@@ -1,0 +1,210 @@
+//
+//  QuakeEngineHost.swift
+//
+//  Owns the C engine's lifetime and its thread.
+//
+//  Quake's host loop is single-threaded and re-entrant-hostile: Host_Frame
+//  touches global state with no locking, and Sys_Error unwinds by calling
+//  exit(). So the engine gets one dedicated thread, created here, and every
+//  call into QuakeCore happens on it. Nothing else may call QC_*.
+//
+//  Output flows the other way: the C log callback fires on the engine thread
+//  and hops to the main actor to update observable state.
+//
+
+import Foundation
+
+/// Where the engine looks for game data, and where it may write.
+struct QuakePaths {
+    let baseDirectory: URL
+    let userDirectory: URL
+
+    /// Game data is not redistributable, so `id1/pak0.pak` is expected in the
+    /// app's Documents folder — droppable over the Files app because the
+    /// target sets `UIFileSharingEnabled`.
+    static func standard() throws -> QuakePaths {
+        let documents = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+
+        let support = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let userDirectory = support.appendingPathComponent("QuakeAVP", isDirectory: true)
+        try FileManager.default.createDirectory(at: userDirectory, withIntermediateDirectories: true)
+
+        return QuakePaths(baseDirectory: documents, userDirectory: userDirectory)
+    }
+
+    /// True when `id1/pak0.pak` is actually present. Checked before boot so the
+    /// UI can explain the problem instead of letting the engine Sys_Error out
+    /// (which takes the process with it).
+    var hasGameData: Bool {
+        let pak = baseDirectory
+            .appendingPathComponent("id1", isDirectory: true)
+            .appendingPathComponent("pak0.pak")
+        return FileManager.default.fileExists(atPath: pak.path)
+    }
+}
+
+/// Non-isolated box the C callbacks write into. `Unmanaged` pointers are handed
+/// to C, so this must be a class and must outlive the engine thread.
+final class QuakeEngineHost: @unchecked Sendable {
+
+    /// Called on the main actor for every line the engine logs.
+    private let onLog: @MainActor @Sendable (String) -> Void
+    /// Called on the main actor if the engine dies. `nil` means clean quit.
+    private let onExit: @MainActor @Sendable (String?) -> Void
+
+    private var thread: Thread?
+    private let shouldStop = ManagedAtomicFlag()
+
+    /// Frame pacing for M0. At M3 this disappears: CompositorServices'
+    /// `LayerRenderer.queryNextFrame()` becomes the clock and the engine ticks
+    /// once per drawable instead of on a fixed timer.
+    private let targetFrameInterval: Double = 1.0 / 90.0
+
+    init(
+        onLog: @escaping @MainActor @Sendable (String) -> Void,
+        onExit: @escaping @MainActor @Sendable (String?) -> Void
+    ) {
+        self.onLog = onLog
+        self.onExit = onExit
+    }
+
+    func start(paths: QuakePaths) {
+        guard thread == nil else { return }
+
+        let thread = Thread { [weak self] in
+            self?.run(paths: paths)
+        }
+        thread.name = "quake.host"
+        // Quake's zone allocator is happy in 512 KB, but PR_ExecuteProgram
+        // recurses through QuakeC and the default 512 KB secondary-thread
+        // stack is uncomfortably tight.
+        thread.stackSize = 4 << 20
+        thread.qualityOfService = .userInteractive
+
+        self.thread = thread
+        thread.start()
+    }
+
+    func stop() {
+        shouldStop.set()
+    }
+
+    func execute(_ command: String) {
+        // Cbuf_AddText is not thread-safe; queue it onto the engine thread.
+        // For M0 the console is the only writer and it is low-frequency, so a
+        // straight perform-on-thread is enough.
+        guard let thread, thread.isExecuting else { return }
+        perform(on: thread) {
+            command.withCString { QC_ExecuteCommand($0) }
+        }
+    }
+
+    // MARK: - Engine thread
+
+    private func run(paths: QuakePaths) {
+        let context = Unmanaged.passUnretained(self).toOpaque()
+
+        QC_SetCallbacks(
+            { ctx, text in
+                guard let ctx, let text else { return }
+                let host = Unmanaged<QuakeEngineHost>.fromOpaque(ctx).takeUnretainedValue()
+                let line = String(cString: text)
+                let sink = host.onLog
+                Task { @MainActor in sink(line) }
+            },
+            { ctx, error in
+                guard let ctx else { return }
+                let host = Unmanaged<QuakeEngineHost>.fromOpaque(ctx).takeUnretainedValue()
+                let message = error.map { String(cString: $0) }
+                let sink = host.onExit
+                Task { @MainActor in sink(message) }
+            },
+            context
+        )
+
+        paths.baseDirectory.path.withCString { base in
+            paths.userDirectory.path.withCString { user in
+                QC_SetPaths(base, user)
+            }
+        }
+
+        var argv: [UnsafePointer<CChar>?] = []
+        let basedirFlag = strdup("-basedir")!
+        let basedirValue = strdup(paths.baseDirectory.path)!
+        argv.append(UnsafePointer(basedirFlag))
+        argv.append(UnsafePointer(basedirValue))
+
+        let ok = argv.withUnsafeBufferPointer { buffer in
+            QC_Init(Int32(buffer.count), buffer.baseAddress)
+        }
+
+        free(basedirFlag)
+        free(basedirValue)
+
+        guard ok else {
+            let sink = onExit
+            Task { @MainActor in sink("QC_Init returned false") }
+            return
+        }
+
+        var previous = CFAbsoluteTimeGetCurrent()
+
+        while !shouldStop.isSet {
+            let now = CFAbsoluteTimeGetCurrent()
+            let delta = now - previous
+            previous = now
+
+            QC_Frame(delta)
+
+            let spent = CFAbsoluteTimeGetCurrent() - now
+            let remaining = targetFrameInterval - spent
+            if remaining > 0 {
+                Thread.sleep(forTimeInterval: remaining)
+            }
+        }
+
+        QC_Shutdown()
+
+        let sink = onExit
+        Task { @MainActor in sink(nil) }
+    }
+
+    private func perform(on thread: Thread, _ work: @escaping () -> Void) {
+        let block = BlockBox(work)
+        block.perform(#selector(BlockBox.invoke), onThread: thread, with: nil, waitUntilDone: false)
+    }
+}
+
+/// `perform(_:onThread:)` needs an ObjC selector target.
+private final class BlockBox: NSObject {
+    private let work: () -> Void
+    init(_ work: @escaping () -> Void) { self.work = work }
+    @objc func invoke() { work() }
+}
+
+/// Minimal one-way flag. One writer (main), one reader (engine thread); a lock
+/// is cheaper to reason about here than importing Atomics for a single bool.
+private final class ManagedAtomicFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func set() {
+        lock.lock(); defer { lock.unlock() }
+        value = true
+    }
+}

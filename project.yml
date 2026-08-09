@@ -1,0 +1,95 @@
+name: QuakeAVP
+
+options:
+  bundleIdPrefix: com.acervantez.quakeavp
+  deploymentTarget:
+    visionOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: 5XS37VKG4C
+
+targets:
+
+  # --------------------------------------------------------------------
+  # QuakeCore -- QuakeSpasm's engine core as a plain C static library.
+  # No Apple frameworks, no Swift, no renderer. See Sources/QuakeCore/.
+  # --------------------------------------------------------------------
+  QuakeCore:
+    type: library.static
+    platform: visionOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/QuakeCore/engine
+        excludes:
+          # #included directly by image.c, exactly as upstream does. Building
+          # it as its own TU duplicates every lodepng symbol at link time.
+          - "lodepng.c"
+          # #included by progdefs.h. Not a compilable unit and not a resource.
+          - "progdefs.q1"
+          - ".upstream-rev"
+      - path: Sources/QuakeCore/platform
+      - path: Sources/QuakeCore/include
+    settings:
+      base:
+        PRODUCT_NAME: QuakeCore
+        # QAVP_PLATFORM switches quakedef.h and miniz.h off SDL/OpenGL and
+        # onto the shims in Sources/QuakeCore/platform. Nothing else reads it.
+        GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) QAVP_PLATFORM=1"
+        GCC_C_LANGUAGE_STANDARD: gnu99
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Sources/QuakeCore/engine"
+          - "$(SRCROOT)/Sources/QuakeCore/platform"
+          - "$(SRCROOT)/Sources/QuakeCore/include"
+        # 1996 C. These warnings fire in the thousands and none of them are
+        # actionable without rewriting id's code, which defeats the point of
+        # vendoring a known-good engine. New code lives in platform/ and is
+        # held to the default warning level by review, not by the compiler.
+        GCC_WARN_UNUSED_VARIABLE: NO
+        GCC_WARN_UNUSED_FUNCTION: NO
+        GCC_WARN_64_TO_32_BIT_CONVERSION: NO
+        CLANG_WARN_STRICT_PROTOTYPES: NO
+        CLANG_WARN_IMPLICIT_FALLTHROUGH: NO
+        WARNING_CFLAGS: "-Wno-unused-but-set-variable -Wno-sign-compare -Wno-missing-braces"
+        CLANG_ENABLE_MODULES: NO
+        DEFINES_MODULE: NO
+        SKIP_INSTALL: YES
+
+  # --------------------------------------------------------------------
+  # QuakeAVP -- the visionOS app. SwiftUI shell around QuakeCore.
+  # --------------------------------------------------------------------
+  QuakeAVP:
+    type: application
+    platform: visionOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: App/Sources
+      - path: App/Resources
+    dependencies:
+      - target: QuakeCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.acervantez.quakeavp.app
+        PRODUCT_NAME: Quake
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Quake
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        # Game data is not redistributable, so the user supplies pak0.pak by
+        # dropping it into the app's Documents folder over the Files app.
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: "0.1"
+        TARGETED_DEVICE_FAMILY: "7"
+        ENABLE_PREVIEWS: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/App/Sources/QuakeAVP-Bridging-Header.h"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Sources/QuakeCore/include"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_ALLOWED: YES
+        CODE_SIGN_IDENTITY: "Apple Development"
