@@ -22,8 +22,18 @@ common layers. Also `progdefs.q1` (`#include`d by `progdefs.h`) and
 
 | Files | Reason |
 |---|---|
-| `gl_draw.c` `gl_fog.c` `gl_mesh.c` `gl_rlight.c` `gl_rmain.c` `gl_rmisc.c` `gl_screen.c` `gl_sky.c` `gl_texmgr.c` `gl_warp.c` | OpenGL renderer. No GL on visionOS. Replaced by `platform/r_null.c` now, Metal at M2. |
+| `gl_draw.c` `gl_fog.c` `gl_mesh.c` `gl_rlight.c` `gl_rmain.c` `gl_rmisc.c` `gl_screen.c` `gl_sky.c` `gl_texmgr.c` `gl_warp.c` | OpenGL renderer. No GL on visionOS. Replaced by `platform/r_null.c` + the Metal renderer (see below). |
 | `r_alias.c` `r_brush.c` `r_part.c` `r_sprite.c` `r_world.c` | Ditto — these are GL despite the `r_` prefix. |
+
+Although those files are not vendored, substantial logic from them *was
+ported* (at the same commit) into `Sources/QuakeRenderer/bridge/qr_bridge.c`
+with the GL calls replaced: the texture manager and palettes (`gl_texmgr.c`),
+lightmap building and surface polygon lists (`r_brush.c`), PVS marking and
+texture chains (`r_world.c`), frustum/view setup (`gl_rmain.c`), and the
+refdef/fov math plus cvar tables into `platform/r_null.c` (`gl_screen.c`,
+`gl_rmisc.c`). When merging a newer upstream, diff those upstream files too
+and carry relevant fixes into the ports; cvar defaults must stay
+byte-identical.
 | `gl_vidsdl.c` `main_sdl.c` `in_sdl.c` `snd_sdl.c` `cd_sdl.c` `sys_sdl_unix.c` `sys_sdl_win.c` | SDL platform layer. Replaced by `platform/`. |
 | `net_win.c` `net_wins.c` `net_wipx.c` `pl_win.c` | Windows-only. |
 | `pl_linux.c` | X11 clipboard/icon. Replaced by `platform/pl_null.c`. |

@@ -1,9 +1,9 @@
 //
 //  ContentView.swift
 //
-//  M0's entire UI: a console. There is no renderer yet, so the only evidence
-//  the engine is alive is what it prints — which makes a log view the correct
-//  and complete interface for this milestone, not a placeholder.
+//  The Metal world view over the M0 console. The console stays: with no HUD
+//  or in-game console text yet, the command bar is still the only input, and
+//  the log is still where the engine talks back.
 //
 
 import SwiftUI
@@ -15,13 +15,25 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            Divider()
+            renderSurface
+            // While the world view is up the console shrinks to a log strip;
+            // in every other state it is still the whole interface.
             console
+                .frame(maxHeight: engine.status == .running ? 160 : .infinity)
             commandBar
         }
         .padding(24)
-        .frame(minWidth: 640, minHeight: 480)
+        .frame(minWidth: 640, minHeight: 560)
         .onAppear { engine.boot() }
+    }
+
+    @ViewBuilder
+    private var renderSurface: some View {
+        if engine.status == .running {
+            QuakeRenderView()
+                .clipShape(.rect(cornerRadius: 12))
+                .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+        }
     }
 
     private var header: some View {
@@ -29,7 +41,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Quake")
                     .font(.largeTitle.weight(.semibold))
-                Text("QuakeSpasm \(engine.engineVersion) · M0 · no renderer")
+                Text("QuakeSpasm \(engine.engineVersion) · Metal world renderer")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
