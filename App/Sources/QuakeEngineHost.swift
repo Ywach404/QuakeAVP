@@ -181,7 +181,7 @@ final class QuakeEngineHost: @unchecked Sendable {
 
     private func perform(on thread: Thread, _ work: @escaping () -> Void) {
         let block = BlockBox(work)
-        block.perform(#selector(BlockBox.invoke), onThread: thread, with: nil, waitUntilDone: false)
+        block.perform(#selector(BlockBox.invoke), on: thread, with: nil, waitUntilDone: false)
     }
 }
 
