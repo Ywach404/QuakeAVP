@@ -1,0 +1,1717 @@
+/*
+ * qr_bridge.c -- engine-side half of the Metal world renderer.
+ *
+ * This file is the C producer the Swift/Metal consumer in Sources/QuakeRenderer
+ * feeds from. It ports the load-time and per-frame world logic from upstream
+ * QuakeSpasm 0.97 (gl_texmgr.c, r_brush.c, r_world.c, gl_rmain.c, gl_rlight.c
+ * at commit d27b64cf) with the GL calls replaced by three lock-guarded
+ * handoff structures declared in QuakeCore.h:
+ *
+ *   - a texture upload queue (RGBA pixels, ownership transfers on acquire)
+ *   - a static world vertex array, rebuilt per map under a geometry lock
+ *   - triple-buffered frame packets: view-projection matrix + triangle-list
+ *     indices + draw batches, one slot filled per engine frame
+ *
+ * Threading contract: everything here except the QC_Renderer* consumer API
+ * runs on the engine thread. The consumer (one render thread) never blocks
+ * the engine except for pointer-swap-length critical sections, plus the
+ * geometry lock which it holds for one buffer copy per map load. The engine
+ * never waits on the GPU: if the consumer is slow, publishing a new packet
+ * simply retires the previous unconsumed one.
+ *
+ * Deliberately pure C, no Metal: `make check` compiles and links this on any
+ * host, which keeps the renderer boundary honest (see tools/check-core.sh).
+ */
+
+#include "quakedef.h"
+#include "QuakeCore.h"
+#include "qr_bridge.h"
+
+#include <pthread.h>
+#include <stdlib.h>
+
+/* upstream keeps this in r_brush.c, not a header */
+#define MAX_SANITY_LIGHTMAPS (1u<<20)
+
+/* renderer-owned cvars glquake.h doesn't extern; defined in r_null.c */
+extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farclip;
+
+/* ========================================================================
+ * globals the engine headers declare and upstream's renderer defined
+ * ===================================================================== */
+
+mleaf_t		*r_viewleaf, *r_oldviewleaf;
+int		r_visframecount;
+int		d_lightstylevalue[256];	/* 8.8 fraction of base light value */
+mplane_t	frustum[4];
+
+texture_t	*r_notexture_mip, *r_notexture_mip2; /* set by gl_model.c */
+
+unsigned int	d_8to24table[256];
+unsigned int	d_8to24table_fbright[256];
+unsigned int	d_8to24table_fbright_fence[256];
+unsigned int	d_8to24table_nobright[256];
+unsigned int	d_8to24table_nobright_fence[256];
+unsigned int	d_8to24table_conchars[256];
+
+gltexture_t	*notexture;
+gltexture_t	*nulltexture;
+
+static float	r_fovx, r_fovy;
+
+/* ========================================================================
+ * handoff structures -- the only state both threads touch
+ * ===================================================================== */
+
+typedef struct qr_upload_queue_s {
+	qc_texture_upload_t	*items;
+	int			count, capacity;
+} qr_upload_queue_t;
+
+static qr_upload_queue_t	qr_pending_uploads;	/* engine appends */
+static qr_upload_queue_t	qr_held_uploads;	/* consumer holds */
+static pthread_mutex_t		qr_upload_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint32_t		*qr_pending_frees;
+static int		qr_pending_frees_count, qr_pending_frees_capacity;
+static uint32_t		*qr_held_frees;
+static int		qr_held_frees_count;
+static pthread_mutex_t	qr_free_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* World geometry. The lock is held by the consumer only for its once-per-map
+   copy into an MTLBuffer, and by the engine while rebuilding at map load. */
+static qc_world_vertex_t	*qr_world_verts;
+static uint32_t			qr_world_numverts;
+static uint32_t			qr_map_generation;
+static pthread_mutex_t		qr_geometry_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Frame packets. Three slots suffice: the consumer holds at most one IN_USE
+   and one is READY, so a FREE slot always exists when BeginFrame looks. */
+enum { QR_SLOT_FREE, QR_SLOT_BUILDING, QR_SLOT_READY, QR_SLOT_INUSE };
+
+typedef struct qr_frame_slot_s {
+	qc_frame_t	frame;
+	uint32_t	*indices;
+	uint32_t	index_capacity;
+	qc_draw_batch_t	*batches;
+	uint32_t	batch_capacity;
+	int		state;
+} qr_frame_slot_t;
+
+static qr_frame_slot_t	qr_slots[3];
+static int		qr_building = -1;
+static pthread_mutex_t	qr_frame_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Worst-case index count for the current world, computed at map load so
+   BeginFrame can size a slot without mid-frame reallocation. */
+static uint32_t		qr_index_worst_case;
+
+static int		qr_pending_drawable_w, qr_pending_drawable_h;
+static qboolean		qr_drawable_dirty;
+static pthread_mutex_t	qr_drawable_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void QC_RendererSetDrawableSize (int width, int height)
+{
+	pthread_mutex_lock (&qr_drawable_lock);
+	if (width > 0 && height > 0 &&
+	    (width != qr_pending_drawable_w || height != qr_pending_drawable_h))
+	{
+		qr_pending_drawable_w = width;
+		qr_pending_drawable_h = height;
+		qr_drawable_dirty = true;
+	}
+	pthread_mutex_unlock (&qr_drawable_lock);
+}
+
+qboolean QR_ConsumePendingDrawableSize (int *width, int *height)
+{
+	qboolean dirty;
+
+	pthread_mutex_lock (&qr_drawable_lock);
+	dirty = qr_drawable_dirty;
+	if (dirty)
+	{
+		*width = qr_pending_drawable_w;
+		*height = qr_pending_drawable_h;
+		qr_drawable_dirty = false;
+	}
+	pthread_mutex_unlock (&qr_drawable_lock);
+	return dirty;
+}
+
+/* ========================================================================
+ * gl_texmgr.c -- texture manager
+ *
+ * Ported minus everything that existed to appease GL1 hardware: no
+ * power-of-two resampling, no picmip, no gl_max_size clamping, no CPU
+ * mipmap generation (the consumer builds mip chains on the GPU). Textures
+ * upload at source size, which Metal is happy with.
+ *
+ * One MTLTexture per Quake texture rather than an atlas: world textures
+ * need wrapping samplers, which an atlas can't provide without moving the
+ * wrap into the shader, and a few hundred textures is nothing to Metal.
+ * The gltexture_t source_file/source_offset bookkeeping is preserved so a
+ * streaming/deferred uploader can replace the eager malloc copies later
+ * without touching callers.
+ * ===================================================================== */
+
+#define QR_MAX_GLTEXTURES	4096
+static gltexture_t	qr_gltextures[QR_MAX_GLTEXTURES];
+static gltexture_t	*active_gltextures, *free_gltextures;
+static int		numgltextures;
+static uint32_t		qr_next_texnum = 1;
+
+/*
+================
+QR_EnqueueUpload -- hand finished RGBA pixels to the consumer.
+
+Takes a private copy: the source is hunk memory that TexMgr_LoadImage frees
+on return. Zero-sized images (warpimages while gl_warpimagesize is 0) are
+recorded engine-side but never uploaded.
+================
+*/
+static void QR_EnqueueUpload (gltexture_t *glt, const unsigned *rgba)
+{
+	qc_texture_upload_t *up;
+	size_t bytes;
+	void *copy;
+
+	if (!glt->width || !glt->height || !rgba)
+		return;
+
+	bytes = (size_t)glt->width * glt->height * 4;
+	copy = malloc (bytes);
+	if (!copy)
+		Sys_Error ("QR_EnqueueUpload: out of memory (%u x %u)",
+			   glt->width, glt->height);
+	memcpy (copy, rgba, bytes);
+
+	pthread_mutex_lock (&qr_upload_lock);
+	if (qr_pending_uploads.count == qr_pending_uploads.capacity)
+	{
+		qr_pending_uploads.capacity = qr_pending_uploads.capacity ?
+					      qr_pending_uploads.capacity * 2 : 64;
+		qr_pending_uploads.items = (qc_texture_upload_t *)
+			realloc (qr_pending_uploads.items,
+				 qr_pending_uploads.capacity * sizeof(qc_texture_upload_t));
+	}
+	up = &qr_pending_uploads.items[qr_pending_uploads.count++];
+	up->texnum = glt->texnum;
+	up->width = glt->width;
+	up->height = glt->height;
+	up->rgba = copy;
+	up->flags = 0;
+	if (glt->flags & TEXPREF_MIPMAP)
+		up->flags |= QC_TEXFLAG_MIPMAP;
+	if (glt->flags & TEXPREF_NEAREST)
+		up->flags |= QC_TEXFLAG_NEAREST;
+	if (glt->source_format == SRC_LIGHTMAP)
+		up->flags |= QC_TEXFLAG_CLAMP;
+	pthread_mutex_unlock (&qr_upload_lock);
+}
+
+static void QR_EnqueueFree (uint32_t texnum)
+{
+	pthread_mutex_lock (&qr_free_lock);
+	if (qr_pending_frees_count == qr_pending_frees_capacity)
+	{
+		qr_pending_frees_capacity = qr_pending_frees_capacity ?
+					    qr_pending_frees_capacity * 2 : 64;
+		qr_pending_frees = (uint32_t *)
+			realloc (qr_pending_frees,
+				 qr_pending_frees_capacity * sizeof(uint32_t));
+	}
+	qr_pending_frees[qr_pending_frees_count++] = texnum;
+	pthread_mutex_unlock (&qr_free_lock);
+}
+
+int QC_RendererAcquireUploads (const qc_texture_upload_t **out)
+{
+	pthread_mutex_lock (&qr_upload_lock);
+	qr_held_uploads = qr_pending_uploads;
+	memset (&qr_pending_uploads, 0, sizeof(qr_pending_uploads));
+	pthread_mutex_unlock (&qr_upload_lock);
+
+	*out = qr_held_uploads.count ? qr_held_uploads.items : NULL;
+	return qr_held_uploads.count;
+}
+
+void QC_RendererReleaseUploads (void)
+{
+	int i;
+
+	for (i = 0; i < qr_held_uploads.count; i++)
+		free ((void *)qr_held_uploads.items[i].rgba);
+	free (qr_held_uploads.items);
+	memset (&qr_held_uploads, 0, sizeof(qr_held_uploads));
+}
+
+int QC_RendererAcquireTextureFrees (const uint32_t **out)
+{
+	pthread_mutex_lock (&qr_free_lock);
+	qr_held_frees = qr_pending_frees;
+	qr_held_frees_count = qr_pending_frees_count;
+	qr_pending_frees = NULL;
+	qr_pending_frees_count = qr_pending_frees_capacity = 0;
+	pthread_mutex_unlock (&qr_free_lock);
+
+	*out = qr_held_frees_count ? qr_held_frees : NULL;
+	return qr_held_frees_count;
+}
+
+void QC_RendererReleaseTextureFrees (void)
+{
+	free (qr_held_frees);
+	qr_held_frees = NULL;
+	qr_held_frees_count = 0;
+}
+
+/*
+=================
+TexMgr_LoadPalette -- port of upstream; fills the six derived palettes
+=================
+*/
+static void QR_LoadPalette (void)
+{
+	byte *pal, *src, *dst;
+	int i, mark;
+	FILE *f;
+
+	COM_FOpenFile ("gfx/palette.lmp", &f, NULL);
+	if (!f)
+		Sys_Error ("Couldn't load gfx/palette.lmp");
+
+	mark = Hunk_LowMark ();
+	pal = (byte *) Hunk_Alloc (768);
+	if (!fread(pal, 768, 1, f))
+		Sys_Error ("Failed reading gfx/palette.lmp");
+	fclose(f);
+
+	/* standard palette, 255 is transparent */
+	dst = (byte *)d_8to24table;
+	src = pal;
+	for (i = 0; i < 256; i++)
+	{
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = 255;
+	}
+	((byte *) &d_8to24table[255]) [3] = 0;
+
+	/* fullbright palette, 0-223 are black (for additive blending) */
+	src = pal + 224*3;
+	dst = (byte *) &d_8to24table_fbright[224];
+	for (i = 224; i < 256; i++)
+	{
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = 255;
+	}
+	for (i = 0; i < 224; i++)
+	{
+		dst = (byte *) &d_8to24table_fbright[i];
+		dst[3] = 255;
+		dst[2] = dst[1] = dst[0] = 0;
+	}
+
+	/* nobright palette, 224-255 are black (for additive blending) */
+	dst = (byte *)d_8to24table_nobright;
+	src = pal;
+	for (i = 0; i < 256; i++)
+	{
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = 255;
+	}
+	for (i = 224; i < 256; i++)
+	{
+		dst = (byte *) &d_8to24table_nobright[i];
+		dst[3] = 255;
+		dst[2] = dst[1] = dst[0] = 0;
+	}
+
+	/* fullbright palette, for fence textures */
+	memcpy(d_8to24table_fbright_fence, d_8to24table_fbright, 256*4);
+	d_8to24table_fbright_fence[255] = 0; /* Alpha of zero. */
+
+	/* nobright palette, for fence textures */
+	memcpy(d_8to24table_nobright_fence, d_8to24table_nobright, 256*4);
+	d_8to24table_nobright_fence[255] = 0; /* Alpha of zero. */
+
+	/* conchars palette, 0 and 255 are transparent */
+	memcpy(d_8to24table_conchars, d_8to24table, 256*4);
+	((byte *) &d_8to24table_conchars[0]) [3] = 0;
+
+	Hunk_FreeToLowMark (mark);
+}
+
+gltexture_t *QR_TexMgr_NewTexture (void)
+{
+	gltexture_t *glt;
+
+	if (!free_gltextures)
+		Sys_Error ("QR_TexMgr_NewTexture: cache full, max is %d textures",
+			   QR_MAX_GLTEXTURES);
+
+	glt = free_gltextures;
+	free_gltextures = glt->next;
+	glt->next = active_gltextures;
+	active_gltextures = glt;
+
+	glt->texnum = qr_next_texnum++;
+	numgltextures++;
+	return glt;
+}
+
+static gltexture_t *QR_FindTexture (qmodel_t *owner, const char *name)
+{
+	gltexture_t *glt;
+
+	if (name)
+	{
+		for (glt = active_gltextures; glt; glt = glt->next)
+		{
+			if (glt->owner == owner && !strcmp (glt->name, name))
+				return glt;
+		}
+	}
+	return NULL;
+}
+
+static void QR_FreeTexture (gltexture_t *kill)
+{
+	gltexture_t *glt;
+
+	if (kill == NULL)
+	{
+		Con_Printf ("QR_FreeTexture: NULL texture\n");
+		return;
+	}
+
+	if (active_gltextures == kill)
+	{
+		active_gltextures = kill->next;
+		kill->next = free_gltextures;
+		free_gltextures = kill;
+		QR_EnqueueFree (kill->texnum);
+		numgltextures--;
+		return;
+	}
+
+	for (glt = active_gltextures; glt; glt = glt->next)
+	{
+		if (glt->next == kill)
+		{
+			glt->next = kill->next;
+			kill->next = free_gltextures;
+			free_gltextures = kill;
+			QR_EnqueueFree (kill->texnum);
+			numgltextures--;
+			return;
+		}
+	}
+
+	Con_Printf ("QR_FreeTexture: not found\n");
+}
+
+static void QR_FreeTextures (unsigned int flags, unsigned int mask)
+{
+	gltexture_t *glt, *next;
+
+	for (glt = active_gltextures; glt; glt = next)
+	{
+		next = glt->next;
+		if ((glt->flags & mask) == (flags & mask))
+			QR_FreeTexture (glt);
+	}
+}
+
+void QR_TexMgr_FreeTexturesForOwner (qmodel_t *owner)
+{
+	gltexture_t *glt, *next;
+
+	for (glt = active_gltextures; glt; glt = next)
+	{
+		next = glt->next;
+		if (glt && glt->owner == owner)
+			QR_FreeTexture (glt);
+	}
+}
+
+void QR_TexMgr_NewGame (void)
+{
+	QR_FreeTextures (0, TEXPREF_PERSIST);
+	QR_LoadPalette ();
+}
+
+/*
+================
+QR_8to32
+================
+*/
+static unsigned *QR_8to32 (byte *in, int pixels, unsigned int *usepal)
+{
+	int i;
+	unsigned *out, *data;
+
+	out = data = (unsigned *) Hunk_Alloc (pixels*4);
+	for (i = 0; i < pixels; i++)
+		*out++ = usepal[*in++];
+	return data;
+}
+
+/*
+===============
+QR_AlphaEdgeFix -- port of TexMgr_AlphaEdgeFix
+
+eliminate pink edges on sprites, etc.
+operates in place on 32bit data
+===============
+*/
+static void QR_AlphaEdgeFix (byte *data, int width, int height)
+{
+	int i, j, n = 0, b, c[3] = {0,0,0},
+		lastrow, thisrow, nextrow,
+		lastpix, thispix, nextpix;
+	byte *dest = data;
+
+	for (i = 0; i < height; i++)
+	{
+		lastrow = (i == 0) ? height-1 : i-1;
+		thisrow = i;
+		nextrow = (i == height-1) ? 0 : i+1;
+
+		for (j = 0; j < width; j++, dest += 4)
+		{
+			if (dest[3]) /* not transparent */
+				continue;
+
+			lastpix = (j == 0) ? width-1 : j-1;
+			thispix = j;
+			nextpix = (j == width-1) ? 0 : j+1;
+
+			b = (lastrow*width+lastpix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+			b = (thisrow*width+lastpix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+			b = (nextrow*width+lastpix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+			b = (lastrow*width+thispix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+			b = (nextrow*width+thispix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+			b = (lastrow*width+nextpix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+			b = (thisrow*width+nextpix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+			b = (nextrow*width+nextpix)*4; if (data[b+3]) {c[0] += data[b]; c[1] += data[b+1]; c[2] += data[b+2]; n++;}
+
+			/* average all non-transparent neighbors */
+			if (n)
+			{
+				dest[0] = (byte)(c[0]/n);
+				dest[1] = (byte)(c[1]/n);
+				dest[2] = (byte)(c[2]/n);
+
+				n = c[0] = c[1] = c[2] = 0;
+			}
+		}
+	}
+}
+
+/*
+=================
+QR_LoadMiptexPalette -- port of TexMgr_LoadMiptexPalette
+=================
+*/
+static void QR_LoadMiptexPalette (byte *in, byte *out, int colors, unsigned flags)
+{
+	int i;
+
+	for (i = 0; i < colors; i++)
+	{
+		*out++ = *in++;
+		*out++ = *in++;
+		*out++ = *in++;
+		if (i == 255 && flags & TEXPREF_ALPHA)
+			*out++ = 0;
+		else
+			*out++ = 255;
+	}
+}
+
+/*
+================
+QR_LoadImage8 -- handles 8bit source data; port of TexMgr_LoadImage8
+minus the power-of-two padding, which Metal doesn't need
+================
+*/
+static void QR_LoadImage8 (gltexture_t *glt, byte *data, unsigned int *usepal)
+{
+	int i;
+
+	/* HACK HACK HACK -- taken from tomazquake */
+	if (strstr(glt->name, "shot1sid") &&
+	    glt->width == 32 && glt->height == 32 &&
+	    CRC_Block(data, 1024) == 65393)
+	{
+		/* This texture in b_shell1.bsp has some of the first 32 pixels painted white.
+		   They are invisible in software, but look really ugly in GL. So we just copy
+		   32 pixels from the bottom to make it look nice. */
+		memcpy (data, data + 32*31, 32);
+	}
+
+	/* detect false alpha cases */
+	if (glt->flags & TEXPREF_ALPHA && !(glt->flags & TEXPREF_CONCHARS))
+	{
+		for (i = 0; i < (int) (glt->width * glt->height); i++)
+			if (data[i] == 255) /* transparent index */
+				break;
+		if (i == (int) (glt->width * glt->height))
+			glt->flags -= TEXPREF_ALPHA;
+	}
+
+	/* choose palette */
+	if (!usepal)
+	{
+		if (glt->flags & TEXPREF_FULLBRIGHT)
+		{
+			if (glt->flags & TEXPREF_ALPHA)
+				usepal = d_8to24table_fbright_fence;
+			else
+				usepal = d_8to24table_fbright;
+		}
+		else if (glt->flags & TEXPREF_NOBRIGHT && gl_fullbrights.value)
+		{
+			if (glt->flags & TEXPREF_ALPHA)
+				usepal = d_8to24table_nobright_fence;
+			else
+				usepal = d_8to24table_nobright;
+		}
+		else if (glt->flags & TEXPREF_CONCHARS)
+		{
+			usepal = d_8to24table_conchars;
+		}
+		else
+		{
+			usepal = d_8to24table;
+		}
+	}
+
+	/* convert to 32bit */
+	data = (byte *) QR_8to32 (data, glt->width * glt->height, usepal);
+
+	/* fix edges */
+	if (glt->flags & TEXPREF_ALPHA)
+		QR_AlphaEdgeFix (data, glt->width, glt->height);
+
+	QR_EnqueueUpload (glt, (unsigned *)data);
+}
+
+/*
+================
+QR_LoadImage8Valve -- port of TexMgr_LoadImage8Valve
+================
+*/
+static void QR_LoadImage8Valve (gltexture_t *glt, byte *data)
+{
+	byte *in, *usepal;
+	unsigned short colors;
+
+	in = data + glt->source_width * glt->source_height;
+
+	memcpy (&colors, in, 2);
+	colors = LittleShort (colors);
+
+	usepal = (byte *)Hunk_Alloc (colors * 4);
+	QR_LoadMiptexPalette (in + 2, usepal, colors, glt->flags);
+	QR_LoadImage8 (glt, data, (unsigned *)usepal);
+}
+
+/*
+================
+QR_TexMgr_LoadImage -- the one entry point for loading all textures;
+port of TexMgr_LoadImage with the upload replaced by the queue
+================
+*/
+gltexture_t *QR_TexMgr_LoadImage (qmodel_t *owner, const char *name,
+				  int width, int height, enum srcformat format,
+				  byte *data, const char *source_file,
+				  src_offset_t source_offset, unsigned flags)
+{
+	unsigned short crc;
+	gltexture_t *glt;
+	int mark;
+
+	if (isDedicated)
+		return NULL;
+
+	/* cache check */
+	if (width > 0 && height > 0)
+	{
+		switch (format)
+		{
+		case SRC_INDEXED:
+		case SRC_INDEXED_PALETTE:
+			crc = CRC_Block(data, width * height);
+			break;
+		case SRC_LIGHTMAP:
+			crc = CRC_Block(data, width * height * 4);
+			break;
+		case SRC_RGBA:
+			crc = CRC_Block(data, width * height * 4);
+			break;
+		default: /* not reachable but avoids compiler warnings */
+			crc = 0;
+		}
+	}
+	else
+		crc = 0;
+
+	if ((flags & TEXPREF_OVERWRITE) && (glt = QR_FindTexture (owner, name)))
+	{
+		if (glt->source_crc == crc)
+			return glt;
+	}
+	else
+		glt = QR_TexMgr_NewTexture ();
+
+	/* copy data */
+	glt->owner = owner;
+	q_strlcpy (glt->name, name ? name : "", sizeof(glt->name));
+	glt->width = width;
+	glt->height = height;
+	glt->flags = flags;
+	glt->shirt = -1;
+	glt->pants = -1;
+	q_strlcpy (glt->source_file, source_file ? source_file : "",
+		   sizeof(glt->source_file));
+	glt->source_offset = source_offset;
+	glt->source_format = format;
+	glt->source_width = width;
+	glt->source_height = height;
+	glt->source_crc = crc;
+
+	/* convert and hand to the consumer */
+	mark = Hunk_LowMark();
+
+	if (width > 0 && height > 0)
+	{
+		switch (glt->source_format)
+		{
+		case SRC_INDEXED:
+			QR_LoadImage8 (glt, data, NULL);
+			break;
+		case SRC_LIGHTMAP:
+		case SRC_RGBA:
+			QR_EnqueueUpload (glt, (unsigned *)data);
+			break;
+		case SRC_INDEXED_PALETTE:
+			QR_LoadImage8Valve (glt, data);
+			break;
+		}
+	}
+
+	Hunk_FreeToLowMark(mark);
+
+	return glt;
+}
+
+void QR_TexMgr_Init (void)
+{
+	int i;
+	static byte notexture_data[16] = {159,91,83,255,0,0,0,255,0,0,0,255,159,91,83,255}; /* black and pink checker */
+	static byte nulltexture_data[16] = {127,191,255,255,0,0,0,255,0,0,0,255,127,191,255,255}; /* black and blue checker */
+
+	/* init texture list */
+	free_gltextures = &qr_gltextures[0];
+	active_gltextures = NULL;
+	for (i = 0; i < QR_MAX_GLTEXTURES - 1; i++)
+		qr_gltextures[i].next = &qr_gltextures[i+1];
+	qr_gltextures[i].next = NULL;
+	numgltextures = 0;
+
+	QR_LoadPalette ();
+
+	/* upstream's 2x2 checker patterns, so broken texture lookups are
+	   loudly visible instead of invisible */
+	notexture = QR_TexMgr_LoadImage (NULL, "notexture", 2, 2, SRC_RGBA,
+		notexture_data, "", (src_offset_t)notexture_data,
+		TEXPREF_NEAREST | TEXPREF_PERSIST | TEXPREF_NOPICMIP);
+	nulltexture = QR_TexMgr_LoadImage (NULL, "nulltexture", 2, 2, SRC_RGBA,
+		nulltexture_data, "", (src_offset_t)nulltexture_data,
+		TEXPREF_NEAREST | TEXPREF_PERSIST | TEXPREF_NOPICMIP);
+}
+
+/* ========================================================================
+ * r_brush.c -- lightmap atlases and surface polygon lists (map load)
+ * ===================================================================== */
+
+struct lightmap_s	*lightmaps;
+int			lightmap_count;
+int			gl_lightmap_format = 0, lightmap_bytes = 4;
+
+static int	allocated[LMBLOCK_WIDTH];
+static int	last_lightmap_allocated;
+
+static unsigned	blocklights[LMBLOCK_WIDTH*LMBLOCK_HEIGHT*3];
+
+static mvertex_t	*r_pcurrentvertbase;
+static qmodel_t		*currentmodel;
+
+/*
+================
+R_TextureAnimation -- returns the proper texture for a given time and base
+================
+*/
+texture_t *R_TextureAnimation (texture_t *base, int frame)
+{
+	int	relative;
+	int	count;
+
+	if (frame)
+		if (base->alternate_anims)
+			base = base->alternate_anims;
+
+	if (!base->anim_total)
+		return base;
+
+	relative = (int)(cl.time*10) % base->anim_total;
+
+	count = 0;
+	while (base->anim_min > relative || base->anim_max <= relative)
+	{
+		base = base->anim_next;
+		if (!base)
+			Sys_Error ("R_TextureAnimation: broken cycle");
+		if (++count > 100)
+			Sys_Error ("R_TextureAnimation: infinite cycle");
+	}
+
+	return base;
+}
+
+/*
+========================
+AllocBlock -- returns a texture number and the position inside it
+========================
+*/
+static int AllocBlock (int w, int h, int *x, int *y)
+{
+	int		i, j;
+	int		best, best2;
+	int		texnum;
+
+	for (texnum = last_lightmap_allocated; texnum < MAX_SANITY_LIGHTMAPS; texnum++)
+	{
+		if (texnum == lightmap_count)
+		{
+			lightmap_count++;
+			lightmaps = (struct lightmap_s *) realloc (lightmaps,
+					sizeof(*lightmaps)*lightmap_count);
+			memset (&lightmaps[texnum], 0, sizeof(lightmaps[texnum]));
+			lightmaps[texnum].data = (byte *) calloc (1,
+					4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT);
+			/* as we're only tracking one texture, we don't need
+			   multiple copies of allocated any more */
+			memset (allocated, 0, sizeof(allocated));
+		}
+		best = LMBLOCK_HEIGHT;
+
+		for (i = 0; i < LMBLOCK_WIDTH-w; i++)
+		{
+			best2 = 0;
+
+			for (j = 0; j < w; j++)
+			{
+				if (allocated[i+j] >= best)
+					break;
+				if (allocated[i+j] > best2)
+					best2 = allocated[i+j];
+			}
+			if (j == w)
+			{	/* this is a valid spot */
+				*x = i;
+				*y = best = best2;
+			}
+		}
+
+		if (best + h > LMBLOCK_HEIGHT)
+			continue;
+
+		for (i = 0; i < w; i++)
+			allocated[*x + i] = best + h;
+
+		last_lightmap_allocated = texnum;
+		return texnum;
+	}
+
+	Sys_Error ("AllocBlock: full");
+	return 0;
+}
+
+/*
+===============
+R_BuildLightMap -- combine and scale multiple lightmaps into RGBA
+
+Ported minus dynamic lights and the 10-bit path. Because there is no
+runtime lightmap re-upload yet, styled lights bake at their default value
+(d_lightstylevalue 256); see the roadmap.
+===============
+*/
+void R_BuildLightMap (msurface_t *surf, byte *dest, int stride)
+{
+	const int overbright = !!gl_overbright.value;
+
+	int		smax, tmax;
+	unsigned	r, g, b;
+	int		i, j, size;
+	byte		*lightmap;
+	unsigned	scale;
+	int		maps;
+	unsigned	*bl;
+
+	smax = (surf->extents[0]>>4)+1;
+	tmax = (surf->extents[1]>>4)+1;
+	size = smax*tmax;
+	lightmap = surf->samples;
+
+	if (cl.worldmodel->lightdata)
+	{
+	/* clear to no light */
+		memset (&blocklights[0], 0, size * 3 * sizeof (unsigned int));
+
+	/* add all the lightmaps */
+		if (lightmap)
+		{
+			for (maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++)
+			{
+				scale = d_lightstylevalue[surf->styles[maps]];
+				surf->cached_light[maps] = scale;	/* 8.8 fraction */
+				bl = blocklights;
+				for (i = 0; i < size; i++)
+				{
+					*bl++ += *lightmap++ * scale;
+					*bl++ += *lightmap++ * scale;
+					*bl++ += *lightmap++ * scale;
+				}
+			}
+		}
+	}
+	else
+	{
+	/* set to full bright if no light data */
+		memset (&blocklights[0], 255, size * 3 * sizeof (unsigned int));
+	}
+
+/* bound, invert, and shift */
+	stride -= smax * 4;
+	bl = blocklights;
+	for (i = 0; i < tmax; i++, dest += stride)
+	{
+		for (j = 0; j < smax; j++)
+		{
+			if (overbright)
+			{
+				r = *bl++ >> 8;
+				g = *bl++ >> 8;
+				b = *bl++ >> 8;
+			}
+			else
+			{
+				r = *bl++ >> 7;
+				g = *bl++ >> 7;
+				b = *bl++ >> 7;
+			}
+			*dest++ = (r > 255)? 255 : r;
+			*dest++ = (g > 255)? 255 : g;
+			*dest++ = (b > 255)? 255 : b;
+			*dest++ = 255;
+		}
+	}
+}
+
+/*
+========================
+GL_CreateSurfaceLightmap
+========================
+*/
+static void GL_CreateSurfaceLightmap (msurface_t *surf)
+{
+	int		smax, tmax;
+	byte	*base;
+
+	if (surf->flags & SURF_DRAWTILED)
+	{
+		surf->lightmaptexturenum = -1;
+		return;
+	}
+
+	smax = (surf->extents[0]>>4)+1;
+	tmax = (surf->extents[1]>>4)+1;
+
+	surf->lightmaptexturenum = AllocBlock (smax, tmax, &surf->light_s, &surf->light_t);
+	base = lightmaps[surf->lightmaptexturenum].data;
+	base += (surf->light_t * LMBLOCK_WIDTH + surf->light_s) * lightmap_bytes;
+	R_BuildLightMap (surf, base, LMBLOCK_WIDTH*lightmap_bytes);
+}
+
+/*
+================
+BuildSurfaceDisplayList -- called at level load time
+================
+*/
+static void BuildSurfaceDisplayList (msurface_t *fa)
+{
+	int			i, lindex, lnumverts;
+	medge_t		*pedges, *r_pedge;
+	float		*vec;
+	float		s, t, s0, t0, sdiv, tdiv;
+	glpoly_t	*poly;
+
+/* reconstruct the polygon */
+	pedges = currentmodel->edges;
+	lnumverts = fa->numedges;
+
+	poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + (lnumverts-4) * VERTEXSIZE*sizeof(float));
+	poly->next = fa->polys;
+	fa->polys = poly;
+	poly->numverts = lnumverts;
+
+	if (fa->flags & SURF_DRAWTURB)
+	{
+		/* match Mod_PolyForUnlitSurface */
+		s0 = t0 = 0.f;
+		sdiv = tdiv = 128.f;
+	}
+	else
+	{
+		s0 = fa->texinfo->vecs[0][3];
+		t0 = fa->texinfo->vecs[1][3];
+		sdiv = fa->texinfo->texture->width;
+		tdiv = fa->texinfo->texture->height;
+	}
+
+	for (i = 0; i < lnumverts; i++)
+	{
+		lindex = currentmodel->surfedges[fa->firstedge + i];
+
+		if (lindex > 0)
+		{
+			r_pedge = &pedges[lindex];
+			vec = r_pcurrentvertbase[r_pedge->v[0]].position;
+		}
+		else
+		{
+			r_pedge = &pedges[-lindex];
+			vec = r_pcurrentvertbase[r_pedge->v[1]].position;
+		}
+		s = DotProduct (vec, fa->texinfo->vecs[0]) + s0;
+		s /= sdiv;
+
+		t = DotProduct (vec, fa->texinfo->vecs[1]) + t0;
+		t /= tdiv;
+
+		VectorCopy (vec, poly->verts[i]);
+		poly->verts[i][3] = s;
+		poly->verts[i][4] = t;
+
+		/* Q64 RERELEASE texture shift */
+		if (fa->texinfo->texture->shift > 0)
+		{
+			poly->verts[i][3] /= ( 2 * fa->texinfo->texture->shift);
+			poly->verts[i][4] /= ( 2 * fa->texinfo->texture->shift);
+		}
+
+		/* lightmap texture coordinates */
+		s = DotProduct (vec, fa->texinfo->vecs[0]) + fa->texinfo->vecs[0][3];
+		s -= fa->texturemins[0];
+		s += fa->light_s*16;
+		s += 8;
+		s /= LMBLOCK_WIDTH*16;
+
+		t = DotProduct (vec, fa->texinfo->vecs[1]) + fa->texinfo->vecs[1][3];
+		t -= fa->texturemins[1];
+		t += fa->light_t*16;
+		t += 8;
+		t /= LMBLOCK_HEIGHT*16;
+
+		poly->verts[i][5] = s;
+		poly->verts[i][6] = t;
+	}
+
+	poly->numverts = lnumverts;
+}
+
+/*
+==================
+GL_BuildLightmaps -- called at level load time; builds the lightmap
+atlases for all surfaces from all brush models
+==================
+*/
+void GL_BuildLightmaps (void)
+{
+	char	name[24];
+	int		i, j;
+	struct lightmap_s *lm;
+	qmodel_t	*m;
+
+	r_framecount = 1; /* no dlightcache */
+
+	/* wipe out all the lightmap data (the gltexture objects were already
+	   freed by Mod_ClearAll) */
+	for (i = 0; i < lightmap_count; i++)
+		free (lightmaps[i].data);
+	free (lightmaps);
+	lightmaps = NULL;
+	last_lightmap_allocated = 0;
+	lightmap_count = 0;
+
+	for (j = 1; j < MAX_MODELS; j++)
+	{
+		m = cl.model_precache[j];
+		if (!m)
+			break;
+		if (m->name[0] == '*')
+			continue;
+		r_pcurrentvertbase = m->vertexes;
+		currentmodel = m;
+		for (i = 0; i < m->numsurfaces; i++)
+		{
+			if (m->surfaces[i].flags & SURF_DRAWTILED)
+				continue;
+			GL_CreateSurfaceLightmap (m->surfaces + i);
+			BuildSurfaceDisplayList (m->surfaces + i);
+		}
+	}
+
+	/* upload all lightmaps that were filled */
+	for (i = 0; i < lightmap_count; i++)
+	{
+		lm = &lightmaps[i];
+		lm->modified = false;
+		lm->rectchange.l = LMBLOCK_WIDTH;
+		lm->rectchange.t = LMBLOCK_HEIGHT;
+		lm->rectchange.w = 0;
+		lm->rectchange.h = 0;
+
+		sprintf (name, "lightmap%07i", i);
+		lm->texture = QR_TexMgr_LoadImage (cl.worldmodel, name,
+				LMBLOCK_WIDTH, LMBLOCK_HEIGHT, SRC_LIGHTMAP,
+				lm->data, "", (src_offset_t)lm->data,
+				TEXPREF_LINEAR | TEXPREF_NOPICMIP);
+	}
+}
+
+/*
+==================
+QR_BuildWorldVertexArray -- flatten every surface polygon into the shared
+vertex array the consumer copies into an MTLBuffer; port of
+GL_BuildBModelVertexBuffer. glpoly verts are 7 floats (xyz s1t1 s2t2),
+which is exactly qc_world_vertex_t, so surfaces copy wholesale.
+==================
+*/
+static void QR_BuildWorldVertexArray (void)
+{
+	unsigned int	numverts, varray_index;
+	int		i, j;
+	qmodel_t	*m;
+	qc_world_vertex_t *varray;
+
+	numverts = 0;
+	for (j = 1; j < MAX_MODELS; j++)
+	{
+		m = cl.model_precache[j];
+		if (!m || m->name[0] == '*' || m->type != mod_brush)
+			continue;
+		for (i = 0; i < m->numsurfaces; i++)
+			numverts += m->surfaces[i].numedges;
+	}
+
+	varray = (qc_world_vertex_t *) malloc (numverts * sizeof(qc_world_vertex_t));
+	if (!varray && numverts)
+		Sys_Error ("QR_BuildWorldVertexArray: out of memory (%u verts)", numverts);
+	varray_index = 0;
+
+	for (j = 1; j < MAX_MODELS; j++)
+	{
+		m = cl.model_precache[j];
+		if (!m || m->name[0] == '*' || m->type != mod_brush)
+			continue;
+		for (i = 0; i < m->numsurfaces; i++)
+		{
+			msurface_t *s = &m->surfaces[i];
+			s->vbo_firstvert = varray_index;
+			if (s->polys)
+				memcpy (&varray[varray_index], s->polys->verts,
+					s->numedges * sizeof(qc_world_vertex_t));
+			varray_index += s->numedges;
+		}
+	}
+
+	pthread_mutex_lock (&qr_geometry_lock);
+	free (qr_world_verts);
+	qr_world_verts = varray;
+	qr_world_numverts = varray_index;
+	qr_map_generation++;
+	pthread_mutex_unlock (&qr_geometry_lock);
+}
+
+uint32_t QC_RendererAcquireGeometry (const qc_world_vertex_t **verts, uint32_t *count)
+{
+	pthread_mutex_lock (&qr_geometry_lock);
+	*verts = qr_world_verts;
+	*count = qr_world_numverts;
+	return qr_map_generation;
+}
+
+void QC_RendererReleaseGeometry (void)
+{
+	pthread_mutex_unlock (&qr_geometry_lock);
+}
+
+/* ========================================================================
+ * gl_rmain.c / r_world.c -- per-frame view setup, PVS marking, culling
+ * ===================================================================== */
+
+byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
+
+static int SignbitsForPlane (mplane_t *out)
+{
+	int	bits, j;
+
+	/* for fast box on planeside test */
+	bits = 0;
+	for (j = 0; j < 3; j++)
+	{
+		if (out->normal[j] < 0)
+			bits |= 1<<j;
+	}
+	return bits;
+}
+
+/*
+===============
+TurnVector -- turn forward towards side on the plane defined by forward and side
+===============
+*/
+void TurnVector (vec3_t out, const vec3_t forward, const vec3_t side, float angle)
+{
+	float scale_forward, scale_side;
+
+	scale_forward = cos( DEG2RAD( angle ) );
+	scale_side = sin( DEG2RAD( angle ) );
+
+	out[0] = scale_forward*forward[0] + scale_side*side[0];
+	out[1] = scale_forward*forward[1] + scale_side*side[1];
+	out[2] = scale_forward*forward[2] + scale_side*side[2];
+}
+
+static void R_SetFrustum (float fovx, float fovy)
+{
+	int		i;
+
+	TurnVector(frustum[0].normal, vpn, vright, fovx/2 - 90); /* left plane */
+	TurnVector(frustum[1].normal, vpn, vright, 90 - fovx/2); /* right plane */
+	TurnVector(frustum[2].normal, vpn, vup, 90 - fovy/2); /* bottom plane */
+	TurnVector(frustum[3].normal, vpn, vup, fovy/2 - 90); /* top plane */
+
+	for (i = 0; i < 4; i++)
+	{
+		frustum[i].type = PLANE_ANYZ;
+		frustum[i].dist = DotProduct (r_origin, frustum[i].normal);
+		frustum[i].signbits = SignbitsForPlane (&frustum[i]);
+	}
+}
+
+qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
+{
+	int i;
+	mplane_t *p;
+	for (i = 0; i < 4; i++)
+	{
+		p = frustum + i;
+		switch (p->signbits)
+		{
+		default:
+		case 0: if (p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2] < p->dist) return true; break;
+		case 1: if (p->normal[0]*emins[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2] < p->dist) return true; break;
+		case 2: if (p->normal[0]*emaxs[0] + p->normal[1]*emins[1] + p->normal[2]*emaxs[2] < p->dist) return true; break;
+		case 3: if (p->normal[0]*emins[0] + p->normal[1]*emins[1] + p->normal[2]*emaxs[2] < p->dist) return true; break;
+		case 4: if (p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emins[2] < p->dist) return true; break;
+		case 5: if (p->normal[0]*emins[0] + p->normal[1]*emaxs[1] + p->normal[2]*emins[2] < p->dist) return true; break;
+		case 6: if (p->normal[0]*emaxs[0] + p->normal[1]*emins[1] + p->normal[2]*emins[2] < p->dist) return true; break;
+		case 7: if (p->normal[0]*emins[0] + p->normal[1]*emins[1] + p->normal[2]*emins[2] < p->dist) return true; break;
+		}
+	}
+	return false;
+}
+
+/*
+================
+R_BackFaceCull -- returns true if the surface is facing away from vieworg
+================
+*/
+static qboolean R_BackFaceCull (msurface_t *surf)
+{
+	double dot;
+
+	if (surf->plane->type < 3)
+		dot = r_refdef.vieworg[surf->plane->type] - surf->plane->dist;
+	else
+		dot = DotProduct (r_refdef.vieworg, surf->plane->normal) - surf->plane->dist;
+
+	if ((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK))
+		return true;
+
+	return false;
+}
+
+/*
+===============
+R_MarkSurfaces -- mark surfaces based on PVS and rebuild texture chains
+
+Port of r_world.c minus efrags (no entities drawn yet), dynamic lightmap
+updates, and warp texture bookkeeping.
+===============
+*/
+void R_MarkSurfaces (void)
+{
+	byte		*vis;
+	mleaf_t		*leaf;
+	msurface_t	*surf, **mark;
+	int			i, j;
+	qboolean	nearwaterportal;
+
+	/* check this leaf for water portals */
+	nearwaterportal = false;
+	for (i = 0, mark = r_viewleaf->firstmarksurface; i < r_viewleaf->nummarksurfaces; i++, mark++)
+		if ((*mark)->flags & SURF_DRAWTURB)
+			nearwaterportal = true;
+
+	/* choose vis data */
+	if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
+		vis = Mod_NoVisPVS (cl.worldmodel);
+	else if (nearwaterportal)
+		vis = SV_FatPVS (r_origin, cl.worldmodel);
+	else
+		vis = Mod_LeafPVS (r_viewleaf, cl.worldmodel);
+
+	r_visframecount++;
+
+	/* set all chains to null */
+	for (i = 0; i < cl.worldmodel->numtextures; i++)
+		if (cl.worldmodel->textures[i])
+			cl.worldmodel->textures[i]->texturechains[chain_world] = NULL;
+
+	/* iterate through leaves, marking surfaces */
+	leaf = &cl.worldmodel->leafs[1];
+	for (i = 0; i < cl.worldmodel->numleafs; i++, leaf++)
+	{
+		if (vis[i>>3] & (1<<(i&7)))
+		{
+			if (R_CullBox(leaf->minmaxs, leaf->minmaxs + 3))
+				continue;
+
+			if (r_oldskyleaf.value || leaf->contents != CONTENTS_SKY)
+				for (j = 0, mark = leaf->firstmarksurface; j < leaf->nummarksurfaces; j++, mark++)
+				{
+					surf = *mark;
+					if (surf->visframe != r_visframecount)
+					{
+						surf->visframe = r_visframecount;
+						if (!R_CullBox(surf->mins, surf->maxs) && !R_BackFaceCull (surf))
+						{
+							surf->texturechain = surf->texinfo->texture->texturechains[chain_world];
+							surf->texinfo->texture->texturechains[chain_world] = surf;
+						}
+					}
+				}
+		}
+	}
+}
+
+/* ========================================================================
+ * frame packet construction
+ * ===================================================================== */
+
+/* Column-major 4x4 helpers; just enough to replace the GL matrix stack. */
+
+static void Mat4_Multiply (float out[16], const float a[16], const float b[16])
+{
+	float tmp[16];
+	int row, col, k;
+
+	for (col = 0; col < 4; col++)
+		for (row = 0; row < 4; row++)
+		{
+			float sum = 0;
+			for (k = 0; k < 4; k++)
+				sum += a[k*4 + row] * b[col*4 + k];
+			tmp[col*4 + row] = sum;
+		}
+	memcpy (out, tmp, sizeof(tmp));
+}
+
+static void Mat4_RotateAxis (float m[16], float deg, int axis)
+{
+	float c = cos (DEG2RAD (deg));
+	float s = sin (DEG2RAD (deg));
+
+	memset (m, 0, 16*sizeof(float));
+	m[15] = 1;
+	switch (axis)
+	{
+	case 0:	/* x */
+		m[0] = 1;
+		m[5] = c;  m[6] = s;
+		m[9] = -s; m[10] = c;
+		break;
+	case 1:	/* y */
+		m[5] = 1;
+		m[0] = c;  m[2] = -s;
+		m[8] = s;  m[10] = c;
+		break;
+	case 2:	/* z */
+		m[10] = 1;
+		m[0] = c;  m[1] = s;
+		m[4] = -s; m[5] = c;
+		break;
+	}
+}
+
+#define NEARCLIP 4
+
+/*
+================
+QR_BuildViewProj -- replaces R_SetupGL's matrix stack.
+
+Same rotations as upstream (put Quake's z-up, x-forward world into eye
+space, then apply viewangles and origin), but the projection maps depth to
+Metal's [0,1] instead of GL's [-1,1].
+================
+*/
+static void QR_BuildViewProj (float out[16])
+{
+	float proj[16], rot[16];
+	float xmax, ymax, n, f;
+
+	n = NEARCLIP;
+	f = gl_farclip.value;
+	xmax = n * tan( r_fovx * M_PI / 360.0 );
+	ymax = n * tan( r_fovy * M_PI / 360.0 );
+
+	memset (proj, 0, sizeof(proj));
+	proj[0] = n / xmax;
+	proj[5] = n / ymax;
+	proj[10] = f / (n - f);
+	proj[11] = -1;
+	proj[14] = n * f / (n - f);
+
+	Mat4_RotateAxis (rot, -90, 0);	/* put Z going up */
+	Mat4_Multiply (out, proj, rot);
+	Mat4_RotateAxis (rot, 90, 2);	/* put Z going up */
+	Mat4_Multiply (out, out, rot);
+	Mat4_RotateAxis (rot, -r_refdef.viewangles[2], 0);
+	Mat4_Multiply (out, out, rot);
+	Mat4_RotateAxis (rot, -r_refdef.viewangles[0], 1);
+	Mat4_Multiply (out, out, rot);
+	Mat4_RotateAxis (rot, -r_refdef.viewangles[1], 2);
+	Mat4_Multiply (out, out, rot);
+
+	/* glTranslatef(-vieworg): fold into the last column directly */
+	{
+		float t[16];
+		memset (t, 0, sizeof(t));
+		t[0] = t[5] = t[10] = t[15] = 1;
+		t[12] = -r_refdef.vieworg[0];
+		t[13] = -r_refdef.vieworg[1];
+		t[14] = -r_refdef.vieworg[2];
+		Mat4_Multiply (out, out, t);
+	}
+}
+
+static void QR_EnsureBatchCapacity (qr_frame_slot_t *slot)
+{
+	if (slot->frame.num_batches < slot->batch_capacity)
+		return;
+	slot->batch_capacity = slot->batch_capacity ? slot->batch_capacity * 2 : 128;
+	slot->batches = (qc_draw_batch_t *) realloc (slot->batches,
+			slot->batch_capacity * sizeof(qc_draw_batch_t));
+}
+
+/*
+================
+QR_EmitSurface -- append one surface's triangle fan as a triangle list
+================
+*/
+static void QR_EmitSurface (qr_frame_slot_t *slot, msurface_t *surf)
+{
+	uint32_t base = (uint32_t) surf->vbo_firstvert;
+	uint32_t *dst = slot->indices + slot->frame.num_indices;
+	int i;
+
+	for (i = 2; i < surf->numedges; i++)
+	{
+		*dst++ = base;
+		*dst++ = base + i - 1;
+		*dst++ = base + i;
+	}
+	slot->frame.num_indices += 3 * (surf->numedges - 2);
+}
+
+/*
+================
+QR_BuildFramePacket -- walk the texture chains R_MarkSurfaces built and
+flatten them into (texture, lightmap) batches of triangle-list indices.
+
+Runs where upstream ran R_DrawTextureChains: same traversal, but instead
+of binding textures and issuing fans it records index ranges for the
+consumer. Sky and water chains are skipped whole (not drawn yet).
+================
+*/
+static void QR_BuildFramePacket (qr_frame_slot_t *slot)
+{
+	static byte	*lm_emitted;		/* scratch, sized lightmap_count */
+	static int	lm_emitted_size;
+	qmodel_t	*model = cl.worldmodel;
+	texture_t	*t, *anim;
+	msurface_t	*s, *s2;
+	int		i, lm;
+	uint32_t	texnum, start;
+
+	if (lm_emitted_size < lightmap_count)
+	{
+		lm_emitted_size = lightmap_count;
+		lm_emitted = (byte *) realloc (lm_emitted, lm_emitted_size);
+	}
+
+	for (i = 0; i < model->numtextures; i++)
+	{
+		t = model->textures[i];
+		if (!t || !t->texturechains[chain_world])
+			continue;
+		if (t->texturechains[chain_world]->flags & (SURF_DRAWTURB | SURF_DRAWSKY))
+			continue;
+
+		anim = R_TextureAnimation (t, 0);
+		texnum = (anim->gltexture) ? anim->gltexture->texnum : notexture->texnum;
+
+		if (lightmap_count)
+			memset (lm_emitted, 0, lightmap_count);
+
+		/* one batch per distinct lightmap in this chain */
+		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
+		{
+			lm = s->lightmaptexturenum;
+			if (lm < 0 || (lm < lightmap_count && lm_emitted[lm]))
+				continue;
+			if (lm < lightmap_count)
+				lm_emitted[lm] = 1;
+
+			start = slot->frame.num_indices;
+			for (s2 = s; s2; s2 = s2->texturechain)
+				if (s2->lightmaptexturenum == lm)
+					QR_EmitSurface (slot, s2);
+
+			QR_EnsureBatchCapacity (slot);
+			slot->batches[slot->frame.num_batches].texnum = texnum;
+			slot->batches[slot->frame.num_batches].lightmap =
+				(lm < lightmap_count && lightmaps[lm].texture) ?
+					lightmaps[lm].texture->texnum : 0;
+			slot->batches[slot->frame.num_batches].first_index = start;
+			slot->batches[slot->frame.num_batches].index_count =
+				slot->frame.num_indices - start;
+			slot->frame.num_batches++;
+		}
+	}
+}
+
+/* ========================================================================
+ * frame lifecycle -- QR_BeginFrame / QR_RenderView / QR_PublishFrame
+ * ===================================================================== */
+
+void QR_BeginFrame (void)
+{
+	int i;
+	qr_frame_slot_t *slot;
+
+	pthread_mutex_lock (&qr_frame_lock);
+	qr_building = -1;
+	for (i = 0; i < 3; i++)
+	{
+		if (qr_slots[i].state == QR_SLOT_FREE)
+		{
+			qr_slots[i].state = QR_SLOT_BUILDING;
+			qr_building = i;
+			break;
+		}
+	}
+	pthread_mutex_unlock (&qr_frame_lock);
+
+	if (qr_building < 0)
+		return;		/* can't happen with 3 slots; drop the frame if it does */
+
+	slot = &qr_slots[qr_building];
+	slot->frame.num_indices = 0;
+	slot->frame.num_batches = 0;
+
+	/* engine owns this slot: safe to (re)size outside the lock */
+	if (slot->index_capacity < qr_index_worst_case)
+	{
+		slot->index_capacity = qr_index_worst_case;
+		slot->indices = (uint32_t *) realloc (slot->indices,
+				slot->index_capacity * sizeof(uint32_t));
+	}
+}
+
+void QR_RenderView (void)
+{
+	qr_frame_slot_t *slot;
+
+	if (r_norefresh.value)
+		return;
+
+	if (!cl.worldmodel)
+		Sys_Error ("R_RenderView: NULL worldmodel");
+
+	if (qr_building < 0)
+		return;
+
+	slot = &qr_slots[qr_building];
+
+	r_framecount++;
+
+	/* view setup -- port of R_SetupView */
+	VectorCopy (r_refdef.vieworg, r_origin);
+	AngleVectors (r_refdef.viewangles, vpn, vright, vup);
+
+	r_oldviewleaf = r_viewleaf;
+	r_viewleaf = Mod_PointInLeaf (r_origin, cl.worldmodel);
+
+	/* no r_waterwarp fov wobble yet: water isn't drawn */
+	r_fovx = r_refdef.fov_x;
+	r_fovy = r_refdef.fov_y;
+
+	R_SetFrustum (r_fovx, r_fovy);
+
+	R_MarkSurfaces ();
+
+	QR_BuildViewProj (slot->frame.viewproj);
+	QR_BuildFramePacket (slot);
+
+	if (r_pos.value)
+		Con_Printf ("x %i y %i z %i (pitch %i yaw %i roll %i)\n",
+			    (int)cl_entities[cl.viewentity].origin[0],
+			    (int)cl_entities[cl.viewentity].origin[1],
+			    (int)cl_entities[cl.viewentity].origin[2],
+			    (int)cl.viewangles[PITCH],
+			    (int)cl.viewangles[YAW],
+			    (int)cl.viewangles[ROLL]);
+}
+
+void QR_PublishFrame (void)
+{
+	qr_frame_slot_t *slot;
+	byte *rgb;
+	int i;
+
+	if (qr_building < 0)
+		return;
+
+	slot = &qr_slots[qr_building];
+	slot->frame.generation = qr_map_generation;
+	slot->frame.indices = slot->indices;
+	slot->frame.batches = slot->batches;
+
+	/* upstream R_Clear clears to r_clearcolor (a palette index) when
+	   gl_clear is set; keep that, else clear to black */
+	if (gl_clear.value)
+	{
+		rgb = (byte *) &d_8to24table_nobright[(int)r_clearcolor.value & 0xff];
+		slot->frame.clear_color[0] = rgb[0] / 255.0f;
+		slot->frame.clear_color[1] = rgb[1] / 255.0f;
+		slot->frame.clear_color[2] = rgb[2] / 255.0f;
+	}
+	else
+	{
+		slot->frame.clear_color[0] = 0;
+		slot->frame.clear_color[1] = 0;
+		slot->frame.clear_color[2] = 0;
+	}
+	slot->frame.clear_color[3] = 1;
+
+	pthread_mutex_lock (&qr_frame_lock);
+	/* retire any unconsumed previous frame; latest wins */
+	for (i = 0; i < 3; i++)
+		if (qr_slots[i].state == QR_SLOT_READY)
+			qr_slots[i].state = QR_SLOT_FREE;
+	slot->state = QR_SLOT_READY;
+	pthread_mutex_unlock (&qr_frame_lock);
+
+	qr_building = -1;
+}
+
+const qc_frame_t *QC_RendererAcquireFrame (void)
+{
+	const qc_frame_t *frame = NULL;
+	int i;
+
+	pthread_mutex_lock (&qr_frame_lock);
+	for (i = 0; i < 3; i++)
+	{
+		if (qr_slots[i].state == QR_SLOT_READY)
+		{
+			qr_slots[i].state = QR_SLOT_INUSE;
+			frame = &qr_slots[i].frame;
+			break;
+		}
+	}
+	pthread_mutex_unlock (&qr_frame_lock);
+	return frame;
+}
+
+void QC_RendererReleaseFrame (void)
+{
+	int i;
+
+	pthread_mutex_lock (&qr_frame_lock);
+	for (i = 0; i < 3; i++)
+		if (qr_slots[i].state == QR_SLOT_INUSE)
+			qr_slots[i].state = QR_SLOT_FREE;
+	pthread_mutex_unlock (&qr_frame_lock);
+}
+
+/* ========================================================================
+ * init / map load
+ * ===================================================================== */
+
+void QR_Init (void)
+{
+	int i;
+
+	/* Lightmaps bake once at load with no runtime style animation yet, so
+	   every style must sit at its default 'm' (256) -- zeros would bake
+	   the world black. */
+	for (i = 0; i < 256; i++)
+		d_lightstylevalue[i] = 256;
+}
+
+void QR_NewMap (void)
+{
+	int i;
+	msurface_t *s;
+
+	r_viewleaf = r_oldviewleaf = NULL;
+	r_framecount = 0;
+	r_visframecount = 0;
+
+	/* clear out efrags in case the level hasn't been reloaded */
+	for (i = 0; i < cl.worldmodel->numleafs; i++)
+		cl.worldmodel->leafs[i].efrags = NULL;
+
+	GL_BuildLightmaps ();
+	QR_BuildWorldVertexArray ();
+
+	/* worst-case index count: every world surface visible */
+	qr_index_worst_case = 0;
+	for (i = 0, s = cl.worldmodel->surfaces; i < cl.worldmodel->numsurfaces; i++, s++)
+		if (s->numedges >= 3)
+			qr_index_worst_case += 3 * (s->numedges - 2);
+}
