@@ -12,6 +12,7 @@
  */
 
 #include "quakedef.h"
+#include "qr_bridge.h"
 
 viddef_t	vid;			/* global video state */
 modestate_t	modestate = MS_UNINIT;
@@ -41,6 +42,12 @@ void VID_Init (void)
 	vid.aspect	= (float)QAVP_VID_WIDTH / (float)QAVP_VID_HEIGHT;
 	vid.numpages	= 1;
 	vid.recalc_refdef = 1;
+
+	/* CL_NewTranslation and the entity parsers read vid.colormap; upstream
+	   gl_vidsdl.c points it at host_colormap, which Host_Init loads just
+	   before calling us. Without this, the first connect (or demo) crashes. */
+	vid.colormap	= host_colormap;
+	vid.fullbright	= 256 - LittleLong (*((int *)vid.colormap + 2048));
 
 	glwidth  = QAVP_VID_WIDTH;
 	glheight = QAVP_VID_HEIGHT;
@@ -93,18 +100,32 @@ qboolean VID_IsMinimized (void)
 }
 
 /* --------------------------------------------------------- GL entry points
- * glquake.h declares these; the software/Metal path will own them later.
+ * glquake.h declares these; SCR_UpdateScreen brackets each frame with them,
+ * which makes them the natural place to sync the drawable size in and to
+ * hand the finished frame packet to the Metal side.
  */
 
 void GL_BeginRendering (int *x, int *y, int *width, int *height)
 {
+	int w, h;
+
+	if (QR_ConsumePendingDrawableSize (&w, &h))
+	{
+		glwidth = w;
+		glheight = h;
+		vid.recalc_refdef = 1;
+	}
+
 	*x = *y = 0;
 	*width  = glwidth;
 	*height = glheight;
+
+	QR_BeginFrame ();
 }
 
 void GL_EndRendering (void)
 {
+	QR_PublishFrame ();
 }
 
 void GL_Set2D (void)
