@@ -36,6 +36,7 @@ CFLAGS=(
   -I"$ROOT/Sources/QuakeCore/engine"
   -I"$ROOT/Sources/QuakeCore/platform"
   -I"$ROOT/Sources/QuakeCore/include"
+  -I"$ROOT/Sources/QuakeRenderer/bridge"
   -Wall
   -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function
   -Wno-sign-compare -Wno-missing-braces -Wno-strict-aliasing
@@ -59,7 +60,8 @@ mkdir -p "$OUT"
 rm -f "$OUT"/*.o
 
 fail=0
-for src in "$ROOT"/Sources/QuakeCore/engine/*.c "$ROOT"/Sources/QuakeCore/platform/*.c; do
+for src in "$ROOT"/Sources/QuakeCore/engine/*.c "$ROOT"/Sources/QuakeCore/platform/*.c \
+           "$ROOT"/Sources/QuakeRenderer/bridge/*.c; do
   skip "$src" && continue
   obj="$OUT/$(basename "$src" .c).o"
   if ! "$CC" "${CFLAGS[@]}" -c -o "$obj" "$src" 2> "$OUT/last.err"; then

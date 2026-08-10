@@ -33,6 +33,10 @@ targets:
           - ".upstream-rev"
       - path: Sources/QuakeCore/platform
       - path: Sources/QuakeCore/include
+      # The renderer's engine-side half. Pure C (no Metal) so `make check`
+      # still proves the whole library on any host; it lives under
+      # QuakeRenderer because it is renderer logic, not platform shim.
+      - path: Sources/QuakeRenderer/bridge
     settings:
       base:
         PRODUCT_NAME: QuakeCore
@@ -44,6 +48,7 @@ targets:
           - "$(SRCROOT)/Sources/QuakeCore/engine"
           - "$(SRCROOT)/Sources/QuakeCore/platform"
           - "$(SRCROOT)/Sources/QuakeCore/include"
+          - "$(SRCROOT)/Sources/QuakeRenderer/bridge"
         # 1996 C. These warnings fire in the thousands and none of them are
         # actionable without rewriting id's code, which defeats the point of
         # vendoring a known-good engine. New code lives in platform/ and is
@@ -68,6 +73,12 @@ targets:
     sources:
       - path: App/Sources
       - path: App/Resources
+      # Swift + Metal consumer half of the renderer. Compiled into the app
+      # (not QuakeCore, which stays a plain C library); the bridge/ C half
+      # is excluded here because QuakeCore compiles it.
+      - path: Sources/QuakeRenderer
+        excludes:
+          - "bridge/**"
     dependencies:
       - target: QuakeCore
     settings:
