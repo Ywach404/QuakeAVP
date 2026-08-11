@@ -1997,23 +1997,28 @@ static void QR_EmitSurface (qr_frame_slot_t *slot, msurface_t *surf)
 
 /*
 ================
-QR_BuildFramePacket -- walk the texture chains R_MarkSurfaces built and
-flatten them into typed batches of triangle-list indices, in draw order.
+QR_EmitTextureChains -- flatten one model's texture chains into batches.
 
-Runs where upstream ran Sky_DrawSky / R_DrawTextureChains /
-R_DrawTextureChains_Water, in that order: same traversals, but instead of
-binding textures and issuing fans it records index ranges for the
-consumer. Liquids take upstream's unlit path (the lit-water path needs
-the GLSL renderer upstream too); their alpha comes from
-GL_WaterAlphaForSurface per chain, and blended chains are emitted after
-everything opaque, as upstream draws them.
+The shared core of the world and brush-entity paths: walks `chain`,
+emitting sky, opaque, then liquid batches for whatever R_MarkSurfaces or
+QR_EmitBrushModel chained. `entity` is QC_ENTITY_NONE for the world;
+`entalpha`/`frame` come from the entity (1.0 / 0 for the world).
+Liquids take upstream's unlit path (the lit-water path needs the GLSL
+renderer upstream too); their alpha comes from GL_WaterAlphaForSurface
+with the entity override, exactly GL_WaterAlphaForEntitySurface.
 ================
 */
-static void QR_BuildFramePacket (qr_frame_slot_t *slot)
+#define QR_PHASE_SKY	(1 << 0)
+#define QR_PHASE_OPAQUE	(1 << 1)
+#define QR_PHASE_LIQUID	(1 << 2)
+#define QR_PHASE_ALL	(QR_PHASE_SKY | QR_PHASE_OPAQUE | QR_PHASE_LIQUID)
+
+static void QR_EmitTextureChains (qr_frame_slot_t *slot, qmodel_t *model,
+				  texchain_t chain, uint32_t entity,
+				  float entalpha, int entframe, int phases)
 {
 	static byte	*lm_emitted;		/* scratch, sized lightmap_count */
 	static int	lm_emitted_size;
-	qmodel_t	*model = cl.worldmodel;
 	texture_t	*t, *anim;
 	msurface_t	*s, *s2;
 	int		i, lm;
@@ -2027,38 +2032,38 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	}
 
 	/* sky chains -- drawn first, writing depth, as upstream Sky_DrawSky */
-	for (i = 0; i < model->numtextures; i++)
+	for (i = 0; (phases & QR_PHASE_SKY) && i < model->numtextures; i++)
 	{
 		t = model->textures[i];
-		if (!t || !t->texturechains[chain_world])
+		if (!t || !t->texturechains[chain])
 			continue;
-		if (!(t->texturechains[chain_world]->flags & SURF_DRAWSKY))
+		if (!(t->texturechains[chain]->flags & SURF_DRAWSKY))
 			continue;
 
 		start = slot->frame.num_indices;
-		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
 			QR_EmitSurface (slot, s);
 		QR_AppendBatch (slot, QC_BATCH_SKY, 0, 0, start, r_skyalpha.value,
-				QC_ENTITY_NONE);
+				entity);
 	}
 
-	/* opaque world chains */
-	for (i = 0; i < model->numtextures; i++)
+	/* opaque chains */
+	for (i = 0; (phases & QR_PHASE_OPAQUE) && i < model->numtextures; i++)
 	{
 		t = model->textures[i];
-		if (!t || !t->texturechains[chain_world])
+		if (!t || !t->texturechains[chain])
 			continue;
-		if (t->texturechains[chain_world]->flags & (SURF_DRAWTURB | SURF_DRAWSKY))
+		if (t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWSKY))
 			continue;
 
-		anim = R_TextureAnimation (t, 0);
+		anim = R_TextureAnimation (t, entframe);
 		texnum = (anim->gltexture) ? anim->gltexture->texnum : notexture->texnum;
 
 		if (lightmap_count)
 			memset (lm_emitted, 0, lightmap_count);
 
 		/* one batch per distinct lightmap in this chain */
-		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
 		{
 			lm = s->lightmaptexturenum;
 			if (lm < 0 || (lm < lightmap_count && lm_emitted[lm]))
@@ -2074,28 +2079,226 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			QR_AppendBatch (slot, QC_BATCH_WORLD, texnum,
 					(lm < lightmap_count && lightmaps[lm].texture) ?
 						lightmaps[lm].texture->texnum : 0,
-					start, 1.0f, QC_ENTITY_NONE);
+					start, entalpha, entity);
 		}
 	}
 
-	/* liquid chains -- after all opaque, like R_DrawTextureChains_Water */
-	for (i = 0; i < model->numtextures; i++)
+	/* liquid chains -- after the model's opaque, like
+	   R_DrawTextureChains_Water */
+	for (i = 0; (phases & QR_PHASE_LIQUID) && i < model->numtextures; i++)
 	{
 		t = model->textures[i];
-		if (!t || !t->texturechains[chain_world])
+		if (!t || !t->texturechains[chain])
 			continue;
-		if (!(t->texturechains[chain_world]->flags & SURF_DRAWTURB))
+		if (!(t->texturechains[chain]->flags & SURF_DRAWTURB))
 			continue;
 
 		texnum = (t->gltexture) ? t->gltexture->texnum : notexture->texnum;
-		alpha = GL_WaterAlphaForSurface (t->texturechains[chain_world]);
+		/* GL_WaterAlphaForEntitySurface: explicit entity alpha wins,
+		   default falls through to the per-surface water alpha */
+		if (entity != QC_ENTITY_NONE && entalpha < 1.0f)
+			alpha = entalpha;
+		else
+			alpha = GL_WaterAlphaForSurface (t->texturechains[chain]);
 
 		start = slot->frame.num_indices;
-		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
 			QR_EmitSurface (slot, s);
 		QR_AppendBatch (slot, QC_BATCH_LIQUID, texnum, 0, start, alpha,
-				QC_ENTITY_NONE);
+				entity);
 	}
+}
+
+/* r_brush.c: R_ClearTextureChains / R_ChainSurface -- declared in glquake.h */
+void R_ClearTextureChains (qmodel_t *mod, texchain_t chain)
+{
+	int i;
+
+	for (i = 0; i < mod->numtextures; i++)
+		if (mod->textures[i])
+			mod->textures[i]->texturechains[chain] = NULL;
+}
+
+void R_ChainSurface (msurface_t *surf, texchain_t chain)
+{
+	surf->texturechain = surf->texinfo->texture->texturechains[chain];
+	surf->texinfo->texture->texturechains[chain] = surf;
+}
+
+/*
+=============
+R_CullModelForEntity -- port of gl_rmain.c; uses the (widened) frustum
+=============
+*/
+qboolean R_CullModelForEntity (entity_t *e)
+{
+	vec3_t mins, maxs;
+	vec_t scalefactor, *minbounds, *maxbounds;
+
+	if (e->angles[0] || e->angles[2])	/* pitch or roll */
+	{
+		minbounds = e->model->rmins;
+		maxbounds = e->model->rmaxs;
+	}
+	else if (e->angles[1])			/* yaw */
+	{
+		minbounds = e->model->ymins;
+		maxbounds = e->model->ymaxs;
+	}
+	else					/* no rotation */
+	{
+		minbounds = e->model->mins;
+		maxbounds = e->model->maxs;
+	}
+
+	scalefactor = ENTSCALE_DECODE(e->scale);
+	if (scalefactor != 1.0f)
+	{
+		VectorMA (e->origin, scalefactor, minbounds, mins);
+		VectorMA (e->origin, scalefactor, maxbounds, maxs);
+	}
+	else
+	{
+		VectorAdd (e->origin, minbounds, mins);
+		VectorAdd (e->origin, maxbounds, maxs);
+	}
+
+	return R_CullBox (mins, maxs);
+}
+
+/*
+================
+QR_EntityMatrix -- the matrix R_RotateForEntity built on the GL stack:
+T(origin) . Rz(yaw) . Ry(-pitch) . Rx(roll) . S(entity scale)
+================
+*/
+static void QR_EntityMatrix (float out[16], const vec3_t origin,
+			     const vec3_t angles, unsigned char scale)
+{
+	float rot[16], t[16];
+	float scalefactor = ENTSCALE_DECODE(scale);
+	int i;
+
+	memset (t, 0, sizeof(t));
+	t[0] = t[5] = t[10] = t[15] = 1;
+	t[12] = origin[0];
+	t[13] = origin[1];
+	t[14] = origin[2];
+
+	Mat4_RotateAxis (rot, angles[1], 2);
+	Mat4_Multiply (out, t, rot);
+	Mat4_RotateAxis (rot, -angles[0], 1);
+	Mat4_Multiply (out, out, rot);
+	Mat4_RotateAxis (rot, angles[2], 0);
+	Mat4_Multiply (out, out, rot);
+
+	if (scalefactor != 1.0f)
+		for (i = 0; i < 12; i++)
+			out[i] *= scalefactor;
+}
+
+/*
+================
+QR_EmitBrushModel -- port of R_DrawBrushModel, emitting batches.
+
+Chains the visible submodel faces exactly as upstream (backface test
+against the entity-space view origin), then reuses the shared chain
+flattener with this entity's transform. Dynamic light marking
+(R_MarkLights) and R_RenderDynamicLightmaps are still stubbed with the
+rest of the dynamic-light path.
+================
+*/
+static void QR_EmitBrushModel (qr_frame_slot_t *slot, entity_t *e)
+{
+	int		i;
+	msurface_t	*psurf;
+	float		dot;
+	mplane_t	*pplane;
+	qmodel_t	*clmodel = e->model;
+	vec3_t		modelorg, temp;
+	vec3_t		angles;
+	qc_entity_t	rec;
+	uint32_t	entity;
+
+	if (R_CullModelForEntity (e))
+		return;
+
+	VectorSubtract (r_refdef.vieworg, e->origin, modelorg);
+	if (e->angles[0] || e->angles[1] || e->angles[2])
+	{
+		vec3_t	forward, right, up;
+
+		VectorCopy (modelorg, temp);
+		AngleVectors (e->angles, forward, right, up);
+		modelorg[0] = DotProduct (temp, forward);
+		modelorg[1] = -DotProduct (temp, right);
+		modelorg[2] = DotProduct (temp, up);
+	}
+
+	R_ClearTextureChains (clmodel, chain_model);
+	psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
+	for (i = 0; i < clmodel->nummodelsurfaces; i++, psurf++)
+	{
+		pplane = psurf->plane;
+		dot = DotProduct (modelorg, pplane->normal) - pplane->dist;
+		if (((psurf->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) ||
+		    (!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
+			R_ChainSurface (psurf, chain_model);
+	}
+
+	memset (&rec, 0, sizeof(rec));
+	VectorCopy (e->angles, angles);
+	angles[0] = -angles[0];		/* stupid quake bug */
+	QR_EntityMatrix (rec.transform, e->origin, angles, e->scale);
+	rec.alpha = ENTALPHA_DECODE(e->alpha);
+	entity = QR_AppendEntity (slot, &rec);
+
+	QR_EmitTextureChains (slot, clmodel, chain_model, entity,
+			      rec.alpha, e->frame, QR_PHASE_ALL);
+}
+
+/*
+================
+QR_BuildFramePacket -- flatten this frame into typed batches, in upstream
+R_RenderScene order: sky, opaque world, opaque entities, world liquids,
+translucent entities. Runs where upstream issued the GL draws; instead it
+records index ranges, entity records, and texture handles for the
+consumer.
+================
+*/
+static void QR_BuildFramePacket (qr_frame_slot_t *slot)
+{
+	int i;
+
+	QR_EmitTextureChains (slot, cl.worldmodel, chain_world, QC_ENTITY_NONE,
+			      1.0f, 0, QR_PHASE_SKY | QR_PHASE_OPAQUE);
+
+	/* opaque entities between the opaque world and its liquids,
+	   translucent entities after both -- upstream's R_RenderScene order
+	   (two R_DrawEntitiesOnList passes around R_DrawWorld_Water) */
+	if (r_drawentities.value)
+		for (i = 0; i < cl_numvisedicts; i++)
+		{
+			entity_t *e = cl_visedicts[i];
+			if (ENTALPHA_DECODE(e->alpha) < 1)
+				continue;
+			if (e->model->type == mod_brush)
+				QR_EmitBrushModel (slot, e);
+		}
+
+	QR_EmitTextureChains (slot, cl.worldmodel, chain_world, QC_ENTITY_NONE,
+			      1.0f, 0, QR_PHASE_LIQUID);
+
+	if (r_drawentities.value)
+		for (i = 0; i < cl_numvisedicts; i++)
+		{
+			entity_t *e = cl_visedicts[i];
+			float a = ENTALPHA_DECODE(e->alpha);
+			if (a == 1 || a == 0)
+				continue;
+			if (e->model->type == mod_brush)
+				QR_EmitBrushModel (slot, e);
+		}
 }
 
 /* ========================================================================
