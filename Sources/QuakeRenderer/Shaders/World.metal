@@ -4,6 +4,16 @@
 //  BSP world surfaces: diffuse * lightmap with the overbright doubling,
 //  plus the liquid (UV warp) and sky (projected scrolling layers / skybox)
 //  fragment variants selected per batch kind.
+//
+//  One vertex function feeds every fragment shader, and it is written for
+//  single-pass stereo: the uniforms carry two view-projections and two eye
+//  origins, indexed by [[amplification_id]]. The immersive renderer encodes
+//  with amplification count 2; the flat window encodes with count 1 and
+//  fills both slots with the same mono matrix, so the shaders never know
+//  which output they are drawing for. The per-eye origin rides to the sky
+//  fragments as a flat varying because fragment functions have no
+//  amplification id of their own.
+//
 //  Vertex layout must match qc_world_vertex_t in QuakeCore.h.
 //
 
@@ -17,12 +27,14 @@ struct WorldVertex {
 };
 
 struct WorldUniforms {
-    float4x4 viewproj;
+    float4x4 viewproj[2];   // per eye; [1] == [0] on the mono path
+    float4 eyeorg[2];       // per-eye view origin, Quake units (w unused)
 };
 
 struct WorldVaryings {
     float4 position [[position]];
     float3 worldpos;
+    float3 eyeorg [[flat]];
     float2 st;
     float2 lm;
 };
@@ -30,13 +42,15 @@ struct WorldVaryings {
 // Vertices are fetched manually so the index buffer's uint32 indices land in
 // vertex_id via drawIndexedPrimitives -- no vertex descriptor needed.
 vertex WorldVaryings world_vertex(uint vid [[vertex_id]],
+                                  uint amp [[amplification_id]],
                                   const device WorldVertex *vertices [[buffer(0)]],
                                   constant WorldUniforms &uniforms [[buffer(1)]])
 {
     WorldVertex v = vertices[vid];
     WorldVaryings out;
-    out.position = uniforms.viewproj * float4(float3(v.xyz), 1.0);
+    out.position = uniforms.viewproj[amp] * float4(float3(v.xyz), 1.0);
     out.worldpos = float3(v.xyz);
+    out.eyeorg = uniforms.eyeorg[amp].xyz;
     out.st = float2(v.st);
     out.lm = float2(v.lm_st);
     return out;
@@ -89,15 +103,17 @@ fragment float4 liquid_fragment(WorldVaryings in [[stage_in]],
 // MARK: - Sky
 
 struct SkyUniforms {
-    float4 vieworg_time;    // xyz = r_origin, w = cl.time
-    float skyalpha;         // r_skyalpha (cloud layer opacity)
+    float time;         // cl.time from the frame packet
+    float skyalpha;     // r_skyalpha (cloud layer opacity)
 };
 
 // Sky_GetTexCoord (gl_sky.c): project the view ray onto a flattened sphere
 // and scroll with time. speed is 8 for the solid layer, 16 for the clouds.
-static float2 sky_layer_uv(float3 worldpos, float3 vieworg, float time, float speed)
+// The projection origin is the per-eye origin from the vertex stage, so the
+// two eyes see correctly-parallaxed sky rather than one eye's copy.
+static float2 sky_layer_uv(float3 worldpos, float3 eyeorg, float time, float speed)
 {
-    float3 dir = worldpos - vieworg;
+    float3 dir = worldpos - eyeorg;
     dir.z *= 3.0;                       // flatten the sphere
     float len = 6.0 * 63.0 / length(dir);
     float scroll = fmod(time * speed, 128.0);
@@ -110,11 +126,8 @@ fragment float4 sky_layers_fragment(WorldVaryings in [[stage_in]],
                                     texture2d<float> clouds [[texture(1)]],
                                     sampler layerSampler [[sampler(0)]])
 {
-    float3 vieworg = uniforms.vieworg_time.xyz;
-    float time = uniforms.vieworg_time.w;
-
-    float3 back = solid.sample(layerSampler, sky_layer_uv(in.worldpos, vieworg, time, 8.0)).rgb;
-    float4 front = clouds.sample(layerSampler, sky_layer_uv(in.worldpos, vieworg, time, 16.0));
+    float3 back = solid.sample(layerSampler, sky_layer_uv(in.worldpos, in.eyeorg, uniforms.time, 8.0)).rgb;
+    float4 front = clouds.sample(layerSampler, sky_layer_uv(in.worldpos, in.eyeorg, uniforms.time, 16.0));
 
     // Upstream draws the solid layer then blends the cloud layer over it
     // with r_skyalpha; folded into one pass here.
@@ -144,7 +157,7 @@ fragment float4 sky_box_fragment(WorldVaryings in [[stage_in]],
                                  array<texture2d<float>, 6> faces [[texture(0)]],
                                  sampler faceSampler [[sampler(1)]])
 {
-    float3 dir = in.worldpos - uniforms.vieworg_time.xyz;
+    float3 dir = in.worldpos - in.eyeorg;
     float3 av = abs(dir);
     int axis;
     if (av.x > av.y && av.x > av.z)

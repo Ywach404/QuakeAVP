@@ -35,7 +35,20 @@
 
 /* renderer-owned cvars glquake.h doesn't extern; defined in r_null.c */
 extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farclip;
-extern cvar_t r_skyalpha, r_skyfog;
+extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
+
+/* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
+   0.8x-1.2x band the comfort theory-craft allows before the world reads as
+   miniature or gigantic. The sim stays in Quake units; only the consumer's
+   matrix composition scales. */
+#define QR_WORLDSCALE_DEFAULT	0.0254f
+#define QR_WORLDSCALE_MIN	(0.8f * QR_WORLDSCALE_DEFAULT)
+#define QR_WORLDSCALE_MAX	(1.2f * QR_WORLDSCALE_DEFAULT)
+
+/* Extra culling fov on top of what the consumer reports, covering one frame
+   of head rotation before the engine sees the new pose. A fast head turn is
+   ~300 deg/s; at 90 Hz that is ~3.3 deg, so 10 gives margin to spare. */
+#define QR_CULL_FOV_MARGIN	10.0f
 
 /* ========================================================================
  * globals the engine headers declare and upstream's renderer defined
@@ -111,6 +124,12 @@ static int		qr_pending_drawable_w, qr_pending_drawable_h;
 static qboolean		qr_drawable_dirty;
 static pthread_mutex_t	qr_drawable_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Culling fov override, degrees; 0 = none (refdef fov applies). Written by
+   the consumer when the immersive layer knows its merged binocular frustum,
+   read once per engine frame. */
+static float		qr_cull_fovx, qr_cull_fovy;
+static pthread_mutex_t	qr_cullfov_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void QC_RendererSetDrawableSize (int width, int height)
 {
 	pthread_mutex_lock (&qr_drawable_lock);
@@ -122,6 +141,14 @@ void QC_RendererSetDrawableSize (int width, int height)
 		qr_drawable_dirty = true;
 	}
 	pthread_mutex_unlock (&qr_drawable_lock);
+}
+
+void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg)
+{
+	pthread_mutex_lock (&qr_cullfov_lock);
+	qr_cull_fovx = fovx_deg;
+	qr_cull_fovy = fovy_deg;
+	pthread_mutex_unlock (&qr_cullfov_lock);
 }
 
 qboolean QR_ConsumePendingDrawableSize (int *width, int *height)
@@ -1949,6 +1976,8 @@ void QR_BeginFrame (void)
 	   animation state from this slot's previous life */
 	slot->frame.time = 0;
 	memset (slot->frame.vieworg, 0, sizeof(slot->frame.vieworg));
+	memset (slot->frame.viewangles, 0, sizeof(slot->frame.viewangles));
+	slot->frame.world_scale = QR_WORLDSCALE_DEFAULT;
 	slot->frame.sky_solid_texnum = 0;
 	slot->frame.sky_alpha_texnum = 0;
 	memset (slot->frame.skybox_texnums, 0, sizeof(slot->frame.skybox_texnums));
@@ -1986,11 +2015,30 @@ void QR_RenderView (void)
 	r_oldviewleaf = r_viewleaf;
 	r_viewleaf = Mod_PointInLeaf (r_origin, cl.worldmodel);
 
-	/* no r_waterwarp fov wobble yet: water isn't drawn */
+	/* no r_waterwarp underwater fov wobble yet (see roadmap) */
 	r_fovx = r_refdef.fov_x;
 	r_fovy = r_refdef.fov_y;
 
-	R_SetFrustum (r_fovx, r_fovy);
+	/* Cull once with a frustum wide enough for whatever the consumer
+	   renders. Immersive rendering reports the merged binocular fov and
+	   late-latches the head pose, so widen by the reported fov plus a
+	   rotation margin; the packet's mono viewproj keeps r_fovx/r_fovy.
+	   Over-drawing is much cheaper than popping at the periphery. */
+	{
+		float cullx, cully;
+
+		pthread_mutex_lock (&qr_cullfov_lock);
+		cullx = qr_cull_fovx;
+		cully = qr_cull_fovy;
+		pthread_mutex_unlock (&qr_cullfov_lock);
+
+		if (cullx > 0 && cully > 0)
+		{
+			cullx = q_min (cullx + QR_CULL_FOV_MARGIN, 170.f);
+			cully = q_min (cully + QR_CULL_FOV_MARGIN, 170.f);
+		}
+		R_SetFrustum (q_max (r_fovx, cullx), q_max (r_fovy, cully));
+	}
 
 	R_MarkSurfaces ();
 
@@ -2002,6 +2050,11 @@ void QR_RenderView (void)
 	slot->frame.vieworg[0] = r_origin[0];
 	slot->frame.vieworg[1] = r_origin[1];
 	slot->frame.vieworg[2] = r_origin[2];
+	slot->frame.viewangles[0] = r_refdef.viewangles[0];
+	slot->frame.viewangles[1] = r_refdef.viewangles[1];
+	slot->frame.viewangles[2] = r_refdef.viewangles[2];
+	slot->frame.world_scale = CLAMP (QR_WORLDSCALE_MIN, vr_worldscale.value,
+					 QR_WORLDSCALE_MAX);
 	slot->frame.sky_solid_texnum = solidskytexture ? solidskytexture->texnum : 0;
 	slot->frame.sky_alpha_texnum = alphaskytexture ? alphaskytexture->texnum : 0;
 	if (skybox_name[0])
