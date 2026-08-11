@@ -43,14 +43,6 @@ final class ImmersiveRenderer {
     private var singlePassStereo = false
     private var loggedSetup = false
 
-    /// bgra8Unorm views over the drawable's sRGB color textures, keyed by
-    /// texture identity (drawables recycle a small pool). Quake's textures
-    /// are sRGB-authored values in unorm storage; writing them through a
-    /// unorm view stores them byte-identical, and the compositor's sRGB
-    /// decode then displays exactly what the flat window shows. Rendering
-    /// into the sRGB format directly would re-encode and wash the world out.
-    private var unormViews: [ObjectIdentifier: MTLTexture] = [:]
-
     /// Culling fov last reported to the engine, to dedupe the C call.
     private var reportedCullFov = SIMD2<Float>(0, 0)
 
@@ -135,6 +127,7 @@ final class ImmersiveRenderer {
         let anchorTime = seconds(from: timing.presentationTime)
         let deviceAnchor = worldTracking.queryDeviceAnchor(atTimestamp: anchorTime)
         drawable.deviceAnchor = deviceAnchor
+
 
         reportViewGeometry(for: drawable)
 
@@ -268,7 +261,7 @@ final class ImmersiveRenderer {
                                 slice: Int?,
                                 clear: MTLClearColor) -> MTLRenderPassDescriptor {
         let descriptor = MTLRenderPassDescriptor()
-        descriptor.colorAttachments[0].texture = unormView(of: drawable.colorTextures[textureIndex])
+        descriptor.colorAttachments[0].texture = drawable.colorTextures[textureIndex]
         descriptor.colorAttachments[0].loadAction = .clear
         descriptor.colorAttachments[0].storeAction = .store
         descriptor.colorAttachments[0].clearColor = clear
@@ -288,28 +281,20 @@ final class ImmersiveRenderer {
         return descriptor
     }
 
-    private func unormView(of texture: MTLTexture) -> MTLTexture {
-        guard texture.pixelFormat == .bgra8Unorm_srgb else { return texture }
-        let key = ObjectIdentifier(texture)
-        if let view = unormViews[key] { return view }
-        let view = texture.makeTextureView(pixelFormat: .bgra8Unorm) ?? texture
-        unormViews[key] = view
-        return view
-    }
-
     private func buildPipelines() {
         let configuration = layerRenderer.configuration
-        let colorFormat: MTLPixelFormat =
-            configuration.colorFormat == .bgra8Unorm_srgb ? .bgra8Unorm : configuration.colorFormat
 
         singlePassStereo = configuration.layout == .layered
             && core.device.supportsVertexAmplificationCount(2)
 
+        // Quake's colors are sRGB-authored: linearize at fragment output so
+        // the sRGB (or float) target displays them like the flat window.
         pipelines = core.makePipelines(
-            colorFormat: colorFormat,
+            colorFormat: configuration.colorFormat,
             depthFormat: configuration.depthFormat,
             amplified: singlePassStereo,
-            reverseDepth: true)
+            reverseDepth: true,
+            linearOutput: true)
 
         if !loggedSetup {
             loggedSetup = true

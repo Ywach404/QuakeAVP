@@ -40,10 +40,11 @@ struct QuakeLayerConfiguration: CompositorLayerConfiguration {
                            configuration: inout LayerRenderer.Configuration) {
         configuration.depthFormat = .depth32Float
 
-        // The device default is rgba16Float, which the compositor treats as
-        // linear — Quake's sRGB-authored palette would wash out. Prefer the
-        // sRGB unorm format; the renderer then writes through a plain-unorm
-        // texture view so stored bytes match the flat window exactly.
+        // Prefer the sRGB unorm format: the renderer's immersive pipelines
+        // linearize their output so the sRGB store re-encodes Quake's
+        // authored palette byte-identically (the rgba16Float default would
+        // read it as linear and wash it out; a plain-unorm texture view is
+        // not an option — the compositor rejects pixelFormatView usage).
         if capabilities.supportedColorFormats(options: []).contains(.bgra8Unorm_srgb) {
             configuration.colorFormat = .bgra8Unorm_srgb
         }

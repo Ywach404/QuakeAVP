@@ -190,12 +190,17 @@ final class RendererCore {
     func makePipelines(colorFormat: MTLPixelFormat,
                        depthFormat: MTLPixelFormat,
                        amplified: Bool,
-                       reverseDepth: Bool) -> RenderPipelines? {
+                       reverseDepth: Bool,
+                       linearOutput: Bool = false) -> RenderPipelines? {
+        let constants = MTLFunctionConstantValues()
+        var linear = linearOutput
+        constants.setConstantValue(&linear, type: .bool, index: 0)
+
         func pipeline(vertex: String = "world_vertex", fragment: String,
                       blended: Bool) -> MTLRenderPipelineState? {
             guard
-                let vertexFunction = library.makeFunction(name: vertex),
-                let fragmentFunction = library.makeFunction(name: fragment)
+                let vertexFunction = try? library.makeFunction(name: vertex, constantValues: constants),
+                let fragmentFunction = try? library.makeFunction(name: fragment, constantValues: constants)
             else { return nil }
             let descriptor = MTLRenderPipelineDescriptor()
             descriptor.label = fragment + (amplified ? " (stereo)" : "")
