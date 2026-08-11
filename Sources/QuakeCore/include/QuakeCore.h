@@ -92,6 +92,38 @@ void QC_RendererReleaseUploads (void);
 int  QC_RendererAcquireTextureFrees (const uint32_t **out);
 void QC_RendererReleaseTextureFrees (void);
 
+/*
+ * Alias mesh uploads. Static per-model geometry built once at model load
+ * (the GL_MakeAliasModelDisplayLists port) and handed over exactly like
+ * texture pixels: the engine queues a private copy, the consumer acquires,
+ * builds GPU buffers, releases. Per-frame packets then reference meshes by
+ * handle — static mesh data never travels in the packet.
+ *
+ * Vertex layout matches upstream's meshxyz_t: positions are the MDL's raw
+ * byte coordinates (the entity transform bakes scale/scale_origin), normals
+ * are signed bytes in [-127, 127]. All poses are concatenated; texcoords
+ * are shared across poses; indices are one triangle list.
+ */
+typedef struct qc_mesh_vertex_s {
+	uint8_t		xyz[4];		/* w = 1, for 4-byte compression */
+	int8_t		normal[4];	/* [-127..127]; w unused */
+} qc_mesh_vertex_t;
+
+typedef struct qc_mesh_upload_s {
+	uint32_t	meshnum;	/* engine-side handle, never 0 */
+	uint32_t	numposes;
+	uint32_t	numverts;	/* vertices per pose */
+	uint32_t	numindexes;
+	const qc_mesh_vertex_t	*vertices;	/* numposes * numverts */
+	const float		*st;		/* numverts * 2 */
+	const uint16_t		*indexes;	/* numindexes */
+} qc_mesh_upload_t;
+
+int  QC_RendererAcquireMeshUploads (const qc_mesh_upload_t **out);
+void QC_RendererReleaseMeshUploads (void);
+int  QC_RendererAcquireMeshFrees (const uint32_t **out);
+void QC_RendererReleaseMeshFrees (void);
+
 /* Static world geometry, rebuilt at map load. Layout matches World.metal.
    Acquire returns the map generation (0 = no map) and holds the geometry
    lock until Release, so copy into a GPU buffer and get out quickly --
@@ -106,25 +138,64 @@ uint32_t QC_RendererAcquireGeometry (const qc_world_vertex_t **verts,
 				     uint32_t *count);
 void QC_RendererReleaseGeometry (void);
 
-/* Batch kinds select the consumer's pipeline. Batches arrive in draw order:
-   sky first (depth-writing, like upstream Sky_DrawSky), then opaque world,
-   then liquids (blended when alpha < 1, after everything opaque). */
+/* Batch kinds select the consumer's pipeline. Batches arrive in upstream's
+   draw order: sky (depth-writing, like Sky_DrawSky), opaque world, opaque
+   entities, liquids, then translucent entities. */
 enum {
 	QC_BATCH_WORLD  = 0,	/* diffuse * lightmap */
 	QC_BATCH_SKY    = 1,	/* scrolling cloud layers or skybox, projected
 				   from vieworg; per-frame sky texnums below */
-	QC_BATCH_LIQUID = 2	/* unlit, UV-warped, alpha-blended */
+	QC_BATCH_LIQUID = 2,	/* unlit, UV-warped, alpha-blended */
+	QC_BATCH_ALIAS  = 3	/* lerped alias mesh; geometry comes from the
+				   entity's mesh handle, not the frame indices */
 };
+
+/* Batches that belong to an entity index into the frame's entity array;
+   world batches use the sentinel and draw with the identity transform. */
+#define QC_ENTITY_NONE	0xffffffffu
+
+enum {
+	/* The view weapon. View-locked, which is wrong in VR; the consumer
+	   decides (window draws it depth-squished like upstream's
+	   glDepthRange(0, 0.3), immersive skips it).
+	   TODO(M4): decouple the weapon from the view instead. */
+	QC_ENTFLAG_VIEWMODEL = 1 << 0
+};
+
+/*
+ * Per-entity state, published once per frame in a side array so world
+ * batches don't carry a transform each. Alias lighting follows upstream
+ * R_SetupAliasLighting: light is lightcolor/200 with overbright-model
+ * doubling pre-baked, shadevector the quantized yaw light direction the
+ * shade-dot formula needs. Dynamic lights and lightstyle animation are
+ * still stubbed, so both feed defaults and results differ from upstream
+ * until those land.
+ */
+typedef struct qc_entity_s {
+	float		transform[16];	/* column-major model->world, Quake units;
+					   bakes origin/angles/scale and, for alias
+					   models, scale_origin/scale */
+	float		light[3];	/* alias vertex light color */
+	float		shadevector[3];
+	float		alpha;		/* ENTALPHA_DECODE'd */
+	float		blend;		/* pose lerp factor, 0 = pose1 */
+	uint32_t	meshnum;	/* alias mesh handle; 0 for brush entities */
+	uint32_t	pose1, pose2;
+	uint32_t	flags;		/* QC_ENTFLAG_* */
+} qc_entity_t;
 
 /* One draw batch: a run of triangle-list indices sharing textures. */
 typedef struct qc_draw_batch_s {
 	uint32_t	kind;		/* QC_BATCH_* */
-	uint32_t	texnum;		/* diffuse texture handle */
-	uint32_t	lightmap;	/* lightmap texture handle, 0 = fullbright */
+	uint32_t	texnum;		/* diffuse texture handle (alias: skin) */
+	uint32_t	lightmap;	/* lightmap texture handle, 0 = fullbright
+					   (alias: fullbright mask, 0 = none) */
 	uint32_t	first_index;
-	uint32_t	index_count;
+	uint32_t	index_count;	/* alias: index count within the mesh */
+	uint32_t	entity;		/* index into entities, QC_ENTITY_NONE = world */
 	float		alpha;		/* liquid: water/lava/slime/tele alpha;
-					   sky: r_skyalpha; world: unused (1) */
+					   sky: r_skyalpha; entity kinds: entity
+					   alpha; world: 1 */
 } qc_draw_batch_t;
 
 /* There is no packet version field: both halves of this contract compile in
@@ -154,6 +225,8 @@ typedef struct qc_frame_s {
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;
 	const qc_draw_batch_t *batches;
+	uint32_t	num_entities;
+	const qc_entity_t *entities;
 } qc_frame_t;
 
 /* Latest published frame, or NULL if none is newer than the last acquire.
