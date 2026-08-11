@@ -97,8 +97,18 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
             let uniforms = RendererCore.WorldUniforms(
                 viewproj0: viewproj, viewproj1: viewproj,
                 eyeorg0: eyeorg, eyeorg1: eyeorg)
+            // The window draws the view weapon with upstream's
+            // glDepthRange(0, 0.3) squish; the immersive path skips it.
+            let w = Double(view.drawableSize.width)
+            let h = Double(view.drawableSize.height)
+            let viewports = (
+                full: MTLViewport(originX: 0, originY: 0, width: w, height: h,
+                                  znear: 0, zfar: 1),
+                squished: MTLViewport(originX: 0, originY: 0, width: w, height: h,
+                                      znear: 0, zfar: 0.3))
             core.encode(frame: f, with: encoder, pipelines: pipelines,
-                        uniforms: uniforms, amplificationCount: 1)
+                        uniforms: uniforms, amplificationCount: 1,
+                        viewmodelViewport: viewports)
         }
         encoder.endEncoding()
 

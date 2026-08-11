@@ -579,14 +579,8 @@ cvar_t	r_sky_quality = {"r_sky_quality", "12", CVAR_NONE};
 cvar_t	r_skyalpha = {"r_skyalpha", "1", CVAR_NONE};
 cvar_t	r_skyfog = {"r_skyfog","0.5",CVAR_NONE};
 
-void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *hdr)
-{
-	(void) m; (void) hdr;
-}
-
-void GLMesh_DeleteVertexBuffers (void)
-{
-}
+/* GL_MakeAliasModelDisplayLists / GLMesh_DeleteVertexBuffers are real now,
+   ported into qr_bridge.c's mesh section. */
 
 void GL_SubdivideSurface (msurface_t *fa)
 {

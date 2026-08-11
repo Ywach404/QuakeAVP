@@ -36,6 +36,7 @@
 /* renderer-owned cvars glquake.h doesn't extern; defined in r_null.c */
 extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farclip;
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
+extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
 
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
@@ -1809,6 +1810,11 @@ void R_MarkSurfaces (void)
 						}
 					}
 				}
+
+			/* static entities (torches, flames) ride efrags into
+			   cl_visedicts, exactly upstream r_world.c */
+			if (leaf->efrags)
+				R_StoreEfrags (&leaf->efrags);
 		}
 	}
 }
@@ -2257,6 +2263,630 @@ static void QR_EmitBrushModel (qr_frame_slot_t *slot, entity_t *e)
 			      rec.alpha, e->frame, QR_PHASE_ALL);
 }
 
+/* ========================================================================
+ * gl_mesh.c -- alias model mesh building (VBO path only)
+ *
+ * Upstream builds two representations: the strip/fan command lists for the
+ * GL1 immediate-mode path and a deduped indexed mesh for the GLSL path.
+ * Only the indexed mesh is ported; the command lists existed for hardware
+ * this renderer never runs on.
+ * ===================================================================== */
+
+const float r_avertexnormals[NUMVERTEXNORMALS][3] = {
+#include "anorms.h"
+};
+
+/*
+================
+GL_MakeAliasModelDisplayLists -- port of the _VBO half of gl_mesh.c.
+
+Dedupes verts (each source vert can appear twice: once with original UVs
+and once seam-adjusted for backfacing tris), then packs every pose as
+byte positions + signed-byte normals and hands the mesh to the consumer
+through the mesh queue. The handle lives in qmodel_t's meshvbo field --
+the same slot upstream kept its GL buffer name in -- so cache eviction
+and reload just replaces the mesh like upstream replaced the VBO.
+================
+*/
+void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *hdr)
+{
+	int		i, j, mark;
+	unsigned short	*remap;
+	aliasmesh_t	*desc;
+	unsigned short	*indexes;
+	qc_mesh_vertex_t *verts;
+	float		*st;
+	uint16_t	*idx_copy;
+	int		numindexes, numverts_vbo;
+	float		hscale, vscale;
+
+	mark = Hunk_LowMark ();
+
+	desc = (aliasmesh_t *) Hunk_Alloc (sizeof(aliasmesh_t) * hdr->numverts * 2);
+	indexes = (unsigned short *) Hunk_Alloc (sizeof(unsigned short) * hdr->numtris * 3);
+	remap = (unsigned short *) Hunk_Alloc (hdr->numverts * 2 * sizeof(remap[0]));
+
+	numindexes = 0;
+	numverts_vbo = 0;
+
+	for (i = 0; i < hdr->numtris; i++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			unsigned short vertindex = triangles[i].vertindex[j];
+			int v = vertindex * 2;
+
+			/* check for back side */
+			if (!triangles[i].facesfront && stverts[vertindex].onseam)
+				v++;
+
+			if (!remap[v])
+			{
+				int s = stverts[vertindex].s;
+				int t = stverts[vertindex].t;
+
+				if (v & 1)
+					s += hdr->skinwidth / 2;
+
+				desc[numverts_vbo].vertindex = vertindex;
+				desc[numverts_vbo].st[0] = s;
+				desc[numverts_vbo].st[1] = t;
+				remap[v] = ++numverts_vbo;
+			}
+
+			indexes[numindexes++] = remap[v] - 1;
+		}
+	}
+
+	hdr->numindexes = numindexes;
+	hdr->numverts_vbo = numverts_vbo;
+
+	/* pack the upload: all poses' verts, shared st, indices */
+	verts = (qc_mesh_vertex_t *) malloc ((size_t)hdr->numposes * numverts_vbo
+					     * sizeof(qc_mesh_vertex_t));
+	st = (float *) malloc ((size_t)numverts_vbo * 2 * sizeof(float));
+	idx_copy = (uint16_t *) malloc ((size_t)numindexes * sizeof(uint16_t));
+	if (!verts || !st || !idx_copy)
+		Sys_Error ("GL_MakeAliasModelDisplayLists: out of memory");
+
+	for (i = 0; i < hdr->numposes; i++)
+	{
+		const trivertx_t *tv = poseverts[i];
+		qc_mesh_vertex_t *out = verts + (size_t)i * numverts_vbo;
+
+		for (j = 0; j < numverts_vbo; j++)
+		{
+			trivertx_t trivert = tv[desc[j].vertindex];
+
+			out[j].xyz[0] = trivert.v[0];
+			out[j].xyz[1] = trivert.v[1];
+			out[j].xyz[2] = trivert.v[2];
+			out[j].xyz[3] = 1;
+			/* map [-1..1] normals to [-127..127] signed bytes; the
+			   error (< 0.004) is far below the source table's own
+			   coarseness */
+			out[j].normal[0] = 127 * r_avertexnormals[trivert.lightnormalindex][0];
+			out[j].normal[1] = 127 * r_avertexnormals[trivert.lightnormalindex][1];
+			out[j].normal[2] = 127 * r_avertexnormals[trivert.lightnormalindex][2];
+			out[j].normal[3] = 0;
+		}
+	}
+
+	hscale = 1.0f / (float)hdr->skinwidth;
+	vscale = 1.0f / (float)hdr->skinheight;
+	for (j = 0; j < numverts_vbo; j++)
+	{
+		st[j*2+0] = hscale * ((float)desc[j].st[0] + 0.5f);
+		st[j*2+1] = vscale * ((float)desc[j].st[1] + 0.5f);
+	}
+
+	memcpy (idx_copy, indexes, numindexes * sizeof(uint16_t));
+
+	Hunk_FreeToLowMark (mark);
+
+	if (m->meshvbo)
+		QR_EnqueueMeshFree (m->meshvbo);
+	m->meshvbo = QR_EnqueueMeshUpload (hdr->numposes, numverts_vbo,
+					   numindexes, verts, st, idx_copy);
+}
+
+/*
+================
+GLMesh_DeleteVertexBuffers -- called by Mod_ClearAll on map/game change
+================
+*/
+void GLMesh_DeleteVertexBuffers (void)
+{
+	int j;
+	qmodel_t *m;
+
+	for (j = 1; j < MAX_MODELS; j++)
+	{
+		if (!(m = cl.model_precache[j]))
+			break;
+		if (m->type != mod_alias || !m->meshvbo)
+			continue;
+		QR_EnqueueMeshFree (m->meshvbo);
+		m->meshvbo = 0;
+	}
+}
+
+/* ========================================================================
+ * gl_rlight.c -- R_LightPoint, for alias entity lighting
+ * ===================================================================== */
+
+static vec3_t	lightspot;
+static vec3_t	lightcolor;
+
+static int RecursiveLightPoint (vec3_t color, mnode_t *node, vec3_t rayorg,
+				vec3_t start, vec3_t end, float *maxdist)
+{
+	float		front, back, frac;
+	vec3_t		mid;
+
+loc0:
+	if (node->contents < 0)
+		return false;		/* didn't hit anything */
+
+/* calculate mid point */
+	if (node->plane->type < 3)
+	{
+		front = start[node->plane->type] - node->plane->dist;
+		back = end[node->plane->type] - node->plane->dist;
+	}
+	else
+	{
+		front = DotProduct(start, node->plane->normal) - node->plane->dist;
+		back = DotProduct(end, node->plane->normal) - node->plane->dist;
+	}
+
+	/* LordHavoc: optimized recursion */
+	if ((back < 0) == (front < 0))
+	{
+		node = node->children[front < 0];
+		goto loc0;
+	}
+
+	frac = front / (front-back);
+	mid[0] = start[0] + (end[0] - start[0])*frac;
+	mid[1] = start[1] + (end[1] - start[1])*frac;
+	mid[2] = start[2] + (end[2] - start[2])*frac;
+
+/* go down front side */
+	if (RecursiveLightPoint (color, node->children[front < 0], rayorg, start, mid, maxdist))
+		return true;	/* hit something */
+	else
+	{
+		int i, ds, dt;
+		msurface_t *surf;
+
+	/* check for impact on this node */
+		VectorCopy (mid, lightspot);
+
+		surf = cl.worldmodel->surfaces + node->firstsurface;
+		for (i = 0; i < node->numsurfaces; i++, surf++)
+		{
+			float sfront, sback, dist;
+			vec3_t raydelta;
+
+			if (surf->flags & SURF_DRAWTILED)
+				continue;	/* no lightmaps */
+
+		/* ericw -- double casts for 64-bit precision (SSE builds lit
+		   the jam3_ericw zombie wrongly without them) */
+			ds = (int) ((double) DoublePrecisionDotProduct (mid, surf->texinfo->vecs[0]) + surf->texinfo->vecs[0][3]);
+			dt = (int) ((double) DoublePrecisionDotProduct (mid, surf->texinfo->vecs[1]) + surf->texinfo->vecs[1][3]);
+
+			if (ds < surf->texturemins[0] || dt < surf->texturemins[1])
+				continue;
+
+			ds -= surf->texturemins[0];
+			dt -= surf->texturemins[1];
+
+			if (ds > surf->extents[0] || dt > surf->extents[1])
+				continue;
+
+			if (surf->plane->type < 3)
+			{
+				sfront = rayorg[surf->plane->type] - surf->plane->dist;
+				sback = end[surf->plane->type] - surf->plane->dist;
+			}
+			else
+			{
+				sfront = DotProduct(rayorg, surf->plane->normal) - surf->plane->dist;
+				sback = DotProduct(end, surf->plane->normal) - surf->plane->dist;
+			}
+			VectorSubtract(end, rayorg, raydelta);
+			dist = sfront / (sfront - sback) * VectorLength(raydelta);
+
+			if (!surf->samples)
+			{
+				/* lightmapped flag but no data: keep looking
+				   nearby instead of going black (DOTM overlap
+				   fix) */
+				const float nearby = 8.f;
+				dist += nearby;
+				*maxdist = q_min(*maxdist, dist);
+				continue;
+			}
+
+			if (dist < *maxdist)
+			{
+				/* LordHavoc: interpolated sampling. Lightstyles
+				   feed in via d_lightstylevalue, which is pinned
+				   to the default until lightstyle animation
+				   lands. */
+				byte *lightmap;
+				int maps, line3, dsfrac = ds & 15, dtfrac = dt & 15, r00 = 0, g00 = 0, b00 = 0, r01 = 0, g01 = 0, b01 = 0, r10 = 0, g10 = 0, b10 = 0, r11 = 0, g11 = 0, b11 = 0;
+				float scale;
+				line3 = ((surf->extents[0]>>4)+1)*3;
+
+				lightmap = surf->samples + ((dt>>4) * ((surf->extents[0]>>4)+1) + (ds>>4))*3;
+
+				for (maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++)
+				{
+					scale = (float) d_lightstylevalue[surf->styles[maps]] * 1.0 / 256.0;
+					r00 += (float) lightmap[      0] * scale;g00 += (float) lightmap[      1] * scale;b00 += (float) lightmap[2] * scale;
+					r01 += (float) lightmap[      3] * scale;g01 += (float) lightmap[      4] * scale;b01 += (float) lightmap[5] * scale;
+					r10 += (float) lightmap[line3+0] * scale;g10 += (float) lightmap[line3+1] * scale;b10 += (float) lightmap[line3+2] * scale;
+					r11 += (float) lightmap[line3+3] * scale;g11 += (float) lightmap[line3+4] * scale;b11 += (float) lightmap[line3+5] * scale;
+					lightmap += ((surf->extents[0]>>4)+1) * ((surf->extents[1]>>4)+1)*3;
+				}
+
+				color[0] += (float) ((int) ((((((((r11-r10) * dsfrac) >> 4) + r10)-((((r01-r00) * dsfrac) >> 4) + r00)) * dtfrac) >> 4) + ((((r01-r00) * dsfrac) >> 4) + r00)));
+				color[1] += (float) ((int) ((((((((g11-g10) * dsfrac) >> 4) + g10)-((((g01-g00) * dsfrac) >> 4) + g00)) * dtfrac) >> 4) + ((((g01-g00) * dsfrac) >> 4) + g00)));
+				color[2] += (float) ((int) ((((((((b11-b10) * dsfrac) >> 4) + b10)-((((b01-b00) * dsfrac) >> 4) + b00)) * dtfrac) >> 4) + ((((b01-b00) * dsfrac) >> 4) + b00)));
+			}
+			return true;
+		}
+
+	/* go down back side */
+		return RecursiveLightPoint (color, node->children[front >= 0], rayorg, mid, end, maxdist);
+	}
+}
+
+int R_LightPoint (vec3_t p)
+{
+	vec3_t		end;
+	float		maxdist = 8192.f;
+
+	if (!cl.worldmodel->lightdata)
+	{
+		lightcolor[0] = lightcolor[1] = lightcolor[2] = 255;
+		return 255;
+	}
+
+	end[0] = p[0];
+	end[1] = p[1];
+	end[2] = p[2] - maxdist;
+
+	lightcolor[0] = lightcolor[1] = lightcolor[2] = 0;
+	RecursiveLightPoint (lightcolor, cl.worldmodel->nodes, p, p, end, &maxdist);
+	return ((lightcolor[0] + lightcolor[1] + lightcolor[2]) * (1.0f / 3.0f));
+}
+
+/* ========================================================================
+ * r_alias.c -- alias model lerp setup, lighting, and batch emission
+ * ===================================================================== */
+
+typedef struct {
+	short pose1;
+	short pose2;
+	float blend;
+	vec3_t origin;
+	vec3_t angles;
+} lerpdata_t;
+
+/*
+=================
+R_SetupAliasFrame -- straight port; mutates the entity's lerp state
+=================
+*/
+static void QR_SetupAliasFrame (entity_t *e, aliashdr_t *paliashdr, int frame,
+				lerpdata_t *lerpdata)
+{
+	int	posenum, numposes;
+
+	if ((frame >= paliashdr->numframes) || (frame < 0))
+	{
+		Con_DPrintf ("R_AliasSetupFrame: no such frame %d for '%s'\n", frame, e->model->name);
+		frame = 0;
+	}
+
+	posenum = paliashdr->frames[frame].firstpose;
+	numposes = paliashdr->frames[frame].numposes;
+
+	if (numposes > 1)
+	{
+		e->lerptime = paliashdr->frames[frame].interval;
+		posenum += (int)(cl.time / e->lerptime) % numposes;
+	}
+	else
+		e->lerptime = 0.1;
+
+	if (e->lerpflags & LERP_RESETANIM)	/* kill any lerp in progress */
+	{
+		e->lerpstart = 0;
+		e->previouspose = posenum;
+		e->currentpose = posenum;
+		e->lerpflags -= LERP_RESETANIM;
+	}
+	else if (e->currentpose != posenum)	/* pose changed, start new lerp */
+	{
+		if (e->lerpflags & LERP_RESETANIM2)	/* defer lerping one more time */
+		{
+			e->lerpstart = 0;
+			e->previouspose = posenum;
+			e->currentpose = posenum;
+			e->lerpflags -= LERP_RESETANIM2;
+		}
+		else
+		{
+			e->lerpstart = cl.time;
+			e->previouspose = e->currentpose;
+			e->currentpose = posenum;
+		}
+	}
+
+	if (r_lerpmodels.value && !(e->model->flags & MOD_NOLERP && r_lerpmodels.value != 2))
+	{
+		if (e->lerpflags & LERP_FINISH && numposes == 1)
+			lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerpstart) / (e->lerpfinish - e->lerpstart), 1.0f);
+		else
+			lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerpstart) / e->lerptime, 1.0f);
+		if (lerpdata->blend == 1.0f)
+			e->previouspose = e->currentpose;
+		lerpdata->pose1 = e->previouspose;
+		lerpdata->pose2 = e->currentpose;
+	}
+	else	/* don't lerp */
+	{
+		lerpdata->blend = 1;
+		lerpdata->pose1 = posenum;
+		lerpdata->pose2 = posenum;
+	}
+}
+
+/*
+=================
+R_SetupEntityTransform -- straight port
+=================
+*/
+static void QR_SetupEntityTransform (entity_t *e, lerpdata_t *lerpdata)
+{
+	float blend;
+	vec3_t d;
+	int i;
+
+	if (e->lerpflags & LERP_RESETMOVE)
+	{
+		e->movelerpstart = 0;
+		VectorCopy (e->origin, e->previousorigin);
+		VectorCopy (e->origin, e->currentorigin);
+		VectorCopy (e->angles, e->previousangles);
+		VectorCopy (e->angles, e->currentangles);
+		e->lerpflags -= LERP_RESETMOVE;
+	}
+	else if (!VectorCompare (e->origin, e->currentorigin) || !VectorCompare (e->angles, e->currentangles))
+	{
+		e->movelerpstart = cl.time;
+		VectorCopy (e->currentorigin, e->previousorigin);
+		VectorCopy (e->origin,  e->currentorigin);
+		VectorCopy (e->currentangles, e->previousangles);
+		VectorCopy (e->angles,  e->currentangles);
+	}
+
+	if (r_lerpmove.value && e != &cl.viewent && e->lerpflags & LERP_MOVESTEP)
+	{
+		if (e->lerpflags & LERP_FINISH)
+			blend = CLAMP (0.0f, (float)(cl.time - e->movelerpstart) / (e->lerpfinish - e->movelerpstart), 1.0f);
+		else
+			blend = CLAMP (0.0f, (float)(cl.time - e->movelerpstart) / 0.1f, 1.0f);
+
+		VectorSubtract (e->currentorigin, e->previousorigin, d);
+		lerpdata->origin[0] = e->previousorigin[0] + d[0] * blend;
+		lerpdata->origin[1] = e->previousorigin[1] + d[1] * blend;
+		lerpdata->origin[2] = e->previousorigin[2] + d[2] * blend;
+
+		VectorSubtract (e->currentangles, e->previousangles, d);
+		for (i = 0; i < 3; i++)
+		{
+			if (d[i] > 180)  d[i] -= 360;
+			if (d[i] < -180) d[i] += 360;
+		}
+		lerpdata->angles[0] = e->previousangles[0] + d[0] * blend;
+		lerpdata->angles[1] = e->previousangles[1] + d[1] * blend;
+		lerpdata->angles[2] = e->previousangles[2] + d[2] * blend;
+	}
+	else
+	{
+		VectorCopy (e->origin, lerpdata->origin);
+		VectorCopy (e->angles, lerpdata->angles);
+	}
+}
+
+/*
+=================
+R_SetupAliasLighting -- straight port minus the CPU shadedots table (the
+shade-dot quantisation moves into the vertex shader via shadevector).
+Dynamic lights DO contribute here (cl_dlights is engine state, muzzle
+flashes and explosions set it), but surface dlights and lightstyle
+animation are still stubbed, so overall lighting differs from upstream
+until those land.
+=================
+*/
+static void QR_SetupAliasLighting (entity_t *e, vec3_t shadevector_out)
+{
+	vec3_t		dist;
+	float		add;
+	int		i;
+	int		quantizedangle;
+	float		radiansangle;
+
+	/* black initial trace: retry from mid-height (candles-below-floor fix) */
+	if (!R_LightPoint (e->origin))
+	{
+		vec3_t lpos;
+		VectorCopy (e->origin, lpos);
+		lpos[2] += e->model->maxs[2] * 0.5f;
+		R_LightPoint (lpos);
+	}
+
+	for (i = 0; i < MAX_DLIGHTS; i++)
+	{
+		if (cl_dlights[i].die >= cl.time)
+		{
+			VectorSubtract (e->origin, cl_dlights[i].origin, dist);
+			add = cl_dlights[i].radius - VectorLength(dist);
+			if (add > 0)
+				VectorMA (lightcolor, add, cl_dlights[i].color, lightcolor);
+		}
+	}
+
+	/* minimum light value on gun (24) */
+	if (e == &cl.viewent)
+	{
+		add = 72.0f - (lightcolor[0] + lightcolor[1] + lightcolor[2]);
+		if (add > 0.0f)
+		{
+			lightcolor[0] += add / 3.0f;
+			lightcolor[1] += add / 3.0f;
+			lightcolor[2] += add / 3.0f;
+		}
+	}
+
+	/* minimum light value on players (8) */
+	if (e > cl_entities && e <= cl_entities + cl.maxclients)
+	{
+		add = 24.0f - (lightcolor[0] + lightcolor[1] + lightcolor[2]);
+		if (add > 0.0f)
+		{
+			lightcolor[0] += add / 3.0f;
+			lightcolor[1] += add / 3.0f;
+			lightcolor[2] += add / 3.0f;
+		}
+	}
+
+	/* clamp lighting so it doesn't overbright as much (96) */
+	if (gl_overbright_models.value)
+	{
+		add = 288.0f / (lightcolor[0] + lightcolor[1] + lightcolor[2]);
+		if (add < 1.0f)
+			VectorScale(lightcolor, add, lightcolor);
+	}
+
+	/* hack up the brightness when fullbrights but no overbrights (256) */
+	if (gl_fullbrights.value && !gl_overbright_models.value)
+		if (e->model->flags & MOD_FBRIGHTHACK)
+		{
+			lightcolor[0] = 256.0f;
+			lightcolor[1] = 256.0f;
+			lightcolor[2] = 256.0f;
+		}
+
+	quantizedangle = ((int)(e->angles[1] * (16.0 / 360.0))) & 15;
+	radiansangle = (quantizedangle / 16.0) * 2.0 * 3.14159;
+	shadevector_out[0] = cos(-radiansangle);
+	shadevector_out[1] = sin(-radiansangle);
+	shadevector_out[2] = 1;
+	VectorNormalize(shadevector_out);
+
+	VectorScale (lightcolor, 1.0f / 200.0f, lightcolor);
+}
+
+/*
+=================
+QR_EmitAliasModel -- port of R_DrawAliasModel, emitting an entity record
+and one QC_BATCH_ALIAS batch instead of GL state and a draw.
+=================
+*/
+static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
+{
+	aliashdr_t	*paliashdr;
+	int		anim, skinnum;
+	gltexture_t	*tx, *fb;
+	lerpdata_t	lerpdata;
+	qc_entity_t	rec;
+	uint32_t	entity;
+	float		entalpha;
+	float		t[16], s[16];
+	int		i;
+
+	/* pose/lerp state first so culling can't starve lerp updates */
+	paliashdr = (aliashdr_t *)Mod_Extradata (e->model);
+	QR_SetupAliasFrame (e, paliashdr, e->frame, &lerpdata);
+	QR_SetupEntityTransform (e, &lerpdata);
+
+	if (e != &cl.viewent && R_CullModelForEntity (e))
+		return;
+	if (!e->model->meshvbo || !paliashdr->numindexes)
+		return;
+
+	entalpha = ENTALPHA_DECODE(e->alpha);
+	if (entalpha == 0)
+		return;
+
+	memset (&rec, 0, sizeof(rec));
+
+	/* R_RotateForEntity, then the scale_origin translate and scale that
+	   upstream pushed after it -- the mesh stores raw byte positions */
+	QR_EntityMatrix (rec.transform, lerpdata.origin, lerpdata.angles, e->scale);
+	memset (t, 0, sizeof(t));
+	t[0] = t[5] = t[10] = t[15] = 1;
+	t[12] = paliashdr->scale_origin[0];
+	t[13] = paliashdr->scale_origin[1];
+	t[14] = paliashdr->scale_origin[2];
+	Mat4_Multiply (rec.transform, rec.transform, t);
+	memset (s, 0, sizeof(s));
+	s[0] = paliashdr->scale[0];
+	s[5] = paliashdr->scale[1];
+	s[10] = paliashdr->scale[2];
+	s[15] = 1;
+	Mat4_Multiply (rec.transform, rec.transform, s);
+
+	QR_SetupAliasLighting (e, rec.shadevector);
+
+	/* overbright-model doubling folds into the light color: the shader
+	   computes tex*light + fullbright and 2*(tex*light) == tex*(2*light) */
+	for (i = 0; i < 3; i++)
+		rec.light[i] = lightcolor[i] * (gl_overbright_models.value ? 2.0f : 1.0f);
+
+	anim = (int)(cl.time*10) & 3;
+	skinnum = e->skinnum;
+	if ((skinnum >= paliashdr->numskins) || (skinnum < 0))
+	{
+		Con_DPrintf ("QR_EmitAliasModel: no such skin # %d for '%s'\n", skinnum, e->model->name);
+		skinnum = 0;
+	}
+	tx = paliashdr->gltextures[skinnum][anim];
+	fb = paliashdr->fbtextures[skinnum][anim];
+	if (!gl_fullbrights.value)
+		fb = NULL;
+	/* TODO: colormapped player skins (playertextures / gl_nocolors) */
+
+	rec.alpha = entalpha;
+	rec.blend = (lerpdata.pose1 != lerpdata.pose2) ? lerpdata.blend : 0;
+	rec.meshnum = e->model->meshvbo;
+	rec.pose1 = lerpdata.pose1;
+	rec.pose2 = lerpdata.pose2;
+	if (e == &cl.viewent)
+		rec.flags |= QC_ENTFLAG_VIEWMODEL;
+
+	entity = QR_AppendEntity (slot, &rec);
+
+	QR_EnsureBatchCapacity (slot);
+	{
+		qc_draw_batch_t *b = &slot->batches[slot->frame.num_batches++];
+		b->kind = QC_BATCH_ALIAS;
+		b->texnum = tx ? tx->texnum : notexture->texnum;
+		b->lightmap = fb ? fb->texnum : 0;
+		b->first_index = 0;
+		b->index_count = paliashdr->numindexes;
+		b->entity = entity;
+		b->alpha = entalpha;
+	}
+}
+
 /*
 ================
 QR_BuildFramePacket -- flatten this frame into typed batches, in upstream
@@ -2284,6 +2914,9 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				continue;
 			if (e->model->type == mod_brush)
 				QR_EmitBrushModel (slot, e);
+			else if (e->model->type == mod_alias)
+				QR_EmitAliasModel (slot, e);
+			/* mod_sprite: not rendered yet (needs per-frame quads) */
 		}
 
 	QR_EmitTextureChains (slot, cl.worldmodel, chain_world, QC_ENTITY_NONE,
@@ -2298,7 +2931,16 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				continue;
 			if (e->model->type == mod_brush)
 				QR_EmitBrushModel (slot, e);
+			else if (e->model->type == mod_alias)
+				QR_EmitAliasModel (slot, e);
 		}
+
+	/* the view weapon, last, like upstream R_DrawViewModel; the consumer
+	   decides whether to draw it (window yes, immersive no) */
+	if (r_drawviewmodel.value && r_drawentities.value && !chase_active.value
+	    && !(cl.items & IT_INVISIBILITY) && cl.stats[STAT_HEALTH] > 0
+	    && cl.viewent.model && cl.viewent.model->type == mod_alias)
+		QR_EmitAliasModel (slot, &cl.viewent);
 }
 
 /* ========================================================================
