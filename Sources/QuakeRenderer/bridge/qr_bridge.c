@@ -92,6 +92,23 @@ static uint32_t		*qr_held_frees;
 static int		qr_held_frees_count;
 static pthread_mutex_t	qr_free_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Alias mesh handoff: same ownership-transfer idiom as the texture queues.
+   The engine queues malloc'd copies at model load; the consumer acquires,
+   builds MTLBuffers, releases (which frees the copies). */
+typedef struct qr_mesh_queue_s {
+	qc_mesh_upload_t	*items;
+	int			count, capacity;
+} qr_mesh_queue_t;
+
+static qr_mesh_queue_t	qr_pending_meshes;	/* engine appends */
+static qr_mesh_queue_t	qr_held_meshes;		/* consumer holds */
+static uint32_t		*qr_pending_mesh_frees;
+static int		qr_pending_mesh_frees_count, qr_pending_mesh_frees_capacity;
+static uint32_t		*qr_held_mesh_frees;
+static int		qr_held_mesh_frees_count;
+static pthread_mutex_t	qr_mesh_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t		qr_next_meshnum = 1;
+
 /* World geometry. The lock is held by the consumer only for its once-per-map
    copy into an MTLBuffer, and by the engine while rebuilding at map load. */
 static qc_world_vertex_t	*qr_world_verts;
@@ -109,6 +126,8 @@ typedef struct qr_frame_slot_s {
 	uint32_t	index_capacity;
 	qc_draw_batch_t	*batches;
 	uint32_t	batch_capacity;
+	qc_entity_t	*entities;
+	uint32_t	entity_capacity;
 	int		state;
 } qr_frame_slot_t;
 
@@ -272,6 +291,106 @@ void QC_RendererReleaseUploads (void)
 		free ((void *)qr_held_uploads.items[i].rgba);
 	free (qr_held_uploads.items);
 	memset (&qr_held_uploads, 0, sizeof(qr_held_uploads));
+}
+
+/*
+================
+QR_EnqueueMeshUpload -- hand a built alias mesh to the consumer.
+
+Takes ownership of the three malloc'd arrays; they are freed on the
+consumer's Release. Returns the mesh handle.
+================
+*/
+static uint32_t QR_EnqueueMeshUpload (uint32_t numposes, uint32_t numverts,
+				      uint32_t numindexes,
+				      qc_mesh_vertex_t *vertices, float *st,
+				      uint16_t *indexes)
+{
+	qc_mesh_upload_t *up;
+	uint32_t meshnum;
+
+	pthread_mutex_lock (&qr_mesh_lock);
+	if (qr_pending_meshes.count == qr_pending_meshes.capacity)
+	{
+		qr_pending_meshes.capacity = qr_pending_meshes.capacity ?
+					     qr_pending_meshes.capacity * 2 : 16;
+		qr_pending_meshes.items = (qc_mesh_upload_t *)
+			realloc (qr_pending_meshes.items,
+				 qr_pending_meshes.capacity * sizeof(qc_mesh_upload_t));
+	}
+	meshnum = qr_next_meshnum++;
+	up = &qr_pending_meshes.items[qr_pending_meshes.count++];
+	up->meshnum = meshnum;
+	up->numposes = numposes;
+	up->numverts = numverts;
+	up->numindexes = numindexes;
+	up->vertices = vertices;
+	up->st = st;
+	up->indexes = indexes;
+	pthread_mutex_unlock (&qr_mesh_lock);
+	return meshnum;
+}
+
+static void QR_EnqueueMeshFree (uint32_t meshnum)
+{
+	if (!meshnum)
+		return;
+	pthread_mutex_lock (&qr_mesh_lock);
+	if (qr_pending_mesh_frees_count == qr_pending_mesh_frees_capacity)
+	{
+		qr_pending_mesh_frees_capacity = qr_pending_mesh_frees_capacity ?
+						 qr_pending_mesh_frees_capacity * 2 : 16;
+		qr_pending_mesh_frees = (uint32_t *)
+			realloc (qr_pending_mesh_frees,
+				 qr_pending_mesh_frees_capacity * sizeof(uint32_t));
+	}
+	qr_pending_mesh_frees[qr_pending_mesh_frees_count++] = meshnum;
+	pthread_mutex_unlock (&qr_mesh_lock);
+}
+
+int QC_RendererAcquireMeshUploads (const qc_mesh_upload_t **out)
+{
+	pthread_mutex_lock (&qr_mesh_lock);
+	qr_held_meshes = qr_pending_meshes;
+	memset (&qr_pending_meshes, 0, sizeof(qr_pending_meshes));
+	pthread_mutex_unlock (&qr_mesh_lock);
+
+	*out = qr_held_meshes.count ? qr_held_meshes.items : NULL;
+	return qr_held_meshes.count;
+}
+
+void QC_RendererReleaseMeshUploads (void)
+{
+	int i;
+
+	for (i = 0; i < qr_held_meshes.count; i++)
+	{
+		free ((void *)qr_held_meshes.items[i].vertices);
+		free ((void *)qr_held_meshes.items[i].st);
+		free ((void *)qr_held_meshes.items[i].indexes);
+	}
+	free (qr_held_meshes.items);
+	memset (&qr_held_meshes, 0, sizeof(qr_held_meshes));
+}
+
+int QC_RendererAcquireMeshFrees (const uint32_t **out)
+{
+	pthread_mutex_lock (&qr_mesh_lock);
+	qr_held_mesh_frees = qr_pending_mesh_frees;
+	qr_held_mesh_frees_count = qr_pending_mesh_frees_count;
+	qr_pending_mesh_frees = NULL;
+	qr_pending_mesh_frees_count = qr_pending_mesh_frees_capacity = 0;
+	pthread_mutex_unlock (&qr_mesh_lock);
+
+	*out = qr_held_mesh_frees_count ? qr_held_mesh_frees : NULL;
+	return qr_held_mesh_frees_count;
+}
+
+void QC_RendererReleaseMeshFrees (void)
+{
+	free (qr_held_mesh_frees);
+	qr_held_mesh_frees = NULL;
+	qr_held_mesh_frees_count = 0;
 }
 
 int QC_RendererAcquireTextureFrees (const uint32_t **out)
@@ -1805,7 +1924,8 @@ static void QR_EnsureBatchCapacity (qr_frame_slot_t *slot)
 
 static void QR_AppendBatch (qr_frame_slot_t *slot, uint32_t kind,
 			    uint32_t texnum, uint32_t lightmap,
-			    uint32_t first_index, float alpha)
+			    uint32_t first_index, float alpha,
+			    uint32_t entity)
 {
 	qc_draw_batch_t *b;
 
@@ -1819,27 +1939,60 @@ static void QR_AppendBatch (qr_frame_slot_t *slot, uint32_t kind,
 	b->lightmap = lightmap;
 	b->first_index = first_index;
 	b->index_count = slot->frame.num_indices - first_index;
+	b->entity = entity;
 	b->alpha = alpha;
 }
 
 /*
 ================
+QR_AppendEntity -- add a per-entity record, returning its index
+================
+*/
+static uint32_t QR_AppendEntity (qr_frame_slot_t *slot, const qc_entity_t *ent)
+{
+	if (slot->frame.num_entities == slot->entity_capacity)
+	{
+		slot->entity_capacity = slot->entity_capacity ? slot->entity_capacity * 2 : 64;
+		slot->entities = (qc_entity_t *) realloc (slot->entities,
+				slot->entity_capacity * sizeof(qc_entity_t));
+	}
+	slot->entities[slot->frame.num_entities] = *ent;
+	return slot->frame.num_entities++;
+}
+
+/*
+================
 QR_EmitSurface -- append one surface's triangle fan as a triangle list
+
+Grows the slot's index array on demand: with brush entities the per-frame
+bound is dynamic (instanced bmodels re-emit their surfaces per entity), so
+the load-time worst case is only a starting size.
 ================
 */
 static void QR_EmitSurface (qr_frame_slot_t *slot, msurface_t *surf)
 {
 	uint32_t base = (uint32_t) surf->vbo_firstvert;
-	uint32_t *dst = slot->indices + slot->frame.num_indices;
+	uint32_t needed = slot->frame.num_indices + 3 * (surf->numedges - 2);
+	uint32_t *dst;
 	int i;
 
+	if (needed > slot->index_capacity)
+	{
+		slot->index_capacity = slot->index_capacity ? slot->index_capacity * 2 : 4096;
+		if (slot->index_capacity < needed)
+			slot->index_capacity = needed;
+		slot->indices = (uint32_t *) realloc (slot->indices,
+				slot->index_capacity * sizeof(uint32_t));
+	}
+
+	dst = slot->indices + slot->frame.num_indices;
 	for (i = 2; i < surf->numedges; i++)
 	{
 		*dst++ = base;
 		*dst++ = base + i - 1;
 		*dst++ = base + i;
 	}
-	slot->frame.num_indices += 3 * (surf->numedges - 2);
+	slot->frame.num_indices = needed;
 }
 
 /*
@@ -1885,7 +2038,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		start = slot->frame.num_indices;
 		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
 			QR_EmitSurface (slot, s);
-		QR_AppendBatch (slot, QC_BATCH_SKY, 0, 0, start, r_skyalpha.value);
+		QR_AppendBatch (slot, QC_BATCH_SKY, 0, 0, start, r_skyalpha.value,
+				QC_ENTITY_NONE);
 	}
 
 	/* opaque world chains */
@@ -1920,7 +2074,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			QR_AppendBatch (slot, QC_BATCH_WORLD, texnum,
 					(lm < lightmap_count && lightmaps[lm].texture) ?
 						lightmaps[lm].texture->texnum : 0,
-					start, 1.0f);
+					start, 1.0f, QC_ENTITY_NONE);
 		}
 	}
 
@@ -1939,7 +2093,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		start = slot->frame.num_indices;
 		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
 			QR_EmitSurface (slot, s);
-		QR_AppendBatch (slot, QC_BATCH_LIQUID, texnum, 0, start, alpha);
+		QR_AppendBatch (slot, QC_BATCH_LIQUID, texnum, 0, start, alpha,
+				QC_ENTITY_NONE);
 	}
 }
 
@@ -1971,6 +2126,7 @@ void QR_BeginFrame (void)
 	slot = &qr_slots[qr_building];
 	slot->frame.num_indices = 0;
 	slot->frame.num_batches = 0;
+	slot->frame.num_entities = 0;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
@@ -2091,6 +2247,7 @@ void QR_PublishFrame (void)
 	slot->frame.generation = qr_map_generation;
 	slot->frame.indices = slot->indices;
 	slot->frame.batches = slot->batches;
+	slot->frame.entities = slot->entities;
 
 	/* upstream R_Clear clears to r_clearcolor (a palette index) when
 	   gl_clear is set; keep that, else clear to black */
