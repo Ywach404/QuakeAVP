@@ -37,7 +37,7 @@
 extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farclip;
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
-extern cvar_t phase, phase_time;
+extern cvar_t phase, phase_time, phase_color;
 
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
@@ -3060,6 +3060,9 @@ void QR_BeginFrame (void)
 	slot->frame.time = 0;
 	slot->frame.phase = 0;
 	slot->frame.phase_radius = 0;
+	slot->frame.phase_color[0] = 1.5f;
+	slot->frame.phase_color[1] = 0.93f;
+	slot->frame.phase_color[2] = 0.27f;
 	memset (slot->frame.vieworg, 0, sizeof(slot->frame.vieworg));
 	memset (slot->frame.viewangles, 0, sizeof(slot->frame.viewangles));
 	slot->frame.world_scale = QR_WORLDSCALE_DEFAULT;
@@ -3177,6 +3180,17 @@ void QR_RenderView (void)
 			slot->frame.phase_radius = QR_PHASE_NEAR_RADIUS *
 				powf ((qr_world_diagonal + 60.f) / QR_PHASE_NEAR_RADIUS,
 				      eased);
+
+		/* rim colour from the cvar string; malformed input keeps the
+		   molten-orange default rather than going black */
+		slot->frame.phase_color[0] = 1.5f;
+		slot->frame.phase_color[1] = 0.93f;
+		slot->frame.phase_color[2] = 0.27f;
+		if (phase_color.string)
+			sscanf (phase_color.string, "%f %f %f",
+				&slot->frame.phase_color[0],
+				&slot->frame.phase_color[1],
+				&slot->frame.phase_color[2]);
 	}
 	slot->frame.sky_solid_texnum = solidskytexture ? solidskytexture->texnum : 0;
 	slot->frame.sky_alpha_texnum = alphaskytexture ? alphaskytexture->texnum : 0;

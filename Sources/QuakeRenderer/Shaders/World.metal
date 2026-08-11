@@ -142,6 +142,8 @@ struct PhaseFragUniforms {
     // (float3 + float pads to 32 bytes in MSL, 20 in Swift — the debug
     // layer caught exactly that).
     float4 headorg_radius;
+    // Ember rim colour, linear rgb (may exceed 1 for glow); w unused.
+    float4 rimcolor;
 };
 
 fragment float4 world_phase_fragment(WorldVaryings in [[stage_in]],
@@ -167,7 +169,7 @@ fragment float4 world_phase_fragment(WorldVaryings in [[stage_in]],
             discard_fragment();
         // ember rim in a ~14-unit band outside the boundary
         float rim = 1.0 - saturate((d - threshold) * (1.0 / 14.0));
-        rgb = min(rgb + rim * rim * float3(1.5, 0.93, 0.27), 1.0);
+        rgb = min(rgb + rim * rim * phase.rimcolor.rgb, 1.0);
     }
 
     return qavp_out(float4(rgb, 1.0));

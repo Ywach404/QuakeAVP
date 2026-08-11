@@ -97,6 +97,9 @@ cvar_t	vr_worldscale = {"vr_worldscale", "0.0254", CVAR_ARCHIVE};
    semantics, driven from the command bar or the window's Phase button. */
 cvar_t	phase = {"phase", "0", CVAR_NONE};
 cvar_t	phase_time = {"phase_time", "2", CVAR_NONE};
+/* Ember rim colour, linear "r g b" (values may exceed 1 for glow);
+   the default is the molten orange. */
+cvar_t	phase_color = {"phase_color", "1.5 0.93 0.27", CVAR_NONE};
 
 /* gl_rmisc.c */
 cvar_t	r_lightmapwide = {"r_lightmapwide","0",CVAR_ROM};
@@ -168,6 +171,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&vr_worldscale);
 	Cvar_RegisterVariable (&phase);
 	Cvar_RegisterVariable (&phase_time);
+	Cvar_RegisterVariable (&phase_color);
 
 	/* upstream Sky_Init (gl_sky.c) */
 	Cvar_RegisterVariable (&r_fastsky);
