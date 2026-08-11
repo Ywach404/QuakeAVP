@@ -20,11 +20,15 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            if engine.status == .running {
+                phaseControls
+            }
             renderSurface
-            // While the world view is up the console shrinks to a log strip;
+            // While the world view is up the console shrinks to a log strip
+            // (sized so the phase strip fits in the same window height);
             // in every other state it is still the whole interface.
             console
-                .frame(maxHeight: engine.status == .running ? 160 : .infinity)
+                .frame(maxHeight: engine.status == .running ? 112 : .infinity)
             commandBar
         }
         .padding(24)
@@ -84,19 +88,64 @@ struct ContentView: View {
         }
     }
 
-    @State private var phaseTarget = false
+    @State private var phaseLevel = 0.0
+    @State private var phaseSpeed = 2.0
+
+    /// Sweep durations for `phase_time`, in seconds. Discrete steps rather
+    /// than a second slider: this is a mood setting, not a value anyone
+    /// needs to dial in precisely.
+    private static let phaseSpeeds: [(label: String, seconds: Double)] = [
+        ("Instant", 0.25), ("Fast", 1), ("Default", 2), ("Slow", 4), ("Glacial", 8),
+    ]
 
     @ViewBuilder
     private var phaseButton: some View {
         if engine.status == .running {
             Button {
-                phaseTarget.toggle()
-                engine.send("phase \(phaseTarget ? 1 : 0)")
+                phaseLevel = phaseLevel < 0.5 ? 1 : 0
             } label: {
-                Label(phaseTarget ? "Rephase" : "Phase",
-                      systemImage: phaseTarget ? "circle.dashed" : "circle.dotted")
+                Label(phaseLevel < 0.5 ? "Phase" : "Rephase",
+                      systemImage: phaseLevel < 0.5 ? "circle.dotted" : "circle.dashed")
             }
         }
+    }
+
+    /// Crown-style dissolve control, like the system environments: the
+    /// slider scrubs the `phase` target (the engine eases toward it, so a
+    /// partial drag is a partial melt) and the menu picks the sweep speed.
+    private var phaseControls: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "circle.dotted")
+                .foregroundStyle(.secondary)
+            Slider(value: $phaseLevel, in: 0...1) {
+                Text("Phase")
+            }
+            .onChange(of: phaseLevel) { _, level in
+                engine.send(String(format: "phase %.2f", level))
+            }
+            Image(systemName: "circle.dashed")
+                .foregroundStyle(.secondary)
+            Menu {
+                ForEach(Self.phaseSpeeds, id: \.seconds) { speed in
+                    Button {
+                        phaseSpeed = speed.seconds
+                        engine.send(String(format: "phase_time %g", speed.seconds))
+                    } label: {
+                        if phaseSpeed == speed.seconds {
+                            Label(speed.label, systemImage: "checkmark")
+                        } else {
+                            Text(speed.label)
+                        }
+                    }
+                }
+            } label: {
+                Label(Self.phaseSpeeds.first { $0.seconds == phaseSpeed }?.label ?? "\(phaseSpeed)s",
+                      systemImage: "timer")
+                    .font(.callout)
+            }
+            .fixedSize()
+        }
+        .padding(.horizontal, 4)
     }
 
     @ViewBuilder
