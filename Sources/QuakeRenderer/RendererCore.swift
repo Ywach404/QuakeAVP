@@ -25,6 +25,12 @@ import simd
 /// the near plane, 0.0 at the far — so the immersive set tests greater-equal).
 struct RenderPipelines {
     let world: MTLRenderPipelineState
+    /// Phase pass A: world depth only, colour writes masked. Occlusion for
+    /// everything drawn later comes from this pass and is identical at
+    /// every phase value — that is the entire trick of the phase effect.
+    let worldDepthOnly: MTLRenderPipelineState
+    /// Phase pass B: world colour at depthCompare == .equal against A.
+    let worldEqual: MTLRenderPipelineState
     let worldBlend: MTLRenderPipelineState   // translucent brush entities
     let liquid: MTLRenderPipelineState
     let skyLayers: MTLRenderPipelineState
@@ -33,6 +39,8 @@ struct RenderPipelines {
     let aliasBlend: MTLRenderPipelineState
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
+    /// For pass B: pass exactly the prepass depth, write nothing.
+    let depthEqualNoWrite: MTLDepthStencilState
 }
 
 final class RendererCore {
@@ -197,7 +205,7 @@ final class RendererCore {
         constants.setConstantValue(&linear, type: .bool, index: 0)
 
         func pipeline(vertex: String = "world_vertex", fragment: String,
-                      blended: Bool) -> MTLRenderPipelineState? {
+                      blended: Bool, colorWrite: Bool = true) -> MTLRenderPipelineState? {
             guard
                 let vertexFunction = try? library.makeFunction(name: vertex, constantValues: constants),
                 let fragmentFunction = try? library.makeFunction(name: fragment, constantValues: constants)
@@ -208,6 +216,9 @@ final class RendererCore {
             descriptor.fragmentFunction = fragmentFunction
             descriptor.colorAttachments[0].pixelFormat = colorFormat
             descriptor.depthAttachmentPixelFormat = depthFormat
+            if !colorWrite {
+                descriptor.colorAttachments[0].writeMask = []
+            }
             if amplified {
                 descriptor.maxVertexAmplificationCount = 2
             }
@@ -234,8 +245,15 @@ final class RendererCore {
         noWriteDescriptor.depthCompareFunction = compare
         noWriteDescriptor.isDepthWriteEnabled = false
 
+        let equalDescriptor = MTLDepthStencilDescriptor()
+        equalDescriptor.depthCompareFunction = .equal
+        equalDescriptor.isDepthWriteEnabled = false
+
         guard
             let world = pipeline(fragment: "world_fragment", blended: false),
+            let worldDepthOnly = pipeline(fragment: "world_depth_fragment",
+                                          blended: false, colorWrite: false),
+            let worldEqual = pipeline(fragment: "world_fragment", blended: false),
             let worldBlend = pipeline(fragment: "world_fragment", blended: true),
             let liquid = pipeline(fragment: "liquid_fragment", blended: true),
             let skyLayers = pipeline(fragment: "sky_layers_fragment", blended: false),
@@ -243,14 +261,17 @@ final class RendererCore {
             let aliasOpaque = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: false),
             let aliasBlend = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: true),
             let depthWrite = device.makeDepthStencilState(descriptor: writeDescriptor),
-            let depthNoWrite = device.makeDepthStencilState(descriptor: noWriteDescriptor)
+            let depthNoWrite = device.makeDepthStencilState(descriptor: noWriteDescriptor),
+            let depthEqualNoWrite = device.makeDepthStencilState(descriptor: equalDescriptor)
         else { return nil }
 
         return RenderPipelines(
-            world: world, worldBlend: worldBlend, liquid: liquid,
+            world: world, worldDepthOnly: worldDepthOnly, worldEqual: worldEqual,
+            worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
-            depthWrite: depthWrite, depthNoWrite: depthNoWrite)
+            depthWrite: depthWrite, depthNoWrite: depthNoWrite,
+            depthEqualNoWrite: depthEqualNoWrite)
     }
 
     // MARK: - Frame encoding
@@ -321,6 +342,27 @@ final class RendererCore {
                 encoder.setDepthStencilState(depth)
                 currentDepth = depth
             }
+        }
+
+        // Phase pass A: the world's own geometry, depth only. Every later
+        // draw — pass B, entities, liquids — is depth-tested against this,
+        // so occlusion is decided here and never changes with phase.
+        var identity = matrix_identity_float4x4
+        withUnsafeBytes(of: &identity) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 2)
+        }
+        setPipeline(pipelines.worldDepthOnly, depth: pipelines.depthWrite)
+        for i in 0..<Int(frame.num_batches) {
+            let batch = batches[i]
+            guard batch.kind == UInt32(QC_BATCH_WORLD), batch.entity == QC_ENTITY_NONE
+            else { continue }
+            encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
+            encoder.drawIndexedPrimitives(
+                type: .triangle,
+                indexCount: Int(batch.index_count),
+                indexType: .uint32,
+                indexBuffer: indexBuffer,
+                indexBufferOffset: Int(batch.first_index) * MemoryLayout<UInt32>.size)
         }
 
         for i in 0..<Int(frame.num_batches) {
@@ -431,11 +473,18 @@ final class RendererCore {
                 }
 
             default:
-                // World geometry, world-owned or a brush entity's; entity
-                // alpha < 1 blends and stops writing depth like upstream's
+                // World geometry. The world's own batches are phase pass B:
+                // colour at exactly the prepass depth, writing nothing.
+                // Brush entities keep the ordinary depth test (they move;
+                // they are not part of the prepass); entity alpha < 1
+                // blends and stops writing depth like upstream's
                 // R_BeginTransparentDrawing.
-                setPipeline(batch.alpha < 1 ? pipelines.worldBlend : pipelines.world,
-                            depth: batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)
+                if batch.entity == QC_ENTITY_NONE {
+                    setPipeline(pipelines.worldEqual, depth: pipelines.depthEqualNoWrite)
+                } else {
+                    setPipeline(batch.alpha < 1 ? pipelines.worldBlend : pipelines.world,
+                                depth: batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)
+                }
                 encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
                 encoder.setFragmentTexture(textures[batch.lightmap] ?? neutralLightmap, index: 1)
                 var fragUniforms = WorldFragUniforms(alpha: batch.alpha)
