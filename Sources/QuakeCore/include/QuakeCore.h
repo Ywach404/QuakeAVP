@@ -106,18 +106,42 @@ uint32_t QC_RendererAcquireGeometry (const qc_world_vertex_t **verts,
 				     uint32_t *count);
 void QC_RendererReleaseGeometry (void);
 
+/* Batch kinds select the consumer's pipeline. Batches arrive in draw order:
+   sky first (depth-writing, like upstream Sky_DrawSky), then opaque world,
+   then liquids (blended when alpha < 1, after everything opaque). */
+enum {
+	QC_BATCH_WORLD  = 0,	/* diffuse * lightmap */
+	QC_BATCH_SKY    = 1,	/* scrolling cloud layers or skybox, projected
+				   from vieworg; per-frame sky texnums below */
+	QC_BATCH_LIQUID = 2	/* unlit, UV-warped, alpha-blended */
+};
+
 /* One draw batch: a run of triangle-list indices sharing textures. */
 typedef struct qc_draw_batch_s {
+	uint32_t	kind;		/* QC_BATCH_* */
 	uint32_t	texnum;		/* diffuse texture handle */
 	uint32_t	lightmap;	/* lightmap texture handle, 0 = fullbright */
 	uint32_t	first_index;
 	uint32_t	index_count;
+	float		alpha;		/* liquid: water/lava/slime/tele alpha;
+					   sky: r_skyalpha; world: unused (1) */
 } qc_draw_batch_t;
 
+/* There is no packet version field: both halves of this contract compile in
+   the same build, so the structs *are* the protocol. */
 typedef struct qc_frame_s {
 	uint32_t	generation;	/* must match AcquireGeometry's result */
 	float		viewproj[16];	/* column-major, Metal depth range */
 	float		clear_color[4];
+	float		time;		/* cl.time; drives warp + sky scroll.
+					   Engine-thread clock -- the consumer
+					   must not substitute its own. */
+	float		vieworg[3];	/* view origin, for sky projection */
+	uint32_t	sky_solid_texnum;   /* classic sky back layer, 0 = none */
+	uint32_t	sky_alpha_texnum;   /* classic sky cloud layer, 0 = none */
+	uint32_t	skybox_texnums[6];  /* indexed by sky axis (upstream
+					       skytexorder already applied);
+					       [0] == 0 = no skybox */
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;

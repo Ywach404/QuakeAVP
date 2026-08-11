@@ -28,12 +28,20 @@ common layers. Also `progdefs.q1` (`#include`d by `progdefs.h`) and
 Although those files are not vendored, substantial logic from them *was
 ported* (at the same commit) into `Sources/QuakeRenderer/bridge/qr_bridge.c`
 with the GL calls replaced: the texture manager and palettes (`gl_texmgr.c`),
-lightmap building and surface polygon lists (`r_brush.c`), PVS marking and
-texture chains (`r_world.c`), frustum/view setup (`gl_rmain.c`), and the
-refdef/fov math plus cvar tables into `platform/r_null.c` (`gl_screen.c`,
-`gl_rmisc.c`). When merging a newer upstream, diff those upstream files too
-and carry relevant fixes into the ports; cvar defaults must stay
-byte-identical.
+lightmap building and surface polygon lists (`r_brush.c`), PVS marking,
+texture chains, and the liquid draw order (`r_world.c`), frustum/view setup
+(`gl_rmain.c`), sky texture/skybox loading and the worldspawn sky keys
+(`gl_sky.c`), the water alpha plumbing incl. worldspawn overrides
+(`gl_rmisc.c`), and the refdef/fov math plus cvar tables into
+`platform/r_null.c` (`gl_screen.c`, `gl_rmisc.c`). The *draw-time* halves of
+`gl_warp.c` and `gl_sky.c` were not ported line-for-line: their warp
+(`WARPCALC`/`turbsin`) and cloud-projection (`Sky_GetTexCoord`,
+`Sky_ProjectPoly`) math is evaluated per fragment in
+`Sources/QuakeRenderer/Shaders/World.metal` — the render-to-warpimage scheme
+and the far-quad GEQUAL sky trick existed only to work around GL1. When
+merging a newer upstream, diff those upstream files too and carry relevant
+fixes into the ports (including the shader constants); cvar defaults must
+stay byte-identical.
 | `gl_vidsdl.c` `main_sdl.c` `in_sdl.c` `snd_sdl.c` `cd_sdl.c` `sys_sdl_unix.c` `sys_sdl_win.c` | SDL platform layer. Replaced by `platform/`. |
 | `net_win.c` `net_wins.c` `net_wipx.c` `pl_win.c` | Windows-only. |
 | `pl_linux.c` | X11 clipboard/icon. Replaced by `platform/pl_null.c`. |

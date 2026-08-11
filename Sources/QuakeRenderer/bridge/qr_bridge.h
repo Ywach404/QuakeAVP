@@ -32,6 +32,16 @@ void QR_PublishFrame (void);
    glwidth/glheight + vid.recalc_refdef. */
 qboolean QR_ConsumePendingDrawableSize (int *width, int *height);
 
+/* Cvar callbacks and the "sky" console command, wired up by r_null.c's
+   R_Init exactly where upstream's gl_rmisc.c / gl_sky.c registered them.
+   (The Sky_* entry points themselves are declared in glquake.h.) */
+void QR_SetWateralpha_f (cvar_t *var);
+void QR_SetLavaalpha_f (cvar_t *var);
+void QR_SetTelealpha_f (cvar_t *var);
+void QR_SetSlimealpha_f (cvar_t *var);
+void QR_SetSkyfog_f (cvar_t *var);
+void Sky_SkyCommand_f (void);
+
 /* Texture manager -- real implementations behind the TexMgr_* shims. */
 void QR_TexMgr_Init (void);
 void QR_TexMgr_NewGame (void);
