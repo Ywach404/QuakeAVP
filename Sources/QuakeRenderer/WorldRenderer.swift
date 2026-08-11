@@ -111,7 +111,8 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
             let phase = RendererCore.PhaseParams(
                 headorg: SIMD3(f.vieworg.0, f.vieworg.1, f.vieworg.2),
                 radius: f.phase_radius,
-                skyFade: 1 - f.phase)
+                skyFade: 1 - f.phase,
+                rimColor: SIMD3(f.phase_color.0, f.phase_color.1, f.phase_color.2))
             core.encode(frame: f, with: encoder, pipelines: pipelines,
                         uniforms: uniforms, phase: phase, amplificationCount: 1,
                         viewmodelViewport: viewports)

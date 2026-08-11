@@ -202,7 +202,9 @@ final class ImmersiveRenderer {
         let phaseParams = RendererCore.PhaseParams(
             headorg: SIMD3(headQuake.x, headQuake.y, headQuake.z),
             radius: packet?.phase_radius ?? 0,
-            skyFade: 1 - (packet?.phase ?? 0))
+            skyFade: 1 - (packet?.phase ?? 0),
+            rimColor: packet.map { SIMD3($0.phase_color.0, $0.phase_color.1, $0.phase_color.2) }
+                ?? SIMD3(1.5, 0.93, 0.27))
 
         var eyeViewproj: [simd_float4x4] = []
         var eyeOrigin: [SIMD4<Float>] = []

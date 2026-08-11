@@ -58,6 +58,7 @@ final class RendererCore {
         var headorg: SIMD3<Float>
         var radius: Float
         var skyFade: Float
+        var rimColor: SIMD3<Float>
     }
 
     /// Layout must match WorldUniforms in World.metal: two view-projections
@@ -333,7 +334,8 @@ final class RendererCore {
 
         var skyUniforms = SkyUniforms(time: frame.time, skyalpha: 1, fade: phase.skyFade)
         var phaseUniforms = PhaseFragUniforms(
-            headorgRadius: SIMD4(phase.headorg.x, phase.headorg.y, phase.headorg.z, phase.radius))
+            headorgRadius: SIMD4(phase.headorg.x, phase.headorg.y, phase.headorg.z, phase.radius),
+            rimColor: SIMD4(phase.rimColor.x, phase.rimColor.y, phase.rimColor.z, 0))
         let skyboxTexnums = [
             frame.skybox_texnums.0, frame.skybox_texnums.1, frame.skybox_texnums.2,
             frame.skybox_texnums.3, frame.skybox_texnums.4, frame.skybox_texnums.5,
@@ -556,10 +558,11 @@ final class RendererCore {
         var fade: Float
     }
 
-    /// Layout must match PhaseFragUniforms in World.metal: one float4,
-    /// xyz = head origin, w = radius, so the layouts cannot disagree.
+    /// Layout must match PhaseFragUniforms in World.metal: float4s only,
+    /// so the layouts cannot disagree.
     private struct PhaseFragUniforms {
         var headorgRadius: SIMD4<Float>
+        var rimColor: SIMD4<Float>
     }
 
     private struct WorldFragUniforms {

@@ -241,6 +241,8 @@ typedef struct qc_frame_s {
 	   the head with no added latency. */
 	float		phase;		/* eased 0..1; sky fades by 1 - phase */
 	float		phase_radius;	/* dissolve sphere radius, Quake units */
+	float		phase_color[3];	/* ember rim, linear rgb (may exceed 1
+					   for glow); the `phase_color` cvar */
 
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
