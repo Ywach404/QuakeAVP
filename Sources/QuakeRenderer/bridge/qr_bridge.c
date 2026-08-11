@@ -52,6 +52,11 @@ extern cvar_t phase, phase_time;
    ~300 deg/s; at 90 Hz that is ~3.3 deg, so 10 gives margin to spare. */
 #define QR_CULL_FOV_MARGIN	10.0f
 
+/* The dissolve radius at the bottom of the phase range: arm's reach, in
+   Quake units (~0.8 m). The sweep grows exponentially from here to the
+   world diagonal -- see the phase block in QR_RenderView. */
+#define QR_PHASE_NEAR_RADIUS	32.0f
+
 /* ========================================================================
  * globals the engine headers declare and upstream's renderer defined
  * ===================================================================== */
@@ -3157,7 +3162,21 @@ void QR_RenderView (void)
 		/* smoothstep on the linear progress = the ~2s eased sweep */
 		eased = qr_phase_value * qr_phase_value * (3.f - 2.f * qr_phase_value);
 		slot->frame.phase = eased;
-		slot->frame.phase_radius = eased * qr_world_diagonal;
+
+		/* Perceptually even melt. Scaling the radius linearly in the
+		   diagonal spends every visible surface in the first ~15% of
+		   the range, because the diagonal dwarfs room scale -- the
+		   dial felt like a 0/1 toggle. Exponential growth from arm's
+		   reach gives each increment the same multiplicative bite:
+		   half phase is a room-sized bubble, full phase still clears
+		   the map. The +60 keeps the far corners inside the noise
+		   band's reach at full phase. */
+		if (eased <= 0.f)
+			slot->frame.phase_radius = 0.f;
+		else
+			slot->frame.phase_radius = QR_PHASE_NEAR_RADIUS *
+				powf ((qr_world_diagonal + 60.f) / QR_PHASE_NEAR_RADIUS,
+				      eased);
 	}
 	slot->frame.sky_solid_texnum = solidskytexture ? solidskytexture->texnum : 0;
 	slot->frame.sky_alpha_texnum = alphaskytexture ? alphaskytexture->texnum : 0;
