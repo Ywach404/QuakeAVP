@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
@@ -90,6 +91,9 @@ struct ContentView: View {
 
     @State private var phaseLevel = 0.0
     @State private var phaseSpeed = 2.0
+    /// The default molten orange: the cvar's (1.5, 0.93, 0.27) glow with
+    /// the 1.5x intensity factored out for the 0-1 picker.
+    @State private var phaseColor = Color(red: 1.0, green: 0.62, blue: 0.18)
 
     /// Sweep durations for `phase_time`, in seconds. Discrete steps rather
     /// than a second slider: this is a mood setting, not a value anyone
@@ -144,6 +148,16 @@ struct ContentView: View {
                 }
                 .fixedSize()
             }
+            // Ember rim colour; the 1.5x keeps the glow as hot as the
+            // default orange regardless of the picked hue.
+            ColorPicker("Phase colour", selection: $phaseColor, supportsOpacity: false)
+                .labelsHidden()
+                .onChange(of: phaseColor) { _, color in
+                    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                    UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+                    engine.send(String(format: "phase_color \"%.3f %.3f %.3f\"",
+                                       r * 1.5, g * 1.5, b * 1.5))
+                }
             Spacer()
         }
         .padding(.horizontal, 4)
@@ -281,11 +295,16 @@ struct ContentView: View {
 private struct PhaseDial: View {
     @Binding var value: Double
 
-    /// Value when the current twist began. Twisting is relative — grabbing
-    /// the dial never moves it, only the angle swept from the grab point
-    /// does — because the absolute mapping made every touch a hair trigger:
-    /// the value teleported to wherever the pinch landed.
-    @State private var valueAtTwistStart: Double?
+    /// Twist tracking. Relative — grabbing the dial never moves it, only
+    /// the angle swept after the grab does (absolute mapping was a hair
+    /// trigger). Deltas accumulate tick by tick from `lastAngle`, never
+    /// measured back to the grab point: an endpoint-to-start measurement
+    /// wraps at ±180°, so sweeping past half a turn snapped the value to
+    /// the far end. Per-tick deltas are always small, so the accumulator
+    /// survives any number of full rotations, and clamping it (not just
+    /// the published value) makes reversing out of an over-twist respond
+    /// immediately.
+    @State private var twist: (lastAngle: Double, value: Double)?
 
     private static let size: CGFloat = 72
     private static let sweep = 270.0
@@ -314,14 +333,20 @@ private struct PhaseDial: View {
         .gesture(
             DragGesture(minimumDistance: 4)
                 .onChanged { drag in
-                    let base = valueAtTwistStart ?? value
-                    valueAtTwistStart = base
-                    var delta = Self.angle(at: drag.location) - Self.angle(at: drag.startLocation)
-                    if delta > 180 { delta -= 360 }      // shortest way round
+                    let angle = Self.angle(at: drag.location)
+                    guard var t = twist else {
+                        twist = (angle, value)
+                        return
+                    }
+                    var delta = angle - t.lastAngle
+                    if delta > 180 { delta -= 360 }
                     if delta < -180 { delta += 360 }
-                    value = min(max(base + delta / Self.sweep, 0), 1)
+                    t.value = min(max(t.value + delta / Self.sweep, 0), 1)
+                    t.lastAngle = angle
+                    twist = t
+                    value = t.value
                 }
-                .onEnded { _ in valueAtTwistStart = nil }
+                .onEnded { _ in twist = nil }
         )
     }
 
