@@ -20,6 +20,22 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Set true for pipelines rendering into an sRGB target (the immersive
+// layer): Quake's colors are sRGB-authored, so emitting their linearized
+// form lets the hardware's sRGB store re-encode them byte-identically to
+// what the flat window's plain-unorm path displays.
+constant bool qavp_linear_output [[function_constant(0)]];
+
+static inline float4 qavp_out(float4 c)
+{
+    if (qavp_linear_output) {
+        float3 lo = c.rgb / 12.92;
+        float3 hi = pow((c.rgb + 0.055) / 1.055, 2.4);
+        return float4(select(hi, lo, c.rgb <= 0.04045), c.a);
+    }
+    return c;
+}
+
 struct WorldVertex {
     packed_float3 xyz;
     packed_float2 st;
@@ -88,7 +104,7 @@ fragment float4 world_fragment(WorldVaryings in [[stage_in]],
     // gl_overbright: lightmaps are baked >>8 so full bright is 0.5; the *2
     // here is the other half of that contract (see R_BuildLightMap).
     float3 light = lightmap.sample(lightmapSampler, in.lm).rgb;
-    return float4(albedo.rgb * light * 2.0, uniforms.alpha);
+    return qavp_out(float4(albedo.rgb * light * 2.0, uniforms.alpha));
 }
 
 // MARK: - Liquids
@@ -113,7 +129,7 @@ fragment float4 liquid_fragment(WorldVaryings in [[stage_in]],
     float4 albedo = diffuse.sample(diffuseSampler, uv);
     // Liquids are unlit: no lightmap, no overbright doubling, upstream
     // modulates by glColor(1,1,1,wateralpha) only.
-    return float4(albedo.rgb, uniforms.alpha);
+    return qavp_out(float4(albedo.rgb, uniforms.alpha));
 }
 
 // MARK: - Sky
@@ -147,7 +163,7 @@ fragment float4 sky_layers_fragment(WorldVaryings in [[stage_in]],
 
     // Upstream draws the solid layer then blends the cloud layer over it
     // with r_skyalpha; folded into one pass here.
-    return float4(mix(back, front.rgb, front.a * uniforms.skyalpha), 1.0);
+    return qavp_out(float4(mix(back, front.rgb, front.a * uniforms.skyalpha), 1.0));
 }
 
 // Sky_ProjectPoly's axis pick plus the st_to_vec/vec_to_st projection from
@@ -188,5 +204,5 @@ fragment float4 sky_box_fragment(WorldVaryings in [[stage_in]],
     float t = sky_component(dir, vec_to_st[axis].y) / dv;
     float2 uv = float2((s + 1.0) * 0.5, 1.0 - (t + 1.0) * 0.5);
 
-    return float4(faces[axis].sample(faceSampler, uv).rgb, 1.0);
+    return qavp_out(float4(faces[axis].sample(faceSampler, uv).rgb, 1.0));
 }

@@ -19,6 +19,19 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Same contract as World.metal's qavp_linear_output; see that file.
+constant bool qavp_linear_output [[function_constant(0)]];
+
+static inline float4 qavp_out(float4 c)
+{
+    if (qavp_linear_output) {
+        float3 lo = c.rgb / 12.92;
+        float3 hi = pow((c.rgb + 0.055) / 1.055, 2.4);
+        return float4(select(hi, lo, c.rgb <= 0.04045), c.a);
+    }
+    return c;
+}
+
 struct AliasVertex {
     uchar4 xyz;     // raw MDL byte positions; the model matrix bakes
                     // scale_origin/scale
@@ -87,5 +100,5 @@ fragment float4 alias_fragment(AliasVaryings in [[stage_in]],
         discard_fragment();
 
     float3 rgb = tex.rgb * in.color.rgb + fullbright.sample(skinSampler, in.st).rgb;
-    return float4(clamp(rgb, 0.0, 1.0), in.color.a);
+    return qavp_out(float4(clamp(rgb, 0.0, 1.0), in.color.a));
 }
