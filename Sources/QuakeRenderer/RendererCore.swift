@@ -29,6 +29,8 @@ struct RenderPipelines {
     let liquid: MTLRenderPipelineState
     let skyLayers: MTLRenderPipelineState
     let skyBox: MTLRenderPipelineState
+    let aliasOpaque: MTLRenderPipelineState
+    let aliasBlend: MTLRenderPipelineState
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
 }
@@ -69,6 +71,22 @@ final class RendererCore {
     /// Upstream's pink/black "notexture" checker: any batch whose texture
     /// hasn't been uploaded yet draws this, so a miss is loud, not invisible.
     private let missingTexture: MTLTexture
+
+    /// Black 1x1: bound as the fullbright layer for skins without one, so
+    /// the alias fragment's unconditional add contributes nothing.
+    private let blackTexture: MTLTexture
+
+    /// One alias model's GPU mesh: all poses' packed vertices followed by
+    /// the shared texcoords in one buffer, plus a uint16 index list.
+    struct AliasMesh {
+        let buffer: MTLBuffer
+        let stOffset: Int
+        let poseStride: Int      // bytes per pose = vertsPerPose * 8
+        let indexBuffer: MTLBuffer
+    }
+
+    /// Engine meshnum -> GPU mesh, mutated only inside a consume cycle.
+    private var meshes: [UInt32: AliasMesh] = [:]
 
     private var vertexBuffer: MTLBuffer?
     private var geometryGeneration: UInt32 = 0
@@ -113,8 +131,14 @@ final class RendererCore {
             let worldSampler = device.makeSamplerState(descriptor: worldSamplerDescriptor),
             let lightmapSampler = device.makeSamplerState(descriptor: lightmapSamplerDescriptor),
             let neutralLightmap = device.makeTexture(descriptor: smallTextureDescriptor),
-            let missingTexture = device.makeTexture(descriptor: checkerDescriptor)
+            let missingTexture = device.makeTexture(descriptor: checkerDescriptor),
+            let blackTexture = device.makeTexture(descriptor: smallTextureDescriptor)
         else { return nil }
+
+        var black: [UInt8] = [0, 0, 0, 255]
+        blackTexture.replace(
+            region: MTLRegionMake2D(0, 0, 1, 1),
+            mipmapLevel: 0, withBytes: &black, bytesPerRow: 4)
 
         var gray: [UInt8] = [128, 128, 128, 255]
         neutralLightmap.replace(
@@ -137,6 +161,7 @@ final class RendererCore {
         self.lightmapSampler = lightmapSampler
         self.neutralLightmap = neutralLightmap
         self.missingTexture = missingTexture
+        self.blackTexture = blackTexture
     }
 
     // MARK: - Consumer arbitration
@@ -166,9 +191,10 @@ final class RendererCore {
                        depthFormat: MTLPixelFormat,
                        amplified: Bool,
                        reverseDepth: Bool) -> RenderPipelines? {
-        func pipeline(fragment: String, blended: Bool) -> MTLRenderPipelineState? {
+        func pipeline(vertex: String = "world_vertex", fragment: String,
+                      blended: Bool) -> MTLRenderPipelineState? {
             guard
-                let vertexFunction = library.makeFunction(name: "world_vertex"),
+                let vertexFunction = library.makeFunction(name: vertex),
                 let fragmentFunction = library.makeFunction(name: fragment)
             else { return nil }
             let descriptor = MTLRenderPipelineDescriptor()
@@ -209,6 +235,8 @@ final class RendererCore {
             let liquid = pipeline(fragment: "liquid_fragment", blended: true),
             let skyLayers = pipeline(fragment: "sky_layers_fragment", blended: false),
             let skyBox = pipeline(fragment: "sky_box_fragment", blended: false),
+            let aliasOpaque = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: false),
+            let aliasBlend = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: true),
             let depthWrite = device.makeDepthStencilState(descriptor: writeDescriptor),
             let depthNoWrite = device.makeDepthStencilState(descriptor: noWriteDescriptor)
         else { return nil }
@@ -216,6 +244,7 @@ final class RendererCore {
         return RenderPipelines(
             world: world, worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
+            aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite)
     }
 
@@ -228,7 +257,8 @@ final class RendererCore {
                 with encoder: MTLRenderCommandEncoder,
                 pipelines: RenderPipelines,
                 uniforms: WorldUniforms,
-                amplificationCount: Int) {
+                amplificationCount: Int,
+                viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -273,6 +303,9 @@ final class RendererCore {
         var boundEntity = UInt32.max - 1   // != QC_ENTITY_NONE, forces first bind
         var currentPipeline: MTLRenderPipelineState?
         var currentDepth: MTLDepthStencilState?
+        // Alias batches rebind vertex buffers 0-2 to their mesh; the world
+        // path rebinds its own afterwards.
+        var worldBuffersBound = true
 
         func setPipeline(_ p: MTLRenderPipelineState, depth: MTLDepthStencilState) {
             if p !== currentPipeline {
@@ -288,9 +321,68 @@ final class RendererCore {
         for i in 0..<Int(frame.num_batches) {
             let batch = batches[i]
 
-            // Alias batches draw from their own mesh buffers in a second
-            // encoder phase (encodeAlias); skip them here.
-            if batch.kind == UInt32(QC_BATCH_ALIAS) { continue }
+            if batch.kind == UInt32(QC_BATCH_ALIAS) {
+                guard let entities = frame.entities else { continue }
+                let entity = entities[Int(batch.entity)]
+                if entity.flags & UInt32(QC_ENTFLAG_VIEWMODEL) != 0 {
+                    // View-locked weapon: wrong in VR, drawn only where the
+                    // caller supplies the upstream glDepthRange(0, 0.3)
+                    // squish (the flat window). TODO(M4): decouple instead.
+                    guard viewmodelViewport != nil else { continue }
+                }
+                guard let mesh = meshes[entity.meshnum] else { continue }
+
+                setPipeline(batch.alpha < 1 ? pipelines.aliasBlend : pipelines.aliasOpaque,
+                            depth: batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)
+
+                encoder.setVertexBuffer(mesh.buffer,
+                                        offset: Int(entity.pose1) * mesh.poseStride, index: 0)
+                encoder.setVertexBuffer(mesh.buffer,
+                                        offset: Int(entity.pose2) * mesh.poseStride, index: 1)
+                encoder.setVertexBuffer(mesh.buffer, offset: mesh.stOffset, index: 2)
+
+                var aliasUniforms = AliasUniforms(
+                    viewproj0: uniforms.viewproj0,
+                    viewproj1: uniforms.viewproj1,
+                    model: Self.matrix(from: entity.transform),
+                    light: SIMD4(entity.light.0, entity.light.1, entity.light.2, entity.alpha),
+                    shadeblend: SIMD4(entity.shadevector.0, entity.shadevector.1,
+                                      entity.shadevector.2, entity.blend))
+                withUnsafeBytes(of: &aliasUniforms) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 3)
+                }
+
+                encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
+                encoder.setFragmentTexture(
+                    batch.lightmap != 0 ? (textures[batch.lightmap] ?? blackTexture) : blackTexture,
+                    index: 1)
+
+                let isViewmodel = entity.flags & UInt32(QC_ENTFLAG_VIEWMODEL) != 0
+                if isViewmodel, let viewmodelViewport {
+                    encoder.setViewport(viewmodelViewport.squished)
+                }
+                encoder.drawIndexedPrimitives(
+                    type: .triangle,
+                    indexCount: Int(batch.index_count),
+                    indexType: .uint16,
+                    indexBuffer: mesh.indexBuffer,
+                    indexBufferOffset: 0)
+                if isViewmodel, let viewmodelViewport {
+                    encoder.setViewport(viewmodelViewport.full)
+                }
+
+                worldBuffersBound = false
+                continue
+            }
+
+            if !worldBuffersBound {
+                worldBuffersBound = true
+                encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+                withUnsafeBytes(of: &uniforms) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                }
+                boundEntity = UInt32.max - 1    // force the model rebind too
+            }
 
             if batch.entity != boundEntity {
                 boundEntity = batch.entity
@@ -381,6 +473,15 @@ final class RendererCore {
         var alpha: Float
     }
 
+    /// Layout must match AliasUniforms in Alias.metal.
+    private struct AliasUniforms {
+        var viewproj0: simd_float4x4
+        var viewproj1: simd_float4x4
+        var model: simd_float4x4
+        var light: SIMD4<Float>
+        var shadeblend: SIMD4<Float>
+    }
+
     /// Mirror the engine's world vertex array on generation change. The
     /// geometry lock is held for exactly one memcpy; a map load on the
     /// engine thread can block on this, so get in and out.
@@ -427,6 +528,8 @@ final class RendererCore {
 
     /// Returns the textures that still need a mip chain generated.
     func drainTextureQueues() -> [MTLTexture] {
+        drainMeshQueues()
+
         var frees: UnsafePointer<UInt32>?
         let freeCount = QC_RendererAcquireTextureFrees(&frees)
         if let frees {
@@ -451,6 +554,44 @@ final class RendererCore {
         }
         QC_RendererReleaseUploads()
         return mipCandidates
+    }
+
+    private func drainMeshQueues() {
+        var frees: UnsafePointer<UInt32>?
+        let freeCount = QC_RendererAcquireMeshFrees(&frees)
+        if let frees {
+            for i in 0..<Int(freeCount) {
+                meshes.removeValue(forKey: frees[i])
+            }
+        }
+        QC_RendererReleaseMeshFrees()
+
+        var uploads: UnsafePointer<qc_mesh_upload_t>?
+        let uploadCount = QC_RendererAcquireMeshUploads(&uploads)
+        if let uploads {
+            for i in 0..<Int(uploadCount) {
+                let up = uploads[i]
+                let poseStride = Int(up.numverts) * MemoryLayout<qc_mesh_vertex_t>.stride
+                let vertexBytes = Int(up.numposes) * poseStride
+                let stBytes = Int(up.numverts) * 2 * MemoryLayout<Float>.size
+                guard
+                    let vertices = up.vertices, let st = up.st, let indexes = up.indexes,
+                    let buffer = device.makeBuffer(length: vertexBytes + stBytes,
+                                                   options: .storageModeShared),
+                    let indexBuffer = device.makeBuffer(
+                        bytes: indexes,
+                        length: Int(up.numindexes) * MemoryLayout<UInt16>.size,
+                        options: .storageModeShared)
+                else { continue }
+                buffer.label = "alias mesh \(up.meshnum)"
+                buffer.contents().copyMemory(from: vertices, byteCount: vertexBytes)
+                (buffer.contents() + vertexBytes).copyMemory(from: st, byteCount: stBytes)
+                meshes[up.meshnum] = AliasMesh(
+                    buffer: buffer, stOffset: vertexBytes,
+                    poseStride: poseStride, indexBuffer: indexBuffer)
+            }
+        }
+        QC_RendererReleaseMeshUploads()
     }
 
     private func makeTexture(for upload: qc_texture_upload_t) -> MTLTexture? {
