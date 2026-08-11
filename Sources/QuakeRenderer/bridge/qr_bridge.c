@@ -35,6 +35,7 @@
 
 /* renderer-owned cvars glquake.h doesn't extern; defined in r_null.c */
 extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farclip;
+extern cvar_t r_skyalpha, r_skyfog;
 
 /* ========================================================================
  * globals the engine headers declare and upstream's renderer defined
@@ -1167,6 +1168,345 @@ void QC_RendererReleaseGeometry (void)
 }
 
 /* ========================================================================
+ * gl_sky.c -- sky texture loading and skybox state
+ *
+ * The load-time half of upstream gl_sky.c, ported as-is. The draw-time
+ * half (Sky_DrawSky's flat pass + far-quad GEQUAL trick) is not: those
+ * existed because GL1 couldn't project cloud UVs per pixel. Here sky
+ * surfaces are emitted as QC_BATCH_SKY geometry and World.metal computes
+ * Sky_GetTexCoord's projection per fragment, which keeps sky at the sky
+ * surfaces' real depth -- same occlusion behaviour, no depth trickery.
+ * ===================================================================== */
+
+static gltexture_t	*solidskytexture, *alphaskytexture;
+static gltexture_t	*skybox_textures[6];
+static char		skybox_name[1024];	/* "" = no skybox */
+static float		skyflatcolor[3];	/* for r_fastsky, unported */
+static float		skyfog;
+
+static const int	skytexorder[6] = {0,2,1,3,4,5};
+
+/*
+=============
+Sky_LoadTexture
+
+A sky texture is 256*128, with the left side being a masked overlay
+==============
+*/
+void Sky_LoadTexture (qmodel_t *mod, texture_t *mt)
+{
+	char		texturename[64];
+	unsigned	x, y, p, r, g, b, count, halfwidth, *rgba;
+	byte		*src, *front_data, *back_data;
+
+	if (mt->width != 256 || mt->height != 128)
+	{
+		Con_Warning ("Sky texture %s is %d x %d, expected 256 x 128\n", mt->name, mt->width, mt->height);
+		if (mt->width < 2 || mt->height < 1)
+			return;
+	}
+
+	halfwidth = mt->width / 2;
+	back_data = (byte *) Hunk_AllocName (halfwidth*mt->height*2, "skytex");
+	front_data = back_data + halfwidth*mt->height;
+	src = (byte *)(mt + 1);
+
+// extract back layer and upload
+	for (y=0 ; y<mt->height ; y++)
+		memcpy (back_data + y*halfwidth, src + halfwidth + y*mt->width, halfwidth);
+
+	q_snprintf(texturename, sizeof(texturename), "%s:%s_back", mod->name, mt->name);
+	solidskytexture = QR_TexMgr_LoadImage (mod, texturename, halfwidth, mt->height, SRC_INDEXED, back_data, "", (src_offset_t)back_data, TEXPREF_NONE);
+
+// extract front layer and upload
+	r = g = b = count = 0;
+	for (y=0 ; y<mt->height ; src+=mt->width, front_data+=halfwidth, y++)
+	{
+		for (x=0 ; x<halfwidth ; x++)
+		{
+			p = src[x];
+			if (p == 0)
+				p = 255;
+			else
+			{
+				rgba = &d_8to24table[p];
+				r += ((byte *)rgba)[0];
+				g += ((byte *)rgba)[1];
+				b += ((byte *)rgba)[2];
+				count++;
+			}
+			front_data[x] = p;
+		}
+	}
+
+	front_data = back_data + halfwidth*mt->height;
+	q_snprintf(texturename, sizeof(texturename), "%s:%s_front", mod->name, mt->name);
+	alphaskytexture = QR_TexMgr_LoadImage (mod, texturename, halfwidth, mt->height, SRC_INDEXED, front_data, "", (src_offset_t)front_data, TEXPREF_ALPHA);
+
+// calculate r_fastsky color based on average of all opaque foreground colors
+	skyflatcolor[0] = (float)r/(count*255);
+	skyflatcolor[1] = (float)g/(count*255);
+	skyflatcolor[2] = (float)b/(count*255);
+}
+
+/*
+==================
+Sky_LoadSkyBox
+==================
+*/
+static const char *suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
+void Sky_LoadSkyBox (const char *name)
+{
+	int		i, mark, width, height;
+	char	filename[MAX_OSPATH];
+	byte	*data;
+	qboolean nonefound = true;
+
+	if (strcmp(skybox_name, name) == 0)
+		return; //no change
+
+	//purge old textures
+	for (i=0; i<6; i++)
+	{
+		if (skybox_textures[i] && skybox_textures[i] != notexture)
+			QR_FreeTexture (skybox_textures[i]);
+		skybox_textures[i] = NULL;
+	}
+
+	//turn off skybox if sky is set to ""
+	if (name[0] == 0)
+	{
+		skybox_name[0] = 0;
+		return;
+	}
+
+	//load textures
+	for (i=0; i<6; i++)
+	{
+		mark = Hunk_LowMark ();
+		q_snprintf (filename, sizeof(filename), "gfx/env/%s%s", name, suf[i]);
+		data = Image_LoadImage (filename, &width, &height);
+		if (data)
+		{
+			skybox_textures[i] = QR_TexMgr_LoadImage (cl.worldmodel, filename, width, height, SRC_RGBA, data, filename, 0, TEXPREF_NONE);
+			nonefound = false;
+		}
+		else
+		{
+			Con_Printf ("Couldn't load %s\n", filename);
+			skybox_textures[i] = notexture;
+		}
+		Hunk_FreeToLowMark (mark);
+	}
+
+	if (nonefound) // go back to scrolling sky if skybox is totally missing
+	{
+		for (i=0; i<6; i++)
+		{
+			if (skybox_textures[i] && skybox_textures[i] != notexture)
+				QR_FreeTexture (skybox_textures[i]);
+			skybox_textures[i] = NULL;
+		}
+		skybox_name[0] = 0;
+		return;
+	}
+
+	q_strlcpy(skybox_name, name, sizeof(skybox_name));
+}
+
+/*
+=================
+Sky_ClearAll
+
+Called on map unload/game change to avoid keeping pointers to freed data
+=================
+*/
+void Sky_ClearAll (void)
+{
+	int i;
+
+	skybox_name[0] = 0;
+	for (i=0; i<6; i++)
+		skybox_textures[i] = NULL;
+	solidskytexture = NULL;
+	alphaskytexture = NULL;
+	Cvar_SetQuick (&r_skyfog, r_skyfog.default_string);
+}
+
+/*
+=================
+Sky_NewMap
+=================
+*/
+void Sky_NewMap (void)
+{
+	char	key[128], value[4096];
+	const char	*data;
+
+	skyfog = r_skyfog.value;
+
+	//
+	// read worldspawn (this is so ugly, and shouldn't it be done on the server?)
+	//
+	data = cl.worldmodel->entities;
+	if (!data)
+		return; //FIXME: how could this possibly ever happen? -- if there's no
+	// worldspawn then the sever wouldn't send the loadmap message to the client
+
+	data = COM_Parse(data);
+	if (!data) //should never happen
+		return; // error
+	if (com_token[0] != '{') //should never happen
+		return; // error
+	while (1)
+	{
+		data = COM_Parse(data);
+		if (!data)
+			return; // error
+		if (com_token[0] == '}')
+			break; // end of worldspawn
+		if (com_token[0] == '_')
+			q_strlcpy(key, com_token + 1, sizeof(key));
+		else
+			q_strlcpy(key, com_token, sizeof(key));
+		while (key[0] && key[strlen(key)-1] == ' ') // remove trailing spaces
+			key[strlen(key)-1] = 0;
+		data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+		if (!data)
+			return; // error
+		q_strlcpy(value, com_token, sizeof(value));
+
+		if (!strcmp("sky", key))
+			Sky_LoadSkyBox(value);
+
+		if (!strcmp("skyfog", key))
+			skyfog = atof(value);
+#if 1 /* also accept non-standard keys */
+		else if (!strcmp("skyname", key)) //half-life
+			Sky_LoadSkyBox(value);
+		else if (!strcmp("qlsky", key)) //quake lives
+			Sky_LoadSkyBox(value);
+#endif
+	}
+}
+
+/*
+=================
+Sky_SkyCommand_f
+=================
+*/
+void Sky_SkyCommand_f (void)
+{
+	switch (Cmd_Argc())
+	{
+	case 1:
+		Con_Printf("\"sky\" is \"%s\"\n", skybox_name);
+		break;
+	case 2:
+		Sky_LoadSkyBox(Cmd_Argv(1));
+		break;
+	default:
+		Con_Printf("usage: sky <skyname>\n");
+	}
+}
+
+/*
+====================
+QR_SetSkyfog_f -- ericw (upstream R_SetSkyfog_f)
+====================
+*/
+void QR_SetSkyfog_f (cvar_t *var)
+{
+// clear any skyfog setting from worldspawn
+	skyfog = var->value;
+}
+
+/* ========================================================================
+ * gl_rmisc.c -- water alpha plumbing
+ *
+ * map_* mirror the cvars but can be overridden per map by worldspawn keys;
+ * the cvar callbacks (registered in r_null.c's R_Init) keep them in sync
+ * when the user changes a cvar mid-map. Straight port.
+ * ===================================================================== */
+
+float	map_wateralpha, map_lavaalpha, map_telealpha, map_slimealpha;
+
+void QR_SetWateralpha_f (cvar_t *var)	{ map_wateralpha = var->value; }
+void QR_SetLavaalpha_f (cvar_t *var)	{ map_lavaalpha = var->value; }
+void QR_SetTelealpha_f (cvar_t *var)	{ map_telealpha = var->value; }
+void QR_SetSlimealpha_f (cvar_t *var)	{ map_slimealpha = var->value; }
+
+/*
+====================
+GL_WaterAlphaForSurface -- ericw
+====================
+*/
+float GL_WaterAlphaForSurface (msurface_t *fa)
+{
+	if (fa->flags & SURF_DRAWLAVA)
+		return map_lavaalpha > 0 ? map_lavaalpha : map_wateralpha;
+	else if (fa->flags & SURF_DRAWTELE)
+		return map_telealpha > 0 ? map_telealpha : map_wateralpha;
+	else if (fa->flags & SURF_DRAWSLIME)
+		return map_slimealpha > 0 ? map_slimealpha : map_wateralpha;
+	else
+		return map_wateralpha;
+}
+
+/*
+=============
+QR_ParseWorldspawn -- upstream R_ParseWorldspawn, called at map load
+=============
+*/
+static void QR_ParseWorldspawn (void)
+{
+	char key[128], value[4096];
+	const char *data;
+
+	map_wateralpha = r_wateralpha.value;
+	map_lavaalpha = r_lavaalpha.value;
+	map_telealpha = r_telealpha.value;
+	map_slimealpha = r_slimealpha.value;
+
+	data = COM_Parse(cl.worldmodel->entities);
+	if (!data)
+		return; // error
+	if (com_token[0] != '{')
+		return; // error
+
+	while (1)
+	{
+		data = COM_Parse(data);
+		if (!data)
+			return; // error
+		if (com_token[0] == '}')
+			break; // end of worldspawn
+		if (com_token[0] == '_')
+			q_strlcpy(key, com_token + 1, sizeof(key));
+		else
+			q_strlcpy(key, com_token, sizeof(key));
+		while (key[0] && key[strlen(key)-1] == ' ') // remove trailing spaces
+			key[strlen(key)-1] = 0;
+		data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+		if (!data)
+			return; // error
+		q_strlcpy(value, com_token, sizeof(value));
+
+		if (!strcmp("wateralpha", key))
+			map_wateralpha = atof(value);
+
+		if (!strcmp("lavaalpha", key))
+			map_lavaalpha = atof(value);
+
+		if (!strcmp("telealpha", key))
+			map_telealpha = atof(value);
+
+		if (!strcmp("slimealpha", key))
+			map_slimealpha = atof(value);
+	}
+}
+
+/* ========================================================================
  * gl_rmain.c / r_world.c -- per-frame view setup, PVS marking, culling
  * ===================================================================== */
 
@@ -1436,6 +1776,25 @@ static void QR_EnsureBatchCapacity (qr_frame_slot_t *slot)
 			slot->batch_capacity * sizeof(qc_draw_batch_t));
 }
 
+static void QR_AppendBatch (qr_frame_slot_t *slot, uint32_t kind,
+			    uint32_t texnum, uint32_t lightmap,
+			    uint32_t first_index, float alpha)
+{
+	qc_draw_batch_t *b;
+
+	if (slot->frame.num_indices == first_index)
+		return;		/* nothing was emitted */
+
+	QR_EnsureBatchCapacity (slot);
+	b = &slot->batches[slot->frame.num_batches++];
+	b->kind = kind;
+	b->texnum = texnum;
+	b->lightmap = lightmap;
+	b->first_index = first_index;
+	b->index_count = slot->frame.num_indices - first_index;
+	b->alpha = alpha;
+}
+
 /*
 ================
 QR_EmitSurface -- append one surface's triangle fan as a triangle list
@@ -1459,11 +1818,15 @@ static void QR_EmitSurface (qr_frame_slot_t *slot, msurface_t *surf)
 /*
 ================
 QR_BuildFramePacket -- walk the texture chains R_MarkSurfaces built and
-flatten them into (texture, lightmap) batches of triangle-list indices.
+flatten them into typed batches of triangle-list indices, in draw order.
 
-Runs where upstream ran R_DrawTextureChains: same traversal, but instead
-of binding textures and issuing fans it records index ranges for the
-consumer. Sky and water chains are skipped whole (not drawn yet).
+Runs where upstream ran Sky_DrawSky / R_DrawTextureChains /
+R_DrawTextureChains_Water, in that order: same traversals, but instead of
+binding textures and issuing fans it records index ranges for the
+consumer. Liquids take upstream's unlit path (the lit-water path needs
+the GLSL renderer upstream too); their alpha comes from
+GL_WaterAlphaForSurface per chain, and blended chains are emitted after
+everything opaque, as upstream draws them.
 ================
 */
 static void QR_BuildFramePacket (qr_frame_slot_t *slot)
@@ -1475,6 +1838,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	msurface_t	*s, *s2;
 	int		i, lm;
 	uint32_t	texnum, start;
+	float		alpha;
 
 	if (lm_emitted_size < lightmap_count)
 	{
@@ -1482,6 +1846,22 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		lm_emitted = (byte *) realloc (lm_emitted, lm_emitted_size);
 	}
 
+	/* sky chains -- drawn first, writing depth, as upstream Sky_DrawSky */
+	for (i = 0; i < model->numtextures; i++)
+	{
+		t = model->textures[i];
+		if (!t || !t->texturechains[chain_world])
+			continue;
+		if (!(t->texturechains[chain_world]->flags & SURF_DRAWSKY))
+			continue;
+
+		start = slot->frame.num_indices;
+		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
+			QR_EmitSurface (slot, s);
+		QR_AppendBatch (slot, QC_BATCH_SKY, 0, 0, start, r_skyalpha.value);
+	}
+
+	/* opaque world chains */
 	for (i = 0; i < model->numtextures; i++)
 	{
 		t = model->textures[i];
@@ -1510,16 +1890,29 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				if (s2->lightmaptexturenum == lm)
 					QR_EmitSurface (slot, s2);
 
-			QR_EnsureBatchCapacity (slot);
-			slot->batches[slot->frame.num_batches].texnum = texnum;
-			slot->batches[slot->frame.num_batches].lightmap =
-				(lm < lightmap_count && lightmaps[lm].texture) ?
-					lightmaps[lm].texture->texnum : 0;
-			slot->batches[slot->frame.num_batches].first_index = start;
-			slot->batches[slot->frame.num_batches].index_count =
-				slot->frame.num_indices - start;
-			slot->frame.num_batches++;
+			QR_AppendBatch (slot, QC_BATCH_WORLD, texnum,
+					(lm < lightmap_count && lightmaps[lm].texture) ?
+						lightmaps[lm].texture->texnum : 0,
+					start, 1.0f);
 		}
+	}
+
+	/* liquid chains -- after all opaque, like R_DrawTextureChains_Water */
+	for (i = 0; i < model->numtextures; i++)
+	{
+		t = model->textures[i];
+		if (!t || !t->texturechains[chain_world])
+			continue;
+		if (!(t->texturechains[chain_world]->flags & SURF_DRAWTURB))
+			continue;
+
+		texnum = (t->gltexture) ? t->gltexture->texnum : notexture->texnum;
+		alpha = GL_WaterAlphaForSurface (t->texturechains[chain_world]);
+
+		start = slot->frame.num_indices;
+		for (s = t->texturechains[chain_world]; s; s = s->texturechain)
+			QR_EmitSurface (slot, s);
+		QR_AppendBatch (slot, QC_BATCH_LIQUID, texnum, 0, start, alpha);
 	}
 }
 
@@ -1551,6 +1944,14 @@ void QR_BeginFrame (void)
 	slot = &qr_slots[qr_building];
 	slot->frame.num_indices = 0;
 	slot->frame.num_batches = 0;
+
+	/* an empty packet (console up, no world) must not carry stale sky or
+	   animation state from this slot's previous life */
+	slot->frame.time = 0;
+	memset (slot->frame.vieworg, 0, sizeof(slot->frame.vieworg));
+	slot->frame.sky_solid_texnum = 0;
+	slot->frame.sky_alpha_texnum = 0;
+	memset (slot->frame.skybox_texnums, 0, sizeof(slot->frame.skybox_texnums));
 
 	/* engine owns this slot: safe to (re)size outside the lock */
 	if (slot->index_capacity < qr_index_worst_case)
@@ -1594,6 +1995,24 @@ void QR_RenderView (void)
 	R_MarkSurfaces ();
 
 	QR_BuildViewProj (slot->frame.viewproj);
+
+	/* animation clock and sky state travel in the packet: the consumer
+	   must never substitute its own clock or reach into engine globals */
+	slot->frame.time = (float) cl.time;
+	slot->frame.vieworg[0] = r_origin[0];
+	slot->frame.vieworg[1] = r_origin[1];
+	slot->frame.vieworg[2] = r_origin[2];
+	slot->frame.sky_solid_texnum = solidskytexture ? solidskytexture->texnum : 0;
+	slot->frame.sky_alpha_texnum = alphaskytexture ? alphaskytexture->texnum : 0;
+	if (skybox_name[0])
+	{
+		int axis;
+		for (axis = 0; axis < 6; axis++)
+			slot->frame.skybox_texnums[axis] =
+				skybox_textures[skytexorder[axis]] ?
+					skybox_textures[skytexorder[axis]]->texnum : 0;
+	}
+
 	QR_BuildFramePacket (slot);
 
 	if (r_pos.value)
@@ -1708,6 +2127,9 @@ void QR_NewMap (void)
 
 	GL_BuildLightmaps ();
 	QR_BuildWorldVertexArray ();
+
+	Sky_NewMap ();		/* worldspawn sky + skyfog keys */
+	QR_ParseWorldspawn ();	/* worldspawn wateralpha overrides */
 
 	/* worst-case index count: every world surface visible */
 	qr_index_worst_case = 0;

@@ -9,16 +9,35 @@
 //  and encodes one draw call per batch. Nothing here ever calls QC_* engine
 //  entry points, so the engine-thread rule is preserved by construction.
 //
+//  Batches arrive in draw order (sky, opaque world, liquids) with a kind
+//  that selects the pipeline; all animation state (cl.time, view origin,
+//  sky textures) travels in the packet, never sampled on this thread.
+//
 
 import Metal
 import MetalKit
 
 final class WorldRenderer: NSObject, MTKViewDelegate {
 
+    // Layouts must match LiquidUniforms / SkyUniforms in World.metal.
+    private struct LiquidUniforms {
+        var time: Float
+        var alpha: Float
+    }
+
+    private struct SkyUniforms {
+        var vieworgTime: SIMD4<Float>
+        var skyalpha: Float
+    }
+
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let pipeline: MTLRenderPipelineState
+    private let worldPipeline: MTLRenderPipelineState
+    private let liquidPipeline: MTLRenderPipelineState
+    private let skyLayersPipeline: MTLRenderPipelineState
+    private let skyBoxPipeline: MTLRenderPipelineState
     private let depthState: MTLDepthStencilState
+    private let noWriteDepthState: MTLDepthStencilState
     private let worldSampler: MTLSamplerState
     private let lightmapSampler: MTLSamplerState
 
@@ -27,6 +46,10 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
 
     /// 0.5 gray: a batch with no lightmap renders albedo * 0.5 * 2 = albedo.
     private let neutralLightmap: MTLTexture
+
+    /// Upstream's pink/black "notexture" checker: any batch whose texture
+    /// hasn't been uploaded yet draws this, so a miss is loud, not invisible.
+    private let missingTexture: MTLTexture
 
     private var vertexBuffer: MTLBuffer?
     private var geometryGeneration: UInt32 = 0
@@ -41,23 +64,42 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
             let device = MTLCreateSystemDefaultDevice(),
             let queue = device.makeCommandQueue(),
             let library = device.makeDefaultLibrary(),
-            let vertexFunction = library.makeFunction(name: "world_vertex"),
-            let fragmentFunction = library.makeFunction(name: "world_fragment")
+            let vertexFunction = library.makeFunction(name: "world_vertex")
         else { return nil }
 
-        let pipelineDescriptor = MTLRenderPipelineDescriptor()
-        pipelineDescriptor.label = "world"
-        pipelineDescriptor.vertexFunction = vertexFunction
-        pipelineDescriptor.fragmentFunction = fragmentFunction
-        pipelineDescriptor.colorAttachments[0].pixelFormat = colorPixelFormat
-        pipelineDescriptor.depthAttachmentPixelFormat = depthPixelFormat
+        func makePipeline(fragment: String, blended: Bool) -> MTLRenderPipelineState? {
+            guard let fragmentFunction = library.makeFunction(name: fragment) else { return nil }
+            let descriptor = MTLRenderPipelineDescriptor()
+            descriptor.label = fragment
+            descriptor.vertexFunction = vertexFunction
+            descriptor.fragmentFunction = fragmentFunction
+            descriptor.colorAttachments[0].pixelFormat = colorPixelFormat
+            descriptor.depthAttachmentPixelFormat = depthPixelFormat
+            if blended {
+                let attachment = descriptor.colorAttachments[0]!
+                attachment.isBlendingEnabled = true
+                attachment.sourceRGBBlendFactor = .sourceAlpha
+                attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+                attachment.sourceAlphaBlendFactor = .one
+                attachment.destinationAlphaBlendFactor = .zero
+            }
+            return try? device.makeRenderPipelineState(descriptor: descriptor)
+        }
 
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .lessEqual
         depthDescriptor.isDepthWriteEnabled = true
 
+        // Translucent liquids test but don't write, like upstream's
+        // glDepthMask(GL_FALSE) in R_BeginTransparentDrawing.
+        let noWriteDepthDescriptor = MTLDepthStencilDescriptor()
+        noWriteDepthDescriptor.depthCompareFunction = .lessEqual
+        noWriteDepthDescriptor.isDepthWriteEnabled = false
+
         // World textures wrap and get the full mip/aniso treatment; lightmap
-        // atlases must clamp (blocks are packed edge to edge) and have no mips.
+        // atlases must clamp (blocks are packed edge to edge) and have no
+        // mips. Skybox faces reuse the clamping sampler: clamp-to-edge is
+        // what Sky_EmitSkyBoxVertex's half-texel seam remap emulated.
         let worldSamplerDescriptor = MTLSamplerDescriptor()
         worldSamplerDescriptor.minFilter = .linear
         worldSamplerDescriptor.magFilter = .linear
@@ -72,15 +114,23 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
         lightmapSamplerDescriptor.sAddressMode = .clampToEdge
         lightmapSamplerDescriptor.tAddressMode = .clampToEdge
 
-        let neutralDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        let smallTextureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
 
+        let checkerDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 2, height: 2, mipmapped: false)
+
         guard
-            let pipeline = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor),
+            let worldPipeline = makePipeline(fragment: "world_fragment", blended: false),
+            let liquidPipeline = makePipeline(fragment: "liquid_fragment", blended: true),
+            let skyLayersPipeline = makePipeline(fragment: "sky_layers_fragment", blended: false),
+            let skyBoxPipeline = makePipeline(fragment: "sky_box_fragment", blended: false),
             let depthState = device.makeDepthStencilState(descriptor: depthDescriptor),
+            let noWriteDepthState = device.makeDepthStencilState(descriptor: noWriteDepthDescriptor),
             let worldSampler = device.makeSamplerState(descriptor: worldSamplerDescriptor),
             let lightmapSampler = device.makeSamplerState(descriptor: lightmapSamplerDescriptor),
-            let neutralLightmap = device.makeTexture(descriptor: neutralDescriptor)
+            let neutralLightmap = device.makeTexture(descriptor: smallTextureDescriptor),
+            let missingTexture = device.makeTexture(descriptor: checkerDescriptor)
         else { return nil }
 
         var gray: [UInt8] = [128, 128, 128, 255]
@@ -88,13 +138,27 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
             region: MTLRegionMake2D(0, 0, 1, 1),
             mipmapLevel: 0, withBytes: &gray, bytesPerRow: 4)
 
+        // Same pixels as the bridge's notexture (qr_bridge.c).
+        var checker: [UInt8] = [
+            159, 91, 83, 255,   0, 0, 0, 255,
+            0, 0, 0, 255,       159, 91, 83, 255,
+        ]
+        missingTexture.replace(
+            region: MTLRegionMake2D(0, 0, 2, 2),
+            mipmapLevel: 0, withBytes: &checker, bytesPerRow: 8)
+
         self.device = device
         self.commandQueue = queue
-        self.pipeline = pipeline
+        self.worldPipeline = worldPipeline
+        self.liquidPipeline = liquidPipeline
+        self.skyLayersPipeline = skyLayersPipeline
+        self.skyBoxPipeline = skyBoxPipeline
         self.depthState = depthState
+        self.noWriteDepthState = noWriteDepthState
         self.worldSampler = worldSampler
         self.lightmapSampler = lightmapSampler
         self.neutralLightmap = neutralLightmap
+        self.missingTexture = missingTexture
         super.init()
     }
 
@@ -157,7 +221,6 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
         else { return }
 
         encoder.label = "world"
-        encoder.setRenderPipelineState(pipeline)
         encoder.setDepthStencilState(depthState)
         // The bridge already backface-culls, and Quake's fan winding flips
         // with SURF_PLANEBACK, so GPU face culling would drop half the world.
@@ -171,13 +234,65 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
         encoder.setFragmentSamplerState(worldSampler, index: 0)
         encoder.setFragmentSamplerState(lightmapSampler, index: 1)
 
+        var skyUniforms = SkyUniforms(
+            vieworgTime: SIMD4(frame.vieworg.0, frame.vieworg.1, frame.vieworg.2, frame.time),
+            skyalpha: 1)
+        let skyboxTexnums = [
+            frame.skybox_texnums.0, frame.skybox_texnums.1, frame.skybox_texnums.2,
+            frame.skybox_texnums.3, frame.skybox_texnums.4, frame.skybox_texnums.5,
+        ]
+        let hasSkybox = skyboxTexnums[0] != 0
+
+        var currentKind = UInt32.max
         for i in 0..<Int(frame.num_batches) {
             let batch = batches[i]
-            guard let diffuse = textures[batch.texnum] else { continue }
-            let lightmap = textures[batch.lightmap] ?? neutralLightmap
 
-            encoder.setFragmentTexture(diffuse, index: 0)
-            encoder.setFragmentTexture(lightmap, index: 1)
+            if batch.kind != currentKind {
+                currentKind = batch.kind
+                switch batch.kind {
+                case UInt32(QC_BATCH_SKY):
+                    encoder.setRenderPipelineState(hasSkybox ? skyBoxPipeline : skyLayersPipeline)
+                    encoder.setDepthStencilState(depthState)
+                    if hasSkybox {
+                        for (slot, texnum) in skyboxTexnums.enumerated() {
+                            encoder.setFragmentTexture(textures[texnum] ?? missingTexture, index: slot)
+                        }
+                    } else {
+                        encoder.setFragmentTexture(
+                            textures[frame.sky_solid_texnum] ?? missingTexture, index: 0)
+                        encoder.setFragmentTexture(
+                            textures[frame.sky_alpha_texnum] ?? missingTexture, index: 1)
+                    }
+                case UInt32(QC_BATCH_LIQUID):
+                    encoder.setRenderPipelineState(liquidPipeline)
+                default:
+                    encoder.setRenderPipelineState(worldPipeline)
+                    encoder.setDepthStencilState(depthState)
+                }
+            }
+
+            switch batch.kind {
+            case UInt32(QC_BATCH_SKY):
+                skyUniforms.skyalpha = batch.alpha
+                withUnsafeBytes(of: &skyUniforms) { raw in
+                    encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+                }
+
+            case UInt32(QC_BATCH_LIQUID):
+                // Translucent liquids keep testing but stop writing depth,
+                // exactly upstream's R_BeginTransparentDrawing.
+                encoder.setDepthStencilState(batch.alpha < 1 ? noWriteDepthState : depthState)
+                encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
+                var uniforms = LiquidUniforms(time: frame.time, alpha: batch.alpha)
+                withUnsafeBytes(of: &uniforms) { raw in
+                    encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+                }
+
+            default:
+                encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
+                encoder.setFragmentTexture(textures[batch.lightmap] ?? neutralLightmap, index: 1)
+            }
+
             encoder.drawIndexedPrimitives(
                 type: .triangle,
                 indexCount: Int(batch.index_count),
