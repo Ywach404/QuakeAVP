@@ -50,6 +50,16 @@ final class RendererCore {
         case immersive
     }
 
+    /// Per-frame dissolve state. The radius comes from the packet (the
+    /// engine owns the phase clock); the origin is supplied by the caller:
+    /// the immersive path passes the late-latched head position mapped into
+    /// Quake space, the window passes the packet's view origin.
+    struct PhaseParams {
+        var headorg: SIMD3<Float>
+        var radius: Float
+        var skyFade: Float
+    }
+
     /// Layout must match WorldUniforms in World.metal: two view-projections
     /// and two eye origins, indexed by [[amplification_id]]. The mono path
     /// fills both slots identically.
@@ -256,7 +266,7 @@ final class RendererCore {
             let world = pipeline(fragment: "world_fragment", blended: false),
             let worldDepthOnly = pipeline(fragment: "world_depth_fragment",
                                           blended: false, colorWrite: false),
-            let worldEqual = pipeline(fragment: "world_fragment", blended: false),
+            let worldEqual = pipeline(fragment: "world_phase_fragment", blended: false),
             let worldBlend = pipeline(fragment: "world_fragment", blended: true),
             let liquid = pipeline(fragment: "liquid_fragment", blended: true),
             let skyLayers = pipeline(fragment: "sky_layers_fragment", blended: false),
@@ -286,6 +296,7 @@ final class RendererCore {
                 with encoder: MTLRenderCommandEncoder,
                 pipelines: RenderPipelines,
                 uniforms: WorldUniforms,
+                phase: PhaseParams,
                 amplificationCount: Int,
                 viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil) {
         guard frame.num_batches > 0, frame.num_indices > 0,
@@ -320,7 +331,9 @@ final class RendererCore {
         encoder.setFragmentSamplerState(worldSampler, index: 0)
         encoder.setFragmentSamplerState(lightmapSampler, index: 1)
 
-        var skyUniforms = SkyUniforms(time: frame.time, skyalpha: 1)
+        var skyUniforms = SkyUniforms(time: frame.time, skyalpha: 1, fade: phase.skyFade)
+        var phaseUniforms = PhaseFragUniforms(
+            headorgRadius: SIMD4(phase.headorg.x, phase.headorg.y, phase.headorg.z, phase.radius))
         let skyboxTexnums = [
             frame.skybox_texnums.0, frame.skybox_texnums.1, frame.skybox_texnums.2,
             frame.skybox_texnums.3, frame.skybox_texnums.4, frame.skybox_texnums.5,
@@ -484,15 +497,20 @@ final class RendererCore {
                 // R_BeginTransparentDrawing.
                 if batch.entity == QC_ENTITY_NONE {
                     setPipeline(pipelines.worldEqual, depth: pipelines.depthEqualNoWrite)
+                    encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
+                    encoder.setFragmentTexture(textures[batch.lightmap] ?? neutralLightmap, index: 1)
+                    withUnsafeBytes(of: &phaseUniforms) { raw in
+                        encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+                    }
                 } else {
                     setPipeline(batch.alpha < 1 ? pipelines.worldBlend : pipelines.world,
                                 depth: batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)
-                }
-                encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
-                encoder.setFragmentTexture(textures[batch.lightmap] ?? neutralLightmap, index: 1)
-                var fragUniforms = WorldFragUniforms(alpha: batch.alpha)
-                withUnsafeBytes(of: &fragUniforms) { raw in
-                    encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+                    encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
+                    encoder.setFragmentTexture(textures[batch.lightmap] ?? neutralLightmap, index: 1)
+                    var fragUniforms = WorldFragUniforms(alpha: batch.alpha)
+                    withUnsafeBytes(of: &fragUniforms) { raw in
+                        encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+                    }
                 }
             }
 
@@ -524,6 +542,13 @@ final class RendererCore {
     private struct SkyUniforms {
         var time: Float
         var skyalpha: Float
+        var fade: Float
+    }
+
+    /// Layout must match PhaseFragUniforms in World.metal: one float4,
+    /// xyz = head origin, w = radius, so the layouts cannot disagree.
+    private struct PhaseFragUniforms {
+        var headorgRadius: SIMD4<Float>
     }
 
     private struct WorldFragUniforms {

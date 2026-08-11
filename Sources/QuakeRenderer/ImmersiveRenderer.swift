@@ -194,6 +194,16 @@ final class ImmersiveRenderer {
             quakeFromOrigin = originFromQuake.inverse
         }
 
+        // Dissolve origin: the head itself (the device anchor), mapped into
+        // Quake space with the same late-latched pose the view matrices
+        // use, so the sphere tracks the head with no lag. Radius and sky
+        // fade come from the packet — the engine owns the phase clock.
+        let headQuake = quakeFromOrigin * originFromDevice.columns.3
+        let phaseParams = RendererCore.PhaseParams(
+            headorg: SIMD3(headQuake.x, headQuake.y, headQuake.z),
+            radius: packet?.phase_radius ?? 0,
+            skyFade: 1 - (packet?.phase ?? 0))
+
         var eyeViewproj: [simd_float4x4] = []
         var eyeOrigin: [SIMD4<Float>] = []
         for index in views.indices {
@@ -234,7 +244,8 @@ final class ImmersiveRenderer {
                     viewproj0: eyeViewproj[0], viewproj1: eyeViewproj[1],
                     eyeorg0: eyeOrigin[0], eyeorg1: eyeOrigin[1])
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
-                            uniforms: uniforms, amplificationCount: 2)
+                            uniforms: uniforms, phase: phaseParams,
+                            amplificationCount: 2)
             }
             encoder.endEncoding()
         } else {
@@ -255,7 +266,8 @@ final class ImmersiveRenderer {
                         viewproj0: eyeViewproj[index], viewproj1: eyeViewproj[index],
                         eyeorg0: eyeOrigin[index], eyeorg1: eyeOrigin[index])
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
-                                uniforms: uniforms, amplificationCount: 1)
+                                uniforms: uniforms, phase: phaseParams,
+                                amplificationCount: 1)
                 }
                 encoder.endEncoding()
             }

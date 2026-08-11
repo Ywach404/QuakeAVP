@@ -92,6 +92,12 @@ cvar_t	r_scale = {"r_scale", "1", CVAR_ARCHIVE};
    world to dollhouse scale. */
 cvar_t	vr_worldscale = {"vr_worldscale", "0.0254", CVAR_ARCHIVE};
 
+/* The phase effect's controls. A cvar named `phase` IS the console command:
+   `phase 1` sets the target, bare `phase` prints it -- standard cvar
+   semantics, driven from the command bar or the window's Phase button. */
+cvar_t	phase = {"phase", "0", CVAR_NONE};
+cvar_t	phase_time = {"phase_time", "2", CVAR_NONE};
+
 /* gl_rmisc.c */
 cvar_t	r_lightmapwide = {"r_lightmapwide","0",CVAR_ROM};
 
@@ -160,6 +166,8 @@ void R_Init (void)
 	Cvar_SetCallback (&r_slimealpha, QR_SetSlimealpha_f);
 	Cvar_RegisterVariable (&r_scale);
 	Cvar_RegisterVariable (&vr_worldscale);
+	Cvar_RegisterVariable (&phase);
+	Cvar_RegisterVariable (&phase_time);
 
 	/* upstream Sky_Init (gl_sky.c) */
 	Cvar_RegisterVariable (&r_fastsky);

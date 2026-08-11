@@ -106,8 +106,14 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
                                   znear: 0, zfar: 1),
                 squished: MTLViewport(originX: 0, originY: 0, width: w, height: h,
                                       znear: 0, zfar: 0.3))
+            // Debug path: no head pose here, so the dissolve is centred on
+            // the packet's view origin and reveals the clear colour.
+            let phase = RendererCore.PhaseParams(
+                headorg: SIMD3(f.vieworg.0, f.vieworg.1, f.vieworg.2),
+                radius: f.phase_radius,
+                skyFade: 1 - f.phase)
             core.encode(frame: f, with: encoder, pipelines: pipelines,
-                        uniforms: uniforms, amplificationCount: 1,
+                        uniforms: uniforms, phase: phase, amplificationCount: 1,
                         viewmodelViewport: viewports)
         }
         encoder.endEncoding()
