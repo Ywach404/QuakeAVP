@@ -227,8 +227,11 @@ final class RendererCore {
                 attachment.isBlendingEnabled = true
                 attachment.sourceRGBBlendFactor = .sourceAlpha
                 attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+                // Alpha accumulates as "over" so translucent draws never
+                // reduce the coverage the compositor sees in mixed
+                // immersion: water over an opaque wall stays alpha 1.
                 attachment.sourceAlphaBlendFactor = .one
-                attachment.destinationAlphaBlendFactor = .zero
+                attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             }
             return try? device.makeRenderPipelineState(descriptor: descriptor)
         }

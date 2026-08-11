@@ -203,7 +203,11 @@ typedef struct qc_draw_batch_s {
 typedef struct qc_frame_s {
 	uint32_t	generation;	/* must match AcquireGeometry's result */
 	float		viewproj[16];	/* column-major, Metal depth range */
-	float		clear_color[4];
+	float		clear_color[4];	/* gl_clear / r_clearcolor; advisory:
+					   the flat window honours it, the mixed-
+					   immersion layer clears transparent so
+					   passthrough shows wherever nothing is
+					   drawn */
 	float		time;		/* cl.time; drives warp + sky scroll.
 					   Engine-thread clock -- the consumer
 					   must not substitute its own. */

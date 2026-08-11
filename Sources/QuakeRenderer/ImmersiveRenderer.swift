@@ -206,16 +206,22 @@ final class ImmersiveRenderer {
             eyeOrigin.append(quakeFromOrigin * originFromEye.columns.3)
         }
 
-        let clear: MTLClearColor
-        if let packet {
-            clear = MTLClearColor(
-                red: Double(packet.clear_color.0),
-                green: Double(packet.clear_color.1),
-                blue: Double(packet.clear_color.2),
-                alpha: 1)
-        } else {
-            clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        }
+        // Alpha contract for mixed immersion, worked out once so nobody has
+        // to re-derive it (see 181e113 for what silent colour assumptions
+        // cost): the compositor samples the sRGB target (rgb decoded to
+        // linear, alpha as-is) and expects PREMULTIPLIED linear rgb.
+        //  - Clear is (0,0,0,0): fully transparent passthrough, which is
+        //    also the only valid premultiplied zero-alpha value. The
+        //    engine's clear_color (gl_clear / r_clearcolor) is advisory
+        //    here — the flat window still honours it.
+        //  - Opaque draws write alpha 1; rgb premultiplied by 1 is itself.
+        //  - Translucent draws are straight-alpha sources blended
+        //    srcAlpha/1-srcAlpha over premultiplied dst — which yields the
+        //    correct premultiplied result — with alpha accumulating as
+        //    src + dst*(1-src) ("over"), so water over a wall stays
+        //    alpha 1 and water over passthrough keeps its own coverage.
+        let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        _ = packet   // clear_color intentionally unused on this path
 
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
