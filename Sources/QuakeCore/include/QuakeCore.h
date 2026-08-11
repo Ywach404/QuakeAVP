@@ -136,7 +136,15 @@ typedef struct qc_frame_s {
 	float		time;		/* cl.time; drives warp + sky scroll.
 					   Engine-thread clock -- the consumer
 					   must not substitute its own. */
-	float		vieworg[3];	/* view origin, for sky projection */
+
+	/* The player's world->view basis, in Quake units/degrees. The immersive
+	   consumer composes per-eye matrices from this *after* sampling the head
+	   pose (late latch); building them engine-side would cost a frame of
+	   head-tracking latency. viewproj above stays the mono/window path and
+	   is derived from the same basis. */
+	float		vieworg[3];	/* view origin; also the sky projection origin */
+	float		viewangles[3];	/* pitch, yaw, roll -- Quake order, degrees */
+	float		world_scale;	/* metres per Quake unit (vr_worldscale, clamped) */
 	uint32_t	sky_solid_texnum;   /* classic sky back layer, 0 = none */
 	uint32_t	sky_alpha_texnum;   /* classic sky cloud layer, 0 = none */
 	uint32_t	skybox_texnums[6];  /* indexed by sky axis (upstream
@@ -156,6 +164,14 @@ void QC_RendererReleaseFrame (void);
 /* Report the drawable size in pixels. Callable from any thread; the engine
    picks it up at the next frame and recalculates the refdef. */
 void QC_RendererSetDrawableSize (int width, int height);
+
+/* Report the field of view the consumer actually renders, in degrees --
+   for the immersive path this is the merged binocular frustum of both eyes.
+   The engine widens its culling frustum to cover it (plus a margin for one
+   frame of head rotation) while the packet's mono viewproj keeps the refdef
+   fov. Pass (0, 0) to clear the override when leaving immersive rendering.
+   Callable from any thread. */
+void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg);
 
 #ifdef __cplusplus
 }

@@ -86,6 +86,12 @@ cvar_t	r_slimealpha = {"r_slimealpha","0",CVAR_NONE};
 
 cvar_t	r_scale = {"r_scale", "1", CVAR_ARCHIVE};
 
+/* M3: metres per Quake unit for the immersive renderer's matrix composition.
+   The simulation stays in Quake units; qr_bridge.c clamps to 0.8x-1.2x of
+   the 0.0254 default before publishing, so a config typo can't shrink the
+   world to dollhouse scale. */
+cvar_t	vr_worldscale = {"vr_worldscale", "0.0254", CVAR_ARCHIVE};
+
 /* gl_rmisc.c */
 cvar_t	r_lightmapwide = {"r_lightmapwide","0",CVAR_ROM};
 
@@ -153,6 +159,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_slimealpha);
 	Cvar_SetCallback (&r_slimealpha, QR_SetSlimealpha_f);
 	Cvar_RegisterVariable (&r_scale);
+	Cvar_RegisterVariable (&vr_worldscale);
 
 	/* upstream Sky_Init (gl_sky.c) */
 	Cvar_RegisterVariable (&r_fastsky);
