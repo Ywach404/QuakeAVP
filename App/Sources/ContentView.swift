@@ -11,6 +11,11 @@ import SwiftUI
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
     @State private var commandText = ""
+    @State private var autoOpened = false
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+
+    private var coordinator: RendererCoordinator { .shared }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -25,14 +30,41 @@ struct ContentView: View {
         .padding(24)
         .frame(minWidth: 640, minHeight: 560)
         .onAppear { engine.boot() }
+        .onChange(of: engine.status) { _, status in
+            // Test harness: QAVP_AUTO_IMMERSIVE=1 opens the space as soon as
+            // the engine is up, so simctl/devicectl runs need no UI taps;
+            // =cycle additionally dismisses and reopens it once, which is
+            // the lifecycle test (no leak, no crash, engine keeps ticking).
+            let mode = ProcessInfo.processInfo.environment["QAVP_AUTO_IMMERSIVE"]
+            guard status == .running, !autoOpened, mode == "1" || mode == "cycle"
+            else { return }
+            autoOpened = true
+            Task {
+                await openImmersiveSpace(id: QuakeAVPApp.immersiveSpaceID)
+                guard mode == "cycle" else { return }
+                try? await Task.sleep(for: .seconds(12))
+                await dismissImmersiveSpace()
+                try? await Task.sleep(for: .seconds(6))
+                await openImmersiveSpace(id: QuakeAVPApp.immersiveSpaceID)
+            }
+        }
     }
 
     @ViewBuilder
     private var renderSurface: some View {
         if engine.status == .running {
-            QuakeRenderView()
-                .clipShape(.rect(cornerRadius: 12))
+            if coordinator.isImmersiveActive {
+                ContentUnavailableView(
+                    "Rendering in the immersive space",
+                    systemImage: "visionpro",
+                    description: Text("The window view resumes when you exit."))
                 .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+                .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: 12))
+            } else {
+                QuakeRenderView(paused: false)
+                    .clipShape(.rect(cornerRadius: 12))
+                    .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+            }
         }
     }
 
@@ -46,7 +78,27 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            immersiveButton
             statusBadge
+        }
+    }
+
+    @ViewBuilder
+    private var immersiveButton: some View {
+        if engine.status == .running {
+            Button {
+                Task {
+                    if coordinator.isImmersiveActive {
+                        await dismissImmersiveSpace()
+                    } else {
+                        await openImmersiveSpace(id: QuakeAVPApp.immersiveSpaceID)
+                    }
+                }
+            } label: {
+                Label(coordinator.isImmersiveActive ? "Exit Immersive" : "Enter Immersive",
+                      systemImage: "visionpro")
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
 

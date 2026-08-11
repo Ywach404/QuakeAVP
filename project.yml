@@ -81,18 +81,25 @@ targets:
           - "bridge/**"
     dependencies:
       - target: QuakeCore
+    # Explicit Info.plist (XcodeGen generates it): the immersive space is a
+    # second scene, which requires UIApplicationSupportsMultipleScenes --
+    # the INFOPLIST_KEY_* generation path has no switch for that.
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Quake
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
+        UIApplicationSupportsIndirectInputEvents: true
+        # Game data is not redistributable, so the user supplies pak0.pak by
+        # dropping it into the app's Documents folder over the Files app.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.acervantez.quakeavp.app
         PRODUCT_NAME: Quake
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Quake
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
-        # Game data is not redistributable, so the user supplies pak0.pak by
-        # dropping it into the app's Documents folder over the Files app.
-        INFOPLIST_KEY_UIFileSharingEnabled: YES
-        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: "0.1"
         TARGETED_DEVICE_FAMILY: "7"
