@@ -118,8 +118,12 @@ static uint32_t			qr_world_numverts;
 static uint32_t			qr_map_generation;
 static pthread_mutex_t		qr_geometry_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Frame packets. Three slots suffice: the consumer holds at most one IN_USE
-   and one is READY, so a FREE slot always exists when BeginFrame looks. */
+/* Frame packets. Three slots suffice: the consumer holds at most one INUSE
+   and releasing parks it back in READY (a consumer ticking faster than the
+   engine re-renders the latest packet rather than presenting nothing -- the
+   compositor can run at 120 Hz against the engine's 90), so at most two
+   slots are READY+INUSE and a FREE slot always exists when BeginFrame
+   looks. `seq` orders READY slots so latest still wins. */
 enum { QR_SLOT_FREE, QR_SLOT_BUILDING, QR_SLOT_READY, QR_SLOT_INUSE };
 
 typedef struct qr_frame_slot_s {
@@ -131,10 +135,12 @@ typedef struct qr_frame_slot_s {
 	qc_entity_t	*entities;
 	uint32_t	entity_capacity;
 	int		state;
+	uint64_t	seq;
 } qr_frame_slot_t;
 
 static qr_frame_slot_t	qr_slots[3];
 static int		qr_building = -1;
+static uint64_t		qr_frame_seq;
 static pthread_mutex_t	qr_frame_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Worst-case index count for the current world, computed at map load so
@@ -3149,6 +3155,7 @@ void QR_PublishFrame (void)
 	for (i = 0; i < 3; i++)
 		if (qr_slots[i].state == QR_SLOT_READY)
 			qr_slots[i].state = QR_SLOT_FREE;
+	slot->seq = ++qr_frame_seq;
 	slot->state = QR_SLOT_READY;
 	pthread_mutex_unlock (&qr_frame_lock);
 
@@ -3158,17 +3165,24 @@ void QR_PublishFrame (void)
 const qc_frame_t *QC_RendererAcquireFrame (void)
 {
 	const qc_frame_t *frame = NULL;
-	int i;
+	int i, newest = -1;
 
 	pthread_mutex_lock (&qr_frame_lock);
 	for (i = 0; i < 3; i++)
 	{
-		if (qr_slots[i].state == QR_SLOT_READY)
-		{
-			qr_slots[i].state = QR_SLOT_INUSE;
-			frame = &qr_slots[i].frame;
-			break;
-		}
+		if (qr_slots[i].state == QR_SLOT_READY &&
+		    (newest < 0 || qr_slots[i].seq > qr_slots[newest].seq))
+			newest = i;
+	}
+	if (newest >= 0)
+	{
+		/* a released slot may still sit READY next to a fresher publish;
+		   retire it so only the packet being handed out survives */
+		for (i = 0; i < 3; i++)
+			if (i != newest && qr_slots[i].state == QR_SLOT_READY)
+				qr_slots[i].state = QR_SLOT_FREE;
+		qr_slots[newest].state = QR_SLOT_INUSE;
+		frame = &qr_slots[newest].frame;
 	}
 	pthread_mutex_unlock (&qr_frame_lock);
 	return frame;
@@ -3179,9 +3193,14 @@ void QC_RendererReleaseFrame (void)
 	int i;
 
 	pthread_mutex_lock (&qr_frame_lock);
+	/* back to READY, not FREE: the consumer may tick faster than the
+	   engine publishes, and re-rendering the latest packet beats
+	   presenting an empty frame (a 120 Hz compositor against the 90 Hz
+	   engine pacer flickered 30 times a second). PublishFrame retires
+	   it the moment something newer exists. */
 	for (i = 0; i < 3; i++)
 		if (qr_slots[i].state == QR_SLOT_INUSE)
-			qr_slots[i].state = QR_SLOT_FREE;
+			qr_slots[i].state = QR_SLOT_READY;
 	pthread_mutex_unlock (&qr_frame_lock);
 }
 

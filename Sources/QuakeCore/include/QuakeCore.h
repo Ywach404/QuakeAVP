@@ -244,8 +244,12 @@ typedef struct qc_frame_s {
 	const qc_entity_t *entities;
 } qc_frame_t;
 
-/* Latest published frame, or NULL if none is newer than the last acquire.
-   The slot stays locked against reuse until Release. */
+/* Latest published frame, or NULL only if nothing has been published yet
+   (or the engine retired everything at teardown). Release parks the packet
+   back in the ready state rather than freeing it, so a consumer ticking
+   faster than the engine re-acquires the same packet and re-renders it --
+   never present an empty frame just because Acquire lagged a publish. The
+   slot stays locked against engine reuse from Acquire to Release. */
 const qc_frame_t *QC_RendererAcquireFrame (void);
 void QC_RendererReleaseFrame (void);
 
