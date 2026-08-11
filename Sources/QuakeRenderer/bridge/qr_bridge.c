@@ -37,6 +37,7 @@
 extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farclip;
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
+extern cvar_t phase, phase_time;
 
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
@@ -139,6 +140,12 @@ static pthread_mutex_t	qr_frame_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Worst-case index count for the current world, computed at map load so
    BeginFrame can size a slot without mid-frame reallocation. */
 static uint32_t		qr_index_worst_case;
+
+/* Phase effect state: the linear progress the easing runs on, and the
+   world's bounding diagonal (the radius that dissolves everything from any
+   head position on the map). */
+static float		qr_phase_value;
+static float		qr_world_diagonal;
 
 static int		qr_pending_drawable_w, qr_pending_drawable_h;
 static qboolean		qr_drawable_dirty;
@@ -2976,6 +2983,8 @@ void QR_BeginFrame (void)
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
 	slot->frame.time = 0;
+	slot->frame.phase = 0;
+	slot->frame.phase_radius = 0;
 	memset (slot->frame.vieworg, 0, sizeof(slot->frame.vieworg));
 	memset (slot->frame.viewangles, 0, sizeof(slot->frame.viewangles));
 	slot->frame.world_scale = QR_WORLDSCALE_DEFAULT;
@@ -3056,6 +3065,30 @@ void QR_RenderView (void)
 	slot->frame.viewangles[2] = r_refdef.viewangles[2];
 	slot->frame.world_scale = CLAMP (QR_WORLDSCALE_MIN, vr_worldscale.value,
 					 QR_WORLDSCALE_MAX);
+
+	/* phase: ease the published scalar toward the cvar target. The engine
+	   owns this clock; the renderer only supplies the sphere origin. */
+	{
+		static double	qr_phase_lasttime;
+		float		target = CLAMP (0.f, phase.value, 1.f);
+		float		ptime = q_max (phase_time.value, 0.01f);
+		double		dt = cl.time - qr_phase_lasttime;
+		float		eased;
+
+		if (dt < 0 || dt > 1)	/* map change / demo restart */
+			dt = 0;
+		qr_phase_lasttime = cl.time;
+
+		if (qr_phase_value < target)
+			qr_phase_value = q_min (qr_phase_value + (float)dt / ptime, target);
+		else if (qr_phase_value > target)
+			qr_phase_value = q_max (qr_phase_value - (float)dt / ptime, target);
+
+		/* smoothstep on the linear progress = the ~2s eased sweep */
+		eased = qr_phase_value * qr_phase_value * (3.f - 2.f * qr_phase_value);
+		slot->frame.phase = eased;
+		slot->frame.phase_radius = eased * qr_world_diagonal;
+	}
 	slot->frame.sky_solid_texnum = solidskytexture ? solidskytexture->texnum : 0;
 	slot->frame.sky_alpha_texnum = alphaskytexture ? alphaskytexture->texnum : 0;
 	if (skybox_name[0])
@@ -3185,6 +3218,13 @@ void QR_NewMap (void)
 
 	Sky_NewMap ();		/* worldspawn sky + skyfog keys */
 	QR_ParseWorldspawn ();	/* worldspawn wateralpha overrides */
+
+	{
+		vec3_t size;
+		VectorSubtract (cl.worldmodel->maxs, cl.worldmodel->mins, size);
+		qr_world_diagonal = VectorLength (size);
+	}
+	qr_phase_value = CLAMP (0.f, phase.value, 1.f);	/* no sweep on map load */
 
 	/* worst-case index count: every world surface visible */
 	qr_index_worst_case = 0;

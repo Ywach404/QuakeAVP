@@ -225,6 +225,17 @@ typedef struct qc_frame_s {
 	uint32_t	skybox_texnums[6];  /* indexed by sky axis (upstream
 					       skytexorder already applied);
 					       [0] == 0 = no skybox */
+	/* The phase effect: the world dissolves outward from the viewer's
+	   head, revealing passthrough, while entities and liquids stay. The
+	   ownership is split deliberately: the ENGINE owns the scalar -- it
+	   has the clock and the cvars (`phase`, `phase_time`), eases toward
+	   the target, and scales by the world's bounding diagonal -- and the
+	   RENDERER supplies the sphere's origin from the same late-latched
+	   head pose it builds the view matrices from, so the dissolve tracks
+	   the head with no added latency. */
+	float		phase;		/* eased 0..1; sky fades by 1 - phase */
+	float		phase_radius;	/* dissolve sphere radius, Quake units */
+
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;

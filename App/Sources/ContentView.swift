@@ -78,8 +78,24 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            phaseButton
             immersiveButton
             statusBadge
+        }
+    }
+
+    @State private var phaseTarget = false
+
+    @ViewBuilder
+    private var phaseButton: some View {
+        if engine.status == .running {
+            Button {
+                phaseTarget.toggle()
+                engine.send("phase \(phaseTarget ? 1 : 0)")
+            } label: {
+                Label(phaseTarget ? "Rephase" : "Phase",
+                      systemImage: phaseTarget ? "circle.dashed" : "circle.dotted")
+            }
         }
     }
 

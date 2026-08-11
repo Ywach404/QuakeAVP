@@ -110,6 +110,69 @@ fragment float4 world_fragment(WorldVaryings in [[stage_in]],
     return qavp_out(float4(albedo.rgb * light * 2.0, uniforms.alpha));
 }
 
+// Cheap 3D value noise for the dissolve boundary; feature size is set by
+// the caller's coordinate scale. Hash from a folded fract product — no
+// texture fetch, good enough to break up a sphere edge.
+static float qavp_hash(float3 p)
+{
+    p = fract(p * 0.3183099 + float3(0.1, 0.2, 0.3));
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+static float qavp_noise3(float3 x)
+{
+    float3 i = floor(x);
+    float3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(qavp_hash(i + float3(0, 0, 0)), qavp_hash(i + float3(1, 0, 0)), f.x),
+                   mix(qavp_hash(i + float3(0, 1, 0)), qavp_hash(i + float3(1, 1, 0)), f.x), f.y),
+               mix(mix(qavp_hash(i + float3(0, 0, 1)), qavp_hash(i + float3(1, 0, 1)), f.x),
+                   mix(qavp_hash(i + float3(0, 1, 1)), qavp_hash(i + float3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+// The phase dissolve, applied only to the world's colour pass (pass B).
+// Surfaces inside the head-centred sphere discard — the depth prepass
+// already wrote their depth, so occlusion is untouched — with the boundary
+// broken up by world-space noise and a hot emissive rim just outside it
+// so the sweep reads as deliberate.
+struct PhaseFragUniforms {
+    // xyz = sphere centre (late-latched head pose, Quake units), w = radius;
+    // packed in one float4 so the MSL and Swift layouts cannot disagree
+    // (float3 + float pads to 32 bytes in MSL, 20 in Swift — the debug
+    // layer caught exactly that).
+    float4 headorg_radius;
+};
+
+fragment float4 world_phase_fragment(WorldVaryings in [[stage_in]],
+                                     constant PhaseFragUniforms &phase [[buffer(0)]],
+                                     texture2d<float> diffuse [[texture(0)]],
+                                     texture2d<float> lightmap [[texture(1)]],
+                                     sampler diffuseSampler [[sampler(0)]],
+                                     sampler lightmapSampler [[sampler(1)]])
+{
+    float4 albedo = diffuse.sample(diffuseSampler, in.st);
+    if (albedo.a < 0.666)
+        discard_fragment();
+
+    float3 light = lightmap.sample(lightmapSampler, in.lm).rgb;
+    float3 rgb = albedo.rgb * light * 2.0;
+
+    if (phase.headorg_radius.w > 0.0) {
+        float d = distance(in.worldpos, phase.headorg_radius.xyz);
+        // ~11-unit noise features, +-30 units of edge break-up
+        float threshold = phase.headorg_radius.w
+            + (qavp_noise3(in.worldpos * 0.09) - 0.5) * 60.0;
+        if (d < threshold)
+            discard_fragment();
+        // ember rim in a ~14-unit band outside the boundary
+        float rim = 1.0 - saturate((d - threshold) * (1.0 / 14.0));
+        rgb = min(rgb + rim * rim * float3(1.5, 0.93, 0.27), 1.0);
+    }
+
+    return qavp_out(float4(rgb, 1.0));
+}
+
 // Depth prepass for the world (phase pass A): colour writes are masked off
 // at the pipeline, but fence textures must still discard so they cut holes
 // in the depth buffer exactly like the colour pass does.
@@ -152,7 +215,17 @@ fragment float4 liquid_fragment(WorldVaryings in [[stage_in]],
 struct SkyUniforms {
     float time;         // cl.time from the frame packet
     float skyalpha;     // r_skyalpha (cloud layer opacity)
+    float fade;         // 1 - phase: the sky can't dissolve by distance,
+                        // so it fades out with the world as a whole
 };
+
+// Premultiply AFTER linearizing: the compositor's premultiplied-alpha
+// convention applies to the linear values it decodes, not the sRGB bytes.
+static inline float4 qavp_sky_out(float3 rgb, float fade)
+{
+    float4 c = qavp_out(float4(rgb, 1.0));
+    return float4(c.rgb * fade, fade);
+}
 
 // Sky_GetTexCoord (gl_sky.c): project the view ray onto a flattened sphere
 // and scroll with time. speed is 8 for the solid layer, 16 for the clouds.
@@ -178,7 +251,7 @@ fragment float4 sky_layers_fragment(WorldVaryings in [[stage_in]],
 
     // Upstream draws the solid layer then blends the cloud layer over it
     // with r_skyalpha; folded into one pass here.
-    return qavp_out(float4(mix(back, front.rgb, front.a * uniforms.skyalpha), 1.0));
+    return qavp_sky_out(mix(back, front.rgb, front.a * uniforms.skyalpha), uniforms.fade);
 }
 
 // Sky_ProjectPoly's axis pick plus the st_to_vec/vec_to_st projection from
@@ -219,5 +292,5 @@ fragment float4 sky_box_fragment(WorldVaryings in [[stage_in]],
     float t = sky_component(dir, vec_to_st[axis].y) / dv;
     float2 uv = float2((s + 1.0) * 0.5, 1.0 - (t + 1.0) * 0.5);
 
-    return qavp_out(float4(faces[axis].sample(faceSampler, uv).rgb, 1.0));
+    return qavp_sky_out(faces[axis].sample(faceSampler, uv).rgb, uniforms.fade);
 }
