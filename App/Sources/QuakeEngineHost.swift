@@ -100,14 +100,16 @@ final class QuakeEngineHost: @unchecked Sendable {
     }
 
     func execute(_ command: String) {
-        // Cbuf_AddText is not thread-safe; queue it onto the engine thread.
-        // For M0 the console is the only writer and it is low-frequency, so a
-        // straight perform-on-thread is enough.
-        guard let thread, thread.isExecuting else { return }
-        perform(on: thread) {
-            command.withCString { QC_ExecuteCommand($0) }
-        }
+        // Cbuf_AddText is not thread-safe; queue for the engine thread, which
+        // drains before each frame. NOT perform(onThread:) -- that delivers
+        // via the target thread's run loop, and the engine thread never runs
+        // one (it sits in the frame loop below), so commands sent that way
+        // queue forever and silently do nothing.
+        guard thread != nil else { return }
+        pendingCommands.append(command)
     }
+
+    private let pendingCommands = CommandQueue()
 
     // MARK: - Engine thread
 
@@ -164,6 +166,9 @@ final class QuakeEngineHost: @unchecked Sendable {
             let delta = now - previous
             previous = now
 
+            for command in pendingCommands.drain() {
+                command.withCString { QC_ExecuteCommand($0) }
+            }
             QC_Frame(delta)
 
             let spent = CFAbsoluteTimeGetCurrent() - now
@@ -179,17 +184,24 @@ final class QuakeEngineHost: @unchecked Sendable {
         Task { @MainActor in sink(nil) }
     }
 
-    private func perform(on thread: Thread, _ work: @escaping () -> Void) {
-        let block = BlockBox(work)
-        block.perform(#selector(BlockBox.invoke), on: thread, with: nil, waitUntilDone: false)
-    }
 }
 
-/// `perform(_:onThread:)` needs an ObjC selector target.
-private final class BlockBox: NSObject {
-    private let work: () -> Void
-    init(_ work: @escaping () -> Void) { self.work = work }
-    @objc func invoke() { work() }
+/// Locked FIFO between the UI (append) and the engine thread (drain).
+private final class CommandQueue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var commands: [String] = []
+
+    func append(_ command: String) {
+        lock.lock(); defer { lock.unlock() }
+        commands.append(command)
+    }
+
+    func drain() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        let drained = commands
+        commands.removeAll(keepingCapacity: true)
+        return drained
+    }
 }
 
 /// Minimal one-way flag. One writer (main), one reader (engine thread); a lock
