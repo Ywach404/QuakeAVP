@@ -28,7 +28,7 @@ struct ContentView: View {
             // (sized so the phase strip fits in the same window height);
             // in every other state it is still the whole interface.
             console
-                .frame(maxHeight: engine.status == .running ? 112 : .infinity)
+                .frame(maxHeight: engine.status == .running ? 96 : .infinity)
             commandBar
         }
         .padding(24)
@@ -67,7 +67,7 @@ struct ContentView: View {
             } else {
                 QuakeRenderView(paused: false)
                     .clipShape(.rect(cornerRadius: 12))
-                    .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
             }
         }
     }
@@ -110,40 +110,41 @@ struct ContentView: View {
         }
     }
 
-    /// Crown-style dissolve control, like the system environments: the
-    /// slider scrubs the `phase` target (the engine eases toward it, so a
-    /// partial drag is a partial melt) and the menu picks the sweep speed.
+    /// Crown-style dissolve control, like the system environments: the dial
+    /// scrubs the `phase` target (the engine eases toward it, so a partial
+    /// twist is a partial melt) and the menu picks the sweep speed.
     private var phaseControls: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "circle.dotted")
-                .foregroundStyle(.secondary)
-            Slider(value: $phaseLevel, in: 0...1) {
-                Text("Phase")
-            }
-            .onChange(of: phaseLevel) { _, level in
-                engine.send(String(format: "phase %.2f", level))
-            }
-            Image(systemName: "circle.dashed")
-                .foregroundStyle(.secondary)
-            Menu {
-                ForEach(Self.phaseSpeeds, id: \.seconds) { speed in
-                    Button {
-                        phaseSpeed = speed.seconds
-                        engine.send(String(format: "phase_time %g", speed.seconds))
-                    } label: {
-                        if phaseSpeed == speed.seconds {
-                            Label(speed.label, systemImage: "checkmark")
-                        } else {
-                            Text(speed.label)
+        HStack(spacing: 16) {
+            PhaseDial(value: $phaseLevel)
+                .onChange(of: phaseLevel) { _, level in
+                    engine.send(String(format: "phase %.2f", level))
+                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Phase \(Int((phaseLevel * 100).rounded()))%")
+                    .font(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(Self.phaseSpeeds, id: \.seconds) { speed in
+                        Button {
+                            phaseSpeed = speed.seconds
+                            engine.send(String(format: "phase_time %g", speed.seconds))
+                        } label: {
+                            if phaseSpeed == speed.seconds {
+                                Label(speed.label, systemImage: "checkmark")
+                            } else {
+                                Text(speed.label)
+                            }
                         }
                     }
+                } label: {
+                    Label(Self.phaseSpeeds.first { $0.seconds == phaseSpeed }?.label ?? "\(phaseSpeed)s",
+                          systemImage: "timer")
+                        .font(.callout)
                 }
-            } label: {
-                Label(Self.phaseSpeeds.first { $0.seconds == phaseSpeed }?.label ?? "\(phaseSpeed)s",
-                      systemImage: "timer")
-                    .font(.callout)
+                .fixedSize()
             }
-            .fixedSize()
+            Spacer()
         }
         .padding(.horizontal, 4)
     }
@@ -267,6 +268,55 @@ struct ContentView: View {
         guard !text.isEmpty else { return }
         engine.send(text)
         commandText = ""
+    }
+}
+
+/// Pinch-and-twist dial for the phase target. A drag anywhere on the dial
+/// maps the pinch position's angle around the centre onto 0...1 over a
+/// 270-degree sweep, gap at the bottom — grab the ring and twist.
+/// TODO(M4+): this control wants to leave the window — bonded to the
+/// hand/arm as spatial UI — and once the space adopts progressive
+/// immersion the system immersion amount (the crown) feeds `phase`
+/// directly.
+private struct PhaseDial: View {
+    @Binding var value: Double
+
+    private static let size: CGFloat = 72
+    private static let sweep = 270.0
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .trim(from: 0, to: Self.sweep / 360)
+                .stroke(.quaternary, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                .rotationEffect(.degrees(90 + (360 - Self.sweep) / 2))
+            Circle()
+                .trim(from: 0, to: Self.sweep / 360 * value)
+                .stroke(.tint, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                .rotationEffect(.degrees(90 + (360 - Self.sweep) / 2))
+            Circle()
+                .fill(.primary)
+                .frame(width: 9, height: 9)
+                .offset(y: -Self.size / 2)
+                .rotationEffect(.degrees(Self.sweep * (value - 0.5)))
+            Image(systemName: "circle.dotted")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: Self.size, height: Self.size)
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { drag in
+                    // Degrees clockwise from straight up; the dead zone at
+                    // the bottom clamps to the nearer end stop.
+                    let dx = drag.location.x - Self.size / 2
+                    let dy = drag.location.y - Self.size / 2
+                    let degrees = atan2(dx, -dy) * 180 / .pi
+                    let clamped = min(max(degrees, -Self.sweep / 2), Self.sweep / 2)
+                    value = (clamped + Self.sweep / 2) / Self.sweep
+                }
+        )
     }
 }
 
