@@ -61,7 +61,10 @@ struct WorldFragUniforms {
 };
 
 struct WorldVaryings {
-    float4 position [[position]];
+    // invariant: the world draws twice (depth prepass, then a colour pass
+    // with depthCompare == .equal); without invariance the two pipelines
+    // may schedule the position math differently and .equal sparkles.
+    float4 position [[position, invariant]];
     float3 worldpos;
     float3 eyeorg [[flat]];
     float2 st;
@@ -105,6 +108,18 @@ fragment float4 world_fragment(WorldVaryings in [[stage_in]],
     // here is the other half of that contract (see R_BuildLightMap).
     float3 light = lightmap.sample(lightmapSampler, in.lm).rgb;
     return qavp_out(float4(albedo.rgb * light * 2.0, uniforms.alpha));
+}
+
+// Depth prepass for the world (phase pass A): colour writes are masked off
+// at the pipeline, but fence textures must still discard so they cut holes
+// in the depth buffer exactly like the colour pass does.
+fragment float4 world_depth_fragment(WorldVaryings in [[stage_in]],
+                                     texture2d<float> diffuse [[texture(0)]],
+                                     sampler diffuseSampler [[sampler(0)]])
+{
+    if (diffuse.sample(diffuseSampler, in.st).a < 0.666)
+        discard_fragment();
+    return float4(0.0);
 }
 
 // MARK: - Liquids
