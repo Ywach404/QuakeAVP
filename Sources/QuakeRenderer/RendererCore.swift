@@ -25,6 +25,7 @@ import simd
 /// the near plane, 0.0 at the far — so the immersive set tests greater-equal).
 struct RenderPipelines {
     let world: MTLRenderPipelineState
+    let worldBlend: MTLRenderPipelineState   // translucent brush entities
     let liquid: MTLRenderPipelineState
     let skyLayers: MTLRenderPipelineState
     let skyBox: MTLRenderPipelineState
@@ -204,6 +205,7 @@ final class RendererCore {
 
         guard
             let world = pipeline(fragment: "world_fragment", blended: false),
+            let worldBlend = pipeline(fragment: "world_fragment", blended: true),
             let liquid = pipeline(fragment: "liquid_fragment", blended: true),
             let skyLayers = pipeline(fragment: "sky_layers_fragment", blended: false),
             let skyBox = pipeline(fragment: "sky_box_fragment", blended: false),
@@ -212,7 +214,8 @@ final class RendererCore {
         else { return nil }
 
         return RenderPipelines(
-            world: world, liquid: liquid, skyLayers: skyLayers, skyBox: skyBox,
+            world: world, worldBlend: worldBlend, liquid: liquid,
+            skyLayers: skyLayers, skyBox: skyBox,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite)
     }
 
@@ -265,36 +268,55 @@ final class RendererCore {
         ]
         let hasSkybox = skyboxTexnums[0] != 0
 
-        var currentKind = UInt32.max
+        // Per-batch model transform: identity for the world, the entity's
+        // for brush entities. Track by entity index to skip redundant binds.
+        var boundEntity = UInt32.max - 1   // != QC_ENTITY_NONE, forces first bind
+        var currentPipeline: MTLRenderPipelineState?
+        var currentDepth: MTLDepthStencilState?
+
+        func setPipeline(_ p: MTLRenderPipelineState, depth: MTLDepthStencilState) {
+            if p !== currentPipeline {
+                encoder.setRenderPipelineState(p)
+                currentPipeline = p
+            }
+            if depth !== currentDepth {
+                encoder.setDepthStencilState(depth)
+                currentDepth = depth
+            }
+        }
+
         for i in 0..<Int(frame.num_batches) {
             let batch = batches[i]
 
-            if batch.kind != currentKind {
-                currentKind = batch.kind
-                switch batch.kind {
-                case UInt32(QC_BATCH_SKY):
-                    encoder.setRenderPipelineState(hasSkybox ? pipelines.skyBox : pipelines.skyLayers)
-                    encoder.setDepthStencilState(pipelines.depthWrite)
-                    if hasSkybox {
-                        for (slot, texnum) in skyboxTexnums.enumerated() {
-                            encoder.setFragmentTexture(textures[texnum] ?? missingTexture, index: slot)
-                        }
-                    } else {
-                        encoder.setFragmentTexture(
-                            textures[frame.sky_solid_texnum] ?? missingTexture, index: 0)
-                        encoder.setFragmentTexture(
-                            textures[frame.sky_alpha_texnum] ?? missingTexture, index: 1)
-                    }
-                case UInt32(QC_BATCH_LIQUID):
-                    encoder.setRenderPipelineState(pipelines.liquid)
-                default:
-                    encoder.setRenderPipelineState(pipelines.world)
-                    encoder.setDepthStencilState(pipelines.depthWrite)
+            // Alias batches draw from their own mesh buffers in a second
+            // encoder phase (encodeAlias); skip them here.
+            if batch.kind == UInt32(QC_BATCH_ALIAS) { continue }
+
+            if batch.entity != boundEntity {
+                boundEntity = batch.entity
+                var model = matrix_identity_float4x4
+                if batch.entity != QC_ENTITY_NONE, let entities = frame.entities {
+                    model = Self.matrix(from: entities[Int(batch.entity)].transform)
+                }
+                withUnsafeBytes(of: &model) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 2)
                 }
             }
 
             switch batch.kind {
             case UInt32(QC_BATCH_SKY):
+                setPipeline(hasSkybox ? pipelines.skyBox : pipelines.skyLayers,
+                            depth: pipelines.depthWrite)
+                if hasSkybox {
+                    for (slot, texnum) in skyboxTexnums.enumerated() {
+                        encoder.setFragmentTexture(textures[texnum] ?? missingTexture, index: slot)
+                    }
+                } else {
+                    encoder.setFragmentTexture(
+                        textures[frame.sky_solid_texnum] ?? missingTexture, index: 0)
+                    encoder.setFragmentTexture(
+                        textures[frame.sky_alpha_texnum] ?? missingTexture, index: 1)
+                }
                 skyUniforms.skyalpha = batch.alpha
                 withUnsafeBytes(of: &skyUniforms) { raw in
                     encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
@@ -303,8 +325,8 @@ final class RendererCore {
             case UInt32(QC_BATCH_LIQUID):
                 // Translucent liquids keep testing but stop writing depth,
                 // exactly upstream's R_BeginTransparentDrawing.
-                encoder.setDepthStencilState(
-                    batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)
+                setPipeline(pipelines.liquid,
+                            depth: batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)
                 encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
                 var liquidUniforms = LiquidUniforms(time: frame.time, alpha: batch.alpha)
                 withUnsafeBytes(of: &liquidUniforms) { raw in
@@ -312,8 +334,17 @@ final class RendererCore {
                 }
 
             default:
+                // World geometry, world-owned or a brush entity's; entity
+                // alpha < 1 blends and stops writing depth like upstream's
+                // R_BeginTransparentDrawing.
+                setPipeline(batch.alpha < 1 ? pipelines.worldBlend : pipelines.world,
+                            depth: batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)
                 encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
                 encoder.setFragmentTexture(textures[batch.lightmap] ?? neutralLightmap, index: 1)
+                var fragUniforms = WorldFragUniforms(alpha: batch.alpha)
+                withUnsafeBytes(of: &fragUniforms) { raw in
+                    encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+                }
             }
 
             encoder.drawIndexedPrimitives(
@@ -325,6 +356,16 @@ final class RendererCore {
         }
     }
 
+    /// qc_entity_t.transform (a 16-float C array, column-major) as simd.
+    static func matrix(from transform: (Float, Float, Float, Float, Float, Float, Float, Float,
+                                        Float, Float, Float, Float, Float, Float, Float, Float)) -> simd_float4x4 {
+        simd_float4x4(columns: (
+            SIMD4(transform.0, transform.1, transform.2, transform.3),
+            SIMD4(transform.4, transform.5, transform.6, transform.7),
+            SIMD4(transform.8, transform.9, transform.10, transform.11),
+            SIMD4(transform.12, transform.13, transform.14, transform.15)))
+    }
+
     // Layouts must match the structs of the same name in World.metal.
     private struct LiquidUniforms {
         var time: Float
@@ -334,6 +375,10 @@ final class RendererCore {
     private struct SkyUniforms {
         var time: Float
         var skyalpha: Float
+    }
+
+    private struct WorldFragUniforms {
+        var alpha: Float
     }
 
     /// Mirror the engine's world vertex array on generation change. The

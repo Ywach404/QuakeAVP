@@ -31,6 +31,19 @@ struct WorldUniforms {
     float4 eyeorg[2];       // per-eye view origin, Quake units (w unused)
 };
 
+// Per-batch model->world transform: identity for world batches, the entity
+// transform for brush-entity batches. Multiplying by the identity is
+// bit-exact, so world rendering is unchanged by this indirection.
+struct ModelUniforms {
+    float4x4 model;
+};
+
+// Per-batch fragment state for the world pipelines; alpha is 1 for the
+// world itself and ENTALPHA for translucent brush entities.
+struct WorldFragUniforms {
+    float alpha;
+};
+
 struct WorldVaryings {
     float4 position [[position]];
     float3 worldpos;
@@ -44,12 +57,14 @@ struct WorldVaryings {
 vertex WorldVaryings world_vertex(uint vid [[vertex_id]],
                                   uint amp [[amplification_id]],
                                   const device WorldVertex *vertices [[buffer(0)]],
-                                  constant WorldUniforms &uniforms [[buffer(1)]])
+                                  constant WorldUniforms &uniforms [[buffer(1)]],
+                                  constant ModelUniforms &entity [[buffer(2)]])
 {
     WorldVertex v = vertices[vid];
+    float4 worldpos = entity.model * float4(float3(v.xyz), 1.0);
     WorldVaryings out;
-    out.position = uniforms.viewproj[amp] * float4(float3(v.xyz), 1.0);
-    out.worldpos = float3(v.xyz);
+    out.position = uniforms.viewproj[amp] * worldpos;
+    out.worldpos = worldpos.xyz;
     out.eyeorg = uniforms.eyeorg[amp].xyz;
     out.st = float2(v.st);
     out.lm = float2(v.lm_st);
@@ -57,6 +72,7 @@ vertex WorldVaryings world_vertex(uint vid [[vertex_id]],
 }
 
 fragment float4 world_fragment(WorldVaryings in [[stage_in]],
+                               constant WorldFragUniforms &uniforms [[buffer(0)]],
                                texture2d<float> diffuse [[texture(0)]],
                                texture2d<float> lightmap [[texture(1)]],
                                sampler diffuseSampler [[sampler(0)]],
@@ -72,7 +88,7 @@ fragment float4 world_fragment(WorldVaryings in [[stage_in]],
     // gl_overbright: lightmaps are baked >>8 so full bright is 0.5; the *2
     // here is the other half of that contract (see R_BuildLightMap).
     float3 light = lightmap.sample(lightmapSampler, in.lm).rgb;
-    return float4(albedo.rgb * light * 2.0, 1.0);
+    return float4(albedo.rgb * light * 2.0, uniforms.alpha);
 }
 
 // MARK: - Liquids
