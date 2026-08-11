@@ -281,6 +281,12 @@ struct ContentView: View {
 private struct PhaseDial: View {
     @Binding var value: Double
 
+    /// Value when the current twist began. Twisting is relative — grabbing
+    /// the dial never moves it, only the angle swept from the grab point
+    /// does — because the absolute mapping made every touch a hair trigger:
+    /// the value teleported to wherever the pinch landed.
+    @State private var valueAtTwistStart: Double?
+
     private static let size: CGFloat = 72
     private static let sweep = 270.0
 
@@ -306,17 +312,22 @@ private struct PhaseDial: View {
         .frame(width: Self.size, height: Self.size)
         .contentShape(Circle())
         .gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 4)
                 .onChanged { drag in
-                    // Degrees clockwise from straight up; the dead zone at
-                    // the bottom clamps to the nearer end stop.
-                    let dx = drag.location.x - Self.size / 2
-                    let dy = drag.location.y - Self.size / 2
-                    let degrees = atan2(dx, -dy) * 180 / .pi
-                    let clamped = min(max(degrees, -Self.sweep / 2), Self.sweep / 2)
-                    value = (clamped + Self.sweep / 2) / Self.sweep
+                    let base = valueAtTwistStart ?? value
+                    valueAtTwistStart = base
+                    var delta = Self.angle(at: drag.location) - Self.angle(at: drag.startLocation)
+                    if delta > 180 { delta -= 360 }      // shortest way round
+                    if delta < -180 { delta += 360 }
+                    value = min(max(base + delta / Self.sweep, 0), 1)
                 }
+                .onEnded { _ in valueAtTwistStart = nil }
         )
+    }
+
+    /// Degrees clockwise from straight up, around the dial centre.
+    private static func angle(at point: CGPoint) -> Double {
+        atan2(point.x - size / 2, -(point.y - size / 2)) * 180 / .pi
     }
 }
 
