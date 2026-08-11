@@ -43,7 +43,16 @@ into `platform/r_null.c` (`gl_screen.c`, `gl_rmisc.c`). The *draw-time* halves o
 (`WARPCALC`/`turbsin`) and cloud-projection (`Sky_GetTexCoord`,
 `Sky_ProjectPoly`) math is evaluated per fragment in
 `Sources/QuakeRenderer/Shaders/World.metal` — the render-to-warpimage scheme
-and the far-quad GEQUAL sky trick existed only to work around GL1. When
+and the far-quad GEQUAL sky trick existed only to work around GL1.
+
+One deliberate structural departure from upstream: the world is drawn as a
+**depth prepass plus an equal-depth colour pass** rather than upstream's
+single pass. Upstream never needed the split — GL Quake never makes walls
+transparent while keeping their occlusion — but the phase effect does:
+occlusion must come from geometry whose colour has been dissolved away, so
+depth and colour are decided in separate passes and only the colour pass
+ever changes with phase. When merging upstream world-drawing changes, apply
+them to both passes. When
 merging a newer upstream, diff those upstream files too and carry relevant
 fixes into the ports (including the shader constants); cvar defaults must
 stay byte-identical.
