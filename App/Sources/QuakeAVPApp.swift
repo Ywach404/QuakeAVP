@@ -27,7 +27,10 @@ struct QuakeAVPApp: App {
                 RendererCoordinator.shared.startImmersive(layerRenderer)
             }
         }
-        .immersionStyle(selection: .constant(.full), in: .full)
+        // Mixed the whole time: switching styles at runtime tears down and
+        // rebuilds the CompositorServices layer. At phase 0 the world draws
+        // opaque and covers the room, indistinguishable from .full.
+        .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
 }
 
