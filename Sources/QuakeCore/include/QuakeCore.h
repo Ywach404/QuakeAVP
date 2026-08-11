@@ -159,7 +159,13 @@ enum {
 	   decides (window draws it depth-squished like upstream's
 	   glDepthRange(0, 0.3), immersive skips it).
 	   TODO(M4): decouple the weapon from the view instead. */
-	QC_ENTFLAG_VIEWMODEL = 1 << 0
+	QC_ENTFLAG_VIEWMODEL = 1 << 0,
+
+	/* Dissolves with the world in the phase effect. Set on brush entities
+	   whose submodel belongs to a func_door_secret: a secret door that
+	   hangs in the air after the wall around it melts is a spoiler, so
+	   secrets go out with the architecture they hide in. */
+	QC_ENTFLAG_PHASED = 1 << 1
 };
 
 /*

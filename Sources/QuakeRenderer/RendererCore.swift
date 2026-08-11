@@ -502,6 +502,17 @@ final class RendererCore {
                     withUnsafeBytes(of: &phaseUniforms) { raw in
                         encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
                     }
+                } else if batch.alpha >= 1, let entities = frame.entities,
+                          entities[Int(batch.entity)].flags & UInt32(QC_ENTFLAG_PHASED) != 0 {
+                    // Secret doors dissolve with the world: same phase
+                    // fragment, but ordinary depth write/test -- they move,
+                    // so they are not part of the prepass .equal contract.
+                    setPipeline(pipelines.worldEqual, depth: pipelines.depthWrite)
+                    encoder.setFragmentTexture(textures[batch.texnum] ?? missingTexture, index: 0)
+                    encoder.setFragmentTexture(textures[batch.lightmap] ?? neutralLightmap, index: 1)
+                    withUnsafeBytes(of: &phaseUniforms) { raw in
+                        encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+                    }
                 } else {
                     setPipeline(batch.alpha < 1 ? pipelines.worldBlend : pipelines.world,
                                 depth: batch.alpha < 1 ? pipelines.depthNoWrite : pipelines.depthWrite)

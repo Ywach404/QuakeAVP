@@ -153,6 +153,14 @@ static uint32_t		qr_index_worst_case;
 static float		qr_phase_value;
 static float		qr_world_diagonal;
 
+/* Submodels owned by func_door_secret entities, parsed from the entities
+   lump at map load. Brush entities using one get QC_ENTFLAG_PHASED and
+   dissolve with the world: a secret door hanging in the air after the wall
+   around it melts would give the secret away. */
+#define QR_MAX_SECRET_SUBMODELS	256
+static int		qr_secret_submodels[QR_MAX_SECRET_SUBMODELS];
+static int		qr_secret_submodel_count;
+
 static int		qr_pending_drawable_w, qr_pending_drawable_h;
 static qboolean		qr_drawable_dirty;
 static pthread_mutex_t	qr_drawable_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1618,6 +1626,50 @@ float GL_WaterAlphaForSurface (msurface_t *fa)
 QR_ParseWorldspawn -- upstream R_ParseWorldspawn, called at map load
 =============
 */
+/*
+================
+QR_ParseSecretSubmodels -- collect the '*N' submodels owned by
+func_door_secret entities. Classnames live server-side; the entities lump
+is the one place the renderer can learn which doors are secrets, and it
+is authoritative for the local games this app runs.
+================
+*/
+static void QR_ParseSecretSubmodels (void)
+{
+	char		key[128];
+	char		classname[64], model[64];
+	const char	*data;
+
+	qr_secret_submodel_count = 0;
+
+	data = cl.worldmodel->entities;
+	while (data && (data = COM_Parse (data)) != NULL)
+	{
+		if (com_token[0] != '{')
+			break;
+		classname[0] = model[0] = 0;
+		while (1)
+		{
+			data = COM_Parse (data);
+			if (!data)
+				return;
+			if (com_token[0] == '}')
+				break;
+			q_strlcpy (key, com_token, sizeof(key));
+			data = COM_ParseEx (data, CPE_ALLOWTRUNC);
+			if (!data)
+				return;
+			if (!strcmp (key, "classname"))
+				q_strlcpy (classname, com_token, sizeof(classname));
+			else if (!strcmp (key, "model"))
+				q_strlcpy (model, com_token, sizeof(model));
+		}
+		if (!strcmp (classname, "func_door_secret") && model[0] == '*' &&
+		    qr_secret_submodel_count < QR_MAX_SECRET_SUBMODELS)
+			qr_secret_submodels[qr_secret_submodel_count++] = atoi (model + 1);
+	}
+}
+
 static void QR_ParseWorldspawn (void)
 {
 	char key[128], value[4096];
@@ -2270,6 +2322,18 @@ static void QR_EmitBrushModel (qr_frame_slot_t *slot, entity_t *e)
 	angles[0] = -angles[0];		/* stupid quake bug */
 	QR_EntityMatrix (rec.transform, e->origin, angles, e->scale);
 	rec.alpha = ENTALPHA_DECODE(e->alpha);
+	if (clmodel->name[0] == '*')
+	{
+		int submodel = atoi (clmodel->name + 1);
+		for (i = 0; i < qr_secret_submodel_count; i++)
+		{
+			if (qr_secret_submodels[i] == submodel)
+			{
+				rec.flags |= QC_ENTFLAG_PHASED;
+				break;
+			}
+		}
+	}
 	entity = QR_AppendEntity (slot, &rec);
 
 	QR_EmitTextureChains (slot, clmodel, chain_model, entity,
@@ -3237,6 +3301,7 @@ void QR_NewMap (void)
 
 	Sky_NewMap ();		/* worldspawn sky + skyfog keys */
 	QR_ParseWorldspawn ();	/* worldspawn wateralpha overrides */
+	QR_ParseSecretSubmodels ();
 
 	{
 		vec3_t size;
