@@ -15,10 +15,11 @@
  * globals, and the screen-update flow.
  *
  * Still honestly stubbed, listed in README.md's roadmap: all 2D drawing
- * (Draw_*), sky, water, entities (alias/brush/sprite), particles, dynamic
- * light and lightstyle updates, fog rendering. Fog_ParseServerMessage and
- * R_ParseParticleEffect still must consume their network bytes -- they are
- * stubs that have to be correct.
+ * (Draw_*), entities (alias/brush/sprite), particles, dynamic light and
+ * lightstyle updates, fog rendering. Sky and liquids are real now (ported
+ * into the bridge; drawn via QC_BATCH_SKY/LIQUID). Fog_ParseServerMessage
+ * and R_ParseParticleEffect still must consume their network bytes -- they
+ * are stubs that have to be correct.
  *
  * The section headers below still map 1:1 onto the upstream files.
  */
@@ -108,6 +109,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_drawviewmodel);
 	Cvar_RegisterVariable (&r_shadows);
 	Cvar_RegisterVariable (&r_wateralpha);
+	Cvar_SetCallback (&r_wateralpha, QR_SetWateralpha_f);
 	Cvar_RegisterVariable (&r_litwater);
 	Cvar_RegisterVariable (&r_dynamic);
 	Cvar_RegisterVariable (&r_novis);
@@ -145,8 +147,11 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_lightmapwide);
 	Cvar_RegisterVariable (&gl_zfix);
 	Cvar_RegisterVariable (&r_lavaalpha);
+	Cvar_SetCallback (&r_lavaalpha, QR_SetLavaalpha_f);
 	Cvar_RegisterVariable (&r_telealpha);
+	Cvar_SetCallback (&r_telealpha, QR_SetTelealpha_f);
 	Cvar_RegisterVariable (&r_slimealpha);
+	Cvar_SetCallback (&r_slimealpha, QR_SetSlimealpha_f);
 	Cvar_RegisterVariable (&r_scale);
 
 	/* upstream Sky_Init (gl_sky.c) */
@@ -154,6 +159,8 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_sky_quality);
 	Cvar_RegisterVariable (&r_skyalpha);
 	Cvar_RegisterVariable (&r_skyfog);
+	Cvar_SetCallback (&r_skyfog, QR_SetSkyfog_f);
+	Cmd_AddCommand ("sky", Sky_SkyCommand_f);
 
 	Cvar_RegisterVariable (&vid_gamma);
 	Cvar_RegisterVariable (&vid_contrast);
@@ -579,10 +586,10 @@ void GL_SubdivideSurface (msurface_t *fa)
 	(void) fa;
 }
 
-void Sky_ClearAll (void)			{ }
-void Sky_LoadTexture (qmodel_t *m, texture_t *mt)	{ (void)m; (void)mt; }
+/* Sky_ClearAll / Sky_LoadTexture / Sky_LoadSkyBox / Sky_NewMap are real now,
+   ported into qr_bridge.c. Only the Quake 64 variant remains stubbed: Q64
+   BSPs aren't a target and their sky needs its own two-layer split. */
 void Sky_LoadTextureQ64 (qmodel_t *m, texture_t *mt)	{ (void)m; (void)mt; }
-void Sky_LoadSkyBox (const char *name)		{ (void)name; }
 
 void Fog_ParseServerMessage (void)
 {
