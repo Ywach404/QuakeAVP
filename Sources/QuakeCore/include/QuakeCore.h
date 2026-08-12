@@ -273,6 +273,51 @@ void QC_RendererSetDrawableSize (int width, int height);
    Callable from any thread. */
 void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg);
 
+/* ========================================================================
+ * Input -- any-thread producers, drained on the engine thread.
+ *
+ * GameController handlers fire on their own queue and the compositor's
+ * render thread owns the head pose; neither may touch engine state. Both
+ * cross into the engine the same way the drawable size does: a lock-guarded
+ * latest-state snapshot the engine thread reads inside IN_Commands/IN_Move.
+ * ===================================================================== */
+
+enum {
+	QC_PAD_A		= 1 << 0,
+	QC_PAD_B		= 1 << 1,
+	QC_PAD_X		= 1 << 2,
+	QC_PAD_Y		= 1 << 3,
+	QC_PAD_LSHOULDER	= 1 << 4,
+	QC_PAD_RSHOULDER	= 1 << 5,
+	QC_PAD_MENU		= 1 << 6,
+	QC_PAD_OPTIONS		= 1 << 7,
+	QC_PAD_LTHUMB		= 1 << 8,
+	QC_PAD_RTHUMB		= 1 << 9
+};
+
+typedef struct qc_gamepad_state_s {
+	float		lx, ly;		/* left stick, -1..1, +y forward */
+	float		rx, ry;		/* right stick, -1..1, +y up */
+	float		lt, rt;		/* triggers, 0..1 */
+	uint32_t	buttons;	/* QC_PAD_* bits */
+	uint32_t	connected;	/* 0 = no controller attached */
+} qc_gamepad_state_t;
+
+/* Latest whole-pad snapshot; the engine diffs consecutive snapshots for
+   button edges. Callable from any thread. */
+void QC_InputSetGamepad (const qc_gamepad_state_t *state);
+
+/* The head's offset from the tracking origin in BODY frame, Quake units
+   (+fwd along body forward, +right along body right, +up), sampled by the
+   render thread from the same late-latched pose it draws with. The engine
+   walks the player box after this offset (traced, so walls refuse it) and
+   publishes what it absorbed in qc_frame_t.head_absorbed. `recenter_ack`
+   echoes the packet's recenter_count the pose was corrected against; the
+   engine ignores stale feeds while a recenter is in flight. Callable from
+   any thread. */
+void QC_InputSetHeadOffset (float fwd, float right, float up,
+			    uint32_t recenter_ack);
+
 #ifdef __cplusplus
 }
 #endif
