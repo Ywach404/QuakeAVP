@@ -21,16 +21,22 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            if engine.status == .running {
-                phaseControls
+            HStack(alignment: .top, spacing: 16) {
+                if engine.status == .running {
+                    phaseControls
+                }
+                VStack(alignment: .leading, spacing: 16) {
+                    renderSurface
+                    // While the windowed world view is up the console
+                    // shrinks to a log strip; in immersive (no preview —
+                    // the world is all around) and in every other state it
+                    // gets the room instead.
+                    console
+                        .frame(maxHeight: engine.status == .running && !coordinator.isImmersiveActive
+                               ? 96 : .infinity)
+                    commandBar
+                }
             }
-            renderSurface
-            // While the world view is up the console shrinks to a log strip
-            // (sized so the phase strip fits in the same window height);
-            // in every other state it is still the whole interface.
-            console
-                .frame(maxHeight: engine.status == .running ? 96 : .infinity)
-            commandBar
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 560)
@@ -57,19 +63,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private var renderSurface: some View {
-        if engine.status == .running {
-            if coordinator.isImmersiveActive {
-                ContentUnavailableView(
-                    "Rendering in the immersive space",
-                    systemImage: "visionpro",
-                    description: Text("The window view resumes when you exit."))
-                .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-                .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: 12))
-            } else {
-                QuakeRenderView(paused: false)
-                    .clipShape(.rect(cornerRadius: 12))
-                    .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
-            }
+        // No placeholder while immersive: the world is all around, so the
+        // window's room goes to the console and controls instead.
+        if engine.status == .running, !coordinator.isImmersiveActive {
+            QuakeRenderView(paused: false)
+                .clipShape(.rect(cornerRadius: 12))
+                .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
         }
     }
 
@@ -93,7 +92,8 @@ struct ContentView: View {
     @State private var phaseSpeed = 2.0
     /// The default molten orange: the cvar's (1.5, 0.93, 0.27) glow with
     /// the 1.5x intensity factored out for the 0-1 picker.
-    @State private var phaseColor = Color(red: 1.0, green: 0.62, blue: 0.18)
+    private static let defaultPhaseColor = Color(red: 1.0, green: 0.62, blue: 0.18)
+    @State private var phaseColor = defaultPhaseColor
 
     /// Sweep durations for `phase_time`, in seconds. Discrete steps rather
     /// than a second slider: this is a mood setting, not a value anyone
@@ -114,53 +114,69 @@ struct ContentView: View {
         }
     }
 
-    /// Crown-style dissolve control, like the system environments: the dial
-    /// scrubs the `phase` target (the engine eases toward it, so a partial
-    /// twist is a partial melt) and the menu picks the sweep speed.
+    /// The dissolve controls, a column beside the console: a vertical
+    /// slider scrubbing the `phase` target (the engine eases toward it, so
+    /// a partial nudge holds a partial melt), the sweep-speed menu, and the
+    /// ember colour well with its reset.
     private var phaseControls: some View {
-        HStack(spacing: 16) {
-            PhaseDial(value: $phaseLevel)
-                .onChange(of: phaseLevel) { _, level in
-                    engine.send(String(format: "phase %.2f", level))
-                }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Phase \(Int((phaseLevel * 100).rounded()))%")
-                    .font(.callout)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                Menu {
-                    ForEach(Self.phaseSpeeds, id: \.seconds) { speed in
-                        Button {
-                            phaseSpeed = speed.seconds
-                            engine.send(String(format: "phase_time %g", speed.seconds))
-                        } label: {
-                            if phaseSpeed == speed.seconds {
-                                Label(speed.label, systemImage: "checkmark")
-                            } else {
-                                Text(speed.label)
-                            }
+        VStack(spacing: 12) {
+            Text("\(Int((phaseLevel * 100).rounded()))%")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+            // A rotated Slider is the sanctioned vertical-slider trick: lay
+            // it out at its length, rotate, then reserve the rotated
+            // footprint. -90 puts minimum at the bottom.
+            Slider(value: $phaseLevel, in: 0...1) {
+                Text("Phase")
+            }
+            .frame(width: 200)
+            .rotationEffect(.degrees(-90))
+            .frame(width: 44, height: 200)
+            .onChange(of: phaseLevel) { _, level in
+                engine.send(String(format: "phase %.2f", level))
+            }
+            Menu {
+                ForEach(Self.phaseSpeeds, id: \.seconds) { speed in
+                    Button {
+                        phaseSpeed = speed.seconds
+                        engine.send(String(format: "phase_time %g", speed.seconds))
+                    } label: {
+                        if phaseSpeed == speed.seconds {
+                            Label(speed.label, systemImage: "checkmark")
+                        } else {
+                            Text(speed.label)
                         }
                     }
-                } label: {
-                    Label(Self.phaseSpeeds.first { $0.seconds == phaseSpeed }?.label ?? "\(phaseSpeed)s",
-                          systemImage: "timer")
-                        .font(.callout)
                 }
-                .fixedSize()
+            } label: {
+                Label(Self.phaseSpeeds.first { $0.seconds == phaseSpeed }?.label ?? "\(phaseSpeed)s",
+                      systemImage: "timer")
+                    .font(.caption)
             }
-            // Ember rim colour; the 1.5x keeps the glow as hot as the
-            // default orange regardless of the picked hue.
-            ColorPicker("Phase colour", selection: $phaseColor, supportsOpacity: false)
-                .labelsHidden()
-                .onChange(of: phaseColor) { _, color in
-                    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-                    UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
-                    engine.send(String(format: "phase_color \"%.3f %.3f %.3f\"",
-                                       r * 1.5, g * 1.5, b * 1.5))
+            .fixedSize()
+            HStack(spacing: 10) {
+                // Ember rim colour; the 1.5x keeps the glow as hot as the
+                // default orange regardless of the picked hue.
+                ColorPicker("Phase colour", selection: $phaseColor, supportsOpacity: false)
+                    .labelsHidden()
+                    .fixedSize()
+                    .onChange(of: phaseColor) { _, color in
+                        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+                        engine.send(String(format: "phase_color \"%.3f %.3f %.3f\"",
+                                           r * 1.5, g * 1.5, b * 1.5))
+                    }
+                Button {
+                    phaseColor = Self.defaultPhaseColor
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
                 }
-            Spacer()
+                .buttonStyle(.borderless)
+                .disabled(phaseColor == Self.defaultPhaseColor)
+                .help("Back to the molten orange")
+            }
         }
-        .padding(.horizontal, 4)
+        .frame(width: 96)
     }
 
     @ViewBuilder
@@ -282,77 +298,6 @@ struct ContentView: View {
         guard !text.isEmpty else { return }
         engine.send(text)
         commandText = ""
-    }
-}
-
-/// Pinch-and-twist dial for the phase target. A drag anywhere on the dial
-/// maps the pinch position's angle around the centre onto 0...1 over a
-/// 270-degree sweep, gap at the bottom — grab the ring and twist.
-/// TODO(M4+): this control wants to leave the window — bonded to the
-/// hand/arm as spatial UI — and once the space adopts progressive
-/// immersion the system immersion amount (the crown) feeds `phase`
-/// directly.
-private struct PhaseDial: View {
-    @Binding var value: Double
-
-    /// Twist tracking. Relative — grabbing the dial never moves it, only
-    /// the angle swept after the grab does (absolute mapping was a hair
-    /// trigger). Deltas accumulate tick by tick from `lastAngle`, never
-    /// measured back to the grab point: an endpoint-to-start measurement
-    /// wraps at ±180°, so sweeping past half a turn snapped the value to
-    /// the far end. Per-tick deltas are always small, so the accumulator
-    /// survives any number of full rotations, and clamping it (not just
-    /// the published value) makes reversing out of an over-twist respond
-    /// immediately.
-    @State private var twist: (lastAngle: Double, value: Double)?
-
-    private static let size: CGFloat = 72
-    private static let sweep = 270.0
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .trim(from: 0, to: Self.sweep / 360)
-                .stroke(.quaternary, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                .rotationEffect(.degrees(90 + (360 - Self.sweep) / 2))
-            Circle()
-                .trim(from: 0, to: Self.sweep / 360 * value)
-                .stroke(.tint, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                .rotationEffect(.degrees(90 + (360 - Self.sweep) / 2))
-            Circle()
-                .fill(.primary)
-                .frame(width: 9, height: 9)
-                .offset(y: -Self.size / 2)
-                .rotationEffect(.degrees(Self.sweep * (value - 0.5)))
-            Image(systemName: "circle.dotted")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(width: Self.size, height: Self.size)
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 4)
-                .onChanged { drag in
-                    let angle = Self.angle(at: drag.location)
-                    guard var t = twist else {
-                        twist = (angle, value)
-                        return
-                    }
-                    var delta = angle - t.lastAngle
-                    if delta > 180 { delta -= 360 }
-                    if delta < -180 { delta += 360 }
-                    t.value = min(max(t.value + delta / Self.sweep, 0), 1)
-                    t.lastAngle = angle
-                    twist = t
-                    value = t.value
-                }
-                .onEnded { _ in twist = nil }
-        )
-    }
-
-    /// Degrees clockwise from straight up, around the dial centre.
-    private static func angle(at point: CGPoint) -> Double {
-        atan2(point.x - size / 2, -(point.y - size / 2)) * 180 / .pi
     }
 }
 
