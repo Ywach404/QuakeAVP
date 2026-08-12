@@ -46,6 +46,14 @@ final class ImmersiveRenderer {
     /// Culling fov last reported to the engine, to dedupe the C call.
     private var reportedCullFov = SIMD2<Float>(0, 0)
 
+    /// Seated recenter: when the packet's recenter_count bumps, capture a
+    /// correction that maps the current head yaw and position to neutral,
+    /// composed under every device pose until the next recenter. The count
+    /// is echoed back through QC_InputSetHeadOffset so the engine knows
+    /// which generation the feed belongs to.
+    private var recenterCorrection = matrix_identity_float4x4
+    private var recenterSeen: UInt32 = 0
+
     // Frame timing stats, logged every `statsWindow` frames.
     private let statsWindow = 300
     private var statFrames = 0
@@ -177,18 +185,52 @@ final class ImmersiveRenderer {
                         pipelines: RenderPipelines,
                         commandBuffer: MTLCommandBuffer) {
         let views = drawable.views
-        let originFromDevice = deviceAnchor?.originFromAnchorTransform ?? matrix_identity_float4x4
+        let rawOriginFromDevice = deviceAnchor?.originFromAnchorTransform ?? matrix_identity_float4x4
 
-        // World->tracking-origin: the Quake camera basis, scaled to metres.
-        // The tracking origin *is* the player's eye at the published pose;
-        // the head pose composes on top of it.
+        if let packet, packet.recenter_count != recenterSeen {
+            recenterSeen = packet.recenter_count
+            recenterCorrection = Self.correction(zeroing: rawOriginFromDevice)
+        }
+        let originFromDevice = recenterCorrection * rawOriginFromDevice
+
+        // World->tracking-origin: the Quake BODY basis, scaled to metres —
+        // yaw only, because pitch and roll belong to the head. The engine's
+        // aim pitch (right stick) moves the gun and the shot, never the
+        // horizon; the flat window keeps the full angles as its debug view.
+        // The anchor sits at vieworg minus what the engine already absorbed
+        // of the head offset — absorption walks the box, not the eye — and
+        // the un-absorbed lean is clamped to the packet's limit so the head
+        // stops at the wall that refused the body.
         var originFromQuake = matrix_identity_float4x4
         var quakeFromOrigin = matrix_identity_float4x4
         if let packet {
-            let quakeView = RendererCore.quakeViewMatrix(
-                origin: SIMD3(packet.vieworg.0, packet.vieworg.1, packet.vieworg.2),
-                angles: SIMD3(packet.viewangles.0, packet.viewangles.1, packet.viewangles.2))
             let s = packet.world_scale > 0 ? packet.world_scale : 0.0254
+
+            // Body-frame head offset in Quake units: the tracking origin's
+            // axes are the body's (yaw is baked into the basis below).
+            let d = originFromDevice.columns.3
+            let fwd = -d.z / s
+            let right = d.x / s
+            let up = d.y / s
+            QC_InputSetHeadOffset(fwd, right, up, packet.recenter_count)
+
+            let yaw = packet.viewangles.1 * .pi / 180
+            let fwdW = SIMD2(cos(yaw), sin(yaw))
+            let rightW = SIMD2(sin(yaw), -cos(yaw))
+            let offsetW = fwd * fwdW + right * rightW
+            let absorbed = SIMD2(packet.head_absorbed.0, packet.head_absorbed.1)
+            let excess = offsetW - absorbed
+            let excessLen = simd_length(excess)
+            let overLimit = excessLen > packet.lean_limit && excessLen > 0
+                ? excess * ((excessLen - packet.lean_limit) / excessLen)
+                : SIMD2<Float>(0, 0)
+
+            let anchor = SIMD3(packet.vieworg.0 - absorbed.x - overLimit.x,
+                               packet.vieworg.1 - absorbed.y - overLimit.y,
+                               packet.vieworg.2)
+            let quakeView = RendererCore.quakeViewMatrix(
+                origin: anchor,
+                angles: SIMD3(0, packet.viewangles.1, 0))
             let scale = simd_float4x4(diagonal: SIMD4(s, s, s, 1))
             originFromQuake = scale * quakeView
             quakeFromOrigin = originFromQuake.inverse
@@ -351,6 +393,20 @@ final class ImmersiveRenderer {
             reportedCullFov = fov
             QC_RendererSetCullingFov(fov.x, fov.y)
         }
+    }
+
+    /// The correction that maps `pose`'s yaw and position to neutral —
+    /// pitch and roll are left alone, they are genuinely the head's. Seated
+    /// recenter is exactly this: the chair's rotation and drift become the
+    /// new zero.
+    private static func correction(zeroing pose: simd_float4x4) -> simd_float4x4 {
+        // Device forward is -Z; its XZ heading is the yaw to undo.
+        let f = -pose.columns.2
+        let yaw = atan2(-f.x, -f.z)
+        let rotation = simd_float4x4(simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)))
+        var neutral = rotation
+        neutral.columns.3 = pose.columns.3
+        return neutral.inverse
     }
 
     // MARK: - Timing

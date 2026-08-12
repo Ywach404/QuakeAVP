@@ -39,6 +39,11 @@ extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
 extern cvar_t phase, phase_time, phase_color;
 
+/* head-follow ledger, owned by in_null.c on the engine thread */
+extern float qr_head_absorbed[2];
+extern uint32_t qr_recenter_count;
+extern cvar_t vr_lean_limit;
+
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
    miniature or gigantic. The sim stays in Quake units; only the consumer's
@@ -3063,6 +3068,12 @@ void QR_BeginFrame (void)
 	slot->frame.phase_color[0] = 1.5f;
 	slot->frame.phase_color[1] = 0.93f;
 	slot->frame.phase_color[2] = 0.27f;
+	slot->frame.head_absorbed[0] = 0;
+	slot->frame.head_absorbed[1] = 0;
+	slot->frame.lean_limit = 12;
+	/* stays live even in empty packets so the consumer's recenter
+	   handshake can't wedge at the console or during demos */
+	slot->frame.recenter_count = qr_recenter_count;
 	memset (slot->frame.vieworg, 0, sizeof(slot->frame.vieworg));
 	memset (slot->frame.viewangles, 0, sizeof(slot->frame.viewangles));
 	slot->frame.world_scale = QR_WORLDSCALE_DEFAULT;
@@ -3192,6 +3203,13 @@ void QR_RenderView (void)
 				&slot->frame.phase_color[1],
 				&slot->frame.phase_color[2]);
 	}
+	/* room-scale head follow: what IN_AbsorbHeadOffset already walked the
+	   player after, and the lean allowance for the remainder */
+	slot->frame.head_absorbed[0] = qr_head_absorbed[0];
+	slot->frame.head_absorbed[1] = qr_head_absorbed[1];
+	slot->frame.lean_limit = q_max (vr_lean_limit.value, 0.f);
+	slot->frame.recenter_count = qr_recenter_count;
+
 	slot->frame.sky_solid_texnum = solidskytexture ? solidskytexture->texnum : 0;
 	slot->frame.sky_alpha_texnum = alphaskytexture ? alphaskytexture->texnum : 0;
 	if (skybox_name[0])

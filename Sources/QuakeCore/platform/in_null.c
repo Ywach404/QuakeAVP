@@ -70,7 +70,7 @@ static uint32_t			qr_head_ack_seen;
 
 static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
 static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
-static cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};
+cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
 
 /* Stick response: radial deadzone, then rescale so the curve still reaches
    1.0 at full deflection. */
