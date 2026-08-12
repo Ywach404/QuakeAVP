@@ -244,6 +244,20 @@ typedef struct qc_frame_s {
 	float		phase_color[3];	/* ember rim, linear rgb (may exceed 1
 					   for glow); the `phase_color` cvar */
 
+	/* Room-scale head follow. The engine walks the player box after the
+	   offset fed through QC_InputSetHeadOffset (traced, so walls refuse
+	   it) and reports here how much of that offset vieworg has already
+	   absorbed, world-frame XY Quake units. The immersive consumer
+	   anchors its camera at vieworg minus this, so absorption never
+	   moves the rendered eye; the un-absorbed remainder is the lean,
+	   clamped to lean_limit so a head cannot pass through the wall that
+	   refused the box. recenter_count bumps when `vr_recenter` runs: the
+	   consumer re-zeroes its pose correction against the current head
+	   pose and echoes the count back through QC_InputSetHeadOffset. */
+	float		head_absorbed[2];
+	float		lean_limit;	/* vr_lean_limit, Quake units */
+	uint32_t	recenter_count;
+
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;
