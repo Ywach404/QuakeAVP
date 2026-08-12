@@ -16,8 +16,10 @@ struct QuakeAVPApp: App {
 
     static let immersiveSpaceID = "quake-immersive"
 
+    static let consoleWindowID = "quake-console"
+
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: Self.consoleWindowID) {
             ContentView()
         }
         .defaultSize(width: 900, height: 640)
