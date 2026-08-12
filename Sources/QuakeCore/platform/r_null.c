@@ -92,6 +92,15 @@ cvar_t	r_scale = {"r_scale", "1", CVAR_ARCHIVE};
    world to dollhouse scale. */
 cvar_t	vr_worldscale = {"vr_worldscale", "0.0254", CVAR_ARCHIVE};
 
+/* The phase effect's controls. A cvar named `phase` IS the console command:
+   `phase 1` sets the target, bare `phase` prints it -- standard cvar
+   semantics, driven from the command bar or the window's Phase button. */
+cvar_t	phase = {"phase", "0", CVAR_NONE};
+cvar_t	phase_time = {"phase_time", "2", CVAR_NONE};
+/* Ember rim colour, linear "r g b" (values may exceed 1 for glow);
+   the default is the molten orange. */
+cvar_t	phase_color = {"phase_color", "1.5 0.93 0.27", CVAR_NONE};
+
 /* gl_rmisc.c */
 cvar_t	r_lightmapwide = {"r_lightmapwide","0",CVAR_ROM};
 
@@ -160,6 +169,9 @@ void R_Init (void)
 	Cvar_SetCallback (&r_slimealpha, QR_SetSlimealpha_f);
 	Cvar_RegisterVariable (&r_scale);
 	Cvar_RegisterVariable (&vr_worldscale);
+	Cvar_RegisterVariable (&phase);
+	Cvar_RegisterVariable (&phase_time);
+	Cvar_RegisterVariable (&phase_color);
 
 	/* upstream Sky_Init (gl_sky.c) */
 	Cvar_RegisterVariable (&r_fastsky);
@@ -579,14 +591,8 @@ cvar_t	r_sky_quality = {"r_sky_quality", "12", CVAR_NONE};
 cvar_t	r_skyalpha = {"r_skyalpha", "1", CVAR_NONE};
 cvar_t	r_skyfog = {"r_skyfog","0.5",CVAR_NONE};
 
-void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *hdr)
-{
-	(void) m; (void) hdr;
-}
-
-void GLMesh_DeleteVertexBuffers (void)
-{
-}
+/* GL_MakeAliasModelDisplayLists / GLMesh_DeleteVertexBuffers are real now,
+   ported into qr_bridge.c's mesh section. */
 
 void GL_SubdivideSurface (msurface_t *fa)
 {
