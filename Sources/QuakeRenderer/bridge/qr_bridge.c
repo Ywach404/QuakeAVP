@@ -38,6 +38,7 @@ extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farc
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
 extern cvar_t phase, phase_time, phase_color;
+extern cvar_t vr_vignette, vr_vignette_threshold;
 
 /* head-follow ledger, owned by in_null.c on the engine thread */
 extern float qr_head_absorbed[2];
@@ -3071,6 +3072,7 @@ void QR_BeginFrame (void)
 	slot->frame.head_absorbed[0] = 0;
 	slot->frame.head_absorbed[1] = 0;
 	slot->frame.lean_limit = 12;
+	slot->frame.vignette = 0;
 	/* stays live even in empty packets so the consumer's recenter
 	   handshake can't wedge at the console or during demos */
 	slot->frame.recenter_count = qr_recenter_count;
@@ -3203,6 +3205,36 @@ void QR_RenderView (void)
 				&slot->frame.phase_color[1],
 				&slot->frame.phase_color[2]);
 	}
+	/* comfort vignette: strength while ARTIFICIAL locomotion is fast.
+	   Player velocity only -- the head-follow absorb writes the origin
+	   directly and never touches velocity, so room-scale walking cannot
+	   trip this. Ease quickly (~120 ms) so it reads as a response, not an
+	   effect of its own. */
+	{
+		static float	qr_vignette_value;
+		static double	qr_vignette_lasttime;
+		float		target = 0.f;
+		double		dt = cl.time - qr_vignette_lasttime;
+
+		if (dt < 0 || dt > 1)
+			dt = 0;
+		qr_vignette_lasttime = cl.time;
+
+		if (vr_vignette.value > 0 && sv.active && svs.clients &&
+		    svs.clients[0].active)
+		{
+			edict_t *pl = svs.clients[0].edict;
+			if (VectorLength (pl->v.velocity) > vr_vignette_threshold.value)
+				target = CLAMP (0.f, vr_vignette.value, 1.f);
+		}
+
+		if (qr_vignette_value < target)
+			qr_vignette_value = q_min (qr_vignette_value + (float)dt / 0.12f, target);
+		else if (qr_vignette_value > target)
+			qr_vignette_value = q_max (qr_vignette_value - (float)dt / 0.12f, target);
+		slot->frame.vignette = qr_vignette_value;
+	}
+
 	/* room-scale head follow: what IN_AbsorbHeadOffset already walked the
 	   player after, and the lean allowance for the remainder */
 	slot->frame.head_absorbed[0] = qr_head_absorbed[0];

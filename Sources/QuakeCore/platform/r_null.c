@@ -101,6 +101,11 @@ cvar_t	phase_time = {"phase_time", "2", CVAR_NONE};
    the default is the molten orange. */
 cvar_t	phase_color = {"phase_color", "1.5 0.93 0.27", CVAR_NONE};
 
+/* Comfort vignette: periphery fade strength while artificial locomotion
+   exceeds the threshold (Quake units/sec; walking is ~200). Zero disables. */
+cvar_t	vr_vignette = {"vr_vignette", "0.6", CVAR_ARCHIVE};
+cvar_t	vr_vignette_threshold = {"vr_vignette_threshold", "30", CVAR_ARCHIVE};
+
 /* gl_rmisc.c */
 cvar_t	r_lightmapwide = {"r_lightmapwide","0",CVAR_ROM};
 
@@ -172,6 +177,8 @@ void R_Init (void)
 	Cvar_RegisterVariable (&phase);
 	Cvar_RegisterVariable (&phase_time);
 	Cvar_RegisterVariable (&phase_color);
+	Cvar_RegisterVariable (&vr_vignette);
+	Cvar_RegisterVariable (&vr_vignette_threshold);
 
 	/* upstream Sky_Init (gl_sky.c) */
 	Cvar_RegisterVariable (&r_fastsky);

@@ -258,6 +258,13 @@ typedef struct qc_frame_s {
 	float		lean_limit;	/* vr_lean_limit, Quake units */
 	uint32_t	recenter_count;
 
+	/* Comfort vignette, eased 0..1 on the engine clock: vr_vignette
+	   strength while ARTIFICIAL locomotion exceeds vr_vignette_threshold,
+	   zero at rest. Physical (room-scale) walking never trips it -- real
+	   motion needs no comfort aid. The consumer draws a periphery fade at
+	   this strength; 0 draws nothing. */
+	float		vignette;
+
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;
