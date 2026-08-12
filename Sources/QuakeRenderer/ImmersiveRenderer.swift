@@ -53,6 +53,7 @@ final class ImmersiveRenderer {
     /// which generation the feed belongs to.
     private var recenterCorrection = matrix_identity_float4x4
     private var recenterSeen: UInt32 = 0
+    private var zeroedInitialPose = false
 
     // Frame timing stats, logged every `statsWindow` frames.
     private let statsWindow = 300
@@ -187,6 +188,15 @@ final class ImmersiveRenderer {
         let views = drawable.views
         let rawOriginFromDevice = deviceAnchor?.originFromAnchorTransform ?? matrix_identity_float4x4
 
+        // The first tracked pose after the space opens becomes neutral —
+        // wherever the head is, that is now the player's eye. Without this
+        // the tracking origin's arbitrary placement (metres away, in the
+        // simulator) feeds in as a giant head offset and drags the player
+        // across the map the moment the space opens.
+        if deviceAnchor != nil, !zeroedInitialPose {
+            zeroedInitialPose = true
+            recenterCorrection = Self.correction(zeroing: rawOriginFromDevice)
+        }
         if let packet, packet.recenter_count != recenterSeen {
             recenterSeen = packet.recenter_count
             recenterCorrection = Self.correction(zeroing: rawOriginFromDevice)
@@ -289,7 +299,7 @@ final class ImmersiveRenderer {
                     eyeorg0: eyeOrigin[0], eyeorg1: eyeOrigin[1])
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
-                            amplificationCount: 2)
+                            amplificationCount: 2, drawsViewmodel: true)
             }
             encoder.endEncoding()
         } else {
@@ -311,7 +321,7 @@ final class ImmersiveRenderer {
                         eyeorg0: eyeOrigin[index], eyeorg1: eyeOrigin[index])
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
-                                amplificationCount: 1)
+                                amplificationCount: 1, drawsViewmodel: true)
                 }
                 encoder.endEncoding()
             }

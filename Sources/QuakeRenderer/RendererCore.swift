@@ -311,7 +311,8 @@ final class RendererCore {
                 uniforms: WorldUniforms,
                 phase: PhaseParams,
                 amplificationCount: Int,
-                viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil) {
+                viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
+                drawsViewmodel: Bool = false) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -402,10 +403,14 @@ final class RendererCore {
                 guard let entities = frame.entities else { continue }
                 let entity = entities[Int(batch.entity)]
                 if entity.flags & UInt32(QC_ENTFLAG_VIEWMODEL) != 0 {
-                    // View-locked weapon: wrong in VR, drawn only where the
-                    // caller supplies the upstream glDepthRange(0, 0.3)
-                    // squish (the flat window). TODO(M4): decouple instead.
-                    guard viewmodelViewport != nil else { continue }
+                    // The weapon. Its transform is vieworg + viewangles —
+                    // the BODY pose — and the immersive camera composes the
+                    // head on a yaw-only basis, so there it hangs on the
+                    // body and pitches with the aim, decoupled from gaze
+                    // (drawsViewmodel: real depth, stereo-correct). The
+                    // flat window instead draws it squished into the near
+                    // depth range like upstream glDepthRange(0, 0.3).
+                    guard viewmodelViewport != nil || drawsViewmodel else { continue }
                 }
                 guard let mesh = meshes[entity.meshnum] else { continue }
 
