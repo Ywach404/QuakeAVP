@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
@@ -20,12 +21,22 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            renderSurface
-            // While the world view is up the console shrinks to a log strip;
-            // in every other state it is still the whole interface.
-            console
-                .frame(maxHeight: engine.status == .running ? 160 : .infinity)
-            commandBar
+            HStack(alignment: .top, spacing: 16) {
+                if engine.status == .running {
+                    phaseControls
+                }
+                VStack(alignment: .leading, spacing: 16) {
+                    renderSurface
+                    // While the windowed world view is up the console
+                    // shrinks to a log strip; in immersive (no preview —
+                    // the world is all around) and in every other state it
+                    // gets the room instead.
+                    console
+                        .frame(maxHeight: engine.status == .running && !coordinator.isImmersiveActive
+                               ? 96 : .infinity)
+                    commandBar
+                }
+            }
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 560)
@@ -52,19 +63,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private var renderSurface: some View {
-        if engine.status == .running {
-            if coordinator.isImmersiveActive {
-                ContentUnavailableView(
-                    "Rendering in the immersive space",
-                    systemImage: "visionpro",
-                    description: Text("The window view resumes when you exit."))
-                .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-                .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: 12))
-            } else {
-                QuakeRenderView(paused: false)
-                    .clipShape(.rect(cornerRadius: 12))
-                    .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-            }
+        // No placeholder while immersive: the world is all around, so the
+        // window's room goes to the console and controls instead.
+        if engine.status == .running, !coordinator.isImmersiveActive {
+            QuakeRenderView(paused: false)
+                .clipShape(.rect(cornerRadius: 12))
+                .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
         }
     }
 
@@ -78,9 +82,101 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            phaseButton
             immersiveButton
             statusBadge
         }
+    }
+
+    @State private var phaseLevel = 0.0
+    @State private var phaseSpeed = 2.0
+    /// The default molten orange: the cvar's (1.5, 0.93, 0.27) glow with
+    /// the 1.5x intensity factored out for the 0-1 picker.
+    private static let defaultPhaseColor = Color(red: 1.0, green: 0.62, blue: 0.18)
+    @State private var phaseColor = defaultPhaseColor
+
+    /// Sweep durations for `phase_time`, in seconds. Discrete steps rather
+    /// than a second slider: this is a mood setting, not a value anyone
+    /// needs to dial in precisely.
+    private static let phaseSpeeds: [(label: String, seconds: Double)] = [
+        ("Instant", 0.25), ("Fast", 1), ("Default", 2), ("Slow", 4), ("Glacial", 8),
+    ]
+
+    @ViewBuilder
+    private var phaseButton: some View {
+        if engine.status == .running {
+            Button {
+                phaseLevel = phaseLevel < 0.5 ? 1 : 0
+            } label: {
+                Label(phaseLevel < 0.5 ? "Phase" : "Rephase",
+                      systemImage: phaseLevel < 0.5 ? "circle.dotted" : "circle.dashed")
+            }
+        }
+    }
+
+    /// The dissolve controls, a column beside the console: a vertical
+    /// slider scrubbing the `phase` target (the engine eases toward it, so
+    /// a partial nudge holds a partial melt), the sweep-speed menu, and the
+    /// ember colour well with its reset.
+    private var phaseControls: some View {
+        VStack(spacing: 12) {
+            Text("\(Int((phaseLevel * 100).rounded()))%")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+            // A rotated Slider is the sanctioned vertical-slider trick: lay
+            // it out at its length, rotate, then reserve the rotated
+            // footprint. -90 puts minimum at the bottom.
+            Slider(value: $phaseLevel, in: 0...1) {
+                Text("Phase")
+            }
+            .frame(width: 200)
+            .rotationEffect(.degrees(-90))
+            .frame(width: 44, height: 200)
+            .onChange(of: phaseLevel) { _, level in
+                engine.send(String(format: "phase %.2f", level))
+            }
+            Menu {
+                ForEach(Self.phaseSpeeds, id: \.seconds) { speed in
+                    Button {
+                        phaseSpeed = speed.seconds
+                        engine.send(String(format: "phase_time %g", speed.seconds))
+                    } label: {
+                        if phaseSpeed == speed.seconds {
+                            Label(speed.label, systemImage: "checkmark")
+                        } else {
+                            Text(speed.label)
+                        }
+                    }
+                }
+            } label: {
+                Label(Self.phaseSpeeds.first { $0.seconds == phaseSpeed }?.label ?? "\(phaseSpeed)s",
+                      systemImage: "timer")
+                    .font(.caption)
+            }
+            .fixedSize()
+            HStack(spacing: 10) {
+                // Ember rim colour; the 1.5x keeps the glow as hot as the
+                // default orange regardless of the picked hue.
+                ColorPicker("Phase colour", selection: $phaseColor, supportsOpacity: false)
+                    .labelsHidden()
+                    .fixedSize()
+                    .onChange(of: phaseColor) { _, color in
+                        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+                        engine.send(String(format: "phase_color \"%.3f %.3f %.3f\"",
+                                           r * 1.5, g * 1.5, b * 1.5))
+                    }
+                Button {
+                    phaseColor = Self.defaultPhaseColor
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                }
+                .buttonStyle(.borderless)
+                .disabled(phaseColor == Self.defaultPhaseColor)
+                .help("Back to the molten orange")
+            }
+        }
+        .frame(width: 96)
     }
 
     @ViewBuilder

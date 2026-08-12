@@ -30,15 +30,29 @@ ported* (at the same commit) into `Sources/QuakeRenderer/bridge/qr_bridge.c`
 with the GL calls replaced: the texture manager and palettes (`gl_texmgr.c`),
 lightmap building and surface polygon lists (`r_brush.c`), PVS marking,
 texture chains, and the liquid draw order (`r_world.c`), frustum/view setup
-(`gl_rmain.c`), sky texture/skybox loading and the worldspawn sky keys
-(`gl_sky.c`), the water alpha plumbing incl. worldspawn overrides
-(`gl_rmisc.c`), and the refdef/fov math plus cvar tables into
-`platform/r_null.c` (`gl_screen.c`, `gl_rmisc.c`). The *draw-time* halves of
+and entity culling (`gl_rmain.c`), sky texture/skybox loading and the
+worldspawn sky keys (`gl_sky.c`), the water alpha plumbing incl. worldspawn
+overrides (`gl_rmisc.c`), brush entity drawing (`r_brush.c`'s
+`R_DrawBrushModel` and the entity halves of `r_world.c`), the alias mesh
+build (`gl_mesh.c`, the indexed-VBO half only — the GL1 strip/fan command
+lists serve no purpose here), alias lerp/lighting/draw (`r_alias.c`, whose
+GLSL two-pose vertex path became `Shaders/Alias.metal`), point lighting
+(`gl_rlight.c`'s `R_LightPoint`), and the refdef/fov math plus cvar tables
+into `platform/r_null.c` (`gl_screen.c`, `gl_rmisc.c`). The *draw-time* halves of
 `gl_warp.c` and `gl_sky.c` were not ported line-for-line: their warp
 (`WARPCALC`/`turbsin`) and cloud-projection (`Sky_GetTexCoord`,
 `Sky_ProjectPoly`) math is evaluated per fragment in
 `Sources/QuakeRenderer/Shaders/World.metal` — the render-to-warpimage scheme
-and the far-quad GEQUAL sky trick existed only to work around GL1. When
+and the far-quad GEQUAL sky trick existed only to work around GL1.
+
+One deliberate structural departure from upstream: the world is drawn as a
+**depth prepass plus an equal-depth colour pass** rather than upstream's
+single pass. Upstream never needed the split — GL Quake never makes walls
+transparent while keeping their occlusion — but the phase effect does:
+occlusion must come from geometry whose colour has been dissolved away, so
+depth and colour are decided in separate passes and only the colour pass
+ever changes with phase. When merging upstream world-drawing changes, apply
+them to both passes. When
 merging a newer upstream, diff those upstream files too and carry relevant
 fixes into the ports (including the shader constants); cvar defaults must
 stay byte-identical.

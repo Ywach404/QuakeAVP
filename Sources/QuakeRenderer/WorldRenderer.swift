@@ -97,8 +97,25 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
             let uniforms = RendererCore.WorldUniforms(
                 viewproj0: viewproj, viewproj1: viewproj,
                 eyeorg0: eyeorg, eyeorg1: eyeorg)
+            // The window draws the view weapon with upstream's
+            // glDepthRange(0, 0.3) squish; the immersive path skips it.
+            let w = Double(view.drawableSize.width)
+            let h = Double(view.drawableSize.height)
+            let viewports = (
+                full: MTLViewport(originX: 0, originY: 0, width: w, height: h,
+                                  znear: 0, zfar: 1),
+                squished: MTLViewport(originX: 0, originY: 0, width: w, height: h,
+                                      znear: 0, zfar: 0.3))
+            // Debug path: no head pose here, so the dissolve is centred on
+            // the packet's view origin and reveals the clear colour.
+            let phase = RendererCore.PhaseParams(
+                headorg: SIMD3(f.vieworg.0, f.vieworg.1, f.vieworg.2),
+                radius: f.phase_radius,
+                skyFade: 1 - f.phase,
+                rimColor: SIMD3(f.phase_color.0, f.phase_color.1, f.phase_color.2))
             core.encode(frame: f, with: encoder, pipelines: pipelines,
-                        uniforms: uniforms, amplificationCount: 1)
+                        uniforms: uniforms, phase: phase, amplificationCount: 1,
+                        viewmodelViewport: viewports)
         }
         encoder.endEncoding()
 

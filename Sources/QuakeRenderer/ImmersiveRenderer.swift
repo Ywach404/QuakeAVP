@@ -43,14 +43,6 @@ final class ImmersiveRenderer {
     private var singlePassStereo = false
     private var loggedSetup = false
 
-    /// bgra8Unorm views over the drawable's sRGB color textures, keyed by
-    /// texture identity (drawables recycle a small pool). Quake's textures
-    /// are sRGB-authored values in unorm storage; writing them through a
-    /// unorm view stores them byte-identical, and the compositor's sRGB
-    /// decode then displays exactly what the flat window shows. Rendering
-    /// into the sRGB format directly would re-encode and wash the world out.
-    private var unormViews: [ObjectIdentifier: MTLTexture] = [:]
-
     /// Culling fov last reported to the engine, to dedupe the C call.
     private var reportedCullFov = SIMD2<Float>(0, 0)
 
@@ -136,6 +128,7 @@ final class ImmersiveRenderer {
         let deviceAnchor = worldTracking.queryDeviceAnchor(atTimestamp: anchorTime)
         drawable.deviceAnchor = deviceAnchor
 
+
         reportViewGeometry(for: drawable)
 
         let presented = core.withConsumer(.immersive) { () -> Bool in
@@ -201,6 +194,18 @@ final class ImmersiveRenderer {
             quakeFromOrigin = originFromQuake.inverse
         }
 
+        // Dissolve origin: the head itself (the device anchor), mapped into
+        // Quake space with the same late-latched pose the view matrices
+        // use, so the sphere tracks the head with no lag. Radius and sky
+        // fade come from the packet — the engine owns the phase clock.
+        let headQuake = quakeFromOrigin * originFromDevice.columns.3
+        let phaseParams = RendererCore.PhaseParams(
+            headorg: SIMD3(headQuake.x, headQuake.y, headQuake.z),
+            radius: packet?.phase_radius ?? 0,
+            skyFade: 1 - (packet?.phase ?? 0),
+            rimColor: packet.map { SIMD3($0.phase_color.0, $0.phase_color.1, $0.phase_color.2) }
+                ?? SIMD3(1.5, 0.93, 0.27))
+
         var eyeViewproj: [simd_float4x4] = []
         var eyeOrigin: [SIMD4<Float>] = []
         for index in views.indices {
@@ -213,16 +218,22 @@ final class ImmersiveRenderer {
             eyeOrigin.append(quakeFromOrigin * originFromEye.columns.3)
         }
 
-        let clear: MTLClearColor
-        if let packet {
-            clear = MTLClearColor(
-                red: Double(packet.clear_color.0),
-                green: Double(packet.clear_color.1),
-                blue: Double(packet.clear_color.2),
-                alpha: 1)
-        } else {
-            clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        }
+        // Alpha contract for mixed immersion, worked out once so nobody has
+        // to re-derive it (see 181e113 for what silent colour assumptions
+        // cost): the compositor samples the sRGB target (rgb decoded to
+        // linear, alpha as-is) and expects PREMULTIPLIED linear rgb.
+        //  - Clear is (0,0,0,0): fully transparent passthrough, which is
+        //    also the only valid premultiplied zero-alpha value. The
+        //    engine's clear_color (gl_clear / r_clearcolor) is advisory
+        //    here — the flat window still honours it.
+        //  - Opaque draws write alpha 1; rgb premultiplied by 1 is itself.
+        //  - Translucent draws are straight-alpha sources blended
+        //    srcAlpha/1-srcAlpha over premultiplied dst — which yields the
+        //    correct premultiplied result — with alpha accumulating as
+        //    src + dst*(1-src) ("over"), so water over a wall stays
+        //    alpha 1 and water over passthrough keeps its own coverage.
+        let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        _ = packet   // clear_color intentionally unused on this path
 
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
@@ -235,7 +246,8 @@ final class ImmersiveRenderer {
                     viewproj0: eyeViewproj[0], viewproj1: eyeViewproj[1],
                     eyeorg0: eyeOrigin[0], eyeorg1: eyeOrigin[1])
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
-                            uniforms: uniforms, amplificationCount: 2)
+                            uniforms: uniforms, phase: phaseParams,
+                            amplificationCount: 2)
             }
             encoder.endEncoding()
         } else {
@@ -256,7 +268,8 @@ final class ImmersiveRenderer {
                         viewproj0: eyeViewproj[index], viewproj1: eyeViewproj[index],
                         eyeorg0: eyeOrigin[index], eyeorg1: eyeOrigin[index])
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
-                                uniforms: uniforms, amplificationCount: 1)
+                                uniforms: uniforms, phase: phaseParams,
+                                amplificationCount: 1)
                 }
                 encoder.endEncoding()
             }
@@ -268,7 +281,7 @@ final class ImmersiveRenderer {
                                 slice: Int?,
                                 clear: MTLClearColor) -> MTLRenderPassDescriptor {
         let descriptor = MTLRenderPassDescriptor()
-        descriptor.colorAttachments[0].texture = unormView(of: drawable.colorTextures[textureIndex])
+        descriptor.colorAttachments[0].texture = drawable.colorTextures[textureIndex]
         descriptor.colorAttachments[0].loadAction = .clear
         descriptor.colorAttachments[0].storeAction = .store
         descriptor.colorAttachments[0].clearColor = clear
@@ -288,28 +301,20 @@ final class ImmersiveRenderer {
         return descriptor
     }
 
-    private func unormView(of texture: MTLTexture) -> MTLTexture {
-        guard texture.pixelFormat == .bgra8Unorm_srgb else { return texture }
-        let key = ObjectIdentifier(texture)
-        if let view = unormViews[key] { return view }
-        let view = texture.makeTextureView(pixelFormat: .bgra8Unorm) ?? texture
-        unormViews[key] = view
-        return view
-    }
-
     private func buildPipelines() {
         let configuration = layerRenderer.configuration
-        let colorFormat: MTLPixelFormat =
-            configuration.colorFormat == .bgra8Unorm_srgb ? .bgra8Unorm : configuration.colorFormat
 
         singlePassStereo = configuration.layout == .layered
             && core.device.supportsVertexAmplificationCount(2)
 
+        // Quake's colors are sRGB-authored: linearize at fragment output so
+        // the sRGB (or float) target displays them like the flat window.
         pipelines = core.makePipelines(
-            colorFormat: colorFormat,
+            colorFormat: configuration.colorFormat,
             depthFormat: configuration.depthFormat,
             amplified: singlePassStereo,
-            reverseDepth: true)
+            reverseDepth: true,
+            linearOutput: true)
 
         if !loggedSetup {
             loggedSetup = true
