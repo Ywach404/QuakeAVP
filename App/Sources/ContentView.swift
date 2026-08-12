@@ -11,6 +11,7 @@ import UIKit
 
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
+    @State private var gamepad = GameControllerInput()
     @State private var commandText = ""
     @State private var autoOpened = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
@@ -40,7 +41,10 @@ struct ContentView: View {
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 560)
-        .onAppear { engine.boot() }
+        .onAppear {
+            engine.boot()
+            gamepad.start()
+        }
         .onChange(of: engine.status) { _, status in
             // Test harness: QAVP_AUTO_IMMERSIVE=1 opens the space as soon as
             // the engine is up, so simctl/devicectl runs need no UI taps;
@@ -80,6 +84,10 @@ struct ContentView: View {
                 Text("QuakeSpasm \(engine.engineVersion) · Metal world renderer")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Label(gamepad.controllerName ?? "No controller — console input only",
+                      systemImage: "gamecontroller")
+                    .font(.caption)
+                    .foregroundStyle(gamepad.controllerName == nil ? .tertiary : .secondary)
             }
             Spacer()
             phaseButton

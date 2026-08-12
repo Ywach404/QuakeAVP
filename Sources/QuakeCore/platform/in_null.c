@@ -1,24 +1,386 @@
 /*
- * in_null.c -- input stub, replacing in_sdl.c.
+ * in_null.c -- GameController input, replacing in_sdl.c.
  *
- * M4 replaces this with GameController (gamepad) and ARKit HandTrackingProvider
- * (aim ray + pinch). The engine-facing contract stays exactly this small:
- * push key events with Key_Event(), and fill usercmd_t in IN_Move().
+ * The Swift layer pushes whole-pad snapshots through QC_InputSetGamepad from
+ * GameController's handler queue, and the immersive render thread pushes the
+ * head's body-frame offset through QC_InputSetHeadOffset; both are any-thread
+ * lock-guarded latest-state handoffs, mirroring QC_RendererSetDrawableSize.
+ * Everything engine-facing -- Key_Event, cl.viewangles, usercmd_t, the player
+ * edict -- happens on the engine thread inside IN_Commands / IN_Move.
+ *
+ * Buttons become Key_Event presses of the SDL2 controller keycodes upstream
+ * already names (K_ABUTTON...), with gameplay defaults bound at IN_Init
+ * before quake.rc executes, so config.cfg/autoexec.cfg can rebind them.
+ *
+ * The engine-facing contract is upstream in_sdl.c's: push key events, fill
+ * usercmd_t in IN_Move. The locomotion model is QuakeQuest's conclusions,
+ * hand tracking (M5) pending: movement and aim follow BODY yaw, never the
+ * head -- the render thread composes head pose on top of the body basis, so
+ * looking around neither steers nor drags the weapon.
  */
 
 #include "quakedef.h"
+#include "QuakeCore.h"
 
-void IN_Init (void)
+#include <pthread.h>
+
+/* defined in cl_main.c; upstream externs them file-locally in cl_input.c */
+extern cvar_t cl_maxpitch, cl_minpitch;
+
+/* ========================================================================
+ * any-thread producers
+ * ===================================================================== */
+
+static pthread_mutex_t		qc_input_lock = PTHREAD_MUTEX_INITIALIZER;
+static qc_gamepad_state_t	qc_pad_shared;
+static float			qc_head_shared[3];	/* fwd, right, up */
+static uint32_t			qc_head_ack;		/* recenter echo */
+
+void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
+	pthread_mutex_lock (&qc_input_lock);
+	qc_pad_shared = *state;
+	pthread_mutex_unlock (&qc_input_lock);
 }
 
-void IN_Shutdown (void)
+void QC_InputSetHeadOffset (float fwd, float right, float up,
+			    uint32_t recenter_ack)
 {
+	pthread_mutex_lock (&qc_input_lock);
+	qc_head_shared[0] = fwd;
+	qc_head_shared[1] = right;
+	qc_head_shared[2] = up;
+	qc_head_ack = recenter_ack;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+/* ========================================================================
+ * engine-thread state
+ * ===================================================================== */
+
+/* Head-follow bookkeeping, read by qr_bridge.c into the frame packet: the
+   world-frame XY displacement already absorbed into the player origin, and
+   the recenter generation the renderer re-zeroes its pose against. */
+float		qr_head_absorbed[2];
+uint32_t	qr_recenter_count;
+
+static qc_gamepad_state_t	qr_pad, qr_pad_prev;
+static float			qr_head[3];
+static uint32_t			qr_head_ack_seen;
+
+static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
+static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
+static cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};
+
+/* Stick response: radial deadzone, then rescale so the curve still reaches
+   1.0 at full deflection. */
+#define QR_STICK_DEADZONE	0.15f
+
+static float IN_DeadZone (float value)
+{
+	float mag = fabsf (value);
+
+	if (mag < QR_STICK_DEADZONE)
+		return 0.f;
+	mag = (mag - QR_STICK_DEADZONE) / (1.f - QR_STICK_DEADZONE);
+	return (value < 0.f) ? -mag : mag;
+}
+
+static void IN_SnapshotInputs (void)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qr_pad = qc_pad_shared;
+	qr_head[0] = qc_head_shared[0];
+	qr_head[1] = qc_head_shared[1];
+	qr_head[2] = qc_head_shared[2];
+	qr_head_ack_seen = qc_head_ack;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+/* ========================================================================
+ * buttons -> Key_Event
+ * ===================================================================== */
+
+typedef struct qr_padkey_s {
+	uint32_t	bit;
+	int		key;
+} qr_padkey_t;
+
+static const qr_padkey_t qr_padkeys[] = {
+	{ QC_PAD_A,		K_ABUTTON },
+	{ QC_PAD_B,		K_BBUTTON },
+	{ QC_PAD_X,		K_XBUTTON },
+	{ QC_PAD_Y,		K_YBUTTON },
+	{ QC_PAD_LSHOULDER,	K_LSHOULDER },
+	{ QC_PAD_RSHOULDER,	K_RSHOULDER },
+	{ QC_PAD_LTHUMB,	K_LTHUMB },
+	{ QC_PAD_RTHUMB,	K_RTHUMB },
+};
+
+/* Triggers are analog; treat as buttons with hysteresis so a resting
+   trigger can't flutter the attack state. */
+#define QR_TRIGGER_PRESS	0.35f
+#define QR_TRIGGER_RELEASE	0.20f
+
+static qboolean	qr_lt_down, qr_rt_down;
+
+static void IN_TriggerEdge (float value, qboolean *down, int key)
+{
+	if (!*down && value > QR_TRIGGER_PRESS)
+	{
+		*down = true;
+		Key_Event (key, true);
+	}
+	else if (*down && value < QR_TRIGGER_RELEASE)
+	{
+		*down = false;
+		Key_Event (key, false);
+	}
 }
 
 void IN_Commands (void)
 {
-	/* Joystick/controller button -> Key_Event translation goes here. */
+	size_t i;
+	uint32_t changed;
+
+	IN_SnapshotInputs ();
+
+	changed = qr_pad.buttons ^ qr_pad_prev.buttons;
+	for (i = 0; i < sizeof(qr_padkeys) / sizeof(qr_padkeys[0]); i++)
+	{
+		if (changed & qr_padkeys[i].bit)
+			Key_Event (qr_padkeys[i].key,
+				   (qr_pad.buttons & qr_padkeys[i].bit) != 0);
+	}
+
+	/* Menu (pause) opens the game menu; options (view) recenters. Both
+	   act directly rather than through bindings so they work even with a
+	   wiped config. */
+	if ((changed & QC_PAD_MENU) && (qr_pad.buttons & QC_PAD_MENU))
+	{
+		Key_Event (K_ESCAPE, true);
+		Key_Event (K_ESCAPE, false);
+	}
+	if ((changed & QC_PAD_OPTIONS) && (qr_pad.buttons & QC_PAD_OPTIONS))
+		Cbuf_AddText ("vr_recenter\n");
+
+	IN_TriggerEdge (qr_pad.rt, &qr_rt_down, K_RTRIGGER);
+	IN_TriggerEdge (qr_pad.lt, &qr_lt_down, K_LTRIGGER);
+
+	qr_pad_prev = qr_pad;
+}
+
+/* ========================================================================
+ * head follow, snap turn, movement
+ * ===================================================================== */
+
+static void IN_YawVectors (float yaw, vec3_t fwd, vec3_t right)
+{
+	float rad = yaw * M_PI / 180.f;
+
+	fwd[0] = cosf (rad);
+	fwd[1] = sinf (rad);
+	fwd[2] = 0.f;
+	right[0] = sinf (rad);
+	right[1] = -cosf (rad);
+	right[2] = 0.f;
+}
+
+/* The head's offset from the camera anchor, world frame, from the latest
+   feed rotated by the CURRENT body yaw (the feed is body-frame exactly so
+   snap turn rotates it for free). */
+static void IN_HeadOffsetWorld (float out[2])
+{
+	vec3_t fwd, right;
+
+	IN_YawVectors (cl.viewangles[YAW], fwd, right);
+	out[0] = qr_head[0] * fwd[0] + qr_head[1] * right[0];
+	out[1] = qr_head[0] * fwd[1] + qr_head[1] * right[1];
+}
+
+/*
+================
+IN_AbsorbHeadOffset -- room-scale walking becomes player movement.
+
+The render thread feeds where the head is; the engine walks the player box
+after it with a real trace, so collision still means something -- without
+this you can lean your head through a wall, which is exactly the failure
+the phase effect cannot afford. The camera anchor is vieworg minus the
+absorbed total, so rendering stays continuous whether or not the box could
+follow; the renderer clamps the leftover lean to vr_lean_limit.
+================
+*/
+static void IN_AbsorbHeadOffset (void)
+{
+	float offset[2], residual[2];
+	edict_t *player;
+	trace_t trace;
+	vec3_t start, end;
+
+	/* A recenter is in flight until the renderer echoes the new count:
+	   the last feed still uses the old pose, and absorbing it would walk
+	   the body toward a head position that is about to become zero. */
+	if (qr_head_ack_seen != qr_recenter_count)
+		return;
+
+	IN_HeadOffsetWorld (offset);
+	residual[0] = offset[0] - qr_head_absorbed[0];
+	residual[1] = offset[1] - qr_head_absorbed[1];
+	if (fabsf (residual[0]) < 0.25f && fabsf (residual[1]) < 0.25f)
+		return;
+
+	if (!sv.active || !svs.clients || !svs.clients[0].active)
+	{
+		/* No world to collide with (console, demos): keep the camera
+		   anchored to the view by treating everything as absorbed. */
+		qr_head_absorbed[0] = offset[0];
+		qr_head_absorbed[1] = offset[1];
+		return;
+	}
+
+	player = svs.clients[0].edict;
+	VectorCopy (player->v.origin, start);
+	end[0] = start[0] + residual[0];
+	end[1] = start[1] + residual[1];
+	end[2] = start[2];
+
+	trace = SV_Move (start, player->v.mins, player->v.maxs, end,
+			 MOVE_NORMAL, player);
+	VectorCopy (trace.endpos, player->v.origin);
+	SV_LinkEdict (player, true);
+
+	qr_head_absorbed[0] += trace.endpos[0] - start[0];
+	qr_head_absorbed[1] += trace.endpos[1] - start[1];
+}
+
+/*
+================
+IN_SnapTurn -- instant body rotation about the HEAD, not the anchor.
+
+Settle the body under the head first (a full absorb), rotate the absorbed
+offset with the body, then yaw. The head's world position solves out
+invariant, which is what "the world stays put under you" means; the whole
+point of snap over smooth is that there is nothing to interpolate.
+================
+*/
+static void IN_SnapTurn (float degrees)
+{
+	float rad, c, s, ax, ay;
+
+	IN_AbsorbHeadOffset ();
+
+	rad = degrees * M_PI / 180.f;
+	c = cosf (rad);
+	s = sinf (rad);
+	ax = qr_head_absorbed[0];
+	ay = qr_head_absorbed[1];
+	qr_head_absorbed[0] = c * ax - s * ay;
+	qr_head_absorbed[1] = s * ax + c * ay;
+
+	cl.viewangles[YAW] += degrees;
+}
+
+/* vr_recenter: current head pose becomes neutral. Absorb what we can so
+   the body is under the head, zero the ledger, and bump the generation;
+   the renderer captures a correction that zeroes the pose against it and
+   echoes the count, unfreezing IN_AbsorbHeadOffset. */
+static void IN_Recenter_f (void)
+{
+	IN_AbsorbHeadOffset ();
+	qr_head_absorbed[0] = 0.f;
+	qr_head_absorbed[1] = 0.f;
+	qr_recenter_count++;
+}
+
+/* Snap fires crossing the press threshold and rearms below the release
+   one; no repeat while held. */
+#define QR_SNAP_PRESS	0.65f
+#define QR_SNAP_RELEASE	0.30f
+
+static qboolean	qr_snap_armed = true;
+
+void IN_Move (usercmd_t *cmd)
+{
+	float speed, lx, ly, rx, ry;
+
+	IN_SnapshotInputs ();
+
+	lx = IN_DeadZone (qr_pad.lx);
+	ly = IN_DeadZone (qr_pad.ly);
+	rx = IN_DeadZone (qr_pad.rx);
+	ry = IN_DeadZone (qr_pad.ry);
+
+	/* Same speed-key contract as upstream CL_BaseMove: +speed (or
+	   cl_alwaysrun) scales by cl_movespeedkey. */
+	if ((in_speed.state & 1) ^ (cl_alwaysrun.value != 0.f))
+		speed = cl_movespeedkey.value;
+	else
+		speed = 1.f;
+
+	/* Left stick: strafe/forward along BODY yaw (usercmd is applied in
+	   the body basis server-side, and the head never touches it). */
+	cmd->sidemove += cl_sidespeed.value * speed * lx;
+	cmd->forwardmove += cl_forwardspeed.value * speed * ly;
+
+	/* Right stick Y: aim pitch. The immersive camera ignores body pitch
+	   (the head supplies its own), so this moves the gun and the shot,
+	   not the horizon. */
+	if (ry != 0.f)
+	{
+		V_StopPitchDrift ();
+		cl.viewangles[PITCH] -= ry * cl_pitchspeed.value * host_frametime;
+		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value,
+					      cl.viewangles[PITCH],
+					      cl_maxpitch.value);
+	}
+
+	/* Right stick X: snap turn (or smooth, for those who opt in). */
+	if (vr_smoothturn.value)
+	{
+		cl.viewangles[YAW] -= rx * cl_yawspeed.value * host_frametime;
+	}
+	else
+	{
+		if (qr_snap_armed && fabsf (rx) > QR_SNAP_PRESS)
+		{
+			qr_snap_armed = false;
+			IN_SnapTurn ((rx > 0.f ? -1.f : 1.f)
+				     * q_max (vr_snapturn.value, 1.f));
+		}
+		else if (!qr_snap_armed && fabsf (rx) < QR_SNAP_RELEASE)
+			qr_snap_armed = true;
+	}
+
+	IN_AbsorbHeadOffset ();
+}
+
+/* ========================================================================
+ * lifecycle
+ * ===================================================================== */
+
+void IN_Init (void)
+{
+	Cvar_RegisterVariable (&vr_snapturn);
+	Cvar_RegisterVariable (&vr_smoothturn);
+	Cvar_RegisterVariable (&vr_lean_limit);
+	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);
+
+	/* Gameplay defaults for the controller keys. Queued before quake.rc
+	   executes, so config.cfg and autoexec.cfg can rebind them. */
+	Cbuf_AddText (
+		"bind ABUTTON +jump\n"
+		"bind BBUTTON +use\n"
+		"bind XBUTTON \"impulse 12\"\n"
+		"bind YBUTTON \"impulse 10\"\n"
+		"bind LSHOULDER \"impulse 12\"\n"
+		"bind RSHOULDER \"impulse 10\"\n"
+		"bind RTRIGGER +attack\n"
+		"bind LTRIGGER +speed\n"
+		"bind RTHUMB vr_recenter\n");
+}
+
+void IN_Shutdown (void)
+{
 }
 
 void IN_MouseMotion (int dx, int dy)
@@ -29,22 +391,18 @@ void IN_MouseMotion (int dx, int dy)
 
 void IN_SendKeyEvents (void)
 {
-	/* Upstream pumps SDL's event queue here. visionOS delivers input on the
-	   main actor, so the Swift layer enqueues events and this drains them.
-	   Nothing to drain yet. */
+	/* Key events originate in IN_Commands' snapshot diff; there is no
+	   separate event queue to pump. */
 }
 
 void IN_UpdateInputMode (void)
 {
 }
 
-void IN_Move (usercmd_t *cmd)
-{
-	(void) cmd;
-}
-
 void IN_ClearStates (void)
 {
+	memset (&qr_pad_prev, 0, sizeof(qr_pad_prev));
+	qr_lt_down = qr_rt_down = false;
 }
 
 void IN_Activate (void)
