@@ -196,12 +196,21 @@ final class ImmersiveRenderer {
         if deviceAnchor != nil, !zeroedInitialPose {
             zeroedInitialPose = true
             recenterCorrection = Self.correction(zeroing: rawOriginFromDevice)
+            TrackingSpace.setCorrection(recenterCorrection)
         }
         if let packet, packet.recenter_count != recenterSeen {
             recenterSeen = packet.recenter_count
             recenterCorrection = Self.correction(zeroing: rawOriginFromDevice)
+            TrackingSpace.setCorrection(recenterCorrection)
         }
         let originFromDevice = recenterCorrection * rawOriginFromDevice
+
+        // Output channel: haptic pulses (damage rises) and the per-weapon
+        // trigger feel follow the packet.
+        if let packet {
+            ControllerOutput.shared.frame(damageFlash: packet.damage_flash,
+                                          activeWeapon: packet.active_weapon)
+        }
 
         // World->tracking-origin: the Quake BODY basis, scaled to metres —
         // yaw only, because pitch and roll belong to the head. The engine's
