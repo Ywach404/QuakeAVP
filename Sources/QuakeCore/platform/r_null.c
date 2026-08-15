@@ -407,6 +407,12 @@ void SCR_UpdateScreen (void)
 
 	/* 2D overlay drawing happened here upstream; still stubbed */
 
+	/* upstream calls this from gl_screen.c after the view: computes the
+	   polyblend colour AND decays the cshift percents. Without it the
+	   damage flash never fades -- qr_bridge publishes that percent as the
+	   haptics/adaptive-trigger output signal, so the decay must run. */
+	V_UpdateBlend ();
+
 	GL_EndRendering ();
 }
 

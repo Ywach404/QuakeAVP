@@ -92,6 +92,14 @@ targets:
           UIApplicationSupportsMultipleScenes: true
         UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
         UIApplicationSupportsIndirectInputEvents: true
+        # M5 input: hands-only play needs hand tracking; PSVR2 Sense
+        # controllers arrive as spatial accessories (ARKit accessory
+        # tracking + the SpatialGamepad controller profile).
+        NSHandsTrackingUsageDescription: Hand tracking drives movement and firing when no controller is connected.
+        NSAccessoryTrackingUsageDescription: Tracks PlayStation VR2 Sense controllers for aiming and movement.
+        GCSupportedGameControllers:
+          - ProfileName: SpatialGamepad
+          - ProfileName: ExtendedGamepad
         # Game data is not redistributable, so the user supplies pak0.pak by
         # dropping it into the app's Documents folder over the Files app.
         UIFileSharingEnabled: true

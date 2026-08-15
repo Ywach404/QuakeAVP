@@ -265,6 +265,15 @@ typedef struct qc_frame_s {
 	   this strength; 0 draws nothing. */
 	float		vignette;
 
+	/* Output channel for controller haptics and (when visionOS exposes
+	   them) adaptive triggers. damage_flash is the engine's damage cshift
+	   percent, rising on hits and decaying through V_UpdateBlend -- the
+	   consumer pulses haptics on rises. active_weapon is the IT_* bit of
+	   the held weapon (cl.stats[STAT_ACTIVEWEAPON]) for per-weapon trigger
+	   feel. */
+	float		damage_flash;
+	uint32_t	active_weapon;
+
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;
