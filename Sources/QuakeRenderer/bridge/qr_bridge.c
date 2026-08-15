@@ -3073,6 +3073,8 @@ void QR_BeginFrame (void)
 	slot->frame.head_absorbed[1] = 0;
 	slot->frame.lean_limit = 12;
 	slot->frame.vignette = 0;
+	slot->frame.damage_flash = 0;
+	slot->frame.active_weapon = 0;
 	/* stays live even in empty packets so the consumer's recenter
 	   handshake can't wedge at the console or during demos */
 	slot->frame.recenter_count = qr_recenter_count;
@@ -3234,6 +3236,12 @@ void QR_RenderView (void)
 			qr_vignette_value = q_max (qr_vignette_value - (float)dt / 0.12f, target);
 		slot->frame.vignette = qr_vignette_value;
 	}
+
+	/* output channel: the damage cshift percent (V_ParseDamage raises it,
+	   V_UpdateBlend decays it) and the held weapon's IT_ bit, for haptic
+	   pulses and per-weapon trigger feel on the consumer side */
+	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
+	slot->frame.active_weapon = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
 
 	/* room-scale head follow: what IN_AbsorbHeadOffset already walked the
 	   player after, and the lean allowance for the remainder */
