@@ -68,6 +68,7 @@ final class ControllerOutput: @unchecked Sendable {
     /// shot itself is decided by the engine, but the feel must not wait a
     /// round trip.
     func noteFire() {
+        InputTelemetry.shared.fire()
         queue.async { self.transient(intensity: 0.8, sharpness: 0.7) }
     }
 
@@ -79,12 +80,14 @@ final class ControllerOutput: @unchecked Sendable {
             if damageFlash > self.lastDamage + 5 {
                 let intensity = min(damageFlash / 100, 1)
                 self.transient(intensity: intensity, sharpness: 0.3)
+                InputTelemetry.shared.kickback(intensity: intensity)
             }
             self.lastDamage = damageFlash
 
             if activeWeapon != self.lastWeapon {
                 self.lastWeapon = activeWeapon
                 self.applyTriggerFeel(weapon: activeWeapon)
+                InputTelemetry.shared.setWeapon(activeWeapon)
             }
         }
     }
@@ -108,6 +111,19 @@ final class ControllerOutput: @unchecked Sendable {
     }
 
     // MARK: - Adaptive trigger feel (armed, awaiting OS support)
+
+    /// The trigger-travel band the adaptive table programs per weapon; the
+    /// scope draws it so the feel is visible before the hardware can
+    /// render it.
+    static func feelZone(weapon: UInt32) -> ClosedRange<Float>? {
+        switch weapon {
+        case 1, 2: return 0.3...0.7
+        case 4, 8: return 0.2...1.0
+        case 16, 32: return 0.1...1.0
+        case 64: return 0.0...1.0
+        default: return nil
+        }
+    }
 
     /// Per-weapon feel, in Quake's IT_* weapon bits. Tuned blind — revisit
     /// on hardware the day the probe reports "active".
