@@ -191,6 +191,7 @@ final class PadAggregator: @unchecked Sendable {
             ControllerOutput.shared.noteFire()
         }
         lastRT = merged.rt
+        InputTelemetry.shared.record(rt: merged.rt, lt: merged.lt)
 
         var state = qc_gamepad_state_t(
             lx: merged.lx, ly: merged.ly, rx: merged.rx, ry: merged.ry,
