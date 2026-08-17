@@ -273,6 +273,9 @@ typedef struct qc_frame_s {
 	   feel. */
 	float		damage_flash;
 	uint32_t	active_weapon;
+	uint32_t	items;		/* cl.items: owned-weapon IT_* bits,
+					   the wheel's source of truth for
+					   what may be offered */
 
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */

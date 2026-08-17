@@ -45,6 +45,12 @@ extern float qr_head_absorbed[2];
 extern uint32_t qr_recenter_count;
 extern cvar_t vr_lean_limit;
 
+/* weapon-wheel state, owned by in_null.c on the engine thread */
+extern float qr_wheel_frac;
+extern int qr_wheel_has_anchor;
+extern float qr_wheel_anchor[3];
+extern int qr_wheel_highlight;
+
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
    miniature or gigantic. The sim stays in Quake units; only the consumer's
@@ -2977,6 +2983,138 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 
 /*
 ================
+QR_EmitWheel -- the weapon wheel: the player's OWNED view-weapon models as
+a ring of synthetic alias entities around the off-hand wrist.
+
+Real models in world space, not an overlay: emitting through the ordinary
+entity side array buys lighting, lerp and stereo amplification for free,
+and a ring of floating shotguns reads far better in a headset than a flat
+radial menu. Unowned weapons are absent -- the wheel never offers a
+selection that would silently fail. The ring's radius follows the open
+fraction and the items spin on `realtime`, the WALL clock: the wheel moves
+at full speed while the weapons' own idle lerp (cl.time-driven) crawls
+with the world. That contrast is the effect.
+================
+*/
+static const uint32_t qr_wheel_bits[8] = {
+	IT_AXE, IT_SHOTGUN, IT_SUPER_SHOTGUN, IT_NAILGUN,
+	IT_SUPER_NAILGUN, IT_GRENADE_LAUNCHER, IT_ROCKET_LAUNCHER,
+	IT_LIGHTNING,
+};
+static const char *qr_wheel_modelnames[8] = {
+	"progs/v_axe.mdl", "progs/v_shot.mdl", "progs/v_shot2.mdl",
+	"progs/v_nail.mdl", "progs/v_nail2.mdl", "progs/v_rock.mdl",
+	"progs/v_rock2.mdl", "progs/v_light.mdl",
+};
+
+static void QR_EmitWheel (qr_frame_slot_t *slot)
+{
+	static qmodel_t	*models[8];
+	static qmodel_t	*cachekey;
+	float		frac, radius, step, theta, spin;
+	vec3_t		fwdv, rightv, upv, angles, center;
+	int		i, owned, k;
+
+	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
+		return;
+
+	/* v_*.mdl are precached by progs on every map; resolve names to
+	   models once per worldmodel */
+	if (cachekey != cl.worldmodel)
+	{
+		cachekey = cl.worldmodel;
+		for (i = 0; i < 8; i++)
+		{
+			int m;
+			models[i] = NULL;
+			for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
+				if (!strcmp (cl.model_precache[m]->name, qr_wheel_modelnames[i]))
+				{
+					models[i] = cl.model_precache[m];
+					break;
+				}
+		}
+	}
+
+	owned = 0;
+	for (i = 0; i < 8; i++)
+		if ((cl.items & qr_wheel_bits[i]) && models[i])
+			owned++;
+	if (!owned)
+		return;
+
+	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
+	radius = 18.f * frac;
+	spin = (float) fmod (realtime * 30.0, 360.0);
+
+	angles[0] = 0;
+	angles[1] = cl.viewangles[YAW];
+	angles[2] = 0;
+	AngleVectors (angles, fwdv, rightv, upv);
+	/* AngleVectors' right points right; keep the ring plane spanned by
+	   (rightv, world up), facing the player */
+	if (qr_wheel_has_anchor)
+	{
+		VectorMA (r_refdef.vieworg, qr_wheel_anchor[0], fwdv, center);
+		VectorMA (center, qr_wheel_anchor[1], rightv, center);
+		center[2] += qr_wheel_anchor[2];
+	}
+	else
+	{
+		/* no wrist (flat window): fixed offset ahead of the view */
+		VectorMA (r_refdef.vieworg, 36.f, fwdv, center);
+		center[2] -= 2.f;
+	}
+
+	step = 360.f / owned;
+	k = 0;
+	for (i = 0; i < 8; i++)
+	{
+		entity_t	e;
+		qc_entity_t	*rec;
+		uint32_t	before;
+		int		highlighted;
+		int		c;
+
+		if (!(cl.items & qr_wheel_bits[i]) || !models[i])
+			continue;
+
+		highlighted = (k == qr_wheel_highlight);
+		theta = (90.f - k * step) * M_PI / 180.f;
+
+		memset (&e, 0, sizeof(e));
+		e.model = models[i];
+		VectorMA (center, radius * cosf (theta), rightv, e.origin);
+		e.origin[2] += radius * sinf (theta);
+		e.angles[0] = 0;
+		e.angles[1] = spin + k * 45.f;
+		e.angles[2] = 0;
+		e.frame = 0;
+		e.skinnum = 0;
+		e.scale = (unsigned char)(highlighted ? 10 : 7);	/* /16 */
+		e.lerpflags = LERP_RESETANIM | LERP_RESETMOVE;
+
+		before = slot->frame.num_entities;
+		QR_EmitAliasModel (slot, &e);
+		if (slot->frame.num_entities > before)
+		{
+			/* room lighting is right in spirit but a wheel item
+			   must never be unreadable in a dark corridor: floor
+			   it, and let the highlight glow */
+			rec = &slot->entities[slot->frame.num_entities - 1];
+			for (c = 0; c < 3; c++)
+			{
+				rec->light[c] = q_max (rec->light[c], 0.45f);
+				if (highlighted)
+					rec->light[c] = q_min (rec->light[c] * 1.7f, 2.f);
+			}
+		}
+		k++;
+	}
+}
+
+/*
+================
 QR_BuildFramePacket -- flatten this frame into typed batches, in upstream
 R_RenderScene order: sky, opaque world, opaque entities, world liquids,
 translucent entities. Runs where upstream issued the GL draws; instead it
@@ -3029,6 +3167,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	    && !(cl.items & IT_INVISIBILITY) && cl.stats[STAT_HEALTH] > 0
 	    && cl.viewent.model && cl.viewent.model->type == mod_alias)
 		QR_EmitAliasModel (slot, &cl.viewent);
+
+	QR_EmitWheel (slot);
 }
 
 /* ========================================================================
@@ -3075,6 +3215,7 @@ void QR_BeginFrame (void)
 	slot->frame.vignette = 0;
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
+	slot->frame.items = 0;
 	/* stays live even in empty packets so the consumer's recenter
 	   handshake can't wedge at the console or during demos */
 	slot->frame.recenter_count = qr_recenter_count;
@@ -3242,6 +3383,7 @@ void QR_RenderView (void)
 	   pulses and per-weapon trigger feel on the consumer side */
 	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
 	slot->frame.active_weapon = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+	slot->frame.items = cl.items;
 
 	/* room-scale head follow: what IN_AbsorbHeadOffset already walked the
 	   player after, and the lean allowance for the remainder */
