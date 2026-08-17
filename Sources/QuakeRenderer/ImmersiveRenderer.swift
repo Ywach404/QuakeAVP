@@ -206,10 +206,13 @@ final class ImmersiveRenderer {
         let originFromDevice = recenterCorrection * rawOriginFromDevice
 
         // Output channel: haptic pulses (damage rises) and the per-weapon
-        // trigger feel follow the packet.
+        // trigger feel follow the packet; the wheel learns what the player
+        // owns from the same source of truth the ring is built from.
         if let packet {
             ControllerOutput.shared.frame(damageFlash: packet.damage_flash,
                                           activeWeapon: packet.active_weapon)
+            WheelState.shared.frame(items: packet.items,
+                                    worldScale: packet.world_scale)
         }
 
         // World->tracking-origin: the Quake BODY basis, scaled to metres —
