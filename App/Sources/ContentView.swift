@@ -51,6 +51,11 @@ struct ContentView: View {
             engine.boot()
             gamepad.start()
             hands = HandInput(aggregator: gamepad.aggregator)
+            // The wheel commits through the one console route.
+            let engine = self.engine
+            WheelState.shared.sendCommand = { command in
+                Task { @MainActor in engine.send(command) }
+            }
         }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.

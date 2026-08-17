@@ -248,8 +248,13 @@ private enum SenseMapper {
             }
         }
         if left {
-            // Square / triangle cycle weapons via the X/Y bindings.
-            set(QC_PAD_X, ["Button X", "Square", "Button A"])
+            // Square is the weapon wheel: hold to open, release to commit
+            // the highlighted weapon. It never reaches the engine as a key.
+            let square = button(profile, containing: "Button X")
+                ?? button(profile, containing: "Square")
+                ?? button(profile, containing: "Button A")
+            WheelState.shared.setHold(square?.isPressed == true, source: .sense)
+            // Triangle still cycles.
             set(QC_PAD_Y, ["Button Y", "Triangle", "Button B"])
             set(QC_PAD_LSHOULDER, ["Grip", "Shoulder"])
             set(QC_PAD_LTHUMB, ["Thumbstick Button", "Thumbstick , Button"])

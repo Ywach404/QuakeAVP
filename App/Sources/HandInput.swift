@@ -82,11 +82,12 @@ final class HandInput: @unchecked Sendable {
             }
             let anchor = update.anchor
             if anchor.chirality == .left {
-                left.ingest(anchor)
+                left.ingest(anchor, isLeft: true)
             } else {
-                right.ingest(anchor)
+                right.ingest(anchor, isLeft: false)
             }
             emit(left: &left, right: &right)
+            wheel(left: left, right: right)
         }
         aggregator.remove(.hands)
     }
@@ -152,6 +153,36 @@ final class HandInput: @unchecked Sendable {
     }
 
     private var bothPinchedSince: Double?
+    private var wheelCommitLatch = false
+
+    /// Weapon wheel, hands language: off-hand palm up opens and anchors
+    /// the ring at that wrist; the aim hand's index ray highlights; a pinch
+    /// commits without closing the wheel. The engine has already silenced
+    /// fire and locomotion while it's open.
+    private func wheel(left: HandState, right: HandState) {
+        WheelState.shared.setHold(left.palmUp, source: .hands)
+        guard left.palmUp else {
+            wheelCommitLatch = false
+            return
+        }
+        let correction = TrackingSpace.correction
+        if let wrist = left.wrist {
+            let p = correction * SIMD4(wrist, 1)
+            WheelState.shared.setAnchor(trackingPosition: SIMD3(p.x, p.y, p.z))
+        }
+        if let origin = right.indexRayOrigin, let dir = right.indexRayDirection {
+            let o = correction * SIMD4(origin, 1)
+            let d = TrackingSpace.rotation * dir
+            WheelState.shared.setPointer(trackingOrigin: SIMD3(o.x, o.y, o.z),
+                                         direction: simd_normalize(d))
+        }
+        if right.indexPinched, !wheelCommitLatch {
+            wheelCommitLatch = true
+            WheelState.shared.commitHighlight()
+        } else if !right.indexPinched {
+            wheelCommitLatch = false
+        }
+    }
 
     private static let pulse = 0.12
     private static func stick(_ metres: Float) -> Float {
@@ -174,6 +205,16 @@ private struct HandState {
     var middleDrag: SIMD3<Float>?
     var stickyUntil: [Pulse: Double] = [:]
 
+    // Wheel facts, room frame (uncorrected).
+    var wrist: SIMD3<Float>?
+    var palmUp = false
+    var indexRayOrigin: SIMD3<Float>?
+    var indexRayDirection: SIMD3<Float>?
+
+    /// Flips the palm-normal convention if the skeleton's winding turns
+    /// out mirrored on hardware; calibrate on device, not by argument.
+    private static let palmSign: Float = 1
+
     private var indexStart: SIMD3<Float>?
     private var middleStart: SIMD3<Float>?
     private var middleStartTime = 0.0
@@ -182,7 +223,7 @@ private struct HandState {
 
     var indexDragLength: Float { indexDrag.map(simd_length) ?? 0 }
 
-    mutating func ingest(_ anchor: HandAnchor) {
+    mutating func ingest(_ anchor: HandAnchor, isLeft: Bool) {
         guard let skeleton = anchor.handSkeleton else { return }
         func tip(_ joint: HandSkeleton.JointName) -> SIMD3<Float>? {
             let j = skeleton.joint(joint)
@@ -228,6 +269,30 @@ private struct HandState {
             middleStart = nil
             middleDrag = nil
         }
+
+        // Wheel facts: the wrist, the palm's facing, the index ray.
+        wrist = tip(.wrist)
+        if let w = wrist,
+           let indexKnuckle = tip(.indexFingerKnuckle),
+           let littleKnuckle = tip(.littleFingerKnuckle) {
+            var normal = simd_cross(indexKnuckle - w, littleKnuckle - w)
+            // The knuckle winding mirrors between hands; normalize both to
+            // "out of the palm" before asking whether it faces the sky.
+            if !isLeft { normal = -normal }
+            normal *= Self.palmSign
+            let len = simd_length(normal)
+            palmUp = len > 0 && (normal / len).y > 0.55
+        } else {
+            palmUp = false
+        }
+        if let knuckle = tip(.indexFingerKnuckle), let tipPos = index,
+           simd_distance(knuckle, tipPos) > 0.02 {
+            indexRayOrigin = knuckle
+            indexRayDirection = simd_normalize(tipPos - knuckle)
+        } else {
+            indexRayOrigin = nil
+            indexRayDirection = nil
+        }
     }
 
     /// True exactly once when a short, still middle pinch was released.
@@ -238,15 +303,22 @@ private struct HandState {
     }
 }
 
-/// The recenter correction's rotation, shared from the render thread so
-/// gesture drags map into BODY axes rather than the room's arbitrary frame.
+/// The recenter correction, shared from the render thread: the rotation
+/// maps gesture DRAG deltas into body axes; the full matrix maps absolute
+/// positions (wrists, controllers) into the body frame the engine expects.
 enum TrackingSpace {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _rotation = matrix_identity_float3x3
+    nonisolated(unsafe) private static var _correction = matrix_identity_float4x4
 
     static var rotation: simd_float3x3 {
         lock.lock(); defer { lock.unlock() }
         return _rotation
+    }
+
+    static var correction: simd_float4x4 {
+        lock.lock(); defer { lock.unlock() }
+        return _correction
     }
 
     static func setCorrection(_ correction: simd_float4x4) {
@@ -256,6 +328,7 @@ enum TrackingSpace {
             SIMD3(correction.columns.2.x, correction.columns.2.y, correction.columns.2.z))
         lock.lock()
         _rotation = r
+        _correction = correction
         lock.unlock()
     }
 }
