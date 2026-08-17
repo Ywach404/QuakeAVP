@@ -26,6 +26,8 @@
 
 /* defined in cl_main.c; upstream externs them file-locally in cl_input.c */
 extern cvar_t cl_maxpitch, cl_minpitch;
+/* defined in host.c; no header declares it */
+extern cvar_t host_timescale;
 
 /* ========================================================================
  * any-thread producers
@@ -35,6 +37,10 @@ static pthread_mutex_t		qc_input_lock = PTHREAD_MUTEX_INITIALIZER;
 static qc_gamepad_state_t	qc_pad_shared;
 static float			qc_head_shared[3];	/* fwd, right, up */
 static uint32_t			qc_head_ack;		/* recenter echo */
+static int			qc_wheel_open_shared;
+static int			qc_wheel_anchor_shared;
+static float			qc_wheel_pos_shared[3];
+static int			qc_wheel_highlight_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
@@ -54,6 +60,19 @@ void QC_InputSetHeadOffset (float fwd, float right, float up,
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
+void QC_InputSetWheel (int open, int has_anchor,
+		       float fwd, float right, float up, int highlight)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_wheel_open_shared = open;
+	qc_wheel_anchor_shared = has_anchor;
+	qc_wheel_pos_shared[0] = fwd;
+	qc_wheel_pos_shared[1] = right;
+	qc_wheel_pos_shared[2] = up;
+	qc_wheel_highlight_shared = highlight;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
 /* ========================================================================
  * engine-thread state
  * ===================================================================== */
@@ -63,6 +82,21 @@ void QC_InputSetHeadOffset (float fwd, float right, float up,
    the recenter generation the renderer re-zeroes its pose against. */
 float		qr_head_absorbed[2];
 uint32_t	qr_recenter_count;
+
+/* Weapon-wheel state, read by qr_bridge.c for the ring emission. The open
+   FRACTION eases on REAL time (the wheel must open at full speed while the
+   world it slows crawls -- that contrast is the whole effect), and the
+   same fraction drives host_timescale, so the two can never disagree. */
+float		qr_wheel_frac;			/* eased 0..1 */
+int		qr_wheel_open;			/* merged intent, this frame */
+int		qr_wheel_has_anchor;
+float		qr_wheel_anchor[3];		/* body frame: fwd, right, up */
+int		qr_wheel_highlight = -1;	/* owned-ring index, -1 none */
+
+static int	qr_wheel_console_open;		/* +wheel / -wheel */
+static cvar_t	wheel_timescale = {"wheel_timescale", "0.2", CVAR_ARCHIVE};
+
+#define QR_WHEEL_RAMP_TIME	0.25
 
 static qc_gamepad_state_t	qr_pad, qr_pad_prev;
 static float			qr_head[3];
@@ -94,8 +128,62 @@ static void IN_SnapshotInputs (void)
 	qr_head[1] = qc_head_shared[1];
 	qr_head[2] = qc_head_shared[2];
 	qr_head_ack_seen = qc_head_ack;
+	qr_wheel_open = qc_wheel_open_shared || qr_wheel_console_open;
+	qr_wheel_has_anchor = qc_wheel_anchor_shared;
+	qr_wheel_anchor[0] = qc_wheel_pos_shared[0];
+	qr_wheel_anchor[1] = qc_wheel_pos_shared[1];
+	qr_wheel_anchor[2] = qc_wheel_pos_shared[2];
+	qr_wheel_highlight = qc_wheel_highlight_shared;
 	pthread_mutex_unlock (&qc_input_lock);
 }
+
+/*
+================
+IN_WheelRamp -- ease the open fraction on REAL time and drive
+host_timescale from it.
+
+Runs every IN_Commands, i.e. once per engine tick. The clock is the
+engine's `realtime`, which accumulates the unscaled dt QC_Frame feeds --
+the same clock Host_FilterTime paces ticks (and therefore packets) with,
+and the one clock host_timescale can never slow. That is also why
+host_timescale is the right lever: it multiplies only host_frametime, the
+simulation's dt, so the tick and packet rate stay at full speed while the
+world crawls. Scaling the QC_Frame dt at the boundary instead would
+starve the pacer and drop the packet rate with it.
+================
+*/
+static void IN_WheelRamp (void)
+{
+	static double	lasttime;
+	double		dt = realtime - lasttime;
+	float		target = qr_wheel_open ? 1.f : 0.f;
+	float		eased, ts;
+
+	if (dt < 0 || dt > 1)
+		dt = 0;
+	lasttime = realtime;
+
+	if (qr_wheel_frac < target)
+		qr_wheel_frac = q_min (qr_wheel_frac + (float)(dt / QR_WHEEL_RAMP_TIME), target);
+	else if (qr_wheel_frac > target)
+		qr_wheel_frac = q_max (qr_wheel_frac - (float)(dt / QR_WHEEL_RAMP_TIME), target);
+
+	if (qr_wheel_frac <= 0.f)
+	{
+		/* fully closed: hand the cvar back to its upstream meaning
+		   (0 = disabled) so console slow-mo experiments still work */
+		if (host_timescale.value != 0.f)
+			Cvar_SetValueQuick (&host_timescale, 0.f);
+		return;
+	}
+
+	eased = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
+	ts = 1.f + eased * (CLAMP (0.05f, wheel_timescale.value, 1.f) - 1.f);
+	Cvar_SetValueQuick (&host_timescale, ts);
+}
+
+static void IN_WheelDown_f (void) { qr_wheel_console_open = 1; }
+static void IN_WheelUp_f (void) { qr_wheel_console_open = 0; }
 
 /* ========================================================================
  * buttons -> Key_Event
@@ -144,6 +232,18 @@ void IN_Commands (void)
 	uint32_t changed;
 
 	IN_SnapshotInputs ();
+	IN_WheelRamp ();
+
+	/* While the wheel is open the trigger picks weapons, not fights:
+	   release a held attack and swallow new edges. */
+	if (qr_wheel_open)
+	{
+		if (qr_rt_down)
+		{
+			qr_rt_down = false;
+			Key_Event (K_RTRIGGER, false);
+		}
+	}
 
 	changed = qr_pad.buttons ^ qr_pad_prev.buttons;
 	for (i = 0; i < sizeof(qr_padkeys) / sizeof(qr_padkeys[0]); i++)
@@ -164,7 +264,8 @@ void IN_Commands (void)
 	if ((changed & QC_PAD_OPTIONS) && (qr_pad.buttons & QC_PAD_OPTIONS))
 		Cbuf_AddText ("vr_recenter\n");
 
-	IN_TriggerEdge (qr_pad.rt, &qr_rt_down, K_RTRIGGER);
+	if (!qr_wheel_open)
+		IN_TriggerEdge (qr_pad.rt, &qr_rt_down, K_RTRIGGER);
 	IN_TriggerEdge (qr_pad.lt, &qr_lt_down, K_LTRIGGER);
 
 	qr_pad_prev = qr_pad;
@@ -305,6 +406,16 @@ void IN_Move (usercmd_t *cmd)
 
 	IN_SnapshotInputs ();
 
+	/* Choosing a weapon, not moving: sticks go quiet while the wheel is
+	   open (stick locomotion through a time-scaled world is a comfort
+	   risk). The head-follow absorb below still runs -- physically
+	   walking is real motion and stays honoured. */
+	if (qr_wheel_open)
+	{
+		IN_AbsorbHeadOffset ();
+		return;
+	}
+
 	lx = IN_DeadZone (qr_pad.lx);
 	ly = IN_DeadZone (qr_pad.ly);
 	rx = IN_DeadZone (qr_pad.rx);
@@ -363,7 +474,10 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_snapturn);
 	Cvar_RegisterVariable (&vr_smoothturn);
 	Cvar_RegisterVariable (&vr_lean_limit);
+	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);
+	Cmd_AddCommand ("+wheel", IN_WheelDown_f);
+	Cmd_AddCommand ("-wheel", IN_WheelUp_f);
 
 	/* Gameplay defaults for the controller keys. Queued before quake.rc
 	   executes, so config.cfg and autoexec.cfg can rebind them. */
