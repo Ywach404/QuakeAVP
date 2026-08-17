@@ -11,8 +11,11 @@ import UIKit
 
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
+    @State private var gamepad = GameControllerInput()
+    @State private var hands: HandInput?
     @State private var commandText = ""
     @State private var autoOpened = false
+    @State private var showScope = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -27,6 +30,10 @@ struct ContentView: View {
                 }
                 VStack(alignment: .leading, spacing: 16) {
                     renderSurface
+                    if engine.status == .running, showScope {
+                        TriggerScope()
+                            .frame(height: 120)
+                    }
                     // While the windowed world view is up the console
                     // shrinks to a log strip; in immersive (no preview —
                     // the world is all around) and in every other state it
@@ -40,7 +47,20 @@ struct ContentView: View {
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 560)
-        .onAppear { engine.boot() }
+        .onAppear {
+            engine.boot()
+            gamepad.start()
+            hands = HandInput(aggregator: gamepad.aggregator)
+        }
+        // Hands drive the game only while immersed with no hardware
+        // attached; a controller connecting mid-session takes over.
+        .onChange(of: coordinator.isImmersiveActive) { _, active in
+            updateHands()
+            // The scope earns its room while immersed (no preview pane);
+            // windowed, it stays behind its toggle.
+            if active { showScope = true }
+        }
+        .onChange(of: gamepad.hasPhysicalController) { _, _ in updateHands() }
         .onChange(of: engine.status) { _, status in
             // Test harness: QAVP_AUTO_IMMERSIVE=1 opens the space as soon as
             // the engine is up, so simctl/devicectl runs need no UI taps;
@@ -80,8 +100,18 @@ struct ContentView: View {
                 Text("QuakeSpasm \(engine.engineVersion) · Metal world renderer")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Label(inputStatus.text, systemImage: inputStatus.icon)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
+            if engine.status == .running {
+                Button {
+                    showScope.toggle()
+                } label: {
+                    Label("Scope", systemImage: "waveform.path.ecg")
+                }
+            }
             phaseButton
             immersiveButton
             statusBadge
@@ -291,6 +321,27 @@ struct ContentView: View {
             Button("Send", action: submit)
                 .disabled(commandText.isEmpty || engine.status != .running)
         }
+    }
+
+    private func updateHands() {
+        hands?.setActive(coordinator.isImmersiveActive && !gamepad.hasPhysicalController)
+    }
+
+    private var inputStatus: (text: String, icon: String) {
+        if let name = gamepad.sourceDescription {
+            var text = name
+            if !gamepad.spatialControllers.isEmpty {
+                text += SpatialControllerTracker.shared.isTracking ? " · tracked" : " · pairing"
+                if let triggers = ControllerOutput.shared.adaptiveTriggerStatus {
+                    text += " · \(triggers)"
+                }
+            }
+            return (text, "gamecontroller")
+        }
+        if hands?.isRunning == true {
+            return ("Hands — pinch left to move, right to fire", "hand.pinch")
+        }
+        return ("No controller — console input only", "gamecontroller")
     }
 
     private func submit() {

@@ -244,6 +244,36 @@ typedef struct qc_frame_s {
 	float		phase_color[3];	/* ember rim, linear rgb (may exceed 1
 					   for glow); the `phase_color` cvar */
 
+	/* Room-scale head follow. The engine walks the player box after the
+	   offset fed through QC_InputSetHeadOffset (traced, so walls refuse
+	   it) and reports here how much of that offset vieworg has already
+	   absorbed, world-frame XY Quake units. The immersive consumer
+	   anchors its camera at vieworg minus this, so absorption never
+	   moves the rendered eye; the un-absorbed remainder is the lean,
+	   clamped to lean_limit so a head cannot pass through the wall that
+	   refused the box. recenter_count bumps when `vr_recenter` runs: the
+	   consumer re-zeroes its pose correction against the current head
+	   pose and echoes the count back through QC_InputSetHeadOffset. */
+	float		head_absorbed[2];
+	float		lean_limit;	/* vr_lean_limit, Quake units */
+	uint32_t	recenter_count;
+
+	/* Comfort vignette, eased 0..1 on the engine clock: vr_vignette
+	   strength while ARTIFICIAL locomotion exceeds vr_vignette_threshold,
+	   zero at rest. Physical (room-scale) walking never trips it -- real
+	   motion needs no comfort aid. The consumer draws a periphery fade at
+	   this strength; 0 draws nothing. */
+	float		vignette;
+
+	/* Output channel for controller haptics and (when visionOS exposes
+	   them) adaptive triggers. damage_flash is the engine's damage cshift
+	   percent, rising on hits and decaying through V_UpdateBlend -- the
+	   consumer pulses haptics on rises. active_weapon is the IT_* bit of
+	   the held weapon (cl.stats[STAT_ACTIVEWEAPON]) for per-weapon trigger
+	   feel. */
+	float		damage_flash;
+	uint32_t	active_weapon;
+
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;
@@ -272,6 +302,51 @@ void QC_RendererSetDrawableSize (int width, int height);
    fov. Pass (0, 0) to clear the override when leaving immersive rendering.
    Callable from any thread. */
 void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg);
+
+/* ========================================================================
+ * Input -- any-thread producers, drained on the engine thread.
+ *
+ * GameController handlers fire on their own queue and the compositor's
+ * render thread owns the head pose; neither may touch engine state. Both
+ * cross into the engine the same way the drawable size does: a lock-guarded
+ * latest-state snapshot the engine thread reads inside IN_Commands/IN_Move.
+ * ===================================================================== */
+
+enum {
+	QC_PAD_A		= 1 << 0,
+	QC_PAD_B		= 1 << 1,
+	QC_PAD_X		= 1 << 2,
+	QC_PAD_Y		= 1 << 3,
+	QC_PAD_LSHOULDER	= 1 << 4,
+	QC_PAD_RSHOULDER	= 1 << 5,
+	QC_PAD_MENU		= 1 << 6,
+	QC_PAD_OPTIONS		= 1 << 7,
+	QC_PAD_LTHUMB		= 1 << 8,
+	QC_PAD_RTHUMB		= 1 << 9
+};
+
+typedef struct qc_gamepad_state_s {
+	float		lx, ly;		/* left stick, -1..1, +y forward */
+	float		rx, ry;		/* right stick, -1..1, +y up */
+	float		lt, rt;		/* triggers, 0..1 */
+	uint32_t	buttons;	/* QC_PAD_* bits */
+	uint32_t	connected;	/* 0 = no controller attached */
+} qc_gamepad_state_t;
+
+/* Latest whole-pad snapshot; the engine diffs consecutive snapshots for
+   button edges. Callable from any thread. */
+void QC_InputSetGamepad (const qc_gamepad_state_t *state);
+
+/* The head's offset from the tracking origin in BODY frame, Quake units
+   (+fwd along body forward, +right along body right, +up), sampled by the
+   render thread from the same late-latched pose it draws with. The engine
+   walks the player box after this offset (traced, so walls refuse it) and
+   publishes what it absorbed in qc_frame_t.head_absorbed. `recenter_ack`
+   echoes the packet's recenter_count the pose was corrected against; the
+   engine ignores stale feeds while a recenter is in flight. Callable from
+   any thread. */
+void QC_InputSetHeadOffset (float fwd, float right, float up,
+			    uint32_t recenter_ack);
 
 #ifdef __cplusplus
 }

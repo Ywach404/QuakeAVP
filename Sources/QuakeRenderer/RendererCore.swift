@@ -37,10 +37,14 @@ struct RenderPipelines {
     let skyBox: MTLRenderPipelineState
     let aliasOpaque: MTLRenderPipelineState
     let aliasBlend: MTLRenderPipelineState
+    /// Comfort vignette: fullscreen periphery fade, drawn last.
+    let vignette: MTLRenderPipelineState
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
     /// For pass B: pass exactly the prepass depth, write nothing.
     let depthEqualNoWrite: MTLDepthStencilState
+    /// For the vignette: no depth test, no depth write.
+    let depthAlways: MTLDepthStencilState
 }
 
 final class RendererCore {
@@ -263,6 +267,10 @@ final class RendererCore {
         equalDescriptor.depthCompareFunction = .equal
         equalDescriptor.isDepthWriteEnabled = false
 
+        let alwaysDescriptor = MTLDepthStencilDescriptor()
+        alwaysDescriptor.depthCompareFunction = .always
+        alwaysDescriptor.isDepthWriteEnabled = false
+
         guard
             let world = pipeline(fragment: "world_fragment", blended: false),
             let worldDepthOnly = pipeline(fragment: "world_depth_fragment",
@@ -274,9 +282,11 @@ final class RendererCore {
             let skyBox = pipeline(fragment: "sky_box_fragment", blended: false),
             let aliasOpaque = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: false),
             let aliasBlend = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: true),
+            let vignette = pipeline(vertex: "vignette_vertex", fragment: "vignette_fragment", blended: true),
             let depthWrite = device.makeDepthStencilState(descriptor: writeDescriptor),
             let depthNoWrite = device.makeDepthStencilState(descriptor: noWriteDescriptor),
-            let depthEqualNoWrite = device.makeDepthStencilState(descriptor: equalDescriptor)
+            let depthEqualNoWrite = device.makeDepthStencilState(descriptor: equalDescriptor),
+            let depthAlways = device.makeDepthStencilState(descriptor: alwaysDescriptor)
         else { return nil }
 
         return RenderPipelines(
@@ -284,8 +294,10 @@ final class RendererCore {
             worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
+            vignette: vignette,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
-            depthEqualNoWrite: depthEqualNoWrite)
+            depthEqualNoWrite: depthEqualNoWrite,
+            depthAlways: depthAlways)
     }
 
     // MARK: - Frame encoding
@@ -299,7 +311,8 @@ final class RendererCore {
                 uniforms: WorldUniforms,
                 phase: PhaseParams,
                 amplificationCount: Int,
-                viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil) {
+                viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
+                drawsViewmodel: Bool = false) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -390,10 +403,14 @@ final class RendererCore {
                 guard let entities = frame.entities else { continue }
                 let entity = entities[Int(batch.entity)]
                 if entity.flags & UInt32(QC_ENTFLAG_VIEWMODEL) != 0 {
-                    // View-locked weapon: wrong in VR, drawn only where the
-                    // caller supplies the upstream glDepthRange(0, 0.3)
-                    // squish (the flat window). TODO(M4): decouple instead.
-                    guard viewmodelViewport != nil else { continue }
+                    // The weapon. Its transform is vieworg + viewangles —
+                    // the BODY pose — and the immersive camera composes the
+                    // head on a yaw-only basis, so there it hangs on the
+                    // body and pitches with the aim, decoupled from gaze
+                    // (drawsViewmodel: real depth, stereo-correct). The
+                    // flat window instead draws it squished into the near
+                    // depth range like upstream glDepthRange(0, 0.3).
+                    guard viewmodelViewport != nil || drawsViewmodel else { continue }
                 }
                 guard let mesh = meshes[entity.meshnum] else { continue }
 
@@ -534,6 +551,16 @@ final class RendererCore {
                 indexBuffer: indexBuffer,
                 indexBufferOffset: Int(batch.first_index) * MemoryLayout<UInt32>.size)
         }
+
+        // Comfort vignette, last over everything, engine-eased strength.
+        if frame.vignette > 0.001 {
+            setPipeline(pipelines.vignette, depth: pipelines.depthAlways)
+            var vignetteUniforms = VignetteUniforms(strength: frame.vignette)
+            withUnsafeBytes(of: &vignetteUniforms) { raw in
+                encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+            }
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
     }
 
     /// qc_entity_t.transform (a 16-float C array, column-major) as simd.
@@ -567,6 +594,11 @@ final class RendererCore {
 
     private struct WorldFragUniforms {
         var alpha: Float
+    }
+
+    /// Layout must match VignetteUniforms in Vignette.metal.
+    private struct VignetteUniforms {
+        var strength: Float
     }
 
     /// Layout must match AliasUniforms in Alias.metal.
