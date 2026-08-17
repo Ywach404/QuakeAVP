@@ -337,6 +337,20 @@ typedef struct qc_gamepad_state_s {
    button edges. Callable from any thread. */
 void QC_InputSetGamepad (const qc_gamepad_state_t *state);
 
+/* Weapon-wheel state, fed by whichever input source owns the gesture
+   (palm-up hands, a held Sense face button, the +wheel console command
+   engine-side). While open the engine ramps host_timescale down toward
+   wheel_timescale -- simulation time slows, the tick and packet rate do
+   not -- blocks locomotion and fire, and emits the owned view-weapon
+   models as a ring of alias entities anchored at `anchor` (body frame,
+   Quake units: fwd/right/up from the eye). has_anchor 0 means no wrist to
+   anchor to (flat window): the ring sits at a fixed offset ahead of the
+   view. highlight is the index into the OWNED-weapon ring (impulse
+   order), -1 for none; committing the selection is the caller's job via
+   QC_ExecuteCommand("impulse N"). Callable from any thread. */
+void QC_InputSetWheel (int open, int has_anchor,
+		       float fwd, float right, float up, int highlight);
+
 /* The head's offset from the tracking origin in BODY frame, Quake units
    (+fwd along body forward, +right along body right, +up), sampled by the
    render thread from the same late-latched pose it draws with. The engine
