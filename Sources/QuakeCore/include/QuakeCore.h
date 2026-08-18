@@ -258,6 +258,19 @@ typedef struct qc_frame_s {
 	float		lean_limit;	/* vr_lean_limit, Quake units */
 	uint32_t	recenter_count;
 
+	/* Weapon-wheel guide, drawn by the consumer as a wireframe ring in
+	   world space so the radial layout is legible: wheel_center is the
+	   ring centre (Quake units, the off-hand wrist), wheel_radius its
+	   radius, wheel_frac the eased open amount (0 = draw nothing),
+	   wheel_count the number of owned slots, wheel_highlight the selected
+	   slot (-1 none). The ring plane is spanned by body-right and world
+	   up, matching where QR_EmitWheel places the models. */
+	float		wheel_center[3];
+	float		wheel_radius;
+	float		wheel_frac;
+	int32_t		wheel_count;
+	int32_t		wheel_highlight;
+
 	/* Comfort vignette, eased 0..1 on the engine clock: vr_vignette
 	   strength while ARTIFICIAL locomotion exceeds vr_vignette_threshold,
 	   zero at rest. Physical (room-scale) walking never trips it -- real
@@ -353,6 +366,13 @@ void QC_InputSetGamepad (const qc_gamepad_state_t *state);
    QC_ExecuteCommand("impulse N"). Callable from any thread. */
 void QC_InputSetWheel (int open, int has_anchor,
 		       float fwd, float right, float up, int highlight);
+
+/* The head's yaw relative to the body, degrees, Quake sense (CCW/left
+   positive), fed by the render thread from the same pose it draws with.
+   Look-relative locomotion (vr_moverelative) rotates the movement stick by
+   this so "forward" tracks where the head looks; body-relative locomotion
+   ignores it. Callable from any thread. */
+void QC_InputSetHeadYaw (float yaw_deg);
 
 /* The head's offset from the tracking origin in BODY frame, Quake units
    (+fwd along body forward, +right along body right, +up), sampled by the

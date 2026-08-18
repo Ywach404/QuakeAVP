@@ -16,6 +16,9 @@ struct ContentView: View {
     @State private var commandText = ""
     @State private var autoOpened = false
     @State private var showScope = false
+    @State private var seated = false
+    @State private var rightHanded = true
+    @State private var lookRelative = true
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -111,6 +114,7 @@ struct ContentView: View {
             }
             Spacer()
             if engine.status == .running {
+                comfortMenu
                 Button {
                     showScope.toggle()
                 } label: {
@@ -120,6 +124,27 @@ struct ContentView: View {
             phaseButton
             immersiveButton
             statusBadge
+        }
+    }
+
+    /// Comfort and handedness toggles — seated raises the eye to standing
+    /// height, handedness swaps which hand aims vs moves.
+    private var comfortMenu: some View {
+        Menu {
+            Toggle("Seated", isOn: Binding(
+                get: { seated },
+                set: { seated = $0; VRSettings.shared.seated = $0 }))
+            Picker("Dominant hand", selection: Binding(
+                get: { rightHanded },
+                set: { rightHanded = $0; VRSettings.shared.rightHanded = $0 })) {
+                Text("Right-handed").tag(true)
+                Text("Left-handed").tag(false)
+            }
+            Toggle("Move where I look", isOn: Binding(
+                get: { lookRelative },
+                set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
+        } label: {
+            Label("Comfort", systemImage: "figure.seated.side")
         }
     }
 

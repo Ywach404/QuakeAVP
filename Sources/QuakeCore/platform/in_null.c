@@ -41,6 +41,7 @@ static int			qc_wheel_open_shared;
 static int			qc_wheel_anchor_shared;
 static float			qc_wheel_pos_shared[3];
 static int			qc_wheel_highlight_shared;
+static float			qc_head_yaw_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
@@ -57,6 +58,13 @@ void QC_InputSetHeadOffset (float fwd, float right, float up,
 	qc_head_shared[1] = right;
 	qc_head_shared[2] = up;
 	qc_head_ack = recenter_ack;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetHeadYaw (float yaw_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_head_yaw_shared = yaw_deg;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -100,10 +108,12 @@ static cvar_t	wheel_timescale = {"wheel_timescale", "0.2", CVAR_ARCHIVE};
 
 static qc_gamepad_state_t	qr_pad, qr_pad_prev;
 static float			qr_head[3];
+static float			qr_head_yaw;
 static uint32_t			qr_head_ack_seen;
 
 static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
 static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
+static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
 
 /* Stick response: radial deadzone, then rescale so the curve still reaches
@@ -127,6 +137,7 @@ static void IN_SnapshotInputs (void)
 	qr_head[0] = qc_head_shared[0];
 	qr_head[1] = qc_head_shared[1];
 	qr_head[2] = qc_head_shared[2];
+	qr_head_yaw = qc_head_yaw_shared;
 	qr_head_ack_seen = qc_head_ack;
 	qr_wheel_open = qc_wheel_open_shared || qr_wheel_console_open;
 	qr_wheel_has_anchor = qc_wheel_anchor_shared;
@@ -416,8 +427,22 @@ void IN_Move (usercmd_t *cmd)
 		return;
 	}
 
-	lx = IN_DeadZone (qr_pad.lx);
-	ly = IN_DeadZone (qr_pad.ly);
+	/* Radial deadzone on the left stick so a diagonal push keeps its
+	   direction -- a per-axis deadzone clips the corners and makes
+	   diagonals feel unreachable. The right stick stays per-axis: its
+	   axes are independent (X snaps, Y pitches). */
+	{
+		float mag = sqrtf (qr_pad.lx * qr_pad.lx + qr_pad.ly * qr_pad.ly);
+		if (mag > QR_STICK_DEADZONE)
+		{
+			float scale = (mag - QR_STICK_DEADZONE)
+				    / ((1.f - QR_STICK_DEADZONE) * mag);
+			lx = qr_pad.lx * scale;
+			ly = qr_pad.ly * scale;
+		}
+		else
+			lx = ly = 0.f;
+	}
 	rx = IN_DeadZone (qr_pad.rx);
 	ry = IN_DeadZone (qr_pad.ry);
 
@@ -428,10 +453,21 @@ void IN_Move (usercmd_t *cmd)
 	else
 		speed = 1.f;
 
-	/* Left stick: strafe/forward along BODY yaw (usercmd is applied in
-	   the body basis server-side, and the head never touches it). */
-	cmd->sidemove += cl_sidespeed.value * speed * lx;
-	cmd->forwardmove += cl_forwardspeed.value * speed * ly;
+	/* Look-relative locomotion: rotate the stick by the head's yaw so
+	   "forward" is where you look, not where the body last snapped to.
+	   The server applies the usercmd in the body basis, so pre-rotate
+	   into it here. vr_moverelative 0 restores body-relative movement. */
+	{
+		float hy = vr_moverelative.value ? qr_head_yaw * M_PI / 180.f : 0.f;
+		float c = cosf (hy), s = sinf (hy);
+		/* stick as a body-frame vector (X forward, Y left): forward
+		   is +X, a right push is -Y */
+		float vx = ly, vy = -lx;
+		float rxv = vx * c - vy * s;	/* rotate CCW by head yaw */
+		float ryv = vx * s + vy * c;
+		cmd->forwardmove += cl_forwardspeed.value * speed * rxv;
+		cmd->sidemove += cl_sidespeed.value * speed * (-ryv);
+	}
 
 	/* Right stick Y: aim pitch. The immersive camera ignores body pitch
 	   (the head supplies its own), so this moves the gun and the shot,
@@ -473,6 +509,7 @@ void IN_Init (void)
 {
 	Cvar_RegisterVariable (&vr_snapturn);
 	Cvar_RegisterVariable (&vr_smoothturn);
+	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_lean_limit);
 	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);
