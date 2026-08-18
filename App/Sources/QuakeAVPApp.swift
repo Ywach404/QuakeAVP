@@ -21,8 +21,13 @@ struct QuakeAVPApp: App {
     var body: some Scene {
         WindowGroup(id: Self.consoleWindowID) {
             ContentView()
+                // One fixed size that fits every control and the log; the
+                // console is a debug surface, not a resizable document, and
+                // a drifting window makes its buttons hard to hit in space.
+                .frame(width: 940, height: 720)
         }
-        .defaultSize(width: 900, height: 640)
+        .defaultSize(width: 940, height: 720)
+        .windowResizability(.contentSize)
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
             CompositorLayer(configuration: QuakeLayerConfiguration()) { layerRenderer in
