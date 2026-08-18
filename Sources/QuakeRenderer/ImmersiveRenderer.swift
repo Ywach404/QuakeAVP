@@ -288,10 +288,12 @@ final class ImmersiveRenderer {
 
         var eyeViewproj: [simd_float4x4] = []
         var eyeOrigin: [SIMD4<Float>] = []
+        var handViewproj: [simd_float4x4] = []   // tracking->clip, ignores height trim
         for index in views.indices {
             let originFromEye = originFromDevice * views[index].transform
             let projection = drawable.computeProjection(viewIndex: index)
             eyeViewproj.append(projection * originFromEye.inverse * originFromQuake)
+            handViewproj.append(projection * originFromEye.inverse)
             // Per-eye view origin back in Quake units, for the sky
             // projection — this is what keeps the sky from mismatching
             // between the eyes.
@@ -315,22 +317,10 @@ final class ImmersiveRenderer {
         let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         _ = packet   // clear_color intentionally unused on this path
 
-        // Hand debug wireframe: map the published finger bones from
-        // corrected-tracking space into Quake world for the guide pipeline.
-        var handDebug: [Float]? = nil
-        if HandDebug.shared.enabled, packet != nil {
-            let raw = HandDebug.shared.snapshot()
-            if raw.count >= 14 {
-                var mapped = [Float](); mapped.reserveCapacity(raw.count)
-                var i = 0
-                while i + 6 < raw.count {
-                    let q = quakeFromOrigin * SIMD4(raw[i], raw[i+1], raw[i+2], 1)
-                    mapped += [q.x, q.y, q.z, raw[i+3], raw[i+4], raw[i+5], raw[i+6]]
-                    i += 7
-                }
-                handDebug = mapped
-            }
-        }
+        // Hand debug wireframe: the published bones are already in
+        // corrected-tracking space; drawn with handViewproj they sit on the
+        // real hand, untouched by the game-world height trim.
+        let handDebug: [Float] = HandDebug.shared.enabled ? HandDebug.shared.snapshot() : []
 
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
@@ -344,7 +334,9 @@ final class ImmersiveRenderer {
                     eyeorg0: eyeOrigin[0], eyeorg1: eyeOrigin[1])
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
-                            amplificationCount: 2, drawsViewmodel: false, handDebug: handDebug)
+                            amplificationCount: 2, drawsViewmodel: false)
+                core.drawHandDebug(handDebug, viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                   pipelines: pipelines, encoder: encoder)
             }
             encoder.endEncoding()
         } else {
@@ -366,7 +358,9 @@ final class ImmersiveRenderer {
                         eyeorg0: eyeOrigin[index], eyeorg1: eyeOrigin[index])
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
-                                amplificationCount: 1, drawsViewmodel: false, handDebug: handDebug)
+                                amplificationCount: 1, drawsViewmodel: false)
+                    core.drawHandDebug(handDebug, viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                       pipelines: pipelines, encoder: encoder)
                 }
                 encoder.endEncoding()
             }

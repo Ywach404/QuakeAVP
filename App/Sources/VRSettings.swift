@@ -23,7 +23,7 @@ final class VRSettings: @unchecked Sendable {
     /// matter of feel per player and posture -- floor detection proved
     /// unreliable, so this is the honest knob. Vertical head motion still
     /// tracks naturally on top of it (stand up and you rise).
-    private var _heightOffset: Float = 0
+    private var _heightOffset: Float = 0.4
 
     var rightHanded: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _rightHanded }

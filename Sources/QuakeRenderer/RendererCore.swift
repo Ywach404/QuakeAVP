@@ -315,8 +315,7 @@ final class RendererCore {
                 phase: PhaseParams,
                 amplificationCount: Int,
                 viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
-                drawsViewmodel: Bool = false,
-                handDebug: [Float]? = nil) {
+                drawsViewmodel: Bool = false) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -574,19 +573,6 @@ final class RendererCore {
             }
         }
 
-        // Hand debug wireframe: already in Quake world space (the caller
-        // mapped tracking->Quake), drawn like the guide ring.
-        if let handDebug, handDebug.count >= 14 {
-            setPipeline(pipelines.wheelGuide, depth: pipelines.depthAlways)
-            var guideUniforms = GuideUniforms(viewproj0: uniforms.viewproj0,
-                                              viewproj1: uniforms.viewproj1)
-            encoder.setVertexBytes(handDebug, length: handDebug.count * MemoryLayout<Float>.size, index: 0)
-            withUnsafeBytes(of: &guideUniforms) { raw in
-                encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
-            }
-            encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: handDebug.count / 7)
-        }
-
         // Comfort vignette, last over everything, engine-eased strength.
         if frame.vignette > 0.001 {
             setPipeline(pipelines.vignette, depth: pipelines.depthAlways)
@@ -596,6 +582,24 @@ final class RendererCore {
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
+    }
+
+    /// Draw the finger debug wireframe. `verts` are 7-float line vertices
+    /// (xyz + rgba) in corrected-TRACKING space, and the viewprojs map that
+    /// space straight to clip (projection * originFromEye.inverse) -- NOT
+    /// through the game world, so the wires sit on the real hand and ignore
+    /// the eye-height trim that shifts the game world.
+    func drawHandDebug(_ verts: [Float], viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                       pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard verts.count >= 14 else { return }
+        encoder.setRenderPipelineState(pipelines.wheelGuide)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        var u = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
+        encoder.setVertexBytes(verts, length: verts.count * MemoryLayout<Float>.size, index: 0)
+        withUnsafeBytes(of: &u) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: verts.count / 7)
     }
 
     /// Build the wheel guide as a flat [Float] of 7-component line
