@@ -18,6 +18,7 @@
 
 import Foundation
 import GameController
+import QuartzCore
 import simd
 
 final class WheelState: @unchecked Sendable {
@@ -35,7 +36,6 @@ final class WheelState: @unchecked Sendable {
     private var worldScale: Float = 0.0254
     private var anchor: SIMD3<Float>?
     private var highlight = -1
-    private var committed = false
     private var sensePump: Task<Void, Never>?
 
     /// Wired by the UI to the engine's console queue.
@@ -57,25 +57,48 @@ final class WheelState: @unchecked Sendable {
 
     // MARK: - Hold / commit
 
+    /// Point-dwell selection (VRChat's gauge idea): resting the pointer on a
+    /// slot for `dwellTime` commits it LIVE -- the weapon swaps while the
+    /// wheel is still open, so you see it happen -- and moving on to another
+    /// slot swaps again. Closing (wrist-flip) does not commit; the swap has
+    /// already happened. This is why brushing past weapons no longer fires
+    /// them: only a slot you rest on for a beat is chosen.
+    private static let dwellTime = 0.28
+    private var dwellSlot = -1
+    private var dwellSince = 0.0
+    private var committedSlot = -1
+
     func setHold(_ on: Bool, source: Source) {
         lock.lock()
         let wasOpen = !holds.isEmpty
         if on { holds.insert(source) } else { holds.remove(source) }
         let nowOpen = !holds.isEmpty
-        var impulse: Int?
         if !wasOpen, nowOpen {
-            committed = false
             highlight = -1
-        }
-        if wasOpen, !nowOpen, !committed, highlight >= 0 {
-            impulse = impulseForOwnedIndex(highlight)
+            dwellSlot = -1
+            committedSlot = -1
         }
         lock.unlock()
         push()
 
         if on, source == .sense { startSensePump() }
         if !on, source == .sense { sensePump?.cancel(); sensePump = nil }
-        if let impulse { sendCommand?("impulse \(impulse)\n") }
+    }
+
+    /// Called by the pointer update with the current highlight and time.
+    /// Commits when a slot has been rested on long enough.
+    private func considerDwellLocked(now: Double) {
+        if highlight != dwellSlot {
+            dwellSlot = highlight
+            dwellSince = now
+            return
+        }
+        guard highlight >= 0, highlight != committedSlot,
+              now - dwellSince >= Self.dwellTime,
+              let impulse = impulseForOwnedIndex(highlight)
+        else { return }
+        committedSlot = highlight
+        sendCommand?("impulse \(impulse)\n")
     }
 
     // MARK: - Geometry (tracking space in, body frame out)
@@ -99,7 +122,10 @@ final class WheelState: @unchecked Sendable {
         let dir = SIMD3(-d.z, d.x, d.y)     // unit direction, body axes
 
         var next = -1
-        defer { if next != highlight { highlight = next; pushLocked() } }
+        defer {
+            if next != highlight { highlight = next; pushLocked() }
+            considerDwellLocked(now: CACurrentMediaTime())
+        }
 
         guard dir.x > 0.05 else { return }
         let t = (a.x - origin.x) / dir.x
