@@ -317,9 +317,22 @@ private struct HandState {
         ]
         let correction = TrackingSpace.correction
         var v: [Float] = []
-        func add(_ p: SIMD3<Float>, _ c: SIMD4<Float>) {
+        func corner(_ p: SIMD3<Float>, _ c: SIMD4<Float>) {
             let q = correction * SIMD4(p, 1)
             v += [q.x, q.y, q.z, c.x, c.y, c.z, c.w]
+        }
+        // Each bone is a thin quad, not a line (foveation forbids line
+        // primitives on device). ~4 mm half-thickness, perpendicular chosen
+        // off world-up so it shows from most angles.
+        let t: Float = 0.004
+        let up = SIMD3<Float>(0, 1, 0)
+        func bone(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD4<Float>) {
+            var perp = simd_cross(b - a, up)
+            if simd_length(perp) < 1e-5 { perp = simd_cross(b - a, SIMD3(1, 0, 0)) }
+            perp = simd_length(perp) > 0 ? simd_normalize(perp) * t : SIMD3(t, 0, 0)
+            let a0 = a - perp, a1 = a + perp, b0 = b - perp, b1 = b + perp
+            corner(a0, c); corner(a1, c); corner(b0, c)
+            corner(a1, c); corner(b1, c); corner(b0, c)
         }
         let wristPt = tip(.wrist)
         for (joints, baseColor) in fingers {
@@ -327,7 +340,7 @@ private struct HandState {
             var prev = wristPt
             for j in joints {
                 guard let cur = tip(j) else { prev = nil; continue }
-                if let p = prev { add(p, color); add(cur, color) }
+                if let p = prev { bone(p, cur, color) }
                 prev = cur
             }
         }

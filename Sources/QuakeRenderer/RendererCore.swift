@@ -560,15 +560,20 @@ final class RendererCore {
         // still darken it, harmlessly).
         if frame.wheel_frac > 0.01, frame.wheel_count > 0 {
             let guide = Self.wheelGuideGeometry(frame: frame)
-            if !guide.isEmpty {
+            // A per-frame buffer, not setVertexBytes: the triangle geometry
+            // exceeds the 4 KB setVertexBytes limit.
+            if guide.count >= 21,
+               let buf = device.makeBuffer(bytes: guide,
+                                           length: guide.count * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
                 setPipeline(pipelines.wheelGuide, depth: pipelines.depthAlways)
                 var guideUniforms = GuideUniforms(viewproj0: uniforms.viewproj0,
                                                   viewproj1: uniforms.viewproj1)
-                encoder.setVertexBytes(guide, length: guide.count * MemoryLayout<Float>.size, index: 0)
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
                 withUnsafeBytes(of: &guideUniforms) { raw in
                     encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
                 }
-                encoder.drawPrimitives(type: .line, vertexStart: 0,
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
                                        vertexCount: guide.count / 7)
             }
         }
@@ -584,22 +589,40 @@ final class RendererCore {
         }
     }
 
-    /// Draw the finger debug wireframe. `verts` are 7-float line vertices
-    /// (xyz + rgba) in corrected-TRACKING space, and the viewprojs map that
-    /// space straight to clip (projection * originFromEye.inverse) -- NOT
-    /// through the game world, so the wires sit on the real hand and ignore
-    /// the eye-height trim that shifts the game world.
+    /// Draw the finger debug wireframe. `verts` are 7-float TRIANGLE
+    /// vertices (xyz + rgba) in corrected-TRACKING space -- thin quads, not
+    /// lines, because line primitives are illegal under the device's
+    /// foveation rasterization-rate map. The viewprojs map that space
+    /// straight to clip (projection * originFromEye.inverse), NOT through
+    /// the game world, so the wires sit on the real hand and ignore the
+    /// eye-height trim.
     func drawHandDebug(_ verts: [Float], viewproj0: simd_float4x4, viewproj1: simd_float4x4,
                        pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
-        guard verts.count >= 14 else { return }
+        guard verts.count >= 21,
+              let buf = device.makeBuffer(bytes: verts,
+                                          length: verts.count * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
         encoder.setRenderPipelineState(pipelines.wheelGuide)
         encoder.setDepthStencilState(pipelines.depthAlways)
         var u = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
-        encoder.setVertexBytes(verts, length: verts.count * MemoryLayout<Float>.size, index: 0)
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
         withUnsafeBytes(of: &u) { raw in
             encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
         }
-        encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: verts.count / 7)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / 7)
+    }
+
+    /// Append a thin quad (two triangles) between A and B into a 7-float
+    /// vertex list, so a "line" survives foveation. `perp` is a unit vector
+    /// off the segment; `t` its half-thickness.
+    static func addRibbon(_ a: SIMD3<Float>, _ b: SIMD3<Float>, perp: SIMD3<Float>,
+                          t: Float, color col: SIMD4<Float>, into v: inout [Float]) {
+        let a0 = a - perp * t, a1 = a + perp * t
+        let b0 = b - perp * t, b1 = b + perp * t
+        for p in [a0, a1, b0, a1, b1, b0] {
+            v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w]
+        }
     }
 
     /// Build the wheel guide as a flat [Float] of 7-component line
@@ -618,28 +641,35 @@ final class RendererCore {
             c + rad * cos(angle) * right + rad * sin(angle) * up
         }
         var v: [Float] = []
-        func add(_ p: SIMD3<Float>, _ col: SIMD4<Float>) {
-            v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w]
+        func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ cc: SIMD3<Float>, _ col: SIMD4<Float>) {
+            for p in [a, b, cc] { v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w] }
         }
-        let dim = SIMD4<Float>(0.6, 0.85, 1.0, 0.35)
+        let dim = SIMD4<Float>(0.6, 0.85, 1.0, 0.6)
         let hot = SIMD4<Float>(1.0, 0.85, 0.35, 0.95)
+        // Thin quads in the ring plane, not lines (foveation forbids line
+        // primitives), so the band and spokes read face-on to the player.
+        let ringT = max(r * 0.04, 0.2)
 
-        // ring as a line list of segments
-        let seg = 64
+        // ring as an in-plane annulus (inner..outer radius) of quads
+        let seg = 48
         for i in 0..<seg {
             let a0 = 2 * Float.pi * Float(i) / Float(seg)
             let a1 = 2 * Float.pi * Float(i + 1) / Float(seg)
-            add(pt(a0, r), dim)
-            add(pt(a1, r), dim)
+            let i0 = pt(a0, r - ringT), o0 = pt(a0, r + ringT)
+            let i1 = pt(a1, r - ringT), o1 = pt(a1, r + ringT)
+            tri(i0, o0, i1, dim); tri(o0, o1, i1, dim)
         }
-        // a radial spoke at each slot; the highlighted one longer + hot
+        // a radial spoke at each slot; the highlighted one longer + hot,
+        // thickened tangentially so it shows face-on
         let step = 360 / Float(count)
         for k in 0..<count {
             let theta = (90 - Float(k) * step) * .pi / 180
             let isHi = k == Int(frame.wheel_highlight)
             let col = isHi ? hot : dim
-            add(pt(theta, r * (isHi ? 0.55 : 0.82)), col)
-            add(pt(theta, r * (isHi ? 1.35 : 1.12)), col)
+            let tangent = -sin(theta) * right + cos(theta) * up
+            let inner = pt(theta, r * (isHi ? 0.55 : 0.82))
+            let outer = pt(theta, r * (isHi ? 1.35 : 1.12))
+            addRibbon(inner, outer, perp: tangent, t: ringT * 1.6, color: col, into: &v)
         }
         return v
     }
