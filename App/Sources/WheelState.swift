@@ -2,16 +2,18 @@
 //  WheelState.swift
 //
 //  The weapon wheel's input-side brain. Hold sources (palm-up hands, a
-//  held Sense face button) merge here; the off-hand anchor and the pointer
-//  ray arrive in tracking space and leave for the engine as body-frame
-//  Quake units through QC_InputSetWheel. Committing sends `impulse N`
-//  through the one existing console route -- no second path in.
+//  held Sense face button) merge here; the wrist anchor arrives in tracking
+//  space and leaves for the engine as body-frame Quake units through
+//  QC_InputSetWheel. On open the ring locks at the wrist's opening pose and
+//  the highlight is read from how far the wrist has since travelled in the
+//  ring plane -- reach toward a weapon to pick it. Committing sends
+//  `impulse N` through the one existing console route -- no second path in.
 //
 //  Highlight math mirrors the engine's ring layout exactly: owned weapons
 //  in impulse order, item k at (90 - k*step) degrees in the plane spanned
 //  by body-right and world-up. Both sides derive the owned set from
 //  cl.items (published in the packet), so they cannot disagree about what
-//  the ring contains.
+//  the ring contains. (Sense controllers still ray-point via setPointer.)
 //
 //  Body-frame convention throughout: SIMD3(fwd, right, up), Quake units.
 //
