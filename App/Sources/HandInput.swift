@@ -98,6 +98,15 @@ final class HandInput: @unchecked Sendable {
         var slice = PadAggregator.Slice()
         let now = CACurrentMediaTime()
 
+        // While the wheel is open, ALL other gestures are suppressed --
+        // you are choosing a weapon, not fighting or moving. This is why
+        // the dominant hand stopped "confusing it": open the wheel and the
+        // only live gestures are point (highlight) and release (commit).
+        if WheelState.shared.isOpen {
+            aggregator.update(.hands, slice)   // zeroed
+            return
+        }
+
         // Body-frame axes: rotate room-frame drags by the same correction
         // the renderer composes under the head pose.
         let basis = TrackingSpace.rotation
@@ -163,22 +172,22 @@ final class HandInput: @unchecked Sendable {
     }
 
     private var bothPinchedSince: Double?
-    private var wheelCommitLatch = false
 
-    /// Weapon wheel, hands language: OFF-hand palm up opens and anchors the
-    /// ring at that wrist; the DOMINANT hand's index ray highlights; a
-    /// dominant pinch commits without closing the wheel. The engine has
-    /// already silenced fire and locomotion while it's open.
+    /// Weapon wheel, hold-to-open / point-to-highlight / release-to-commit
+    /// (Battle Talent's wrist-menu pattern): the OFF-hand palm up holds the
+    /// wheel open and anchors the ring at that wrist; the DOMINANT hand's
+    /// index ray highlights a slot; dropping the palm commits the
+    /// highlighted weapon. No confirm gesture, no dominant-hand actions
+    /// that could fire -- one motion, unambiguous. WheelState commits the
+    /// highlight when the hold releases.
     private func wheel(left: HandState, right: HandState) {
         let rightHanded = VRSettings.shared.rightHanded
         let off = rightHanded ? left : right
         let aim = rightHanded ? right : left
 
         WheelState.shared.setHold(off.palmUp, source: .hands)
-        guard off.palmUp else {
-            wheelCommitLatch = false
-            return
-        }
+        guard off.palmUp else { return }
+
         let correction = TrackingSpace.correction
         if let wrist = off.wrist {
             let p = correction * SIMD4(wrist, 1)
@@ -189,12 +198,6 @@ final class HandInput: @unchecked Sendable {
             let d = TrackingSpace.rotation * dir
             WheelState.shared.setPointer(trackingOrigin: SIMD3(o.x, o.y, o.z),
                                          direction: simd_normalize(d))
-        }
-        if aim.indexPinched, !wheelCommitLatch {
-            wheelCommitLatch = true
-            WheelState.shared.commitHighlight()
-        } else if !aim.indexPinched {
-            wheelCommitLatch = false
         }
     }
 

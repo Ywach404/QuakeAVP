@@ -78,19 +78,6 @@ final class WheelState: @unchecked Sendable {
         if let impulse { sendCommand?("impulse \(impulse)\n") }
     }
 
-    /// Hands commit by pinching without closing the palm; the wheel stays
-    /// open so you can watch the view weapon change in slow motion.
-    func commitHighlight() {
-        lock.lock()
-        var impulse: Int?
-        if !holds.isEmpty, !committed, highlight >= 0 {
-            committed = true
-            impulse = impulseForOwnedIndex(highlight)
-        }
-        lock.unlock()
-        if let impulse { sendCommand?("impulse \(impulse)\n") }
-    }
-
     // MARK: - Geometry (tracking space in, body frame out)
 
     /// Off-hand wrist position, tracking space metres, ALREADY corrected
