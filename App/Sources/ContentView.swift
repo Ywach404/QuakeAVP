@@ -17,7 +17,7 @@ struct ContentView: View {
     @State private var autoOpened = false
     @State private var showScope = false
     @State private var showComfort = false
-    @State private var heightOffset: Float = 0
+    @State private var heightOffset: Float = 0.4
     @State private var rightHanded = true
     @State private var lookRelative = true
     @State private var fingerDebug = false
@@ -149,8 +149,12 @@ struct ContentView: View {
                         get: { Double(heightOffset) },
                         set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0) }),
                         in: -0.6...0.9)
-                    Button("Reset to 0") {
-                        heightOffset = 0; VRSettings.shared.heightOffset = 0
+                    HStack {
+                        Button("Reset") {
+                            heightOffset = 0.4; VRSettings.shared.heightOffset = 0.4
+                        }
+                        Spacer()
+                        Button("Recenter") { engine.send("vr_recenter") }
                     }
                 }
                 Divider()

@@ -99,7 +99,6 @@ final class HandInput: @unchecked Sendable {
 
     private func emit(left: inout HandState, right: inout HandState) {
         var slice = PadAggregator.Slice()
-        let now = CACurrentMediaTime()
 
         // While the wheel is open, ALL other gestures are suppressed --
         // you are choosing a weapon, not fighting or moving. This is why
@@ -120,14 +119,12 @@ final class HandInput: @unchecked Sendable {
         let move = rightHanded ? left : right
         let aim = rightHanded ? right : left
 
-        // Movement, VRChat-style: hold a thumb+middle pinch on the move hand
-        // to walk forward where you look (vr_moverelative steers by head).
-        // A hold, not a drag -- a drag kept resetting when the pinch
-        // flickered, which is why it "didn't pick up". Frees the index
-        // finger for the wheel and aiming.
-        if move.middlePinched {
-            slice.ly = 1
-        }
+        // Movement, VRChat-style holds on the move hand (not drags -- a
+        // drag reset whenever the pinch flickered): thumb+middle walks
+        // FORWARD where you look, thumb+index walks BACKWARD. Steer with
+        // your head (vr_moverelative).
+        if move.middlePinched { slice.ly += 1 }   // forward
+        if move.indexPinched { slice.ly -= 1 }    // backward
 
         // Jump: move-hand thumb+ring pinch. Crouch: thumb+pinky (held).
         if move.ringPinched { slice.buttons |= UInt32(QC_PAD_A) }        // +jump
@@ -142,28 +139,9 @@ final class HandInput: @unchecked Sendable {
             if abs(d.x) > 0.06 { slice.rx = d.x > 0 ? 1 : -1 }
         }
 
-        // Both index pinches held still for a second: recenter.
-        var moveW = move
-        if left.indexPinched, right.indexPinched,
-           left.indexDragLength < 0.02, right.indexDragLength < 0.02 {
-            if let since = bothPinchedSince {
-                if now - since > 1.0 {
-                    moveW.stickyUntil[.recenter] = now + Self.pulse
-                    bothPinchedSince = now + 999  // once per hold
-                }
-            } else {
-                bothPinchedSince = now
-            }
-        } else {
-            bothPinchedSince = nil
-        }
-        if moveW.stickyUntil[.recenter, default: 0] > now { slice.buttons |= UInt32(QC_PAD_OPTIONS) }
-        if rightHanded { left = moveW } else { right = moveW }
-
         aggregator.update(.hands, slice)
     }
 
-    private var bothPinchedSince: Double?
 
     /// Weapon wheel, ONE-HANDED. The off-hand palm gesture holds the ring
     /// open around that wrist, and the SAME hand selects: point the index
