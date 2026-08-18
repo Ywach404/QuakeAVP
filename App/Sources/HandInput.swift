@@ -111,40 +111,36 @@ final class HandInput: @unchecked Sendable {
         // the renderer composes under the head pose.
         let basis = TrackingSpace.rotation
 
-        // Handedness: the OFF hand moves and jumps, the DOMINANT hand
-        // aims/fires and cycles weapons.
+        // Handedness: the OFF (non-gun) hand moves, jumps, crouches; the
+        // DOMINANT (gun) hand aims and fires.
         let rightHanded = VRSettings.shared.rightHanded
         let move = rightHanded ? left : right
         let aim = rightHanded ? right : left
 
-        // Off-hand index pinch-drag: the movement stick.
-        if let drag = move.indexDrag {
+        // Movement, VRChat-style: pinch thumb+middle on the move hand to
+        // engage smooth locomotion, and the drag from where you pinched is
+        // the stick. This frees the index finger for the wheel and aiming.
+        if move.middlePinched, let drag = move.middleDrag {
             let d = basis * drag
             slice.lx = Self.stick(d.x)
             slice.ly = Self.stick(-d.z)
         }
 
-        // Dominant index pinch: fire.
-        if aim.indexPinched {
-            slice.rt = 1
-        }
+        // Jump: move-hand thumb+ring pinch. Crouch: thumb+pinky (held).
+        if move.ringPinched { slice.buttons |= UInt32(QC_PAD_A) }        // +jump
+        if move.pinkyPinched { slice.buttons |= UInt32(QC_PAD_LTHUMB) }  // +movedown
 
-        // Dominant middle pinch: sideways drag snaps, a clean tap cycles.
+        // Fire: dominant index pinch.
+        if aim.indexPinched { slice.rt = 1 }
+
+        // Snap turn: dominant thumb+middle pinch dragged sideways.
         if let drag = aim.middleDrag {
             let d = basis * drag
-            if abs(d.x) > 0.06 {
-                slice.rx = d.x > 0 ? 1 : -1
-            }
-        }
-        var aimW = aim, moveW = move
-        if aimW.middleTapFired(now: now) {
-            aimW.stickyUntil[.nextWeapon] = now + Self.pulse
-        }
-        if moveW.middleTapFired(now: now) {
-            moveW.stickyUntil[.jump] = now + Self.pulse
+            if abs(d.x) > 0.06 { slice.rx = d.x > 0 ? 1 : -1 }
         }
 
-        // Both index pinches held still: recenter.
+        // Both index pinches held still for a second: recenter.
+        var moveW = move
         if left.indexPinched, right.indexPinched,
            left.indexDragLength < 0.02, right.indexDragLength < 0.02 {
             if let since = bothPinchedSince {
@@ -158,15 +154,8 @@ final class HandInput: @unchecked Sendable {
         } else {
             bothPinchedSince = nil
         }
-
-        // Sticky pulses outlive a couple of engine frames so the edge diff
-        // can't miss them between drains.
-        if moveW.stickyUntil[.jump, default: 0] > now { slice.buttons |= UInt32(QC_PAD_A) }
-        if aimW.stickyUntil[.nextWeapon, default: 0] > now { slice.buttons |= UInt32(QC_PAD_Y) }
         if moveW.stickyUntil[.recenter, default: 0] > now { slice.buttons |= UInt32(QC_PAD_OPTIONS) }
-
-        // Persist the tap-latch bookkeeping the working copies advanced.
-        if rightHanded { left = moveW; right = aimW } else { left = aimW; right = moveW }
+        if rightHanded { left = moveW } else { right = moveW }
 
         aggregator.update(.hands, slice)
     }
@@ -216,6 +205,8 @@ private struct HandState {
 
     var indexPinched = false
     var middlePinched = false
+    var ringPinched = false
+    var pinkyPinched = false
     var indexDrag: SIMD3<Float>?       // metres from pinch start, room frame
     var middleDrag: SIMD3<Float>?
     var stickyUntil: [Pulse: Double] = [:]
@@ -284,6 +275,10 @@ private struct HandState {
             middleStart = nil
             middleDrag = nil
         }
+
+        // Ring and pinky pinches: discrete holds (jump, crouch).
+        ringPinched = pinch(tip(.ringFingerTip), ringPinched)
+        pinkyPinched = pinch(tip(.littleFingerTip), pinkyPinched)
 
         // Wheel facts: the wrist, the palm's facing, the index ray.
         wrist = tip(.wrist)

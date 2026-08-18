@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var commandText = ""
     @State private var autoOpened = false
     @State private var showScope = false
+    @State private var showComfort = false
     @State private var heightOffset: Float = 0
     @State private var rightHanded = true
     @State private var lookRelative = true
@@ -127,30 +128,44 @@ struct ContentView: View {
         }
     }
 
-    /// Comfort controls — a live eye-height trim (dial it by feel, standing
-    /// or seated), handedness, and look-relative movement.
+    /// Comfort controls in a POPOVER, not a Menu -- a Menu silently drops
+    /// Sliders (only buttons/toggles/pickers render), which is why the
+    /// height slider never appeared. A popover renders a real slider.
     private var comfortMenu: some View {
-        Menu {
-            Section("Eye height \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm") {
-                Slider(value: Binding(
-                    get: { Double(heightOffset) },
-                    set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0) }),
-                    in: -0.6...0.9)
-                Button("Reset height") {
-                    heightOffset = 0; VRSettings.shared.heightOffset = 0
-                }
-            }
-            Picker("Dominant hand", selection: Binding(
-                get: { rightHanded },
-                set: { rightHanded = $0; VRSettings.shared.rightHanded = $0 })) {
-                Text("Right-handed").tag(true)
-                Text("Left-handed").tag(false)
-            }
-            Toggle("Move where I look", isOn: Binding(
-                get: { lookRelative },
-                set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
+        Button {
+            showComfort.toggle()
         } label: {
             Label("Comfort", systemImage: "slider.horizontal.3")
+        }
+        .popover(isPresented: $showComfort, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Eye height  \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm")
+                        .font(.headline)
+                    Text("Raise until the floor sits at your real floor.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Slider(value: Binding(
+                        get: { Double(heightOffset) },
+                        set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0) }),
+                        in: -0.6...0.9)
+                    Button("Reset to 0") {
+                        heightOffset = 0; VRSettings.shared.heightOffset = 0
+                    }
+                }
+                Divider()
+                Picker("Dominant hand", selection: Binding(
+                    get: { rightHanded },
+                    set: { rightHanded = $0; VRSettings.shared.rightHanded = $0 })) {
+                    Text("Right-handed").tag(true)
+                    Text("Left-handed").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Toggle("Move where I look", isOn: Binding(
+                    get: { lookRelative },
+                    set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
+            }
+            .padding(24)
+            .frame(width: 360)
         }
     }
 

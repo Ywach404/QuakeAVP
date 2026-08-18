@@ -527,6 +527,7 @@ void IN_Init (void)
 		"bind RSHOULDER \"impulse 10\"\n"
 		"bind RTRIGGER +attack\n"
 		"bind LTRIGGER +speed\n"
+		"bind LTHUMB +movedown\n"	/* hands crouch (thumb+pinky) */
 		"bind RTHUMB vr_recenter\n");
 }
 
