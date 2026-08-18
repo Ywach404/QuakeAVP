@@ -21,6 +21,8 @@ struct ContentView: View {
     @State private var rightHanded = true
     @State private var lookRelative = true
     @State private var fingerDebug = false
+    @State private var smoothTurn = false
+    @State private var wheelSlowmo = true
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -168,6 +170,21 @@ struct ContentView: View {
                 Toggle("Move where I look", isOn: Binding(
                     get: { lookRelative },
                     set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Turning", selection: Binding(
+                        get: { smoothTurn },
+                        set: { smoothTurn = $0; engine.send("vr_smoothturn \($0 ? 1 : 0)") })) {
+                        Text("Snap 45°").tag(false)
+                        Text("Smooth").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Flick the gun hand sideways (thumb-and-middle pinch) to turn.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
+                    get: { wheelSlowmo },
+                    set: { wheelSlowmo = $0; engine.send("wheel_timescale \($0 ? "0.2" : "1")") }))
                 Toggle("Finger debug wireframe", isOn: Binding(
                     get: { fingerDebug },
                     set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))

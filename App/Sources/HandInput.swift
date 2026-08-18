@@ -144,10 +144,11 @@ final class HandInput: @unchecked Sendable {
 
 
     /// Weapon wheel, ONE-HANDED. The off-hand palm gesture holds the ring
-    /// open around that wrist, and the SAME hand selects: point the index
-    /// finger toward a slot to highlight it and rest there ~0.28s to swap
-    /// to it live; flip the palm back to close. Nothing else -- the other
-    /// hand is free and every other gesture is suppressed while it's open.
+    /// open; the ring then LOCKS in place and the same wrist is the selector
+    /// -- move the whole hand toward a weapon to highlight it and rest there
+    /// ~0.28s to swap to it live; flip the palm back to close. No finger
+    /// pointing (it was too fiddly on a ring anchored to that same wrist);
+    /// every other gesture stays suppressed while it's open.
     private func wheel(left: HandState, right: HandState) {
         let rightHanded = VRSettings.shared.rightHanded
         let hand = rightHanded ? left : right
@@ -159,13 +160,6 @@ final class HandInput: @unchecked Sendable {
         if let wrist = hand.wrist {
             let p = correction * SIMD4(wrist, 1)
             WheelState.shared.setAnchor(trackingPosition: SIMD3(p.x, p.y, p.z))
-        }
-        // The wheel hand's own finger direction is the pointer: its angle in
-        // the ring plane (body-right = x, world-up = y after correction) is
-        // the highlighted slot.
-        if let dir = hand.indexRayDirection {
-            let d = TrackingSpace.rotation * dir
-            WheelState.shared.setPointerAngle(right: d.x, up: d.y)
         }
     }
 
