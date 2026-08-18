@@ -3013,12 +3013,19 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
 	static qmodel_t	*cachekey;
+	/* the ring locks in world space the instant it opens: you reach INTO a
+	   fixed ring, not one that chases your wrist. Cleared when it closes. */
+	static int	locked;
+	static vec3_t	lock_center;
 	float		frac, radius, step, theta, spin;
 	vec3_t		fwdv, rightv, upv, angles, center;
 	int		i, owned, k;
 
 	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
+	{
+		locked = 0;
 		return;
+	}
 
 	/* v_*.mdl are precached by progs on every map; resolve names to
 	   models once per worldmodel */
@@ -3046,9 +3053,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		return;
 
 	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
-	/* Tight around the wrist so every weapon is in view at a glance -- a
-	   small ring you flick a finger around, not a carousel you sweep. */
-	radius = 7.f * frac;
+	/* A wide ring the wrist sits inside, Skyrim-VR style: it stands off the
+	   wrist far enough that moving the whole hand toward a weapon is the
+	   selection gesture, not a cramped finger flick. */
+	radius = 14.f * frac;
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
 	angles[0] = 0;
@@ -3080,6 +3088,16 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		VectorMA (r_refdef.vieworg, 36.f, fwdv, center);
 		center[2] -= 2.f;
 	}
+
+	/* Freeze the ring at the pose it opened with. After this the wrist is
+	   free to move toward a slot without dragging the ring along; the
+	   consumer turns that wrist travel into the highlight. */
+	if (!locked)
+	{
+		VectorCopy (center, lock_center);
+		locked = 1;
+	}
+	VectorCopy (lock_center, center);
 
 	/* publish the guide ring so the consumer can draw the wireframe circle
 	   and highlight marker in the same plane the models sit in */

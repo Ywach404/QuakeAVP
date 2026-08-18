@@ -35,6 +35,10 @@ final class WheelState: @unchecked Sendable {
     private var items: UInt32 = 0
     private var worldScale: Float = 0.0254
     private var anchor: SIMD3<Float>?
+    /// Where the wrist was when the wheel opened. The ring locks here (the
+    /// engine freezes its world pose to match); selection then reads off how
+    /// far the wrist has travelled from this point.
+    private var lockedAnchor: SIMD3<Float>?
     private var highlight = -1
     private var sensePump: Task<Void, Never>?
 
@@ -77,6 +81,10 @@ final class WheelState: @unchecked Sendable {
             highlight = -1
             dwellSlot = -1
             committedSlot = -1
+            lockedAnchor = nil      // re-locks to wherever the wrist is next frame
+        }
+        if wasOpen, !nowOpen {
+            lockedAnchor = nil
         }
         lock.unlock()
         push()
@@ -107,9 +115,31 @@ final class WheelState: @unchecked Sendable {
     /// by TrackingSpace.correction.
     func setAnchor(trackingPosition p: SIMD3<Float>) {
         lock.lock()
-        anchor = SIMD3(-p.z / worldScale, p.x / worldScale, p.y / worldScale)
+        let body = SIMD3(-p.z / worldScale, p.x / worldScale, p.y / worldScale)
+        anchor = body
+        if !holds.isEmpty {
+            // Wheel open: lock the ring at the wrist's opening pose, then read
+            // the highlight from how far the whole hand has since moved in the
+            // ring plane (body-right, world-up). Moving the wrist toward a
+            // weapon selects it; a small deadzone ignores idle drift.
+            if lockedAnchor == nil { lockedAnchor = body }
+            let off = body - lockedAnchor!
+            let r = off.y, u = off.z
+            var next = -1
+            let count = ownedCount()
+            if count > 0, r * r + u * u > 4 {   // ~0.05 m of intent
+                let angle = atan2(u, r) * 180 / .pi
+                let step = 360 / Float(count)
+                var k = Int(((90 - angle) / step).rounded())
+                k %= count
+                if k < 0 { k += count }
+                next = k
+            }
+            if next != highlight { highlight = next }
+            considerDwellLocked(now: CACurrentMediaTime())
+        }
+        pushLocked()
         lock.unlock()
-        push()
     }
 
     /// Pointer ray (corrected tracking space); updates the highlighted
@@ -140,25 +170,6 @@ final class WheelState: @unchecked Sendable {
         k %= count
         if k < 0 { k += count }
         next = k
-    }
-
-    /// One-handed selection: the wheel hand's own finger DIRECTION picks
-    /// the slot. The ring is centred on that wrist, so a ray from the wrist
-    /// is degenerate -- instead the finger's angle in the ring plane
-    /// (body-right, world-up) is the highlight directly. Point up for the
-    /// top weapon, right for the right one, and so on; dwell to commit.
-    func setPointerAngle(right: Float, up: Float) {
-        lock.lock(); defer { lock.unlock() }
-        guard !holds.isEmpty else { return }
-        let count = ownedCount()
-        guard count > 0, right * right + up * up > 0.02 else { return }
-        let angle = atan2(up, right) * 180 / .pi
-        let step = 360 / Float(count)
-        var k = Int(((90 - angle) / step).rounded())
-        k %= count
-        if k < 0 { k += count }
-        if k != highlight { highlight = k; pushLocked() }
-        considerDwellLocked(now: CACurrentMediaTime())
     }
 
     // MARK: - Sense pose pump
@@ -211,7 +222,9 @@ final class WheelState: @unchecked Sendable {
     }
 
     private func pushLocked() {
-        let a = anchor
+        // While open, feed the LOCKED pose so the engine's ring stays put;
+        // the live wrist is used only for selection, above.
+        let a = holds.isEmpty ? anchor : (lockedAnchor ?? anchor)
         QC_InputSetWheel(holds.isEmpty ? 0 : 1, a != nil ? 1 : 0,
                          a?.x ?? 0, a?.y ?? 0, a?.z ?? 0, Int32(highlight))
     }
