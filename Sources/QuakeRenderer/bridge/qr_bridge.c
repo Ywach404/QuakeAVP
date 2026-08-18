@@ -3045,10 +3045,9 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		return;
 
 	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
-	/* Snug to the wrist so it reads as "around the hand", not a distant
-	   carousel; the guide ring the consumer draws makes the radial layout
-	   legible at this size. */
-	radius = 11.f * frac;
+	/* Tight around the wrist so every weapon is in view at a glance -- a
+	   small ring you flick a finger around, not a carousel you sweep. */
+	radius = 7.f * frac;
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
 	angles[0] = 0;
@@ -3114,7 +3113,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		e.angles[2] = 0;
 		e.frame = 0;
 		e.skinnum = 0;
-		e.scale = (unsigned char)(highlighted ? 10 : 7);	/* /16 */
+		e.scale = (unsigned char)(highlighted ? 8 : 5);	/* /16; smaller to fit the tight ring */
 		e.lerpflags = LERP_RESETANIM | LERP_RESETMOVE;
 
 		before = slot->frame.num_entities;
