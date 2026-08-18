@@ -39,6 +39,8 @@ struct RenderPipelines {
     let aliasBlend: MTLRenderPipelineState
     /// Comfort vignette: fullscreen periphery fade, drawn last.
     let vignette: MTLRenderPipelineState
+    /// Weapon-wheel guide: wireframe ring + highlight, line primitives.
+    let wheelGuide: MTLRenderPipelineState
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
     /// For pass B: pass exactly the prepass depth, write nothing.
@@ -283,6 +285,7 @@ final class RendererCore {
             let aliasOpaque = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: false),
             let aliasBlend = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: true),
             let vignette = pipeline(vertex: "vignette_vertex", fragment: "vignette_fragment", blended: true),
+            let wheelGuide = pipeline(vertex: "wheel_guide_vertex", fragment: "wheel_guide_fragment", blended: true),
             let depthWrite = device.makeDepthStencilState(descriptor: writeDescriptor),
             let depthNoWrite = device.makeDepthStencilState(descriptor: noWriteDescriptor),
             let depthEqualNoWrite = device.makeDepthStencilState(descriptor: equalDescriptor),
@@ -294,7 +297,7 @@ final class RendererCore {
             worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
-            vignette: vignette,
+            vignette: vignette, wheelGuide: wheelGuide,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
             depthEqualNoWrite: depthEqualNoWrite,
             depthAlways: depthAlways)
@@ -552,6 +555,24 @@ final class RendererCore {
                 indexBufferOffset: Int(batch.first_index) * MemoryLayout<UInt32>.size)
         }
 
+        // Weapon-wheel guide ring, over the world, before the vignette (so
+        // locomotion vignette — never on while the wheel is open — could
+        // still darken it, harmlessly).
+        if frame.wheel_frac > 0.01, frame.wheel_count > 0 {
+            let guide = Self.wheelGuideGeometry(frame: frame)
+            if !guide.isEmpty {
+                setPipeline(pipelines.wheelGuide, depth: pipelines.depthAlways)
+                var guideUniforms = GuideUniforms(viewproj0: uniforms.viewproj0,
+                                                  viewproj1: uniforms.viewproj1)
+                encoder.setVertexBytes(guide, length: guide.count * MemoryLayout<Float>.size, index: 0)
+                withUnsafeBytes(of: &guideUniforms) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                }
+                encoder.drawPrimitives(type: .line, vertexStart: 0,
+                                       vertexCount: guide.count / 7)
+            }
+        }
+
         // Comfort vignette, last over everything, engine-eased strength.
         if frame.vignette > 0.001 {
             setPipeline(pipelines.vignette, depth: pipelines.depthAlways)
@@ -561,6 +582,48 @@ final class RendererCore {
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
+    }
+
+    /// Build the wheel guide as a flat [Float] of 7-component line
+    /// vertices (xyz + rgba, matching GuideVertex): a dim ring in the
+    /// body-right / world-up plane, a radial spoke at each owned slot, and
+    /// the highlighted slot's spoke long and bright so the selection reads
+    /// at a glance. Layout mirrors QR_EmitWheel's slot angles exactly.
+    private static func wheelGuideGeometry(frame: qc_frame_t) -> [Float] {
+        let c = SIMD3(frame.wheel_center.0, frame.wheel_center.1, frame.wheel_center.2)
+        let r = frame.wheel_radius
+        let count = Int(frame.wheel_count)
+        let yaw = frame.viewangles.1 * .pi / 180
+        let right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
+        let up = SIMD3<Float>(0, 0, 1)
+        func pt(_ angle: Float, _ rad: Float) -> SIMD3<Float> {
+            c + rad * cos(angle) * right + rad * sin(angle) * up
+        }
+        var v: [Float] = []
+        func add(_ p: SIMD3<Float>, _ col: SIMD4<Float>) {
+            v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w]
+        }
+        let dim = SIMD4<Float>(0.6, 0.85, 1.0, 0.35)
+        let hot = SIMD4<Float>(1.0, 0.85, 0.35, 0.95)
+
+        // ring as a line list of segments
+        let seg = 64
+        for i in 0..<seg {
+            let a0 = 2 * Float.pi * Float(i) / Float(seg)
+            let a1 = 2 * Float.pi * Float(i + 1) / Float(seg)
+            add(pt(a0, r), dim)
+            add(pt(a1, r), dim)
+        }
+        // a radial spoke at each slot; the highlighted one longer + hot
+        let step = 360 / Float(count)
+        for k in 0..<count {
+            let theta = (90 - Float(k) * step) * .pi / 180
+            let isHi = k == Int(frame.wheel_highlight)
+            let col = isHi ? hot : dim
+            add(pt(theta, r * (isHi ? 0.55 : 0.82)), col)
+            add(pt(theta, r * (isHi ? 1.35 : 1.12)), col)
+        }
+        return v
     }
 
     /// qc_entity_t.transform (a 16-float C array, column-major) as simd.
@@ -599,6 +662,12 @@ final class RendererCore {
     /// Layout must match VignetteUniforms in Vignette.metal.
     private struct VignetteUniforms {
         var strength: Float
+    }
+
+    /// Layout must match GuideUniforms in WheelGuide.metal: two matrices.
+    private struct GuideUniforms {
+        var viewproj0: simd_float4x4
+        var viewproj1: simd_float4x4
     }
 
     /// Layout must match AliasUniforms in Alias.metal.

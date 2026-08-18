@@ -3044,7 +3044,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		return;
 
 	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
-	radius = 18.f * frac;
+	/* Snug to the wrist so it reads as "around the hand", not a distant
+	   carousel; the guide ring the consumer draws makes the radial layout
+	   legible at this size. */
+	radius = 11.f * frac;
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
 	angles[0] = 0;
@@ -3065,6 +3068,16 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		VectorMA (r_refdef.vieworg, 36.f, fwdv, center);
 		center[2] -= 2.f;
 	}
+
+	/* publish the guide ring so the consumer can draw the wireframe circle
+	   and highlight marker in the same plane the models sit in */
+	slot->frame.wheel_center[0] = center[0];
+	slot->frame.wheel_center[1] = center[1];
+	slot->frame.wheel_center[2] = center[2];
+	slot->frame.wheel_radius = radius;
+	slot->frame.wheel_frac = frac;
+	slot->frame.wheel_count = owned;
+	slot->frame.wheel_highlight = qr_wheel_highlight;
 
 	step = 360.f / owned;
 	k = 0;
@@ -3216,6 +3229,11 @@ void QR_BeginFrame (void)
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
 	slot->frame.items = 0;
+	slot->frame.wheel_frac = 0;
+	slot->frame.wheel_radius = 0;
+	slot->frame.wheel_count = 0;
+	slot->frame.wheel_highlight = -1;
+	memset (slot->frame.wheel_center, 0, sizeof(slot->frame.wheel_center));
 	/* stays live even in empty packets so the consumer's recenter
 	   handshake can't wedge at the console or during demos */
 	slot->frame.recenter_count = qr_recenter_count;
