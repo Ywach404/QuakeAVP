@@ -42,6 +42,7 @@ static int			qc_wheel_anchor_shared;
 static float			qc_wheel_pos_shared[3];
 static int			qc_wheel_highlight_shared;
 static float			qc_head_yaw_shared;
+static float			qc_height_trim_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
@@ -65,6 +66,13 @@ void QC_InputSetHeadYaw (float yaw_deg)
 {
 	pthread_mutex_lock (&qc_input_lock);
 	qc_head_yaw_shared = yaw_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetHeightTrim (float units)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_height_trim_shared = units;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -100,6 +108,7 @@ int		qr_wheel_open;			/* merged intent, this frame */
 int		qr_wheel_has_anchor;
 float		qr_wheel_anchor[3];		/* body frame: fwd, right, up */
 int		qr_wheel_highlight = -1;	/* owned-ring index, -1 none */
+float		qr_height_trim;			/* eye-height trim, Quake units */
 
 static int	qr_wheel_console_open;		/* +wheel / -wheel */
 static cvar_t	wheel_timescale = {"wheel_timescale", "0.2", CVAR_ARCHIVE};
@@ -145,6 +154,7 @@ static void IN_SnapshotInputs (void)
 	qr_wheel_anchor[1] = qc_wheel_pos_shared[1];
 	qr_wheel_anchor[2] = qc_wheel_pos_shared[2];
 	qr_wheel_highlight = qc_wheel_highlight_shared;
+	qr_height_trim = qc_height_trim_shared;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 

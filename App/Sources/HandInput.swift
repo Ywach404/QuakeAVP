@@ -88,6 +88,9 @@ final class HandInput: @unchecked Sendable {
             }
             emit(left: &left, right: &right)
             wheel(left: left, right: right)
+            if HandDebug.shared.enabled {
+                HandDebug.shared.publish(left.debugVerts + right.debugVerts)
+            }
         }
         aggregator.remove(.hands)
     }
@@ -117,13 +120,13 @@ final class HandInput: @unchecked Sendable {
         let move = rightHanded ? left : right
         let aim = rightHanded ? right : left
 
-        // Movement, VRChat-style: pinch thumb+middle on the move hand to
-        // engage smooth locomotion, and the drag from where you pinched is
-        // the stick. This frees the index finger for the wheel and aiming.
-        if move.middlePinched, let drag = move.middleDrag {
-            let d = basis * drag
-            slice.lx = Self.stick(d.x)
-            slice.ly = Self.stick(-d.z)
+        // Movement, VRChat-style: hold a thumb+middle pinch on the move hand
+        // to walk forward where you look (vr_moverelative steers by head).
+        // A hold, not a drag -- a drag kept resetting when the pinch
+        // flickered, which is why it "didn't pick up". Frees the index
+        // finger for the wheel and aiming.
+        if move.middlePinched {
+            slice.ly = 1
         }
 
         // Jump: move-hand thumb+ring pinch. Crouch: thumb+pinky (held).
@@ -217,6 +220,10 @@ private struct HandState {
     var indexRayOrigin: SIMD3<Float>?
     var indexRayDirection: SIMD3<Float>?
 
+    /// Coloured finger bones for the debug overlay, corrected-tracking
+    /// space, 7 floats/vertex (xyz + rgba), line list. Built in ingest.
+    var debugVerts: [Float] = []
+
     /// Flips the palm-normal convention if the skeleton's winding turns
     /// out mirrored on hardware; calibrate on device, not by argument.
     private static let palmSign: Float = 1
@@ -239,12 +246,12 @@ private struct HandState {
         }
         guard let thumb = tip(.thumbTip) else { return }
 
-        // Hysteresis: 1.8 cm closes a pinch, 2.8 cm opens it, so a held
-        // pinch can't flutter at the threshold.
+        // Hysteresis, loosened so pinches catch reliably (the middle-finger
+        // pinch for movement was dropping out): 2.5 cm closes, 4.0 cm opens.
         func pinch(_ tipPos: SIMD3<Float>?, _ pinched: Bool) -> Bool {
             guard let tipPos else { return false }
             let d = simd_distance(thumb, tipPos)
-            return pinched ? d < 0.028 : d < 0.018
+            return pinched ? d < 0.040 : d < 0.025
         }
 
         let index = tip(.indexFingerTip)
@@ -303,6 +310,50 @@ private struct HandState {
             indexRayOrigin = nil
             indexRayDirection = nil
         }
+
+        buildDebug(tip: tip)
+    }
+
+    /// Colour each finger by whether its gesture is firing, so the overlay
+    /// shows detection live. Points are pushed through the recenter
+    /// correction into the same frame the renderer draws in.
+    private mutating func buildDebug(tip: (HandSkeleton.JointName) -> SIMD3<Float>?) {
+        guard HandDebug.shared.enabled else { debugVerts = []; return }
+        let dim = SIMD4<Float>(0.7, 0.7, 0.7, 0.5)
+        let green = SIMD4<Float>(0.1, 1.0, 0.4, 0.95)
+        let blue = SIMD4<Float>(0.3, 0.6, 1.0, 0.95)
+        let red = SIMD4<Float>(1.0, 0.3, 0.3, 0.95)
+        let cyan = SIMD4<Float>(0.3, 0.9, 1.0, 0.9)
+
+        let fingers: [(joints: [HandSkeleton.JointName], color: SIMD4<Float>)] = [
+            ([.thumbKnuckle, .thumbIntermediateBase, .thumbIntermediateTip, .thumbTip],
+             middlePinched || ringPinched ? green : dim),
+            ([.indexFingerKnuckle, .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip],
+             indexPinched ? red : dim),
+            ([.middleFingerKnuckle, .middleFingerIntermediateBase, .middleFingerIntermediateTip, .middleFingerTip],
+             middlePinched ? green : dim),
+            ([.ringFingerKnuckle, .ringFingerIntermediateBase, .ringFingerIntermediateTip, .ringFingerTip],
+             ringPinched ? green : dim),
+            ([.littleFingerKnuckle, .littleFingerIntermediateBase, .littleFingerIntermediateTip, .littleFingerTip],
+             pinkyPinched ? blue : dim),
+        ]
+        let correction = TrackingSpace.correction
+        var v: [Float] = []
+        func add(_ p: SIMD3<Float>, _ c: SIMD4<Float>) {
+            let q = correction * SIMD4(p, 1)
+            v += [q.x, q.y, q.z, c.x, c.y, c.z, c.w]
+        }
+        let wristPt = tip(.wrist)
+        for (joints, baseColor) in fingers {
+            let color = palmUp ? cyan : baseColor
+            var prev = wristPt
+            for j in joints {
+                guard let cur = tip(j) else { prev = nil; continue }
+                if let p = prev { add(p, color); add(cur, color) }
+                prev = cur
+            }
+        }
+        debugVerts = v
     }
 
     /// True exactly once when a short, still middle pinch was released.

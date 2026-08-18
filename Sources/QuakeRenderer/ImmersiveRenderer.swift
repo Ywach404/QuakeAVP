@@ -259,8 +259,10 @@ final class ImmersiveRenderer {
             // Eye-locked baseline: the anchor (Quake point at the tracking
             // origin) is the game eye, trimmed up/down by the live height
             // knob. Vertical head motion moves the eye from here naturally.
-            // + raises the viewpoint (taller), - lowers it.
+            // + raises the viewpoint (taller), - lowers it. Fed to the
+            // engine too, so the wrist-locked wheel rises with the camera.
             let heightTrim = VRSettings.shared.heightOffset / s
+            QC_InputSetHeightTrim(heightTrim)
             let anchor = SIMD3(packet.vieworg.0 - absorbed.x - overLimit.x,
                                packet.vieworg.1 - absorbed.y - overLimit.y,
                                packet.vieworg.2 + heightTrim)
@@ -313,6 +315,23 @@ final class ImmersiveRenderer {
         let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         _ = packet   // clear_color intentionally unused on this path
 
+        // Hand debug wireframe: map the published finger bones from
+        // corrected-tracking space into Quake world for the guide pipeline.
+        var handDebug: [Float]? = nil
+        if HandDebug.shared.enabled, packet != nil {
+            let raw = HandDebug.shared.snapshot()
+            if raw.count >= 14 {
+                var mapped = [Float](); mapped.reserveCapacity(raw.count)
+                var i = 0
+                while i + 6 < raw.count {
+                    let q = quakeFromOrigin * SIMD4(raw[i], raw[i+1], raw[i+2], 1)
+                    mapped += [q.x, q.y, q.z, raw[i+3], raw[i+4], raw[i+5], raw[i+6]]
+                    i += 7
+                }
+                handDebug = mapped
+            }
+        }
+
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
                 for: drawable, textureIndex: 0, slice: nil, clear: clear)
@@ -325,7 +344,7 @@ final class ImmersiveRenderer {
                     eyeorg0: eyeOrigin[0], eyeorg1: eyeOrigin[1])
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
-                            amplificationCount: 2, drawsViewmodel: false)
+                            amplificationCount: 2, drawsViewmodel: false, handDebug: handDebug)
             }
             encoder.endEncoding()
         } else {
@@ -347,7 +366,7 @@ final class ImmersiveRenderer {
                         eyeorg0: eyeOrigin[index], eyeorg1: eyeOrigin[index])
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
-                                amplificationCount: 1, drawsViewmodel: false)
+                                amplificationCount: 1, drawsViewmodel: false, handDebug: handDebug)
                 }
                 encoder.endEncoding()
             }
