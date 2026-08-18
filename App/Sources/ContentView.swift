@@ -16,7 +16,7 @@ struct ContentView: View {
     @State private var commandText = ""
     @State private var autoOpened = false
     @State private var showScope = false
-    @State private var seated = false
+    @State private var heightOffset: Float = 0
     @State private var rightHanded = true
     @State private var lookRelative = true
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
@@ -127,13 +127,19 @@ struct ContentView: View {
         }
     }
 
-    /// Comfort and handedness toggles — seated raises the eye to standing
-    /// height, handedness swaps which hand aims vs moves.
+    /// Comfort controls — a live eye-height trim (dial it by feel, standing
+    /// or seated), handedness, and look-relative movement.
     private var comfortMenu: some View {
         Menu {
-            Toggle("Seated", isOn: Binding(
-                get: { seated },
-                set: { seated = $0; VRSettings.shared.seated = $0 }))
+            Section("Eye height \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm") {
+                Slider(value: Binding(
+                    get: { Double(heightOffset) },
+                    set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0) }),
+                    in: -0.4...0.6)
+                Button("Reset height") {
+                    heightOffset = 0; VRSettings.shared.heightOffset = 0
+                }
+            }
             Picker("Dominant hand", selection: Binding(
                 get: { rightHanded },
                 set: { rightHanded = $0; VRSettings.shared.rightHanded = $0 })) {
@@ -144,7 +150,7 @@ struct ContentView: View {
                 get: { lookRelative },
                 set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
         } label: {
-            Label("Comfort", systemImage: "figure.seated.side")
+            Label("Comfort", systemImage: "slider.horizontal.3")
         }
     }
 
