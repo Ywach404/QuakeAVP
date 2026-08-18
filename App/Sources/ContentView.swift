@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var heightOffset: Float = 0
     @State private var rightHanded = true
     @State private var lookRelative = true
+    @State private var fingerDebug = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -163,6 +164,9 @@ struct ContentView: View {
                 Toggle("Move where I look", isOn: Binding(
                     get: { lookRelative },
                     set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
+                Toggle("Finger debug wireframe", isOn: Binding(
+                    get: { fingerDebug },
+                    set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))
             }
             .padding(24)
             .frame(width: 360)

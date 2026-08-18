@@ -315,7 +315,8 @@ final class RendererCore {
                 phase: PhaseParams,
                 amplificationCount: Int,
                 viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
-                drawsViewmodel: Bool = false) {
+                drawsViewmodel: Bool = false,
+                handDebug: [Float]? = nil) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -571,6 +572,19 @@ final class RendererCore {
                 encoder.drawPrimitives(type: .line, vertexStart: 0,
                                        vertexCount: guide.count / 7)
             }
+        }
+
+        // Hand debug wireframe: already in Quake world space (the caller
+        // mapped tracking->Quake), drawn like the guide ring.
+        if let handDebug, handDebug.count >= 14 {
+            setPipeline(pipelines.wheelGuide, depth: pipelines.depthAlways)
+            var guideUniforms = GuideUniforms(viewproj0: uniforms.viewproj0,
+                                              viewproj1: uniforms.viewproj1)
+            encoder.setVertexBytes(handDebug, length: handDebug.count * MemoryLayout<Float>.size, index: 0)
+            withUnsafeBytes(of: &guideUniforms) { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+            }
+            encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: handDebug.count / 7)
         }
 
         // Comfort vignette, last over everything, engine-eased strength.

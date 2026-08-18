@@ -374,6 +374,12 @@ void QC_InputSetWheel (int open, int has_anchor,
    ignores it. Callable from any thread. */
 void QC_InputSetHeadYaw (float yaw_deg);
 
+/* The eye-height trim (vr comfort slider) in QUAKE UNITS, fed by the render
+   thread which applies the same trim to the camera. Head/wrist-locked
+   overlays -- the weapon wheel -- add it so they rise with the raised
+   camera instead of sinking out of view. Callable from any thread. */
+void QC_InputSetHeightTrim (float units);
+
 /* The head's offset from the tracking origin in BODY frame, Quake units
    (+fwd along body forward, +right along body right, +up), sampled by the
    render thread from the same late-latched pose it draws with. The engine

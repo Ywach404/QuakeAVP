@@ -51,6 +51,7 @@ extern int qr_wheel_has_anchor;
 extern float qr_wheel_anchor[3];
 extern int qr_wheel_highlight;
 extern float qr_head[3];		/* body-frame head offset from recenter */
+extern float qr_height_trim;		/* eye-height trim, Quake units */
 
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
@@ -3069,7 +3070,9 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		float az = qr_wheel_anchor[2] - qr_head[2];
 		VectorMA (r_refdef.vieworg, ax, fwdv, center);
 		VectorMA (center, ay, rightv, center);
-		center[2] += az;
+		/* rise with the height-trimmed camera so the ring does not sink
+		   out of view as the eye-height slider raises the viewpoint */
+		center[2] += az + qr_height_trim;
 	}
 	else
 	{
