@@ -18,25 +18,21 @@ final class VRSettings: @unchecked Sendable {
 
     private let lock = NSLock()
     private var _rightHanded = true
-    private var _seated = false
-    /// Metres added to the eye height in seated mode, so a seated player
-    /// views the world from roughly standing height.
-    private var _seatedLift: Float = 0.45
+    /// Eye-height trim in metres, applied on top of the recenter baseline.
+    /// Calibrated live from the Comfort menu because the right value is a
+    /// matter of feel per player and posture -- floor detection proved
+    /// unreliable, so this is the honest knob. Vertical head motion still
+    /// tracks naturally on top of it (stand up and you rise).
+    private var _heightOffset: Float = 0
 
     var rightHanded: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _rightHanded }
         set { lock.lock(); _rightHanded = newValue; lock.unlock() }
     }
 
-    var seated: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _seated }
-        set { lock.lock(); _seated = newValue; lock.unlock() }
-    }
-
-    /// Vertical lift in metres, 0 when standing.
-    var seatedLift: Float {
-        lock.lock(); defer { lock.unlock() }
-        return _seated ? _seatedLift : 0
+    var heightOffset: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _heightOffset }
+        set { lock.lock(); _heightOffset = newValue; lock.unlock() }
     }
 
     /// True when `chirality` is the hand that aims / fires / points the
