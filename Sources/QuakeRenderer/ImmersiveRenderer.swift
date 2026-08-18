@@ -325,7 +325,7 @@ final class ImmersiveRenderer {
                     eyeorg0: eyeOrigin[0], eyeorg1: eyeOrigin[1])
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
-                            amplificationCount: 2, drawsViewmodel: true)
+                            amplificationCount: 2, drawsViewmodel: false)
             }
             encoder.endEncoding()
         } else {
@@ -347,7 +347,7 @@ final class ImmersiveRenderer {
                         eyeorg0: eyeOrigin[index], eyeorg1: eyeOrigin[index])
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
-                                amplificationCount: 1, drawsViewmodel: true)
+                                amplificationCount: 1, drawsViewmodel: false)
                 }
                 encoder.endEncoding()
             }

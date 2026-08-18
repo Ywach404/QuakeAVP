@@ -135,7 +135,7 @@ struct ContentView: View {
                 Slider(value: Binding(
                     get: { Double(heightOffset) },
                     set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0) }),
-                    in: -0.4...0.6)
+                    in: -0.6...0.9)
                 Button("Reset height") {
                     heightOffset = 0; VRSettings.shared.heightOffset = 0
                 }
