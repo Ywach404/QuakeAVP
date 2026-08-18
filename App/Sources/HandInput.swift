@@ -102,30 +102,37 @@ final class HandInput: @unchecked Sendable {
         // the renderer composes under the head pose.
         let basis = TrackingSpace.rotation
 
-        // Left index pinch-drag: the movement stick.
-        if let drag = left.indexDrag {
+        // Handedness: the OFF hand moves and jumps, the DOMINANT hand
+        // aims/fires and cycles weapons.
+        let rightHanded = VRSettings.shared.rightHanded
+        let move = rightHanded ? left : right
+        let aim = rightHanded ? right : left
+
+        // Off-hand index pinch-drag: the movement stick.
+        if let drag = move.indexDrag {
             let d = basis * drag
             slice.lx = Self.stick(d.x)
             slice.ly = Self.stick(-d.z)
         }
 
-        // Right index pinch: fire.
-        if right.indexPinched {
+        // Dominant index pinch: fire.
+        if aim.indexPinched {
             slice.rt = 1
         }
 
-        // Right middle pinch: sideways drag snaps, a clean tap cycles.
-        if let drag = right.middleDrag {
+        // Dominant middle pinch: sideways drag snaps, a clean tap cycles.
+        if let drag = aim.middleDrag {
             let d = basis * drag
             if abs(d.x) > 0.06 {
                 slice.rx = d.x > 0 ? 1 : -1
             }
         }
-        if right.middleTapFired(now: now) {
-            right.stickyUntil[.nextWeapon] = now + Self.pulse
+        var aimW = aim, moveW = move
+        if aimW.middleTapFired(now: now) {
+            aimW.stickyUntil[.nextWeapon] = now + Self.pulse
         }
-        if left.middleTapFired(now: now) {
-            left.stickyUntil[.jump] = now + Self.pulse
+        if moveW.middleTapFired(now: now) {
+            moveW.stickyUntil[.jump] = now + Self.pulse
         }
 
         // Both index pinches held still: recenter.
@@ -133,7 +140,7 @@ final class HandInput: @unchecked Sendable {
            left.indexDragLength < 0.02, right.indexDragLength < 0.02 {
             if let since = bothPinchedSince {
                 if now - since > 1.0 {
-                    left.stickyUntil[.recenter] = now + Self.pulse
+                    moveW.stickyUntil[.recenter] = now + Self.pulse
                     bothPinchedSince = now + 999  // once per hold
                 }
             } else {
@@ -145,9 +152,12 @@ final class HandInput: @unchecked Sendable {
 
         // Sticky pulses outlive a couple of engine frames so the edge diff
         // can't miss them between drains.
-        if left.stickyUntil[.jump, default: 0] > now { slice.buttons |= UInt32(QC_PAD_A) }
-        if right.stickyUntil[.nextWeapon, default: 0] > now { slice.buttons |= UInt32(QC_PAD_Y) }
-        if left.stickyUntil[.recenter, default: 0] > now { slice.buttons |= UInt32(QC_PAD_OPTIONS) }
+        if moveW.stickyUntil[.jump, default: 0] > now { slice.buttons |= UInt32(QC_PAD_A) }
+        if aimW.stickyUntil[.nextWeapon, default: 0] > now { slice.buttons |= UInt32(QC_PAD_Y) }
+        if moveW.stickyUntil[.recenter, default: 0] > now { slice.buttons |= UInt32(QC_PAD_OPTIONS) }
+
+        // Persist the tap-latch bookkeeping the working copies advanced.
+        if rightHanded { left = moveW; right = aimW } else { left = aimW; right = moveW }
 
         aggregator.update(.hands, slice)
     }
@@ -155,31 +165,35 @@ final class HandInput: @unchecked Sendable {
     private var bothPinchedSince: Double?
     private var wheelCommitLatch = false
 
-    /// Weapon wheel, hands language: off-hand palm up opens and anchors
-    /// the ring at that wrist; the aim hand's index ray highlights; a pinch
-    /// commits without closing the wheel. The engine has already silenced
-    /// fire and locomotion while it's open.
+    /// Weapon wheel, hands language: OFF-hand palm up opens and anchors the
+    /// ring at that wrist; the DOMINANT hand's index ray highlights; a
+    /// dominant pinch commits without closing the wheel. The engine has
+    /// already silenced fire and locomotion while it's open.
     private func wheel(left: HandState, right: HandState) {
-        WheelState.shared.setHold(left.palmUp, source: .hands)
-        guard left.palmUp else {
+        let rightHanded = VRSettings.shared.rightHanded
+        let off = rightHanded ? left : right
+        let aim = rightHanded ? right : left
+
+        WheelState.shared.setHold(off.palmUp, source: .hands)
+        guard off.palmUp else {
             wheelCommitLatch = false
             return
         }
         let correction = TrackingSpace.correction
-        if let wrist = left.wrist {
+        if let wrist = off.wrist {
             let p = correction * SIMD4(wrist, 1)
             WheelState.shared.setAnchor(trackingPosition: SIMD3(p.x, p.y, p.z))
         }
-        if let origin = right.indexRayOrigin, let dir = right.indexRayDirection {
+        if let origin = aim.indexRayOrigin, let dir = aim.indexRayDirection {
             let o = correction * SIMD4(origin, 1)
             let d = TrackingSpace.rotation * dir
             WheelState.shared.setPointer(trackingOrigin: SIMD3(o.x, o.y, o.z),
                                          direction: simd_normalize(d))
         }
-        if right.indexPinched, !wheelCommitLatch {
+        if aim.indexPinched, !wheelCommitLatch {
             wheelCommitLatch = true
             WheelState.shared.commitHighlight()
-        } else if !right.indexPinched {
+        } else if !aim.indexPinched {
             wheelCommitLatch = false
         }
     }

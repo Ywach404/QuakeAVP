@@ -229,12 +229,21 @@ final class ImmersiveRenderer {
             let s = packet.world_scale > 0 ? packet.world_scale : 0.0254
 
             // Body-frame head offset in Quake units: the tracking origin's
-            // axes are the body's (yaw is baked into the basis below).
+            // axes are the body's (yaw is baked into the basis below). Only
+            // the horizontal offset walks the player box; the vertical is
+            // the real head height and drives the camera height directly.
             let d = originFromDevice.columns.3
             let fwd = -d.z / s
             let right = d.x / s
-            let up = d.y / s
+            let up = d.y / s   // metres-scaled head height above the floor
             QC_InputSetHeadOffset(fwd, right, up, packet.recenter_count)
+
+            // Head yaw relative to the body, for look-relative locomotion:
+            // the head forward in the (yaw-only) tracking frame is already
+            // body-relative. Quake yaw is CCW/left-positive.
+            let hf = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
+            let headYaw = atan2(-hf.x, -hf.z) * 180 / .pi
+            QC_InputSetHeadYaw(headYaw)
 
             let yaw = packet.viewangles.1 * .pi / 180
             let fwdW = SIMD2(cos(yaw), sin(yaw))
@@ -247,9 +256,18 @@ final class ImmersiveRenderer {
                 ? excess * ((excessLen - packet.lean_limit) / excessLen)
                 : SIMD2<Float>(0, 0)
 
+            // Floor-locked vertical: the anchor point (Quake -> tracking
+            // origin) sits at the player's FEET, not the eye, so the game
+            // floor maps to the real floor. The eye is a real tracked
+            // position at height `up`, so you view from your true height
+            // above the game floor. EYE_TO_FEET is the standing view_ofs
+            // (22) plus the box's lower extent (24). Seated mode lowers the
+            // feet mapping so a seated player views from ~standing height.
+            let eyeToFeet: Float = 46
+            let seatedLift = VRSettings.shared.seatedLift / s
             let anchor = SIMD3(packet.vieworg.0 - absorbed.x - overLimit.x,
                                packet.vieworg.1 - absorbed.y - overLimit.y,
-                               packet.vieworg.2)
+                               packet.vieworg.2 - eyeToFeet - seatedLift)
             let quakeView = RendererCore.quakeViewMatrix(
                 origin: anchor,
                 angles: SIMD3(0, packet.viewangles.1, 0))
@@ -417,17 +435,22 @@ final class ImmersiveRenderer {
         }
     }
 
-    /// The correction that maps `pose`'s yaw and position to neutral —
-    /// pitch and roll are left alone, they are genuinely the head's. Seated
-    /// recenter is exactly this: the chair's rotation and drift become the
-    /// new zero.
+    /// The correction that maps `pose`'s yaw and HORIZONTAL position to
+    /// neutral — pitch, roll and HEIGHT are left alone. Height is preserved
+    /// on purpose: the visionOS full-space origin is floor-level, so the
+    /// head's Y is its real height above the floor, and the vertical camera
+    /// mapping pins the game floor to the real floor from it (standing vs
+    /// seated then just works). Zeroing Y here, as an earlier version did,
+    /// pinned the game eye to whatever height you opened at, which is why
+    /// you felt like a giant standing and sunken seated.
     private static func correction(zeroing pose: simd_float4x4) -> simd_float4x4 {
         // Device forward is -Z; its XZ heading is the yaw to undo.
         let f = -pose.columns.2
         let yaw = atan2(-f.x, -f.z)
         let rotation = simd_float4x4(simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)))
         var neutral = rotation
-        neutral.columns.3 = pose.columns.3
+        // Cancel horizontal placement, keep height (y).
+        neutral.columns.3 = SIMD4(pose.columns.3.x, 0, pose.columns.3.z, 1)
         return neutral.inverse
     }
 

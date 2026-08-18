@@ -139,12 +139,14 @@ final class WheelState: @unchecked Sendable {
             while !Task.isCancelled {
                 guard let self else { return }
                 let correction = TrackingSpace.correction
-                if let left = SpatialControllerTracker.shared.pose(left: true) {
-                    let p = correction * left.columns.3
+                // Off hand anchors the ring, dominant hand points.
+                let rightHanded = VRSettings.shared.rightHanded
+                if let anchorPose = SpatialControllerTracker.shared.pose(left: rightHanded) {
+                    let p = correction * anchorPose.columns.3
                     self.setAnchor(trackingPosition: SIMD3(p.x, p.y, p.z))
                 }
-                if let right = SpatialControllerTracker.shared.pose(left: false) {
-                    let c = correction * right
+                if let pointPose = SpatialControllerTracker.shared.pose(left: !rightHanded) {
+                    let c = correction * pointPose
                     let o = c.columns.3
                     let f = -c.columns.2    // controller forward = -z
                     self.setPointer(trackingOrigin: SIMD3(o.x, o.y, o.z),
