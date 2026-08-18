@@ -107,7 +107,7 @@ static cvar_t	wheel_timescale = {"wheel_timescale", "0.2", CVAR_ARCHIVE};
 #define QR_WHEEL_RAMP_TIME	0.25
 
 static qc_gamepad_state_t	qr_pad, qr_pad_prev;
-static float			qr_head[3];
+float				qr_head[3];	/* body-frame head offset, read by qr_bridge.c */
 static float			qr_head_yaw;
 static uint32_t			qr_head_ack_seen;
 

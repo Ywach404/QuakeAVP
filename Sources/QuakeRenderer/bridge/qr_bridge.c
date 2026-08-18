@@ -50,6 +50,7 @@ extern float qr_wheel_frac;
 extern int qr_wheel_has_anchor;
 extern float qr_wheel_anchor[3];
 extern int qr_wheel_highlight;
+extern float qr_head[3];		/* body-frame head offset from recenter */
 
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
@@ -3058,9 +3059,18 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	   (rightv, world up), facing the player */
 	if (qr_wheel_has_anchor)
 	{
-		VectorMA (r_refdef.vieworg, qr_wheel_anchor[0], fwdv, center);
-		VectorMA (center, qr_wheel_anchor[1], rightv, center);
-		center[2] += qr_wheel_anchor[2];
+		/* Both the wrist anchor and the head offset are body-frame Quake
+		   units from the same recenter origin, so their difference is the
+		   wrist RELATIVE TO THE HEAD -- add that to the eye and the ring
+		   sits on the wrist no matter where the player has walked. Adding
+		   the raw anchor (as before) pinned it to the recenter origin, so
+		   it drifted off the wrist the moment you moved. */
+		float ax = qr_wheel_anchor[0] - qr_head[0];
+		float ay = qr_wheel_anchor[1] - qr_head[1];
+		float az = qr_wheel_anchor[2] - qr_head[2];
+		VectorMA (r_refdef.vieworg, ax, fwdv, center);
+		VectorMA (center, ay, rightv, center);
+		center[2] += az;
 	}
 	else
 	{
