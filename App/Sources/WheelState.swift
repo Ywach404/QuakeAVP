@@ -142,6 +142,25 @@ final class WheelState: @unchecked Sendable {
         next = k
     }
 
+    /// One-handed selection: the wheel hand's own finger DIRECTION picks
+    /// the slot. The ring is centred on that wrist, so a ray from the wrist
+    /// is degenerate -- instead the finger's angle in the ring plane
+    /// (body-right, world-up) is the highlight directly. Point up for the
+    /// top weapon, right for the right one, and so on; dwell to commit.
+    func setPointerAngle(right: Float, up: Float) {
+        lock.lock(); defer { lock.unlock() }
+        guard !holds.isEmpty else { return }
+        let count = ownedCount()
+        guard count > 0, right * right + up * up > 0.02 else { return }
+        let angle = atan2(up, right) * 180 / .pi
+        let step = 360 / Float(count)
+        var k = Int(((90 - angle) / step).rounded())
+        k %= count
+        if k < 0 { k += count }
+        if k != highlight { highlight = k; pushLocked() }
+        considerDwellLocked(now: CACurrentMediaTime())
+    }
+
     // MARK: - Sense pose pump
 
     /// While a Sense hold is active, poll the accessory tracker: left
