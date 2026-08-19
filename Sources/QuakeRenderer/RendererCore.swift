@@ -298,15 +298,20 @@ final class RendererCore {
             let depthAlways = device.makeDepthStencilState(descriptor: alwaysDescriptor)
         else { return nil }
 
+        // Non-fatal: build the text pipeline separately so its failure leaves
+        // the rest of the renderer intact. Log the outcome so a device run
+        // tells us whether labels are available there.
+        let textPipeline = pipeline(vertex: "text_vertex",
+                                    fragment: "text_fragment", blended: true)
+        print("[renderer] text pipeline: \(textPipeline == nil ? "FAILED (labels off)" : "ok")")
+
         return RenderPipelines(
             world: world, worldDepthOnly: worldDepthOnly, worldEqual: worldEqual,
             worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
             vignette: vignette, wheelGuide: wheelGuide,
-            // Non-fatal: build the text pipeline separately so its failure
-            // leaves the rest of the renderer intact.
-            text: pipeline(vertex: "text_vertex", fragment: "text_fragment", blended: true),
+            text: textPipeline,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
             depthEqualNoWrite: depthEqualNoWrite,
             depthAlways: depthAlways)
