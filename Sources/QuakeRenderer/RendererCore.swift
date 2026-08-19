@@ -41,6 +41,8 @@ struct RenderPipelines {
     let vignette: MTLRenderPipelineState
     /// Weapon-wheel guide: wireframe ring + highlight, line primitives.
     let wheelGuide: MTLRenderPipelineState
+    /// Billboarded 2D text (wheel labels, item selector, HUD) from conchars.
+    let text: MTLRenderPipelineState
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
     /// For pass B: pass exactly the prepass depth, write nothing.
@@ -286,6 +288,7 @@ final class RendererCore {
             let aliasBlend = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: true),
             let vignette = pipeline(vertex: "vignette_vertex", fragment: "vignette_fragment", blended: true),
             let wheelGuide = pipeline(vertex: "wheel_guide_vertex", fragment: "wheel_guide_fragment", blended: true),
+            let text = pipeline(vertex: "text_vertex", fragment: "text_fragment", blended: true),
             let depthWrite = device.makeDepthStencilState(descriptor: writeDescriptor),
             let depthNoWrite = device.makeDepthStencilState(descriptor: noWriteDescriptor),
             let depthEqualNoWrite = device.makeDepthStencilState(descriptor: equalDescriptor),
@@ -297,7 +300,7 @@ final class RendererCore {
             worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
-            vignette: vignette, wheelGuide: wheelGuide,
+            vignette: vignette, wheelGuide: wheelGuide, text: text,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
             depthEqualNoWrite: depthEqualNoWrite,
             depthAlways: depthAlways)
@@ -575,6 +578,29 @@ final class RendererCore {
                 }
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0,
                                        vertexCount: guide.count / 7)
+            }
+        }
+
+        // Billboarded 2D text — wheel labels now, item selector and HUD next
+        // — over the world and under the vignette. One conchars atlas, one
+        // flat vertex run (9 floats/vert: xyz, uv, rgba), per-frame buffer.
+        if frame.num_text_verts >= 3, frame.conchars_texnum != 0,
+           let atlas = textures[frame.conchars_texnum],
+           let src = frame.text_verts {
+            let floatCount = Int(frame.num_text_verts) * 9
+            if let buf = device.makeBuffer(bytes: src,
+                                           length: floatCount * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
+                setPipeline(pipelines.text, depth: pipelines.depthAlways)
+                var textUniforms = GuideUniforms(viewproj0: uniforms.viewproj0,
+                                                 viewproj1: uniforms.viewproj1)
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                withUnsafeBytes(of: &textUniforms) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                }
+                encoder.setFragmentTexture(atlas, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                       vertexCount: Int(frame.num_text_verts))
             }
         }
 
