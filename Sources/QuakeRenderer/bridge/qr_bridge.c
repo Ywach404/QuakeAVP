@@ -153,6 +153,8 @@ typedef struct qr_frame_slot_s {
 	uint32_t	batch_capacity;
 	qc_entity_t	*entities;
 	uint32_t	entity_capacity;
+	float		*text_verts;		/* 9 floats/vert, grown as needed */
+	uint32_t	text_capacity;		/* in floats */
 	int		state;
 	uint64_t	seq;
 } qr_frame_slot_t;
@@ -3008,6 +3010,97 @@ static const char *qr_wheel_modelnames[8] = {
 	"progs/v_nail.mdl", "progs/v_nail2.mdl", "progs/v_rock.mdl",
 	"progs/v_rock2.mdl", "progs/v_light.mdl",
 };
+static const char *qr_wheel_labels[8] = {
+	"AXE", "SHOTGUN", "SUPER SHOTGUN", "NAILGUN",
+	"SUPER NAILGUN", "GRENADES", "ROCKETS", "THUNDERBOLT",
+};
+
+/*
+================
+2D text as billboarded glyph quads from Quake's conchars atlas -- the
+foundation for wheel labels, the item selector and the HUD. conchars is a
+128x128 8bpp lump living in the already-resident gfx.wad; index 0 and 255
+are transparent under TEXPREF_CONCHARS. Uploaded once, lazily, through the
+same queue every other texture uses. Each glyph is an 8x8 cell in a 16x16
+grid; character c sits at column (c & 15), row (c >> 4).
+================
+*/
+uint32_t	qr_conchars_texnum;		/* atlas handle; 0 until loaded */
+
+static void QR_EnsureConchars (void)
+{
+	byte		*data;
+	gltexture_t	*glt;
+
+	if (qr_conchars_texnum)
+		return;
+	data = (byte *) W_GetLumpName ("conchars");
+	if (!data)
+		return;
+	glt = QR_TexMgr_LoadImage (NULL, "conchars", 128, 128, SRC_INDEXED,
+			data, WADFILENAME, (src_offset_t) data,
+			TEXPREF_ALPHA | TEXPREF_NEAREST | TEXPREF_CONCHARS);
+	if (glt)
+		qr_conchars_texnum = glt->texnum;
+}
+
+static void QR_TextVert (qr_frame_slot_t *slot, const vec3_t p,
+			 float u, float v, const float col[4])
+{
+	uint32_t	n = slot->frame.num_text_verts;
+	float		*o;
+
+	if ((n + 1) * 9 > slot->text_capacity)
+	{
+		slot->text_capacity = slot->text_capacity ? slot->text_capacity * 2 : 4096;
+		slot->text_verts = (float *) realloc (slot->text_verts,
+				slot->text_capacity * sizeof(float));
+	}
+	o = slot->text_verts + n * 9;
+	o[0] = p[0]; o[1] = p[1]; o[2] = p[2];
+	o[3] = u;    o[4] = v;
+	o[5] = col[0]; o[6] = col[1]; o[7] = col[2]; o[8] = col[3];
+	slot->frame.num_text_verts = n + 1;
+}
+
+/* Lay a string out centred on `org`, glyphs advancing along `right` and
+   standing `up`, each cell `cw` units square. Billboarding is the caller's
+   job: pass a (right, up) basis that faces the eye. */
+static void QR_EmitText (qr_frame_slot_t *slot, const char *s, const vec3_t org,
+			 const vec3_t right, const vec3_t up, float cw,
+			 const float col[4])
+{
+	int	len = (int) strlen (s);
+	float	half = len * cw * 0.5f;
+	float	top = cw * 0.5f, bot = -cw * 0.5f;
+	int	i, a;
+
+	for (i = 0; i < len; i++)
+	{
+		int	ch = (unsigned char) s[i];
+		int	cxi = ch & 15, cyi = ch >> 4;
+		float	u0 = cxi / 16.f, u1 = u0 + 1.f / 16.f;
+		float	v0 = cyi / 16.f, v1 = v0 + 1.f / 16.f;
+		float	x0 = -half + i * cw, x1 = x0 + cw;
+		vec3_t	tl, tr, bl, br;
+
+		if (ch == ' ')
+			continue;	/* blank cell: skip the six wasted verts */
+		for (a = 0; a < 3; a++)
+		{
+			tl[a] = org[a] + right[a] * x0 + up[a] * top;
+			tr[a] = org[a] + right[a] * x1 + up[a] * top;
+			bl[a] = org[a] + right[a] * x0 + up[a] * bot;
+			br[a] = org[a] + right[a] * x1 + up[a] * bot;
+		}
+		QR_TextVert (slot, tl, u0, v0, col);
+		QR_TextVert (slot, tr, u1, v0, col);
+		QR_TextVert (slot, bl, u0, v1, col);
+		QR_TextVert (slot, tr, u1, v0, col);
+		QR_TextVert (slot, br, u1, v1, col);
+		QR_TextVert (slot, bl, u0, v1, col);
+	}
+}
 
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
@@ -3051,6 +3144,8 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			owned++;
 	if (!owned)
 		return;
+
+	QR_EnsureConchars ();
 
 	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
 	/* A wide ring the wrist sits inside, Skyrim-VR style: it stands off the
@@ -3152,6 +3247,22 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 					rec->light[c] = q_min (rec->light[c] * 1.7f, 2.f);
 			}
 		}
+
+		/* the weapon's name below its model, billboarded in the ring plane
+		   (body-right, world-up) so it faces the player. The highlighted
+		   slot's label glows white; the rest are dimmer. */
+		if (qr_conchars_texnum)
+		{
+			vec3_t	labelorg, worldup = {0.f, 0.f, 1.f};
+			float	lcol[4];
+
+			VectorCopy (e.origin, labelorg);
+			labelorg[2] -= 4.5f;
+			lcol[0] = lcol[1] = lcol[2] = highlighted ? 1.f : 0.7f;
+			lcol[3] = 1.f;
+			QR_EmitText (slot, qr_wheel_labels[i], labelorg, rightv,
+				     worldup, 1.6f, lcol);
+		}
 		k++;
 	}
 }
@@ -3243,6 +3354,7 @@ void QR_BeginFrame (void)
 	slot->frame.num_indices = 0;
 	slot->frame.num_batches = 0;
 	slot->frame.num_entities = 0;
+	slot->frame.num_text_verts = 0;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
@@ -3477,6 +3589,8 @@ void QR_PublishFrame (void)
 	slot->frame.indices = slot->indices;
 	slot->frame.batches = slot->batches;
 	slot->frame.entities = slot->entities;
+	slot->frame.text_verts = slot->text_verts;
+	slot->frame.conchars_texnum = qr_conchars_texnum;
 
 	/* upstream R_Clear clears to r_clearcolor (a palette index) when
 	   gl_clear is set; keep that, else clear to black */

@@ -296,6 +296,16 @@ typedef struct qc_frame_s {
 	const qc_draw_batch_t *batches;
 	uint32_t	num_entities;
 	const qc_entity_t *entities;
+
+	/* 2D text as billboarded glyph quads from the conchars atlas. All text
+	   this frame -- weapon-wheel labels, HUD, the item selector -- shares
+	   one atlas and one flat vertex run, drawn in a single overlay pass.
+	   Nine floats per vertex: xyz position (Quake units), uv into the
+	   atlas, rgba premultiply-ready colour; six vertices per glyph quad.
+	   conchars_texnum is the atlas handle (0 until it uploads). */
+	uint32_t	conchars_texnum;
+	uint32_t	num_text_verts;
+	const float	*text_verts;
 } qc_frame_t;
 
 /* Latest published frame, or NULL only if nothing has been published yet
