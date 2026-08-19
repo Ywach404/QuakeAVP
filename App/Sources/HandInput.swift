@@ -7,14 +7,16 @@
 //  Active only while the immersive space is open AND no physical controller
 //  is attached — hardware always wins.
 //
-//  The gesture language (QuakeQuest's conclusions, adapted to bare hands):
-//    left index pinch + drag   virtual movement stick (2 cm deadzone,
-//                              full speed at 12 cm, body-frame axes)
-//    left middle pinch tap     jump
-//    right index pinch         fire (hold for automatic)
-//    right middle pinch drag   snap turn (±6 cm sideways)
-//    right middle pinch tap    next weapon
-//    both index pinches 1 s    recenter
+//  The gesture language (VRChat/Battle-Talent conclusions, adapted to bare
+//  hands). The OFF hand locomotes, the GUN hand aims and turns:
+//    move thumb+middle hold    walk forward (where you look, vr_moverelative)
+//    move thumb+index hold     walk backward
+//    move thumb+ring pinch     jump
+//    move thumb+pinky hold     crouch
+//    move palm-up              open the weapon wheel (that hand selects)
+//    gun index pinch           fire (hold for automatic)
+//    gun horizontal flick      snap turn -- quick un-pinched sideways whip
+//    gun thumb+middle drag     turn fallback / smooth-turn's held signal
 //
 //  Drag vectors are rotated by the render thread's recenter correction
 //  (TrackingSpace) so "forward" is the body's forward, not the room's
@@ -31,6 +33,16 @@ final class HandInput: @unchecked Sendable {
     private let aggregator: PadAggregator
     private var session: ARKitSession?
     private var task: Task<Void, Never>?
+
+    // Flick snap-turn on the gun hand: a horizontal wrist speed past
+    // `flickSpeed` fires one snap, then the gesture is disarmed until the
+    // hand slows below `flickReset` AND the cooldown lapses -- so the return
+    // stroke and a continued sweep can't spin you.
+    private static let flickSpeed: Float = 1.1     // m/s to trigger
+    private static let flickReset: Float = 0.4     // m/s to re-arm
+    private static let flickCooldown = 0.35        // s to swallow the return
+    private var flickArmed = true
+    private var flickCooldownUntil = 0.0
 
     init(aggregator: PadAggregator) {
         self.aggregator = aggregator
@@ -133,10 +145,27 @@ final class HandInput: @unchecked Sendable {
         // Fire: dominant index pinch.
         if aim.indexPinched { slice.rt = 1 }
 
-        // Snap turn: dominant thumb+middle pinch dragged sideways.
+        // Turn on the gun hand, two ways in. The pinch-drag is checked first
+        // so smooth-turn (which needs a HELD signal) and a deliberate snap
+        // fallback keep working; if it isn't driving, a quick UN-PINCHED
+        // sideways FLICK of the hand fires one snap. The flick is the easy
+        // default -- no finger gesture, just whip the hand left or right.
+        var turnedByPinch = false
         if let drag = aim.middleDrag {
             let d = basis * drag
-            if abs(d.x) > 0.06 { slice.rx = d.x > 0 ? 1 : -1 }
+            if abs(d.x) > 0.06 { slice.rx = d.x > 0 ? 1 : -1; turnedByPinch = true }
+        }
+        if !turnedByPinch, let vel = aim.wristVel {
+            let speed = (basis * vel).x          // body-right component, m/s
+            let now = CACurrentMediaTime()
+            if flickArmed, now >= flickCooldownUntil, abs(speed) > Self.flickSpeed {
+                // One clean pulse; the engine's snap logic turns it into 45°.
+                slice.rx = speed > 0 ? 1 : -1
+                flickArmed = false
+                flickCooldownUntil = now + Self.flickCooldown   // swallow the return stroke
+            } else if abs(speed) < Self.flickReset {
+                flickArmed = true                // hand slowed: ready for the next flick
+            }
         }
 
         aggregator.update(.hands, slice)
@@ -188,6 +217,8 @@ private struct HandState {
 
     // Wheel facts, room frame (uncorrected).
     var wrist: SIMD3<Float>?
+    /// Wrist velocity, room frame, metres/sec -- drives the flick snap turn.
+    var wristVel: SIMD3<Float>?
     var palmUp = false
     var indexRayOrigin: SIMD3<Float>?
     var indexRayDirection: SIMD3<Float>?
@@ -200,6 +231,8 @@ private struct HandState {
     /// out mirrored on hardware; calibrate on device, not by argument.
     private static let palmSign: Float = 1
 
+    private var prevWrist: SIMD3<Float>?
+    private var prevWristTime = 0.0
     private var indexStart: SIMD3<Float>?
     private var middleStart: SIMD3<Float>?
     private var middleStartTime = 0.0
@@ -261,6 +294,18 @@ private struct HandState {
 
         // Wheel facts: the wrist, the palm's facing, the index ray.
         wrist = tip(.wrist)
+        // Wrist velocity for the flick snap-turn. Skip the first sample and
+        // any dt spike (tracking resuming after a dropout would read as a
+        // huge phantom velocity and fire a bogus turn).
+        let velNow = CACurrentMediaTime()
+        if let w = wrist, let pw = prevWrist {
+            let dt = velNow - prevWristTime
+            wristVel = (dt > 0.001 && dt < 0.1) ? (w - pw) / Float(dt) : nil
+        } else {
+            wristVel = nil
+        }
+        prevWrist = wrist
+        prevWristTime = velNow
         if let w = wrist,
            let indexKnuckle = tip(.indexFingerKnuckle),
            let littleKnuckle = tip(.littleFingerKnuckle) {
