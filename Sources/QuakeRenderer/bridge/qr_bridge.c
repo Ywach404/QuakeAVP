@@ -190,6 +190,7 @@ static pthread_mutex_t	qr_drawable_lock = PTHREAD_MUTEX_INITIALIZER;
    the consumer when the immersive layer knows its merged binocular frustum,
    read once per engine frame. */
 static float		qr_cull_fovx, qr_cull_fovy;
+static int		qr_cull_omni;	/* PVS-only, no frustum (immersive) */
 static pthread_mutex_t	qr_cullfov_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void QC_RendererSetDrawableSize (int width, int height)
@@ -1797,6 +1798,12 @@ qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
 {
 	int i;
 	mplane_t *p;
+	/* Omnidirectional pass (immersive): the head looks anywhere the moment
+	   after we cull, so a body-forward frustum would wrongly discard
+	   everything behind the gaze -- the world "falls out" as you turn. Cull
+	   by PVS alone; over-drawing the potentially-visible set is cheap. */
+	if (qr_cull_omni)
+		return false;
 	for (i = 0; i < 4; i++)
 	{
 		p = frustum + i;
@@ -3436,12 +3443,24 @@ void QR_RenderView (void)
 		cully = qr_cull_fovy;
 		pthread_mutex_unlock (&qr_cullfov_lock);
 
-		if (cullx > 0 && cully > 0)
+		/* >= 360 requests omnidirectional (the head can face anywhere):
+		   render the whole PVS, no frustum. Still build a valid frustum for
+		   any consumer of the planes; R_CullBox short-circuits on the flag. */
+		qr_cull_omni = (cullx >= 359.f || cully >= 359.f);
+		if (qr_cull_omni)
 		{
-			cullx = q_min (cullx + QR_CULL_FOV_MARGIN, 170.f);
-			cully = q_min (cully + QR_CULL_FOV_MARGIN, 170.f);
+			/* keep the planes valid (R_CullBox ignores them anyway) */
+			R_SetFrustum (r_fovx, r_fovy);
 		}
-		R_SetFrustum (q_max (r_fovx, cullx), q_max (r_fovy, cully));
+		else
+		{
+			if (cullx > 0 && cully > 0)
+			{
+				cullx = q_min (cullx + QR_CULL_FOV_MARGIN, 170.f);
+				cully = q_min (cully + QR_CULL_FOV_MARGIN, 170.f);
+			}
+			R_SetFrustum (q_max (r_fovx, cullx), q_max (r_fovy, cully));
+		}
 	}
 
 	R_MarkSurfaces ();
