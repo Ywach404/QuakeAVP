@@ -1865,8 +1865,14 @@ void R_MarkSurfaces (void)
 		if ((*mark)->flags & SURF_DRAWTURB)
 			nearwaterportal = true;
 
-	/* choose vis data */
-	if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
+	/* choose vis data. Omnidirectional (immersive) renders the WHOLE level,
+	   not the current leaf's PVS: the head translates freely as it turns and
+	   climbs, so a position-based visibility set pops and rebuilds as the eye
+	   crosses leaves, and drops the floor beneath you when you stand on a box
+	   (its PVS was baked without that vantage). Drawing every leaf is cheap
+	   for Quake maps and the only thing that holds the world together when you
+	   can look anywhere from anywhere. */
+	if (r_novis.value || qr_cull_omni || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
 		vis = Mod_NoVisPVS (cl.worldmodel);
 	else if (nearwaterportal)
 		vis = SV_FatPVS (r_origin, cl.worldmodel);
