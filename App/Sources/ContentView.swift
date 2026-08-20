@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var fingerDebug = false
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
+    @State private var swapSenseHands = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -74,12 +75,13 @@ struct ContentView: View {
         }
         .onChange(of: gamepad.hasPhysicalController) { _, _ in updateHands() }
         .onChange(of: engine.status) { _, status in
-            // Test harness: QAVP_AUTO_IMMERSIVE=1 opens the space as soon as
-            // the engine is up, so simctl/devicectl runs need no UI taps;
-            // =cycle additionally dismisses and reopens it once, which is
-            // the lifecycle test (no leak, no crash, engine keeps ticking).
+            // Open the immersive space as soon as the engine is up -- the flat
+            // window is only a mono debug view, so play should begin in the
+            // headset without a manual tap. QAVP_AUTO_IMMERSIVE=cycle also
+            // dismisses and reopens once (the lifecycle test: no leak, no
+            // crash, engine keeps ticking); =off opts out.
             let mode = ProcessInfo.processInfo.environment["QAVP_AUTO_IMMERSIVE"]
-            guard status == .running, !autoOpened, mode == "1" || mode == "cycle"
+            guard status == .running, !autoOpened, mode != "off"
             else { return }
             autoOpened = true
             Task {
@@ -170,6 +172,9 @@ struct ContentView: View {
                 Toggle("Move where I look", isOn: Binding(
                     get: { lookRelative },
                     set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
+                Toggle("Swap controller hands", isOn: Binding(
+                    get: { swapSenseHands },
+                    set: { swapSenseHands = $0; VRSettings.shared.swapSenseHands = $0 }))
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("Turning", selection: Binding(
