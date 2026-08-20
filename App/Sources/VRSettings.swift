@@ -35,6 +35,16 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _heightOffset = newValue; lock.unlock() }
     }
 
+    /// Swap which physical Sense controller is treated as left vs right.
+    /// Chirality auto-detection is a vendor-name/connection-order guess that
+    /// can land backwards; this is the honest override. Read live at slice
+    /// build so toggling corrects the hands without reconnecting.
+    private var _swapSenseHands = false
+    var swapSenseHands: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _swapSenseHands }
+        set { lock.lock(); _swapSenseHands = newValue; lock.unlock() }
+    }
+
     /// True when `chirality` is the hand that aims / fires / points the
     /// wheel. The off hand moves and anchors the wheel.
     func isDominant(left: Bool) -> Bool {

@@ -225,8 +225,12 @@ private enum SenseMapper {
     }
 
     private static func build(_ profile: GCPhysicalInputProfile,
-                              left: Bool) -> PadAggregator.Slice {
+                              left rawLeft: Bool) -> PadAggregator.Slice {
         var slice = PadAggregator.Slice()
+
+        // Auto-detected chirality can land backwards (undocumented vendor
+        // names fall back to connection order); the user's swap override wins.
+        let left = VRSettings.shared.swapSenseHands ? !rawLeft : rawLeft
 
         if let stick = dpad(profile, containing: "Thumbstick") {
             if left {
