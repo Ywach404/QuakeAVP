@@ -87,6 +87,9 @@ final class ImmersiveRenderer {
     // MARK: - Render thread
 
     private func run() {
+        // Cull by PVS only: the head faces anywhere the compositor renders,
+        // so a body-forward frustum would drop the world behind the gaze.
+        QC_RendererSetCullingFov(360, 360)
         loop: while true {
             switch layerRenderer.state {
             case .invalidated:
