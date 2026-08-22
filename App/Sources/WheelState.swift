@@ -115,9 +115,21 @@ final class WheelState: @unchecked Sendable {
 
     /// Off-hand wrist position, tracking space metres, ALREADY corrected
     /// by TrackingSpace.correction.
+    /// Stand the ring off in front of the hand and lift it toward eye level.
+    /// Pinned right on the wrist (held low, near the body) it lands too close
+    /// and too low to select comfortably. This is a CONSTANT body-frame
+    /// offset (x = forward, z = up), so it moves the whole ring -- the engine
+    /// draws it here and the pointer/ray select against it -- while the
+    /// wrist-travel highlight, which is anchor-RELATIVE, is unchanged (the
+    /// constant cancels in live - locked).
+    private static let placeForward: Float = 16   // ~0.4 m out along the gaze
+    private static let placeUp: Float = 10         // ~0.25 m up toward eye level
+
     func setAnchor(trackingPosition p: SIMD3<Float>) {
         lock.lock()
-        let body = SIMD3(-p.z / worldScale, p.x / worldScale, p.y / worldScale)
+        let body = SIMD3(-p.z / worldScale + Self.placeForward,
+                         p.x / worldScale,
+                         p.y / worldScale + Self.placeUp)
         anchor = body
         if !holds.isEmpty {
             // Wheel open: lock the ring at the wrist's opening pose, then read
