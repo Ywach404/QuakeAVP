@@ -411,6 +411,10 @@ static void IN_Recenter_f (void)
 	IN_AbsorbHeadOffset ();
 	qr_head_absorbed[0] = 0.f;
 	qr_head_absorbed[1] = 0.f;
+	/* Level the aim too: the body pitch is stick-driven (head supplies the
+	   view pitch), so a drifting stick can rack it up to the clamp with no
+	   easy way back. Recenter is the recovery -- it puts the shot level. */
+	cl.viewangles[PITCH] = 0.f;
 	qr_recenter_count++;
 }
 
@@ -456,12 +460,15 @@ void IN_Move (usercmd_t *cmd)
 	rx = IN_DeadZone (qr_pad.rx);
 	ry = IN_DeadZone (qr_pad.ry);
 
-	/* Same speed-key contract as upstream CL_BaseMove: +speed (or
-	   cl_alwaysrun) scales by cl_movespeedkey. */
+	/* Full speed by DEFAULT. Upstream walks at cl_forwardspeed 200 while the
+	   server cap is 320 and strafe is 350, so forward crawls and strafe is
+	   already maxed -- asymmetric and sluggish on a single stick. Invert it:
+	   run by default, and +speed (the left trigger) becomes a WALK modifier
+	   for precision. cl_alwaysrun flips back to upstream walk-by-default. */
 	if ((in_speed.state & 1) ^ (cl_alwaysrun.value != 0.f))
-		speed = cl_movespeedkey.value;
-	else
 		speed = 1.f;
+	else
+		speed = cl_movespeedkey.value;
 
 	/* Look-relative locomotion: rotate the stick by the head's yaw so
 	   "forward" is where you look, not where the body last snapped to.
