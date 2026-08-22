@@ -205,9 +205,10 @@ final class PadAggregator: @unchecked Sendable {
 }
 
 /// Maps one PSVR2 Sense controller's per-hand profile onto its slice of the
-/// virtual pad. Left hand: movement stick, run trigger, weapon-cycle face
-/// buttons, create = recenter. Right hand: aim stick, fire trigger,
-/// jump/use face buttons, options = menu.
+/// virtual pad. Left hand: movement stick, walk trigger, L1 = weapon wheel,
+/// face buttons cycle weapons, L3 = jump, create = menu. Right hand: aim
+/// stick, fire trigger, Cross + R1 = jump, Circle = use, R3 = recenter,
+/// options = menu.
 private enum SenseMapper {
 
     static func slice(forLeft left: Bool) -> PadAggregator.Source {
@@ -256,22 +257,21 @@ private enum SenseMapper {
             }
         }
         if left {
-            // Square is the weapon wheel: hold to open, release to commit
+            // L1 (grip) is the weapon wheel: hold to open, release to commit
             // the highlighted weapon. It never reaches the engine as a key.
-            let square = button(profile, containing: "Button X")
-                ?? button(profile, containing: "Square")
-                ?? button(profile, containing: "Button A")
-            WheelState.shared.setHold(square?.isPressed == true, source: .sense)
-            // Triangle still cycles.
-            set(QC_PAD_Y, ["Button Y", "Triangle", "Button B"])
-            set(QC_PAD_LSHOULDER, ["Grip", "Shoulder"])
-            set(QC_PAD_LTHUMB, ["Thumbstick Button", "Thumbstick , Button"])
+            let grip = button(profile, containing: "Grip")
+                ?? button(profile, containing: "Shoulder")
+            WheelState.shared.setHold(grip?.isPressed == true, source: .sense)
+            // Weapon cycle lives on the face buttons now (grip is the wheel);
+            // L3 (stick click) is a jump.
+            set(QC_PAD_LSHOULDER, ["Button X", "Square"])          // prev weapon
+            set(QC_PAD_Y, ["Button Y", "Triangle", "Button B"])    // next weapon
+            set(QC_PAD_A, ["Thumbstick Button", "Thumbstick , Button"])  // L3 -> jump
             set(QC_PAD_OPTIONS, ["Create", "Share", "Options", "Menu"])
         } else {
-            // Cross jumps, circle uses, via the A/B bindings.
-            set(QC_PAD_A, ["Button A", "Cross"])
+            // Cross AND R1 (grip) jump; circle uses.
+            set(QC_PAD_A, ["Button A", "Cross", "Grip", "Shoulder"])
             set(QC_PAD_B, ["Button B", "Circle"])
-            set(QC_PAD_RSHOULDER, ["Grip", "Shoulder"])
             set(QC_PAD_RTHUMB, ["Thumbstick Button", "Thumbstick , Button"])
             set(QC_PAD_MENU, ["Options", "Menu"])
         }
