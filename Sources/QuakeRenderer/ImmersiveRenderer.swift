@@ -44,7 +44,6 @@ final class ImmersiveRenderer {
     private var loggedSetup = false
 
     /// Culling fov last reported to the engine, to dedupe the C call.
-    private var reportedCullFov = SIMD2<Float>(0, 0)
 
     /// Seated recenter: when the packet's recenter_count bumps, capture a
     /// correction that maps the current head yaw and position to neutral,
@@ -432,26 +431,11 @@ final class ImmersiveRenderer {
         let color = drawable.colorTextures[0]
         QC_RendererSetDrawableSize(Int32(color.width), Int32(color.height))
 
-        // Widest symmetric fov across both eyes, from the projection
-        // matrices themselves (P00 = 2/(tanL+tanR), P20 = (tanR-tanL)/…).
-        var maxTanX: Float = 0
-        var maxTanY: Float = 0
-        for index in drawable.views.indices {
-            let p = drawable.computeProjection(viewIndex: index)
-            let tanRight = abs((1 + p.columns.2.x) / p.columns.0.x)
-            let tanLeft = abs((1 - p.columns.2.x) / p.columns.0.x)
-            let tanTop = abs((1 + p.columns.2.y) / p.columns.1.y)
-            let tanBottom = abs((1 - p.columns.2.y) / p.columns.1.y)
-            maxTanX = max(maxTanX, tanLeft, tanRight)
-            maxTanY = max(maxTanY, tanTop, tanBottom)
-        }
-        let fov = SIMD2<Float>(
-            2 * atan(maxTanX) * 180 / .pi,
-            2 * atan(maxTanY) * 180 / .pi)
-        if abs(fov.x - reportedCullFov.x) > 0.5 || abs(fov.y - reportedCullFov.y) > 0.5 {
-            reportedCullFov = fov
-            QC_RendererSetCullingFov(fov.x, fov.y)
-        }
+        // NB: no per-frame culling-fov report here. Immersive renders the
+        // WHOLE level (omni, set once in run()); reporting the drawable's
+        // ~100 deg binocular fov each frame here used to overwrite that back
+        // to a body-forward cone, which is what made the world drop out on
+        // move/turn/climb. The drawable size is all this needs to publish.
     }
 
     /// The correction that maps `pose`'s yaw and position to neutral —
