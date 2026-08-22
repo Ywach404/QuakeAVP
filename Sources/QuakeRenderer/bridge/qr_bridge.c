@@ -4070,7 +4070,12 @@ void QR_RenderView (void)
 			dt = 0;
 		qr_phase_lasttime = cl.time;
 
-		if (qr_phase_value < target)
+		/* Turning the effect OFF is INSTANT -- no lingering melt sphere to
+		   dissolve the stairs you're standing on for a couple of seconds
+		   after `phase 0`. Melting IN still eases for the cinematic sweep. */
+		if (target <= 0.f)
+			qr_phase_value = 0.f;
+		else if (qr_phase_value < target)
 			qr_phase_value = q_min (qr_phase_value + (float)dt / ptime, target);
 		else if (qr_phase_value > target)
 			qr_phase_value = q_max (qr_phase_value - (float)dt / ptime, target);

@@ -39,15 +39,13 @@ final class VRSettings: @unchecked Sendable {
     /// Chirality auto-detection is a vendor-name/connection-order guess that
     /// can land backwards; this is the honest override. Read live at slice
     /// build so toggling corrects the hands without reconnecting.
-    /// Persisted: set it once and it survives relaunches, so a corrected hand
-    /// assignment doesn't reset every session.
-    private var _swapSenseHands = UserDefaults.standard.bool(forKey: "qavp.swapSenseHands")
+    /// NOT persisted: name detection ("(L)"/"(R)") is correct now, so this
+    /// defaults OFF every launch. Persisting it inverted the correct detection
+    /// from a stale ON set during the old coin-flip era.
+    private var _swapSenseHands = false
     var swapSenseHands: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _swapSenseHands }
-        set {
-            lock.lock(); _swapSenseHands = newValue; lock.unlock()
-            UserDefaults.standard.set(newValue, forKey: "qavp.swapSenseHands")
-        }
+        set { lock.lock(); _swapSenseHands = newValue; lock.unlock() }
     }
 
     /// Weapon menu as a fixed gaze-selected panel (controllers) instead of the

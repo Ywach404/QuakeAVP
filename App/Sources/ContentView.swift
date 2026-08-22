@@ -23,7 +23,7 @@ struct ContentView: View {
     @State private var fingerDebug = false
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
-    @State private var swapSenseHands = VRSettings.shared.swapSenseHands
+    @State private var swapSenseHands = false
     @State private var fullMenu = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
