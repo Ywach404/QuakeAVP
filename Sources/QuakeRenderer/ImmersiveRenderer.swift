@@ -106,6 +106,7 @@ final class ImmersiveRenderer {
         // The engine outlives any number of immersive sessions; hand the
         // packet stream back to the window and drop the layer.
         QC_RendererSetCullingFov(0, 0)
+        QC_InputSetHeadPitch(0)   // level the aim for a later flat-window session
         print("[immersive] layer invalidated, render thread exiting")
         onStop()
     }
@@ -247,6 +248,12 @@ final class ImmersiveRenderer {
             let hf = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
             let headYaw = atan2(-hf.x, -hf.z) * 180 / .pi
             QC_InputSetHeadYaw(headYaw)
+
+            // Head pitch drives the shot (vr_headaim): elevation of the head
+            // forward, negated into Quake's sense where +pitch looks DOWN.
+            let horiz = (hf.x * hf.x + hf.z * hf.z).squareRoot()
+            let headPitch = -atan2(hf.y, horiz) * 180 / .pi
+            QC_InputSetHeadPitch(headPitch)
 
             let yaw = packet.viewangles.1 * .pi / 180
             let fwdW = SIMD2(cos(yaw), sin(yaw))
