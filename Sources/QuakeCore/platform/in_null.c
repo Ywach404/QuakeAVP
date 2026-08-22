@@ -42,6 +42,7 @@ static int			qc_wheel_anchor_shared;
 static float			qc_wheel_pos_shared[3];
 static int			qc_wheel_highlight_shared;
 static float			qc_head_yaw_shared;
+static float			qc_head_pitch_shared;
 static float			qc_height_trim_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
@@ -66,6 +67,13 @@ void QC_InputSetHeadYaw (float yaw_deg)
 {
 	pthread_mutex_lock (&qc_input_lock);
 	qc_head_yaw_shared = yaw_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetHeadPitch (float pitch_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_head_pitch_shared = pitch_deg;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -118,11 +126,13 @@ static cvar_t	wheel_timescale = {"wheel_timescale", "0.2", CVAR_ARCHIVE};
 static qc_gamepad_state_t	qr_pad, qr_pad_prev;
 float				qr_head[3];	/* body-frame head offset, read by qr_bridge.c */
 static float			qr_head_yaw;
+static float			qr_head_pitch;
 static uint32_t			qr_head_ack_seen;
 
 static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
 static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
+static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
 
 /* Stick response: radial deadzone, then rescale so the curve still reaches
@@ -147,6 +157,7 @@ static void IN_SnapshotInputs (void)
 	qr_head[1] = qc_head_shared[1];
 	qr_head[2] = qc_head_shared[2];
 	qr_head_yaw = qc_head_yaw_shared;
+	qr_head_pitch = qc_head_pitch_shared;
 	qr_head_ack_seen = qc_head_ack;
 	qr_wheel_open = qc_wheel_open_shared || qr_wheel_console_open;
 	qr_wheel_has_anchor = qc_wheel_anchor_shared;
@@ -486,10 +497,18 @@ void IN_Move (usercmd_t *cmd)
 		cmd->sidemove += cl_sidespeed.value * speed * (-ryv);
 	}
 
-	/* Right stick Y: aim pitch. The immersive camera ignores body pitch
-	   (the head supplies its own), so this moves the gun and the shot,
-	   not the horizon. */
-	if (ry != 0.f)
+	/* Vertical aim. Default (vr_headaim): the SHOT pitches to where you LOOK
+	   -- the head pose the renderer draws with, fed as qr_head_pitch, becomes
+	   the body pitch, so looking down shoots down with no stick and nothing
+	   to drift. vr_headaim 0 falls back to the old right-stick rate control
+	   (and the flat debug window, which has no head, uses it too). */
+	if (vr_headaim.value)
+	{
+		V_StopPitchDrift ();
+		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_head_pitch,
+					      cl_maxpitch.value);
+	}
+	else if (ry != 0.f)
 	{
 		V_StopPitchDrift ();
 		cl.viewangles[PITCH] -= ry * cl_pitchspeed.value * host_frametime;
@@ -527,6 +546,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_snapturn);
 	Cvar_RegisterVariable (&vr_smoothturn);
 	Cvar_RegisterVariable (&vr_moverelative);
+	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_lean_limit);
 	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);

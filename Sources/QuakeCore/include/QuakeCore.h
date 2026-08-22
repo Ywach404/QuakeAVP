@@ -384,6 +384,14 @@ void QC_InputSetWheel (int open, int has_anchor,
    ignores it. Callable from any thread. */
 void QC_InputSetHeadYaw (float yaw_deg);
 
+/* The head's pitch, degrees, Quake sense (positive looks DOWN), fed by the
+   render thread from the pose it draws with. With vr_headaim on (default) the
+   shot pitches to where you look -- head aim replaces the old right-stick
+   pitch, which had no head coupling and drifted. Feed 0 when head tracking
+   stops so a later flat-window session starts level. Callable from any
+   thread. */
+void QC_InputSetHeadPitch (float pitch_deg);
+
 /* The eye-height trim (vr comfort slider) in QUAKE UNITS, fed by the render
    thread which applies the same trim to the camera. Head/wrist-locked
    overlays -- the weapon wheel -- add it so they rise with the raised
