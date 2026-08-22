@@ -133,8 +133,8 @@ static cvar_t	wheel_timescale = {"wheel_timescale", "0.2", CVAR_ARCHIVE};
 
 static qc_gamepad_state_t	qr_pad, qr_pad_prev;
 float				qr_head[3];	/* body-frame head offset, read by qr_bridge.c */
-static float			qr_head_yaw;
-static float			qr_head_pitch;
+float				qr_head_yaw;	/* read by qr_bridge (full menu) */
+float				qr_head_pitch;
 static int			qr_slowmo_raw;		/* drained L3 button */
 static int			qr_slowmo_active;	/* toggled bullet-time */
 static uint32_t			qr_head_ack_seen;
@@ -144,6 +144,7 @@ static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
+cvar_t		vr_fullmenu = {"vr_fullmenu", "0", CVAR_ARCHIVE};	/* fixed panel vs wrist ring */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
 
 /* Stick response: radial deadzone, then rescale so the curve still reaches
@@ -578,6 +579,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_slowmo);
+	Cvar_RegisterVariable (&vr_fullmenu);
 	Cvar_RegisterVariable (&vr_lean_limit);
 	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);

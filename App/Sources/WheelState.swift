@@ -98,6 +98,9 @@ final class WheelState: @unchecked Sendable {
     /// Called by the pointer update with the current highlight and time.
     /// Commits when a slot has been rested on long enough.
     private func considerDwellLocked(now: Double) {
+        // Full menu selects and commits engine-side (gaze + dwell); don't let
+        // the wrist/pointer path also fire an impulse.
+        if VRSettings.shared.fullMenu { return }
         if highlight != dwellSlot {
             dwellSlot = highlight
             dwellSince = now
