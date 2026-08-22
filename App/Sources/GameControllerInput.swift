@@ -206,9 +206,9 @@ final class PadAggregator: @unchecked Sendable {
 
 /// Maps one PSVR2 Sense controller's per-hand profile onto its slice of the
 /// virtual pad. Left hand: movement stick, walk trigger, L1 = weapon wheel,
-/// face buttons cycle weapons, L3 = jump, create = menu. Right hand: aim
-/// stick, fire trigger, Cross + R1 = jump, Circle = use, R3 = recenter,
-/// options = menu.
+/// face buttons cycle weapons, L3 = slow-mo toggle, create = menu. Right
+/// hand: aim stick, fire trigger, Cross + R1 = jump, Circle = use,
+/// R3 = recenter, options = menu.
 private enum SenseMapper {
 
     static func slice(forLeft left: Bool) -> PadAggregator.Source {
@@ -262,11 +262,14 @@ private enum SenseMapper {
             let grip = button(profile, containing: "Grip")
                 ?? button(profile, containing: "Shoulder")
             WheelState.shared.setHold(grip?.isPressed == true, source: .sense)
-            // Weapon cycle lives on the face buttons now (grip is the wheel);
-            // L3 (stick click) is a jump.
+            // L3 (stick click) toggles slow-motion -- separate from the wheel,
+            // routed straight to the engine so it never reaches a key.
+            let l3 = button(profile, containing: "Thumbstick Button")
+                ?? button(profile, containing: "Thumbstick , Button")
+            QC_InputSetSlowmo(l3?.isPressed == true ? 1 : 0)
+            // Weapon cycle lives on the face buttons now (grip is the wheel).
             set(QC_PAD_LSHOULDER, ["Button X", "Square"])          // prev weapon
             set(QC_PAD_Y, ["Button Y", "Triangle", "Button B"])    // next weapon
-            set(QC_PAD_A, ["Thumbstick Button", "Thumbstick , Button"])  // L3 -> jump
             set(QC_PAD_OPTIONS, ["Create", "Share", "Options", "Menu"])
         } else {
             // Cross AND R1 (grip) jump; circle uses.

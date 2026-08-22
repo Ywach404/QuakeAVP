@@ -43,6 +43,7 @@ static float			qc_wheel_pos_shared[3];
 static int			qc_wheel_highlight_shared;
 static float			qc_head_yaw_shared;
 static float			qc_head_pitch_shared;
+static int			qc_slowmo_shared;	/* raw L3 button */
 static float			qc_height_trim_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
@@ -74,6 +75,13 @@ void QC_InputSetHeadPitch (float pitch_deg)
 {
 	pthread_mutex_lock (&qc_input_lock);
 	qc_head_pitch_shared = pitch_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetSlowmo (int pressed)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_slowmo_shared = pressed ? 1 : 0;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -127,12 +135,15 @@ static qc_gamepad_state_t	qr_pad, qr_pad_prev;
 float				qr_head[3];	/* body-frame head offset, read by qr_bridge.c */
 static float			qr_head_yaw;
 static float			qr_head_pitch;
+static int			qr_slowmo_raw;		/* drained L3 button */
+static int			qr_slowmo_active;	/* toggled bullet-time */
 static uint32_t			qr_head_ack_seen;
 
 static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
 static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
+static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
 
 /* Stick response: radial deadzone, then rescale so the curve still reaches
@@ -158,6 +169,7 @@ static void IN_SnapshotInputs (void)
 	qr_head[2] = qc_head_shared[2];
 	qr_head_yaw = qc_head_yaw_shared;
 	qr_head_pitch = qc_head_pitch_shared;
+	qr_slowmo_raw = qc_slowmo_shared;
 	qr_head_ack_seen = qc_head_ack;
 	qr_wheel_open = qc_wheel_open_shared || qr_wheel_console_open;
 	qr_wheel_has_anchor = qc_wheel_anchor_shared;
@@ -187,30 +199,48 @@ starve the pacer and drop the packet rate with it.
 static void IN_WheelRamp (void)
 {
 	static double	lasttime;
+	static float	qr_slowmo_frac;		/* eased 0..1 */
+	static int	slowmo_prev_raw;
 	double		dt = realtime - lasttime;
-	float		target = qr_wheel_open ? 1.f : 0.f;
-	float		eased, ts;
+	float		wtarget = qr_wheel_open ? 1.f : 0.f;
+	float		starget, we, se, ts_wheel, ts_slow, ts;
 
 	if (dt < 0 || dt > 1)
 		dt = 0;
 	lasttime = realtime;
 
-	if (qr_wheel_frac < target)
-		qr_wheel_frac = q_min (qr_wheel_frac + (float)(dt / QR_WHEEL_RAMP_TIME), target);
-	else if (qr_wheel_frac > target)
-		qr_wheel_frac = q_max (qr_wheel_frac - (float)(dt / QR_WHEEL_RAMP_TIME), target);
+	/* L3 is a TOGGLE: flip bullet-time on the button's rising edge. */
+	if (qr_slowmo_raw && !slowmo_prev_raw)
+		qr_slowmo_active = !qr_slowmo_active;
+	slowmo_prev_raw = qr_slowmo_raw;
+	starget = qr_slowmo_active ? 1.f : 0.f;
 
-	if (qr_wheel_frac <= 0.f)
+	if (qr_wheel_frac < wtarget)
+		qr_wheel_frac = q_min (qr_wheel_frac + (float)(dt / QR_WHEEL_RAMP_TIME), wtarget);
+	else if (qr_wheel_frac > wtarget)
+		qr_wheel_frac = q_max (qr_wheel_frac - (float)(dt / QR_WHEEL_RAMP_TIME), wtarget);
+
+	if (qr_slowmo_frac < starget)
+		qr_slowmo_frac = q_min (qr_slowmo_frac + (float)(dt / QR_WHEEL_RAMP_TIME), starget);
+	else if (qr_slowmo_frac > starget)
+		qr_slowmo_frac = q_max (qr_slowmo_frac - (float)(dt / QR_WHEEL_RAMP_TIME), starget);
+
+	if (qr_wheel_frac <= 0.f && qr_slowmo_frac <= 0.f)
 	{
-		/* fully closed: hand the cvar back to its upstream meaning
+		/* nothing slowing time: hand the cvar back to its upstream meaning
 		   (0 = disabled) so console slow-mo experiments still work */
 		if (host_timescale.value != 0.f)
 			Cvar_SetValueQuick (&host_timescale, 0.f);
 		return;
 	}
 
-	eased = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
-	ts = 1.f + eased * (CLAMP (0.05f, wheel_timescale.value, 1.f) - 1.f);
+	/* The deeper slowdown wins, so opening the wheel mid-slowmo (or vice
+	   versa) never speeds the world back up. */
+	we = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
+	se = qr_slowmo_frac * qr_slowmo_frac * (3.f - 2.f * qr_slowmo_frac);
+	ts_wheel = 1.f + we * (CLAMP (0.05f, wheel_timescale.value, 1.f) - 1.f);
+	ts_slow  = 1.f + se * (CLAMP (0.05f, vr_slowmo.value, 1.f) - 1.f);
+	ts = q_min (ts_wheel, ts_slow);
 	Cvar_SetValueQuick (&host_timescale, ts);
 }
 
@@ -547,6 +577,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_smoothturn);
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
+	Cvar_RegisterVariable (&vr_slowmo);
 	Cvar_RegisterVariable (&vr_lean_limit);
 	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);
