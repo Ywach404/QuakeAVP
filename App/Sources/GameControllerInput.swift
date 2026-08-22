@@ -73,8 +73,12 @@ final class GameControllerInput {
             print("[input] spatial controller names: \(names)")
             var nameLeft: Bool?
             for s in names {
-                if s.localizedCaseInsensitiveContains("left") { nameLeft = true; break }
-                if s.localizedCaseInsensitiveContains("right") { nameLeft = false; break }
+                // PSVR2 Sense names the pair "... Sense Controller (L)" / "(R)"
+                // -- match the parenthesised side, and the words as a bonus.
+                if s.localizedCaseInsensitiveContains("(l)")
+                    || s.localizedCaseInsensitiveContains("left") { nameLeft = true; break }
+                if s.localizedCaseInsensitiveContains("(r)")
+                    || s.localizedCaseInsensitiveContains("right") { nameLeft = false; break }
             }
             // Fallback only if the name is sideless: connection order.
             let guessLeft = nameLeft ?? spatialControllers.isEmpty
