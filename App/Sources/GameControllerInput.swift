@@ -219,17 +219,21 @@ private enum SenseMapper {
         let profile = controller.physicalInputProfile
         let source = slice(forLeft: left)
         profile.valueDidChangeHandler = { profile, _ in
-            aggregator.update(source, build(profile, left: left))
+            aggregator.update(source, build(profile, controller: controller, guessLeft: left))
         }
-        aggregator.update(source, build(profile, left: left))
+        aggregator.update(source, build(profile, controller: controller, guessLeft: left))
     }
 
     private static func build(_ profile: GCPhysicalInputProfile,
-                              left rawLeft: Bool) -> PadAggregator.Slice {
+                              controller: GCController,
+                              guessLeft: Bool) -> PadAggregator.Slice {
         var slice = PadAggregator.Slice()
 
-        // Auto-detected chirality can land backwards (undocumented vendor
-        // names fall back to connection order); the user's swap override wins.
+        // Handedness, most-authoritative first: ARKit's inherentChirality
+        // (resolved once accessory tracking starts), else the GameController
+        // guess (vendor name / connection order, which can land backwards).
+        // The user's swap override always wins on top.
+        let rawLeft = SpatialControllerTracker.shared.isLeft(controller) ?? guessLeft
         let left = VRSettings.shared.swapSenseHands ? !rawLeft : rawLeft
 
         if let stick = dpad(profile, containing: "Thumbstick") {

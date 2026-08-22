@@ -25,6 +25,10 @@ final class SpatialControllerTracker: @unchecked Sendable {
     private var _leftPose: simd_float4x4?
     private var _rightPose: simd_float4x4?
     private var _tracking = false
+    /// Authoritative handedness per controller, from ARKit's Accessory.
+    /// The GameController-side guess (vendor name / connection order) is
+    /// unreliable; input routing prefers this when it's known.
+    private var _chirality: [ObjectIdentifier: Bool] = [:]
 
     private var session: ARKitSession?
     private var task: Task<Void, Never>?
@@ -38,6 +42,13 @@ final class SpatialControllerTracker: @unchecked Sendable {
     func pose(left: Bool) -> simd_float4x4? {
         lock.lock(); defer { lock.unlock() }
         return left ? _leftPose : _rightPose
+    }
+
+    /// ARKit's authoritative handedness for this controller, or nil if not
+    /// yet resolved (fall back to the GameController guess until then).
+    func isLeft(_ controller: GCController) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        return _chirality[ObjectIdentifier(controller)]
     }
 
     /// Restart tracking for the current accessory set. Main-actor callers
@@ -56,7 +67,16 @@ final class SpatialControllerTracker: @unchecked Sendable {
             do {
                 var accessories: [Accessory] = []
                 for controller in controllers {
-                    accessories.append(try await Accessory(device: controller))
+                    let accessory = try await Accessory(device: controller)
+                    accessories.append(accessory)
+                    // Record the authoritative handedness for input routing.
+                    let chir = accessory.inherentChirality
+                    print("[input] accessory \(controller.vendorName ?? "?") chirality=\(chir)")
+                    if chir == .left || chir == .right {
+                        let isLeft = chir == .left
+                        let key = ObjectIdentifier(controller)
+                        self.lock.lock(); self._chirality[key] = isLeft; self.lock.unlock()
+                    }
                 }
                 let provider = AccessoryTrackingProvider(accessories: accessories)
                 let session = ARKitSession()
@@ -91,6 +111,7 @@ final class SpatialControllerTracker: @unchecked Sendable {
         if !value {
             _leftPose = nil
             _rightPose = nil
+            _chirality.removeAll()
         }
         lock.unlock()
     }
