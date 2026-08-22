@@ -53,6 +53,7 @@ extern int qr_wheel_highlight;
 extern float qr_head[3];		/* body-frame head offset from recenter */
 extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
+extern int qr_wheel_open;		/* held-open intent (release commits) */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
 
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
@@ -3488,7 +3489,7 @@ static const char *qr_wheel_pickupnames[8] = {
 };
 static const char *qr_wheel_labels[8] = {
 	"AXE", "SHOTGUN", "SUPER SHOTGUN", "NAILGUN",
-	"SUPER NAILGUN", "GRENADES", "ROCKETS", "THUNDERBOLT",
+	"SUPER NAILGUN", "GRENADE LAUNCHER", "ROCKET LAUNCHER", "THUNDERBOLT",
 };
 
 /*
@@ -3586,9 +3587,9 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	   fixed ring, not one that chases your wrist. Cleared when it closes. */
 	static int	locked;
 	static vec3_t	lock_center;
-	/* full-menu gaze dwell state, function scope so a close can reset it */
-	static int	menu_dwell = -1, menu_committed = -1, menu_open;
-	static double	menu_dwell_since;
+	/* full-menu gaze state, function scope so a close can reset it. The menu
+	   commits on RELEASE: you hold to open, look at a weapon, let go to pick. */
+	static int	menu_held = -1, menu_open_prev;
 	float		frac, radius, step, theta, spin;
 	vec3_t		fwdv, rightv, upv, angles, center;
 	int		i, owned, k;
@@ -3596,8 +3597,8 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
 	{
 		locked = 0;
-		menu_open = 0;
-		menu_committed = -1;
+		menu_open_prev = 0;
+		menu_held = -1;
 		return;
 	}
 
@@ -3737,38 +3738,33 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			}
 		}
 
-		/* The frame the menu opens, treat whatever you happen to be looking
-		   at as already chosen, so it doesn't auto-swap the centre weapon
-		   out from under you -- only a row you deliberately look TO commits. */
-		if (!menu_open)
+		/* Commit on RELEASE. While the grip is held, track and show the
+		   gazed row; when it lets go, fire the impulse for whatever was
+		   highlighted. Freeze the highlight during the close ramp so a
+		   glance away as you release can't change the pick. */
+		if (qr_wheel_open)
 		{
-			menu_open = 1;
-			menu_committed = gsel;
-			menu_dwell = gsel;
+			menu_held = gsel;
+			qr_wheel_highlight = gsel;
 		}
+		else
+			qr_wheel_highlight = menu_held;
 
-		if (gsel != menu_dwell)
-		{
-			menu_dwell = gsel;
-			menu_dwell_since = realtime;
-		}
-		else if (gsel >= 0 && gsel != menu_committed
-			 && realtime - menu_dwell_since >= 0.35)
+		if (menu_open_prev && !qr_wheel_open && menu_held >= 0)
 		{
 			int b, seen = 0;
 			for (b = 0; b < 8; b++)
 				if (cl.items & qr_wheel_bits[b])
 				{
-					if (seen == gsel)
+					if (seen == menu_held)
 					{
 						Cbuf_AddText (va ("impulse %d\n", b + 1));
-						menu_committed = gsel;
 						break;
 					}
 					seen++;
 				}
 		}
-		qr_wheel_highlight = gsel;
+		menu_open_prev = qr_wheel_open;
 	}
 
 	/* publish the guide ring so the consumer can draw the wireframe circle

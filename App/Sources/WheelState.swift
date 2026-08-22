@@ -85,34 +85,27 @@ final class WheelState: @unchecked Sendable {
             committedSlot = -1
             lockedAnchor = nil      // re-locks to wherever the wrist is next frame
         }
+        // Commit on RELEASE: hold to open, aim at a weapon, let go to pick.
+        // (Dwell-while-held kept resetting on the slightest jitter and never
+        // fired.) The full menu commits engine-side, so skip it there.
+        var releaseImpulse: Int?
         if wasOpen, !nowOpen {
             lockedAnchor = nil
+            if !VRSettings.shared.fullMenu, highlight >= 0 {
+                releaseImpulse = impulseForOwnedIndex(highlight)
+            }
         }
         lock.unlock()
+        if let impulse = releaseImpulse { sendCommand?("impulse \(impulse)\n") }
         push()
 
         if on, source == .sense { startSensePump() }
         if !on, source == .sense { sensePump?.cancel(); sensePump = nil }
     }
 
-    /// Called by the pointer update with the current highlight and time.
-    /// Commits when a slot has been rested on long enough.
-    private func considerDwellLocked(now: Double) {
-        // Full menu selects and commits engine-side (gaze + dwell); don't let
-        // the wrist/pointer path also fire an impulse.
-        if VRSettings.shared.fullMenu { return }
-        if highlight != dwellSlot {
-            dwellSlot = highlight
-            dwellSince = now
-            return
-        }
-        guard highlight >= 0, highlight != committedSlot,
-              now - dwellSince >= Self.dwellTime,
-              let impulse = impulseForOwnedIndex(highlight)
-        else { return }
-        committedSlot = highlight
-        sendCommand?("impulse \(impulse)\n")
-    }
+    /// No-op: the commit is on release (setHold) now, not dwell. Kept as a
+    /// hook the selection paths still call so their call sites stay unchanged.
+    private func considerDwellLocked(now: Double) { }
 
     // MARK: - Geometry (tracking space in, body frame out)
 
