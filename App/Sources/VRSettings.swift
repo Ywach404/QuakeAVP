@@ -45,6 +45,15 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _swapSenseHands = newValue; lock.unlock() }
     }
 
+    /// Weapon menu as a fixed gaze-selected panel (controllers) instead of the
+    /// wrist ring. The engine owns the full-menu selection/commit; this flag
+    /// just tells WheelState to stand down so it doesn't also fire.
+    private var _fullMenu = false
+    var fullMenu: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _fullMenu }
+        set { lock.lock(); _fullMenu = newValue; lock.unlock() }
+    }
+
     /// True when `chirality` is the hand that aims / fires / points the
     /// wheel. The off hand moves and anchors the wheel.
     func isDominant(left: Bool) -> Bool {

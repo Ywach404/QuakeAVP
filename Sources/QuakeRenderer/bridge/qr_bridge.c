@@ -51,6 +51,8 @@ extern int qr_wheel_has_anchor;
 extern float qr_wheel_anchor[3];
 extern int qr_wheel_highlight;
 extern float qr_head[3];		/* body-frame head offset from recenter */
+extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
+extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
 
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
@@ -3474,6 +3476,14 @@ static const char *qr_wheel_modelnames[8] = {
 	"progs/v_nail.mdl", "progs/v_nail2.mdl", "progs/v_rock.mdl",
 	"progs/v_rock2.mdl", "progs/v_light.mdl",
 };
+/* Clean pickup models, preferred over the viewmodels above. Axe and single
+   shotgun are start weapons with no pickup model -- their viewmodels carry no
+   projectile anyway, so NULL falls straight through. */
+static const char *qr_wheel_pickupnames[8] = {
+	NULL, NULL, "progs/g_shot.mdl",
+	"progs/g_nail.mdl", "progs/g_nail2.mdl", "progs/g_rock.mdl",
+	"progs/g_rock2.mdl", "progs/g_light.mdl",
+};
 static const char *qr_wheel_labels[8] = {
 	"AXE", "SHOTGUN", "SUPER SHOTGUN", "NAILGUN",
 	"SUPER NAILGUN", "GRENADES", "ROCKETS", "THUNDERBOLT",
@@ -3584,8 +3594,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		return;
 	}
 
-	/* v_*.mdl are precached by progs on every map; resolve names to
-	   models once per worldmodel */
+	/* Resolve each slot's model once per worldmodel. Prefer the clean PICKUP
+	   model (g_*.mdl) -- the weapon as it sits on the ground, no held nail or
+	   rocket poking out -- and fall back to the first-person viewmodel
+	   (v_*.mdl, always precached) when the map didn't precache the pickup. */
 	if (cachekey != cl.worldmodel)
 	{
 		cachekey = cl.worldmodel;
@@ -3593,12 +3605,20 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		{
 			int m;
 			models[i] = NULL;
-			for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
-				if (!strcmp (cl.model_precache[m]->name, qr_wheel_modelnames[i]))
-				{
-					models[i] = cl.model_precache[m];
-					break;
-				}
+			if (qr_wheel_pickupnames[i])
+				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
+					if (!strcmp (cl.model_precache[m]->name, qr_wheel_pickupnames[i]))
+					{
+						models[i] = cl.model_precache[m];
+						break;
+					}
+			if (!models[i])
+				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
+					if (!strcmp (cl.model_precache[m]->name, qr_wheel_modelnames[i]))
+					{
+						models[i] = cl.model_precache[m];
+						break;
+					}
 		}
 	}
 
@@ -3624,7 +3644,15 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	AngleVectors (angles, fwdv, rightv, upv);
 	/* AngleVectors' right points right; keep the ring plane spanned by
 	   (rightv, world up), facing the player */
-	if (qr_wheel_has_anchor)
+	if (vr_fullmenu.value)
+	{
+		/* Full menu: a fixed panel a comfortable stride ahead of the view,
+		   selected by looking at a weapon (below) -- no wrist, no pointer,
+		   so it works no matter where in the level you've walked. */
+		VectorMA (r_refdef.vieworg, 40.f, fwdv, center);
+		center[2] += qr_height_trim - 2.f;
+	}
+	else if (qr_wheel_has_anchor)
 	{
 		/* Both the wrist anchor and the head offset are body-frame Quake
 		   units from the same recenter origin, so their difference is the
@@ -3658,6 +3686,74 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	}
 	VectorCopy (lock_center, center);
 
+	step = 360.f / owned;
+
+	/* Full menu selects by GAZE, engine-side: cast the head-forward ray
+	   (body yaw + head yaw, head pitch) onto the ring plane and pick the
+	   nearest slot; resting on one for a beat commits it. This has to live
+	   here -- only the engine knows the eye position and the panel's world
+	   pose, so the consumer's wrist-frame pointer can't do it once you move.
+	   It overrides the fed highlight and drives the impulse itself. */
+	if (vr_fullmenu.value)
+	{
+		static int	dwell_slot = -1, committed_slot = -1;
+		static double	dwell_since;
+		vec3_t		gaze_ang, gf, gr, gu, toplane, hit, rel;
+		int		gsel = -1;
+		float		denom;
+
+		gaze_ang[0] = qr_head_pitch;
+		gaze_ang[1] = cl.viewangles[YAW] + qr_head_yaw;
+		gaze_ang[2] = 0;
+		AngleVectors (gaze_ang, gf, gr, gu);
+		denom = DotProduct (gf, fwdv);
+		if (fabsf (denom) > 0.001f)
+		{
+			float t;
+			VectorSubtract (center, r_refdef.vieworg, toplane);
+			t = DotProduct (toplane, fwdv) / denom;
+			if (t > 0.f)
+			{
+				float hr, hu;
+				VectorMA (r_refdef.vieworg, t, gf, hit);
+				VectorSubtract (hit, center, rel);
+				hr = DotProduct (rel, rightv);
+				hu = rel[2];
+				if (hr * hr + hu * hu > 4.f)	/* dead spot at the hub */
+				{
+					float ang = atan2f (hu, hr) * 180.f / M_PI;
+					gsel = (int) floorf ((90.f - ang) / step + 0.5f);
+					gsel %= owned;
+					if (gsel < 0)
+						gsel += owned;
+				}
+			}
+		}
+
+		if (gsel != dwell_slot)
+		{
+			dwell_slot = gsel;
+			dwell_since = realtime;
+		}
+		else if (gsel >= 0 && gsel != committed_slot
+			 && realtime - dwell_since >= 0.35)
+		{
+			int b, seen = 0;
+			for (b = 0; b < 8; b++)
+				if (cl.items & qr_wheel_bits[b])
+				{
+					if (seen == gsel)
+					{
+						Cbuf_AddText (va ("impulse %d\n", b + 1));
+						committed_slot = gsel;
+						break;
+					}
+					seen++;
+				}
+		}
+		qr_wheel_highlight = gsel;
+	}
+
 	/* publish the guide ring so the consumer can draw the wireframe circle
 	   and highlight marker in the same plane the models sit in */
 	slot->frame.wheel_center[0] = center[0];
@@ -3667,8 +3763,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	slot->frame.wheel_frac = frac;
 	slot->frame.wheel_count = owned;
 	slot->frame.wheel_highlight = qr_wheel_highlight;
-
-	step = 360.f / owned;
 	k = 0;
 	for (i = 0; i < 8; i++)
 	{

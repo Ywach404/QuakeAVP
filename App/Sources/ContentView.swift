@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
     @State private var swapSenseHands = false
+    @State private var fullMenu = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -175,6 +176,11 @@ struct ContentView: View {
                 Toggle("Swap controller hands", isOn: Binding(
                     get: { swapSenseHands },
                     set: { swapSenseHands = $0; VRSettings.shared.swapSenseHands = $0 }))
+                Toggle("Full weapon menu (look to pick)", isOn: Binding(
+                    get: { fullMenu },
+                    set: { fullMenu = $0
+                           VRSettings.shared.fullMenu = $0
+                           engine.send("vr_fullmenu \($0 ? 1 : 0)") }))
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("Turning", selection: Binding(
