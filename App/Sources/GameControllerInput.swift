@@ -64,17 +64,24 @@ final class GameControllerInput {
 
     private func attach(_ controller: GCController) {
         if isSpatial(controller) {
-            // Chirality: GameController doesn't expose it directly; the
-            // vendor name does ("...Left"/"...Right"). ARKit's Accessory
-            // is the authority, but slice routing only needs the guess.
-            let name = controller.vendorName ?? ""
-            let left = name.localizedCaseInsensitiveContains("left")
-                || (!name.localizedCaseInsensitiveContains("right")
-                    && !spatialControllers.contains(where: { c in
-                        (c.vendorName ?? "").localizedCaseInsensitiveContains("left")
-                    }) && spatialControllers.isEmpty)
+            // Handedness from the controller's NAME first -- the AVP labels
+            // the pair Left/Right, but which string carries the label is
+            // undocumented, so check them all and LOG them so we can see it.
+            let names = [controller.vendorName ?? "",
+                         controller.productCategory,
+                         String(describing: controller)]
+            print("[input] spatial controller names: \(names)")
+            var nameLeft: Bool?
+            for s in names {
+                if s.localizedCaseInsensitiveContains("left") { nameLeft = true; break }
+                if s.localizedCaseInsensitiveContains("right") { nameLeft = false; break }
+            }
+            // Fallback only if the name is sideless: connection order.
+            let guessLeft = nameLeft ?? spatialControllers.isEmpty
+            print("[input] -> \(guessLeft ? "LEFT" : "RIGHT") hand (fromName=\(nameLeft != nil))")
             spatialControllers.append(controller)
-            SenseMapper.install(on: controller, left: left, into: aggregator)
+            SenseMapper.install(on: controller, nameLeft: nameLeft,
+                                guessLeft: guessLeft, into: aggregator)
             SenseMapper.logElements(of: controller)
         } else if let pad = controller.extendedGamepad {
             pad.valueChangedHandler = { [aggregator] pad, _ in
@@ -215,26 +222,28 @@ private enum SenseMapper {
         left ? .senseLeft : .senseRight
     }
 
-    static func install(on controller: GCController, left: Bool,
-                        into aggregator: PadAggregator) {
+    static func install(on controller: GCController, nameLeft: Bool?,
+                        guessLeft: Bool, into aggregator: PadAggregator) {
         let profile = controller.physicalInputProfile
-        let source = slice(forLeft: left)
+        let source = slice(forLeft: nameLeft ?? guessLeft)
         profile.valueDidChangeHandler = { profile, _ in
-            aggregator.update(source, build(profile, controller: controller, guessLeft: left))
+            aggregator.update(source, build(profile, controller: controller,
+                                            nameLeft: nameLeft, guessLeft: guessLeft))
         }
-        aggregator.update(source, build(profile, controller: controller, guessLeft: left))
+        aggregator.update(source, build(profile, controller: controller,
+                                        nameLeft: nameLeft, guessLeft: guessLeft))
     }
 
     private static func build(_ profile: GCPhysicalInputProfile,
                               controller: GCController,
+                              nameLeft: Bool?,
                               guessLeft: Bool) -> PadAggregator.Slice {
         var slice = PadAggregator.Slice()
 
-        // Handedness, most-authoritative first: ARKit's inherentChirality
-        // (resolved once accessory tracking starts), else the GameController
-        // guess (vendor name / connection order, which can land backwards).
-        // The user's swap override always wins on top.
-        let rawLeft = SpatialControllerTracker.shared.isLeft(controller) ?? guessLeft
+        // Handedness, most-authoritative first: the NAME the AVP gave it, then
+        // live position (left-most = left), then connection order. The user's
+        // swap override always wins on top.
+        let rawLeft = nameLeft ?? SpatialControllerTracker.shared.isLeft(controller) ?? guessLeft
         let left = VRSettings.shared.swapSenseHands ? !rawLeft : rawLeft
 
         if let stick = dpad(profile, containing: "Thumbstick") {
