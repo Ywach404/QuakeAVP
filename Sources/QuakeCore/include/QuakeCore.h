@@ -377,6 +377,13 @@ void QC_InputSetGamepad (const qc_gamepad_state_t *state);
 void QC_InputSetWheel (int open, int has_anchor,
 		       float fwd, float right, float up, int highlight);
 
+/* Slow-motion TOGGLE from a controller button (L3), independent of the
+   weapon wheel. Pass the raw button state; the engine flips bullet-time on
+   the rising edge. host_timescale takes the DEEPER of this and the wheel's
+   slowdown, so opening the wheel during a slow-mo hold never speeds up.
+   Callable from any thread. */
+void QC_InputSetSlowmo (int pressed);
+
 /* The head's yaw relative to the body, degrees, Quake sense (CCW/left
    positive), fed by the render thread from the same pose it draws with.
    Look-relative locomotion (vr_moverelative) rotates the movement stick by
