@@ -23,7 +23,7 @@ struct ContentView: View {
     @State private var fingerDebug = false
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
-    @State private var swapSenseHands = false
+    @State private var swapSenseHands = VRSettings.shared.swapSenseHands
     @State private var fullMenu = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
@@ -76,6 +76,15 @@ struct ContentView: View {
         }
         .onChange(of: gamepad.hasPhysicalController) { _, _ in updateHands() }
         .onChange(of: engine.status) { _, status in
+            // Force the phase melt OFF when the engine comes up. It's a
+            // head-centred sphere that dissolves nearby surfaces to
+            // passthrough; a stale/nonzero `phase` (from a prior config or a
+            // stray slider) leaves it melting the stairs you stand on. The UI
+            // starts at 0%, so match it.
+            if status == .running {
+                engine.send("phase 0")
+                phaseLevel = 0
+            }
             // Open the immersive space as soon as the engine is up -- the flat
             // window is only a mono debug view, so play should begin in the
             // headset without a manual tap. QAVP_AUTO_IMMERSIVE=cycle also
