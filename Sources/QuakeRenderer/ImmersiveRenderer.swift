@@ -330,12 +330,13 @@ final class ImmersiveRenderer {
         // stairs. Clear to OPAQUE black so those gaps read black instead, and
         // fade the clear to transparent as phase runs so the melt still
         // reveals passthrough.
-        // DIAGNOSTIC: bright magenta so a world crack is unmistakable vs
-        // passthrough (a black crack is indistinguishable from a dark room).
-        // Revert to black once we know which it is.
-        let phase = packet?.phase ?? 0
-        let clear = MTLClearColor(red: 1, green: 0, blue: 1,
-                                  alpha: Double(max(0, 1 - phase)))
+        // Always FULLY OPAQUE. A Quake level is a sealed box; brush-seam
+        // cracks must read black, never leak passthrough. The phase melt
+        // reveals passthrough by making the melting SURFACES transparent
+        // (world_phase_fragment), not by thinning this clear -- tying the
+        // clear alpha to phase leaked everywhere the moment phase went
+        // nonzero (crown/effect-driven), which is the stair bug.
+        let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         // Hand debug wireframe: the published bones are already in
         // corrected-tracking space; drawn with handViewproj they sit on the
