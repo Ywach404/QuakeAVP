@@ -306,6 +306,13 @@ typedef struct qc_frame_s {
 	uint32_t	conchars_texnum;
 	uint32_t	num_text_verts;
 	const float	*text_verts;
+
+	/* Particles as billboarded colour quads (explosions, gunshots, rocket
+	   trails). Seven floats per vertex: xyz position (Quake units) and rgba,
+	   six vertices per quad -- the same layout the wheel-guide pipeline
+	   draws, so no new shader. Depth-tested against the world, no write. */
+	uint32_t	num_particle_verts;
+	const float	*particle_verts;
 } qc_frame_t;
 
 /* Latest published frame, or NULL only if nothing has been published yet

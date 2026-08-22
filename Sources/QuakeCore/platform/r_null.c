@@ -633,32 +633,23 @@ void Fog_ParseServerMessage (void)
  * r_part.c -- particles
  * ===================================================================== */
 
-void CL_RunParticles (void)			{ }
+/* The particle system (spawns, CL_RunParticles, R_ClearParticles) now lives
+   in the renderer bridge (qr_bridge.c) -- it needs the packet and palette.
+   R_ParseParticleEffect stays here: it consumes the svc_particle bytes and
+   forwards them to the real R_RunParticleEffect. */
 void R_ParseParticleEffect (void)
 {
-	/* Same hazard as Fog_ParseServerMessage: svc_particle is 3 coords,
-	   3 signed chars of direction, a count and a color. Read them all. */
-	int i;
-	for (i = 0; i < 3; i++) MSG_ReadCoord (cl.protocolflags);
-	for (i = 0; i < 3; i++) MSG_ReadChar ();
-	MSG_ReadByte ();	/* count */
-	MSG_ReadByte ();	/* color */
-}
+	vec3_t	org, dir;
+	int	i, count, color;
 
-void R_RunParticleEffect (vec3_t org, vec3_t dir, int color, int count)
-{
-	(void)org; (void)dir; (void)color; (void)count;
+	for (i = 0; i < 3; i++) org[i] = MSG_ReadCoord (cl.protocolflags);
+	for (i = 0; i < 3; i++) dir[i] = MSG_ReadChar () * (1.0 / 16);
+	count = MSG_ReadByte ();
+	color = MSG_ReadByte ();
+	if (count == 255)
+		count = 1024;
+	R_RunParticleEffect (org, dir, color, count);
 }
-void R_RocketTrail (vec3_t start, vec3_t end, int type)	{ (void)start; (void)end; (void)type; }
-void R_EntityParticles (entity_t *ent)		{ (void)ent; }
-void R_BlobExplosion (vec3_t org)		{ (void)org; }
-void R_ParticleExplosion (vec3_t org)		{ (void)org; }
-void R_ParticleExplosion2 (vec3_t org, int colorStart, int colorLength)
-{
-	(void)org; (void)colorStart; (void)colorLength;
-}
-void R_LavaSplash (vec3_t org)			{ (void)org; }
-void R_TeleportSplash (vec3_t org)		{ (void)org; }
 
 /* ========================================================================
  * software-renderer surface cache (WinQuake leftovers host.c still calls)

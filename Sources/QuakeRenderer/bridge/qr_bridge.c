@@ -155,6 +155,8 @@ typedef struct qr_frame_slot_s {
 	uint32_t	entity_capacity;
 	float		*text_verts;		/* 9 floats/vert, grown as needed */
 	uint32_t	text_capacity;		/* in floats */
+	float		*particle_verts;	/* 7 floats/vert (xyz rgba) */
+	uint32_t	particle_capacity;	/* in floats */
 	int		state;
 	uint64_t	seq;
 } qr_frame_slot_t;
@@ -3000,6 +3002,455 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 
 /*
 ================
+Particles -- a faithful port of Quake's classic particle system (gl_rpart.c
+minus the GL draw). The spawn functions (R_ParticleExplosion, R_RocketTrail,
+...) are engine entry points, stubbed no-ops before this. CL_RunParticles
+ages and moves them once per host frame (host.c calls it); QR_EmitParticles
+billboards the live set into the packet as colour quads, drawn depth-tested
+with the wheel-guide pipeline. Dynamic lights already flashed on explosions;
+this is the missing visual body.
+================
+*/
+#define QR_MAX_PARTICLES	8192
+#define QR_PARTICLE_SIZE	1.3f
+
+extern cvar_t		sv_gravity;
+
+static particle_t	qr_particles[QR_MAX_PARTICLES];
+static particle_t	*qr_active_particles, *qr_free_particles;
+static int		qr_particles_inited;
+
+static const int	qr_ramp1[8] = {0x6f, 0x6d, 0x6b, 0x69, 0x67, 0x65, 0x63, 0x61};
+static const int	qr_ramp2[8] = {0x6f, 0x6e, 0x6d, 0x6c, 0x6b, 0x6a, 0x68, 0x66};
+static const int	qr_ramp3[8] = {0x6d, 0x6b, 0x06, 0x05, 0x04, 0x03, 0x00, 0x00};
+
+void R_ClearParticles (void)
+{
+	int i;
+
+	qr_free_particles = &qr_particles[0];
+	qr_active_particles = NULL;
+	for (i = 0; i < QR_MAX_PARTICLES - 1; i++)
+		qr_particles[i].next = &qr_particles[i + 1];
+	qr_particles[QR_MAX_PARTICLES - 1].next = NULL;
+	qr_particles_inited = 1;
+}
+
+static particle_t *QR_AllocParticle (void)
+{
+	particle_t *p;
+
+	if (!qr_particles_inited)
+		R_ClearParticles ();
+	if (!qr_free_particles)
+		return NULL;
+	p = qr_free_particles;
+	qr_free_particles = p->next;
+	p->next = qr_active_particles;
+	qr_active_particles = p;
+	return p;
+}
+
+void R_ParticleExplosion (vec3_t org)
+{
+	int		i, j;
+	particle_t	*p;
+
+	for (i = 0; i < 1024; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 5;
+		p->color = qr_ramp1[0];
+		p->ramp = rand () & 3;
+		p->type = (i & 1) ? pt_explode : pt_explode2;
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () % 32) - 16);
+			p->vel[j] = (rand () % 512) - 256;
+		}
+	}
+}
+
+void R_ParticleExplosion2 (vec3_t org, int colorStart, int colorLength)
+{
+	int		i, j, colorMod = 0;
+	particle_t	*p;
+
+	for (i = 0; i < 512; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 0.3f;
+		p->color = colorStart + (colorMod % colorLength);
+		colorMod++;
+		p->type = pt_blob;
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () % 32) - 16);
+			p->vel[j] = (rand () % 512) - 256;
+		}
+	}
+}
+
+void R_BlobExplosion (vec3_t org)
+{
+	int		i, j;
+	particle_t	*p;
+
+	for (i = 0; i < 1024; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 1 + (rand () & 8) * 0.05f;
+		if (i & 1)
+		{
+			p->type = pt_blob;
+			p->color = 66 + rand () % 6;
+		}
+		else
+		{
+			p->type = pt_blob2;
+			p->color = 150 + rand () % 6;
+		}
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () % 32) - 16);
+			p->vel[j] = (rand () % 512) - 256;
+		}
+	}
+}
+
+void R_RunParticleEffect (vec3_t org, vec3_t dir, int color, int count)
+{
+	int		i, j;
+	particle_t	*p;
+
+	for (i = 0; i < count; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 0.1f * (rand () % 5);
+		p->color = (color & ~7) + (rand () & 7);
+		p->type = pt_slowgrav;
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () & 15) - 8);
+			p->vel[j] = dir[j] * 15;
+		}
+	}
+}
+
+void R_LavaSplash (vec3_t org)
+{
+	int		i, j, k;
+	particle_t	*p;
+	float		vel;
+	vec3_t		dir;
+
+	for (i = -16; i < 16; i++)
+		for (j = -16; j < 16; j++)
+			for (k = 0; k < 1; k++)
+			{
+				if (!(p = QR_AllocParticle ()))
+					return;
+				p->die = cl.time + 2 + (rand () & 31) * 0.02f;
+				p->color = 224 + (rand () & 7);
+				p->type = pt_slowgrav;
+				dir[0] = j * 8 + (rand () & 7);
+				dir[1] = i * 8 + (rand () & 7);
+				dir[2] = 256;
+				p->org[0] = org[0] + dir[0];
+				p->org[1] = org[1] + dir[1];
+				p->org[2] = org[2] + (rand () & 63);
+				VectorNormalize (dir);
+				vel = 50 + (rand () & 63);
+				VectorScale (dir, vel, p->vel);
+			}
+}
+
+void R_TeleportSplash (vec3_t org)
+{
+	int		i, j, k;
+	particle_t	*p;
+	float		vel;
+	vec3_t		dir;
+
+	for (i = -16; i < 16; i += 4)
+		for (j = -16; j < 16; j += 4)
+			for (k = -24; k < 32; k += 4)
+			{
+				if (!(p = QR_AllocParticle ()))
+					return;
+				p->die = cl.time + 0.2f + (rand () & 7) * 0.02f;
+				p->color = 7 + (rand () & 7);
+				p->type = pt_slowgrav;
+				dir[0] = j * 8;
+				dir[1] = i * 8;
+				dir[2] = k * 8;
+				p->org[0] = org[0] + i + (rand () & 3);
+				p->org[1] = org[1] + j + (rand () & 3);
+				p->org[2] = org[2] + k + (rand () & 3);
+				VectorNormalize (dir);
+				vel = 50 + (rand () & 63);
+				VectorScale (dir, vel, p->vel);
+			}
+}
+
+void R_RocketTrail (vec3_t start, vec3_t end, int type)
+{
+	vec3_t		vec;
+	float		len;
+	int		j, dec;
+	particle_t	*p;
+	static int	tracercount;
+
+	VectorSubtract (end, start, vec);
+	len = VectorNormalize (vec);
+	dec = (type < 128) ? 3 : (type -= 128, 1);
+
+	while (len > 0)
+	{
+		len -= dec;
+		if (!(p = QR_AllocParticle ()))
+			return;
+		VectorCopy (vec3_origin, p->vel);
+		p->die = cl.time + 2;
+		switch (type)
+		{
+		case 0:		/* rocket trail */
+			p->ramp = rand () & 3;
+			p->color = qr_ramp3[(int) p->ramp];
+			p->type = pt_fire;
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			break;
+		case 1:		/* smoke smoke */
+			p->ramp = (rand () & 3) + 2;
+			p->color = qr_ramp3[(int) p->ramp];
+			p->type = pt_fire;
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			break;
+		case 2:		/* blood */
+			p->type = pt_grav;
+			p->color = 67 + (rand () & 3);
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			break;
+		case 3:
+		case 5:		/* tracer */
+			p->die = cl.time + 0.5f;
+			p->type = pt_static;
+			p->color = (type == 3) ? 52 + ((tracercount & 4) << 1)
+					       : 230 + ((tracercount & 4) << 1);
+			tracercount++;
+			VectorCopy (start, p->org);
+			if (tracercount & 1)
+			{
+				p->vel[0] = 30 * vec[1];
+				p->vel[1] = 30 * -vec[0];
+			}
+			else
+			{
+				p->vel[0] = 30 * -vec[1];
+				p->vel[1] = 30 * vec[0];
+			}
+			break;
+		case 4:		/* slight blood */
+			p->type = pt_grav;
+			p->color = 67 + (rand () & 3);
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			len -= 3;
+			break;
+		case 6:		/* voor trail */
+			p->color = 9 * 16 + 8 + (rand () & 3);
+			p->type = pt_static;
+			p->die = cl.time + 0.3f;
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () & 15) - 8);
+			break;
+		}
+		VectorAdd (start, vec, start);
+	}
+}
+
+void R_EntityParticles (entity_t *ent)
+{
+	(void) ent;	/* the spawn-effect shell: rare, skip for now */
+}
+
+void CL_RunParticles (void)
+{
+	particle_t	*p, *kill;
+	int		i;
+	float		grav, dvel, time1, time2, time3, frametime;
+	static double	lasttime;
+
+	if (!qr_particles_inited)
+		R_ClearParticles ();
+
+	frametime = (float) (cl.time - lasttime);
+	lasttime = cl.time;
+	if (frametime < 0)		/* map change / demo restart */
+	{
+		R_ClearParticles ();
+		frametime = 0;
+	}
+	else if (frametime > 0.1f)
+		frametime = 0.1f;
+
+	time3 = frametime * 15;
+	time2 = frametime * 10;
+	time1 = frametime * 5;
+	grav = frametime * sv_gravity.value * 0.05f;
+	dvel = 4 * frametime;
+
+	for ( ; ; )	/* reap dead at the head */
+	{
+		kill = qr_active_particles;
+		if (kill && kill->die < cl.time)
+		{
+			qr_active_particles = kill->next;
+			kill->next = qr_free_particles;
+			qr_free_particles = kill;
+			continue;
+		}
+		break;
+	}
+
+	for (p = qr_active_particles; p; p = p->next)
+	{
+		for ( ; ; )	/* reap dead mid-list */
+		{
+			kill = p->next;
+			if (kill && kill->die < cl.time)
+			{
+				p->next = kill->next;
+				kill->next = qr_free_particles;
+				qr_free_particles = kill;
+				continue;
+			}
+			break;
+		}
+
+		p->org[0] += p->vel[0] * frametime;
+		p->org[1] += p->vel[1] * frametime;
+		p->org[2] += p->vel[2] * frametime;
+
+		switch (p->type)
+		{
+		case pt_fire:
+			p->ramp += time1;
+			if (p->ramp >= 6)
+				p->die = -1;
+			else
+				p->color = qr_ramp3[(int) p->ramp];
+			p->vel[2] += grav;
+			break;
+		case pt_explode:
+			p->ramp += time2;
+			if (p->ramp >= 8)
+				p->die = -1;
+			else
+				p->color = qr_ramp1[(int) p->ramp];
+			for (i = 0; i < 3; i++)
+				p->vel[i] += p->vel[i] * dvel;
+			p->vel[2] -= grav;
+			break;
+		case pt_explode2:
+			p->ramp += time3;
+			if (p->ramp >= 8)
+				p->die = -1;
+			else
+				p->color = qr_ramp2[(int) p->ramp];
+			for (i = 0; i < 3; i++)
+				p->vel[i] -= p->vel[i] * frametime;
+			p->vel[2] -= grav;
+			break;
+		case pt_blob:
+			for (i = 0; i < 3; i++)
+				p->vel[i] += p->vel[i] * dvel;
+			p->vel[2] -= grav;
+			break;
+		case pt_blob2:
+			for (i = 0; i < 2; i++)
+				p->vel[i] -= p->vel[i] * dvel;
+			p->vel[2] -= grav;
+			break;
+		case pt_grav:
+		case pt_slowgrav:
+			p->vel[2] -= grav;
+			break;
+		case pt_static:
+		default:
+			break;
+		}
+	}
+}
+
+static void QR_ParticleVert (qr_frame_slot_t *slot, const vec3_t p,
+			     float r, float g, float b)
+{
+	uint32_t	n = slot->frame.num_particle_verts;
+	float		*o;
+
+	if ((n + 1) * 7 > slot->particle_capacity)
+	{
+		slot->particle_capacity = slot->particle_capacity ? slot->particle_capacity * 2 : 8192;
+		slot->particle_verts = (float *) realloc (slot->particle_verts,
+				slot->particle_capacity * sizeof(float));
+	}
+	o = slot->particle_verts + n * 7;
+	o[0] = p[0]; o[1] = p[1]; o[2] = p[2];
+	o[3] = r; o[4] = g; o[5] = b; o[6] = 1.f;
+	slot->frame.num_particle_verts = n + 1;
+}
+
+static void QR_EmitParticles (qr_frame_slot_t *slot)
+{
+	particle_t	*p;
+	vec3_t		worldup = {0.f, 0.f, 1.f};
+	float		s = QR_PARTICLE_SIZE;
+
+	for (p = qr_active_particles; p; p = p->next)
+	{
+		unsigned int	c = d_8to24table[(int) p->color & 255];
+		float		r = (c & 0xff) / 255.f;
+		float		g = ((c >> 8) & 0xff) / 255.f;
+		float		b = ((c >> 16) & 0xff) / 255.f;
+		vec3_t		look, rt, up, c0, c1, c2, c3;
+		int		k;
+
+		VectorSubtract (r_origin, p->org, look);
+		if (VectorNormalize (look) < 0.01f)
+			continue;
+		CrossProduct (look, worldup, rt);
+		if (VectorNormalize (rt) < 0.01f)
+		{
+			rt[0] = 1.f; rt[1] = 0.f; rt[2] = 0.f;
+		}
+		CrossProduct (rt, look, up);	/* unit: rt and look are orthonormal */
+
+		for (k = 0; k < 3; k++)
+		{
+			c0[k] = p->org[k] - rt[k] * s - up[k] * s;
+			c1[k] = p->org[k] + rt[k] * s - up[k] * s;
+			c2[k] = p->org[k] + rt[k] * s + up[k] * s;
+			c3[k] = p->org[k] - rt[k] * s + up[k] * s;
+		}
+		QR_ParticleVert (slot, c0, r, g, b);
+		QR_ParticleVert (slot, c1, r, g, b);
+		QR_ParticleVert (slot, c2, r, g, b);
+		QR_ParticleVert (slot, c0, r, g, b);
+		QR_ParticleVert (slot, c2, r, g, b);
+		QR_ParticleVert (slot, c3, r, g, b);
+	}
+}
+
+/*
+================
 QR_EmitWheel -- the weapon wheel: the player's OWNED view-weapon models as
 a ring of synthetic alias entities around the off-hand wrist.
 
@@ -3335,6 +3786,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	    && cl.viewent.model && cl.viewent.model->type == mod_alias)
 		QR_EmitAliasModel (slot, &cl.viewent);
 
+	QR_EmitParticles (slot);
 	QR_EmitWheel (slot);
 }
 
@@ -3368,6 +3820,7 @@ void QR_BeginFrame (void)
 	slot->frame.num_batches = 0;
 	slot->frame.num_entities = 0;
 	slot->frame.num_text_verts = 0;
+	slot->frame.num_particle_verts = 0;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
@@ -3616,6 +4069,7 @@ void QR_PublishFrame (void)
 	slot->frame.entities = slot->entities;
 	slot->frame.text_verts = slot->text_verts;
 	slot->frame.conchars_texnum = qr_conchars_texnum;
+	slot->frame.particle_verts = slot->particle_verts;
 
 	/* upstream R_Clear clears to r_clearcolor (a palette index) when
 	   gl_clear is set; keep that, else clear to black */

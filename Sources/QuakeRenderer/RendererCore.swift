@@ -569,6 +569,28 @@ final class RendererCore {
                 indexBufferOffset: Int(batch.first_index) * MemoryLayout<UInt32>.size)
         }
 
+        // Particles (explosions, rocket trails, gunshots): billboarded colour
+        // quads (7 floats/vert, xyz + rgba) built by the bridge. They reuse
+        // the wheel-guide pipeline — colour triangles, no texture — but are
+        // DEPTH-TESTED (depthNoWrite) so the world occludes them, unlike the
+        // always-on-top overlays below.
+        if frame.num_particle_verts >= 3, let src = frame.particle_verts {
+            let floatCount = Int(frame.num_particle_verts) * 7
+            if let buf = device.makeBuffer(bytes: src,
+                                           length: floatCount * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
+                setPipeline(pipelines.wheelGuide, depth: pipelines.depthNoWrite)
+                var u = GuideUniforms(viewproj0: uniforms.viewproj0,
+                                      viewproj1: uniforms.viewproj1)
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                withUnsafeBytes(of: &u) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                }
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                       vertexCount: Int(frame.num_particle_verts))
+            }
+        }
+
         // Weapon-wheel guide ring, over the world, before the vignette (so
         // locomotion vignette — never on while the wheel is open — could
         // still darken it, harmlessly).
