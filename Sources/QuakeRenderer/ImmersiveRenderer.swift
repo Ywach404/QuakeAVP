@@ -323,8 +323,16 @@ final class ImmersiveRenderer {
         //    correct premultiplied result — with alpha accumulating as
         //    src + dst*(1-src) ("over"), so water over a wall stays
         //    alpha 1 and water over passthrough keeps its own coverage.
-        let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        _ = packet   // clear_color intentionally unused on this path
+        // Seal the world during normal play. A Quake level is a closed box;
+        // the only intended see-through is the phase melt. But brush seams
+        // (stair T-junctions) leave sub-pixel cracks that, over a transparent
+        // clear, leak the real room -- the passthrough band that walks up the
+        // stairs. Clear to OPAQUE black so those gaps read black instead, and
+        // fade the clear to transparent as phase runs so the melt still
+        // reveals passthrough.
+        let phase = packet?.phase ?? 0
+        let clear = MTLClearColor(red: 0, green: 0, blue: 0,
+                                  alpha: Double(max(0, 1 - phase)))
 
         // Hand debug wireframe: the published bones are already in
         // corrected-tracking space; drawn with handViewproj they sit on the

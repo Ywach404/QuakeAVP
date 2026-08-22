@@ -594,7 +594,7 @@ final class RendererCore {
         // Weapon-wheel guide ring, over the world, before the vignette (so
         // locomotion vignette — never on while the wheel is open — could
         // still darken it, harmlessly).
-        if frame.wheel_frac > 0.01, frame.wheel_count > 0 {
+        if frame.wheel_frac > 0.01, frame.wheel_count > 0, frame.wheel_radius > 0.5 {
             let guide = Self.wheelGuideGeometry(frame: frame)
             // A per-frame buffer, not setVertexBytes: the triangle geometry
             // exceeds the 4 KB setVertexBytes limit.

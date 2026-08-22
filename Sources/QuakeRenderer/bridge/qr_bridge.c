@@ -3479,6 +3479,8 @@ static const char *qr_wheel_modelnames[8] = {
 /* Clean pickup models, preferred over the viewmodels above. Axe and single
    shotgun are start weapons with no pickup model -- their viewmodels carry no
    projectile anyway, so NULL falls straight through. */
+#define QR_MENU_SPACING	6.0f	/* full-menu row pitch, Quake units */
+
 static const char *qr_wheel_pickupnames[8] = {
 	NULL, NULL, "progs/g_shot.mdl",
 	"progs/g_nail.mdl", "progs/g_nail2.mdl", "progs/g_rock.mdl",
@@ -3584,6 +3586,9 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	   fixed ring, not one that chases your wrist. Cleared when it closes. */
 	static int	locked;
 	static vec3_t	lock_center;
+	/* full-menu gaze dwell state, function scope so a close can reset it */
+	static int	menu_dwell = -1, menu_committed = -1, menu_open;
+	static double	menu_dwell_since;
 	float		frac, radius, step, theta, spin;
 	vec3_t		fwdv, rightv, upv, angles, center;
 	int		i, owned, k;
@@ -3591,6 +3596,8 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
 	{
 		locked = 0;
+		menu_open = 0;
+		menu_committed = -1;
 		return;
 	}
 
@@ -3696,8 +3703,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	   It overrides the fed highlight and drives the impulse itself. */
 	if (vr_fullmenu.value)
 	{
-		static int	dwell_slot = -1, committed_slot = -1;
-		static double	dwell_since;
 		vec3_t		gaze_ang, gf, gr, gu, toplane, hit, rel;
 		int		gsel = -1;
 		float		denom;
@@ -3719,24 +3724,36 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 				VectorSubtract (hit, center, rel);
 				hr = DotProduct (rel, rightv);
 				hu = rel[2];
-				if (hr * hr + hu * hu > 4.f)	/* dead spot at the hub */
+				/* Vertical list: weapon k sits QR_MENU_SPACING below the
+				   one above -- weapon order already puts each super under
+				   its base. Gaze HEIGHT picks the row; looking off to the
+				   side of the column picks nothing. */
 				{
-					float ang = atan2f (hu, hr) * 180.f / M_PI;
-					gsel = (int) floorf ((90.f - ang) / step + 0.5f);
-					gsel %= owned;
-					if (gsel < 0)
-						gsel += owned;
+					float top = (owned - 1) * 0.5f * QR_MENU_SPACING;
+					gsel = (int) floorf ((top - hu) / QR_MENU_SPACING + 0.5f);
+					if (fabsf (hr) > 11.f || gsel < 0 || gsel >= owned)
+						gsel = -1;
 				}
 			}
 		}
 
-		if (gsel != dwell_slot)
+		/* The frame the menu opens, treat whatever you happen to be looking
+		   at as already chosen, so it doesn't auto-swap the centre weapon
+		   out from under you -- only a row you deliberately look TO commits. */
+		if (!menu_open)
 		{
-			dwell_slot = gsel;
-			dwell_since = realtime;
+			menu_open = 1;
+			menu_committed = gsel;
+			menu_dwell = gsel;
 		}
-		else if (gsel >= 0 && gsel != committed_slot
-			 && realtime - dwell_since >= 0.35)
+
+		if (gsel != menu_dwell)
+		{
+			menu_dwell = gsel;
+			menu_dwell_since = realtime;
+		}
+		else if (gsel >= 0 && gsel != menu_committed
+			 && realtime - menu_dwell_since >= 0.35)
 		{
 			int b, seen = 0;
 			for (b = 0; b < 8; b++)
@@ -3745,7 +3762,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 					if (seen == gsel)
 					{
 						Cbuf_AddText (va ("impulse %d\n", b + 1));
-						committed_slot = gsel;
+						menu_committed = gsel;
 						break;
 					}
 					seen++;
@@ -3759,7 +3776,9 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	slot->frame.wheel_center[0] = center[0];
 	slot->frame.wheel_center[1] = center[1];
 	slot->frame.wheel_center[2] = center[2];
-	slot->frame.wheel_radius = radius;
+	/* Full menu draws no ring (it's a list): negative radius tells the
+	   consumer to skip the wireframe circle. */
+	slot->frame.wheel_radius = vr_fullmenu.value ? -1.f : radius;
 	slot->frame.wheel_frac = frac;
 	slot->frame.wheel_count = owned;
 	slot->frame.wheel_highlight = qr_wheel_highlight;
@@ -3780,8 +3799,18 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 
 		memset (&e, 0, sizeof(e));
 		e.model = models[i];
-		VectorMA (center, radius * cosf (theta), rightv, e.origin);
-		e.origin[2] += radius * sinf (theta);
+		if (vr_fullmenu.value)
+		{
+			/* vertical list, weapon order (super under base) */
+			float top = (owned - 1) * 0.5f * QR_MENU_SPACING;
+			VectorCopy (center, e.origin);
+			e.origin[2] += top - k * QR_MENU_SPACING;
+		}
+		else
+		{
+			VectorMA (center, radius * cosf (theta), rightv, e.origin);
+			e.origin[2] += radius * sinf (theta);
+		}
 		e.angles[0] = 0;
 		e.angles[1] = spin + k * 45.f;
 		e.angles[2] = 0;
