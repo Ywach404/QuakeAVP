@@ -162,6 +162,9 @@ float				qr_head_pitch;
    (spawn, teleport svc_setangle) and the body must adopt it. */
 float				qr_body_yaw;
 float				qr_aim_org[3];		/* dominant hand, body frame */
+int				qr_aim_active;		/* hand aim live (vr_handaim &&
+							   valid); read by qr_bridge to
+							   anchor the weapon at the hand */
 static int			qr_aim_valid;
 static float			qr_aim_yaw;		/* room-relative, Quake deg */
 static float			qr_aim_pitch;
@@ -528,10 +531,14 @@ void IN_Move (usercmd_t *cmd)
 	if (fabsf (cl.viewangles[YAW] - qr_expected_yaw) > 0.01f)
 		qr_body_yaw = cl.viewangles[YAW];
 
-	/* The hand ray's room-relative yaw, or zero when body-anchored: added to
-	   the body yaw for the shot, and subtracted from the move pre-rotation so
-	   the stick still walks the body while the gun points elsewhere. */
-	aim_yaw_rel = (vr_handaim.value && qr_aim_valid) ? qr_aim_yaw : 0.f;
+	/* One source of truth for "the gun is in the hand this tick": the aim
+	   feeds a ray AND vr_handaim allows it. The shot, the move compensation,
+	   and the weapon anchor (qr_bridge) all read it, so they can't disagree.
+	   The hand ray's room-relative yaw is added to the body yaw for the shot,
+	   and subtracted from the move pre-rotation so the stick still walks the
+	   body while the gun points elsewhere. */
+	qr_aim_active = (vr_handaim.value && qr_aim_valid);
+	aim_yaw_rel = qr_aim_active ? qr_aim_yaw : 0.f;
 
 	/* Choosing a weapon, not moving: sticks go quiet while the wheel is
 	   open (stick locomotion through a time-scaled world is a comfort
@@ -597,7 +604,7 @@ void IN_Move (usercmd_t *cmd)
 	   hand ray -- point down, shoot down. Otherwise the M5 body-anchored
 	   feel: head-pitch elevation (vr_headaim), or the right-stick rate
 	   control (also the flat debug window, which has no head or hand). */
-	if (vr_handaim.value && qr_aim_valid)
+	if (qr_aim_active)
 	{
 		V_StopPitchDrift ();
 		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_aim_pitch,
