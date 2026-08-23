@@ -724,7 +724,9 @@ final class RendererCore {
         let c = SIMD3(frame.wheel_center.0, frame.wheel_center.1, frame.wheel_center.2)
         let r = frame.wheel_radius
         let count = Int(frame.wheel_count)
-        let yaw = frame.viewangles.1 * .pi / 180
+        // Body frame (M6): QR_EmitWheel lays the ring out in body_yaw, not the
+        // aim, so the guide's plane must match or it rotates off the models.
+        let yaw = frame.body_yaw * .pi / 180
         let right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
         let up = SIMD3<Float>(0, 0, 1)
         func pt(_ angle: Float, _ rad: Float) -> SIMD3<Float> {
