@@ -363,6 +363,12 @@ final class ImmersiveRenderer {
         // real hand, untouched by the game-world height trim.
         let handDebug: [Float] = HandDebug.shared.enabled ? HandDebug.shared.snapshot() : []
 
+        // The virtual hand stands in while the world is solid and fades out
+        // (1 - phase) as the melt reveals the real hand through passthrough.
+        // Same corrected-tracking space and handViewproj as the debug bones.
+        let virtualHand: [Float] = VirtualHand.shared.snapshot()
+        let handOpacity: Float = 1 - (packet?.phase ?? 0)
+
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
                 for: drawable, textureIndex: 0, slice: nil, clear: clear)
@@ -376,6 +382,9 @@ final class ImmersiveRenderer {
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
                             amplificationCount: 2, drawsViewmodel: false)
+                core.drawVirtualHand(virtualHand, opacity: handOpacity,
+                                     viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                     pipelines: pipelines, encoder: encoder)
                 core.drawHandDebug(handDebug, viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                    pipelines: pipelines, encoder: encoder)
             }
@@ -400,6 +409,9 @@ final class ImmersiveRenderer {
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
                                 amplificationCount: 1, drawsViewmodel: false)
+                    core.drawVirtualHand(virtualHand, opacity: handOpacity,
+                                         viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                         pipelines: pipelines, encoder: encoder)
                     core.drawHandDebug(handDebug, viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                        pipelines: pipelines, encoder: encoder)
                 }

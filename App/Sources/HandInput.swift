@@ -63,6 +63,7 @@ final class HandInput: @unchecked Sendable {
             session?.stop()
             session = nil
             aggregator.remove(.hands)
+            VirtualHand.shared.publish([])
         }
     }
 
@@ -104,8 +105,10 @@ final class HandInput: @unchecked Sendable {
             if HandDebug.shared.enabled {
                 HandDebug.shared.publish(left.debugVerts + right.debugVerts)
             }
+            VirtualHand.shared.publish(left.virtualVerts + right.virtualVerts)
         }
         aggregator.remove(.hands)
+        VirtualHand.shared.publish([])   // hands gone: no stand-in to draw
     }
 
     // MARK: - Gesture synthesis
@@ -255,6 +258,11 @@ private struct HandState {
     /// space, 7 floats/vertex (xyz + rgba), line list. Built in ingest.
     var debugVerts: [Float] = []
 
+    /// The stylised solid hand (forearm + palm + fingers), corrected-tracking
+    /// space, 7 floats/vertex (xyz + rgba), triangle list. Built every ingest,
+    /// drawn by the render thread at opacity 1 - phase. See VirtualHand.
+    var virtualVerts: [Float] = []
+
     /// Flips the palm-normal convention if the skeleton's winding turns
     /// out mirrored on hardware; calibrate on device, not by argument.
     private static let palmSign: Float = 1
@@ -357,6 +365,64 @@ private struct HandState {
         }
 
         buildDebug(tip: tip)
+        buildVirtual(tip: tip, isLeft: isLeft)
+    }
+
+    /// The stylised virtual hand: a sleeve-toned forearm stub, a skin palm
+    /// fan from the wrist to the knuckles, and tapered finger ribbons — enough
+    /// to read as a hand without arm IK (there is no shoulder to solve to, and
+    /// a guessed elbow looks worse than none, so the forearm is just the
+    /// ARKit forearm joint). Corrected-tracking space, triangles, 7 floats
+    /// each. Colours are sRGB-ish; the guide fragment linearises them.
+    private mutating func buildVirtual(tip: (HandSkeleton.JointName) -> SIMD3<Float>?,
+                                       isLeft: Bool) {
+        guard let wristPt = tip(.wrist) else { virtualVerts = []; return }
+        let corr = TrackingSpace.correction
+        let skin = SIMD4<Float>(0.80, 0.60, 0.48, 1)
+        let cuff = SIMD4<Float>(0.30, 0.34, 0.44, 1)
+        let up = SIMD3<Float>(0, 1, 0)
+        var v: [Float] = []
+        func c(_ p: SIMD3<Float>) -> SIMD3<Float> {
+            let q = corr * SIMD4(p, 1); return SIMD3(q.x, q.y, q.z)
+        }
+        func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ d: SIMD3<Float>, _ col: SIMD4<Float>) {
+            for p in [c(a), c(b), c(d)] { v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w] }
+        }
+        func ribbon(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ t: Float, _ col: SIMD4<Float>) {
+            var perp = simd_cross(b - a, up)
+            if simd_length(perp) < 1e-5 { perp = simd_cross(b - a, SIMD3(1, 0, 0)) }
+            perp = simd_length(perp) > 0 ? simd_normalize(perp) * t : SIMD3(t, 0, 0)
+            tri(a - perp, a + perp, b - perp, col)
+            tri(a + perp, b + perp, b - perp, col)
+        }
+        // Forearm stub from the ARKit forearm joint to the wrist.
+        if let arm = tip(.forearmArm) { ribbon(arm, wristPt, 0.026, cuff) }
+        // Palm: a fan from the wrist across the knuckle line.
+        let knuckles = [HandSkeleton.JointName.indexFingerKnuckle, .middleFingerKnuckle,
+                        .ringFingerKnuckle, .littleFingerKnuckle].compactMap { tip($0) }
+        for i in 0..<max(0, knuckles.count - 1) {
+            tri(wristPt, knuckles[i], knuckles[i + 1], skin)
+        }
+        if let thumbK = tip(.thumbKnuckle), let idxK = knuckles.first {
+            tri(wristPt, thumbK, idxK, skin)
+        }
+        // Fingers as tapered ribbons.
+        let fingers: [[HandSkeleton.JointName]] = [
+            [.thumbKnuckle, .thumbIntermediateBase, .thumbIntermediateTip, .thumbTip],
+            [.indexFingerKnuckle, .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip],
+            [.middleFingerKnuckle, .middleFingerIntermediateBase, .middleFingerIntermediateTip, .middleFingerTip],
+            [.ringFingerKnuckle, .ringFingerIntermediateBase, .ringFingerIntermediateTip, .ringFingerTip],
+            [.littleFingerKnuckle, .littleFingerIntermediateBase, .littleFingerIntermediateTip, .littleFingerTip],
+        ]
+        for joints in fingers {
+            var prev: SIMD3<Float>?
+            for (i, j) in joints.enumerated() {
+                guard let cur = tip(j) else { prev = nil; continue }
+                if let p = prev { ribbon(p, cur, i <= 1 ? 0.009 : 0.007, skin) }
+                prev = cur
+            }
+        }
+        virtualVerts = v
     }
 
     /// Colour each finger by whether its gesture is firing, so the overlay
@@ -419,6 +485,25 @@ private struct HandState {
         guard middleReleasedClean else { return false }
         middleReleasedClean = false
         return true
+    }
+}
+
+/// The stylised virtual hand mesh, shared from HandInput to the render
+/// thread. Corrected-tracking space, 7 floats/vertex (xyz + rgba), triangle
+/// list — the render thread scales the alpha by 1 - phase and draws it on the
+/// real hand with the wheel-guide pipeline. Empty while no hand is tracked.
+final class VirtualHand: @unchecked Sendable {
+    static let shared = VirtualHand()
+    private let lock = NSLock()
+    private var verts: [Float] = []
+
+    func publish(_ v: [Float]) {
+        lock.lock(); verts = v; lock.unlock()
+    }
+
+    func snapshot() -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return verts
     }
 }
 
