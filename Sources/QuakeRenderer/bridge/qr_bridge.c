@@ -52,6 +52,8 @@ extern float qr_wheel_anchor[3];
 extern int qr_wheel_highlight;
 extern float qr_head[3];		/* body-frame head offset from recenter */
 extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
+extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
+extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
 extern int qr_wheel_open;		/* held-open intent (release commits) */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
@@ -3699,7 +3701,8 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
 	angles[0] = 0;
-	angles[1] = cl.viewangles[YAW];
+	angles[1] = qr_body_yaw;	/* body frame, not the aim: the ring hangs
+					   off the wrist and must not swing with the gun */
 	angles[2] = 0;
 	AngleVectors (angles, fwdv, rightv, upv);
 	/* AngleVectors' right points right; keep the ring plane spanned by
@@ -3761,7 +3764,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		float		denom;
 
 		gaze_ang[0] = qr_head_pitch;
-		gaze_ang[1] = cl.viewangles[YAW] + qr_head_yaw;
+		gaze_ang[1] = qr_body_yaw + qr_head_yaw;	/* body + head, not the aim */
 		gaze_ang[2] = 0;
 		AngleVectors (gaze_ang, gf, gr, gu);
 		denom = DotProduct (gf, fwdv);
@@ -4018,6 +4021,7 @@ void QR_BeginFrame (void)
 	slot->frame.recenter_count = qr_recenter_count;
 	memset (slot->frame.vieworg, 0, sizeof(slot->frame.vieworg));
 	memset (slot->frame.viewangles, 0, sizeof(slot->frame.viewangles));
+	slot->frame.body_yaw = 0;
 	slot->frame.world_scale = QR_WORLDSCALE_DEFAULT;
 	slot->frame.sky_solid_texnum = 0;
 	slot->frame.sky_alpha_texnum = 0;
@@ -4106,6 +4110,10 @@ void QR_RenderView (void)
 	slot->frame.viewangles[0] = r_refdef.viewangles[0];
 	slot->frame.viewangles[1] = r_refdef.viewangles[1];
 	slot->frame.viewangles[2] = r_refdef.viewangles[2];
+	/* The body basis, published apart from viewangles (the aim): the
+	   immersive camera and head-follow frame by this so pointing the gun
+	   never steers the eye. See qc_frame_t.body_yaw. */
+	slot->frame.body_yaw = qr_body_yaw;
 	slot->frame.world_scale = CLAMP (QR_WORLDSCALE_MIN, vr_worldscale.value,
 					 QR_WORLDSCALE_MAX);
 
