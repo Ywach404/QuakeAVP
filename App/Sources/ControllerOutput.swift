@@ -26,7 +26,12 @@ final class ControllerOutput: @unchecked Sendable {
     static let shared = ControllerOutput()
 
     private let queue = DispatchQueue(label: "quake.controller.output")
-    private var engines: [CHHapticEngine] = []
+    /// Haptic engines paired with their controller, so a fire pulse can target
+    /// the hand that shot. The hand is resolved lazily at fire time through
+    /// SpatialControllerTracker.isLeft (live position), which can be unknown
+    /// until both controllers track — buzz both then.
+    private var handEngines: [(controller: GCController, engine: CHHapticEngine)] = []
+    private var engines: [CHHapticEngine] { handEngines.map { $0.engine } }
     private var adaptiveTriggers: [GCDualSenseAdaptiveTrigger] = []
     private var lastDamage: Float = 0
     private var lastWeapon: UInt32 = 0
@@ -39,11 +44,12 @@ final class ControllerOutput: @unchecked Sendable {
 
     func attach(controllers: [GCController]) {
         queue.async {
-            self.engines = controllers.compactMap { controller in
-                guard let haptics = controller.haptics else { return nil }
-                let engine = haptics.createEngine(withLocality: .default)
-                try? engine?.start()
-                return engine
+            self.handEngines = controllers.compactMap { controller in
+                guard let haptics = controller.haptics,
+                      let engine = haptics.createEngine(withLocality: .default)
+                else { return nil }
+                try? engine.start()
+                return (controller, engine)
             }
 
             self.adaptiveTriggers = controllers.flatMap { controller in
@@ -64,12 +70,46 @@ final class ControllerOutput: @unchecked Sendable {
 
     // MARK: - Events
 
-    /// Trigger crossed the fire threshold (any source). Local echo — the
-    /// shot itself is decided by the engine, but the feel must not wait a
-    /// round trip.
+    /// Trigger crossed the fire threshold (any source). The kick lands on the
+    /// FIRING hand — the dominant one — and is scaled by the held weapon, so a
+    /// rocket shoves and a nailgun stutters. Local echo: the shot is the
+    /// engine's call, but the feel must not wait a round trip.
     func noteFire() {
         InputTelemetry.shared.fire()
-        queue.async { self.transient(intensity: 0.8, sharpness: 0.7) }
+        let dominantLeft = !VRSettings.shared.rightHanded
+        queue.async {
+            let intensity = Self.fireIntensity(weapon: self.lastWeapon)
+            if let engine = self.engineForHand(left: dominantLeft) {
+                self.transient(on: [engine], intensity: intensity, sharpness: 0.7)
+            } else {
+                self.transient(on: self.engines, intensity: intensity, sharpness: 0.7)
+            }
+        }
+    }
+
+    /// The haptic engine on the given hand, or nil until the pairing resolves.
+    private func engineForHand(left: Bool) -> CHHapticEngine? {
+        for pair in handEngines
+        where SpatialControllerTracker.shared.isLeft(pair.controller) == left {
+            return pair.engine
+        }
+        return nil
+    }
+
+    /// Per-weapon fire intensity, in Quake's IT_* weapon bits. Tuned blind;
+    /// revisit on hardware alongside the adaptive-trigger table.
+    static func fireIntensity(weapon: UInt32) -> Float {
+        switch weapon {
+        case 1:    return 0.7    // shotgun
+        case 2:    return 0.9    // super shotgun
+        case 4:    return 0.45   // nailgun — rapid, light per shot
+        case 8:    return 0.6    // super nailgun
+        case 16:   return 0.8    // grenade launcher
+        case 32:   return 1.0    // rocket launcher — heaviest
+        case 64:   return 0.5    // lightning — continuous
+        case 4096: return 0.35   // axe — a dull thunk
+        default:   return 0.7
+        }
     }
 
     /// Once per rendered frame, from the packet's output channel.
@@ -79,7 +119,7 @@ final class ControllerOutput: @unchecked Sendable {
             // (V_UpdateBlend) brings it back down between hits.
             if damageFlash > self.lastDamage + 5 {
                 let intensity = min(damageFlash / 100, 1)
-                self.transient(intensity: intensity, sharpness: 0.3)
+                self.transient(on: self.engines, intensity: intensity, sharpness: 0.3)
                 InputTelemetry.shared.kickback(intensity: intensity)
             }
             self.lastDamage = damageFlash
@@ -94,7 +134,7 @@ final class ControllerOutput: @unchecked Sendable {
 
     // MARK: - Haptics
 
-    private func transient(intensity: Float, sharpness: Float) {
+    private func transient(on engines: [CHHapticEngine], intensity: Float, sharpness: Float) {
         for engine in engines {
             let event = CHHapticEvent(
                 eventType: .hapticTransient,

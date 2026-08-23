@@ -60,6 +60,11 @@ extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
    and the gun draws in the world like any other alias entity. */
 static int qr_handweapon;
+
+/* Visual weapon recoil: an eased 0..1 kick on the hand weapon, armed when the
+   view weapon animates a new fire frame and decayed on the sim clock. */
+static int qr_recoil_prevframe = -1;
+static float qr_recoil;
 extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
 extern int qr_wheel_open;		/* held-open intent (release commits) */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
@@ -3989,6 +3994,33 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			cl.viewent.angles[0] = cl.viewangles[0];
 			cl.viewent.angles[1] = cl.viewangles[1];
 			cl.viewent.angles[2] = cl.viewangles[2];
+
+			/* Visual recoil, purely cosmetic (the shot already left with
+			   cl.viewangles). The view weapon idles at frame 0 and steps
+			   through fire poses when shooting, so a step to a new nonzero
+			   frame is a shot: re-arm the kick then. Rapid weapons keep it
+			   topped up for a sustained shake, single-shot kicks once. It
+			   decays on the sim clock, so it eases in bullet-time too. */
+			{
+				vec3_t	gf, gr, gu;
+
+				if (cl.viewent.frame != qr_recoil_prevframe
+				    && cl.viewent.frame != 0)
+					qr_recoil = 1.f;
+				qr_recoil_prevframe = cl.viewent.frame;
+
+				if (qr_recoil > 0.f)
+				{
+					AngleVectors (cl.viewent.angles, gf, gr, gu);
+					VectorMA (cl.viewent.origin, -qr_recoil * 2.5f, gf,
+						  cl.viewent.origin);
+					cl.viewent.origin[2] += qr_recoil * 0.6f;
+					cl.viewent.angles[0] -= qr_recoil * 6.f;   /* muzzle rises */
+					qr_recoil -= (float) host_frametime * 5.f;
+					if (qr_recoil < 0.f)
+						qr_recoil = 0.f;
+				}
+			}
 
 			qr_handweapon = 1;
 			QR_EmitAliasModel (slot, &cl.viewent);
