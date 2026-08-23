@@ -80,6 +80,11 @@ extern float qr_height_trim;		/* eye-height trim, Quake units */
    Small enough that the texture overhang is imperceptible. */
 #define QR_TJUNC_GROW		0.5f
 
+/* Immersive only: surfaces whose plane passes within this many units of the
+   eye are never back-face culled, so a stair tread the eye is grazing doesn't
+   wink out and reveal the level behind it. Roughly a step and a quarter. */
+#define QR_BACKFACE_KEEP	20.0f
+
 /* ========================================================================
  * globals the engine headers declare and upstream's renderer defined
  * ===================================================================== */
@@ -1878,6 +1883,16 @@ static qboolean R_BackFaceCull (msurface_t *surf)
 		dot = r_refdef.vieworg[surf->plane->type] - surf->plane->dist;
 	else
 		dot = DotProduct (r_refdef.vieworg, surf->plane->normal) - surf->plane->dist;
+
+	/* Near-grazing surfaces are KEPT (GPU culling is .none, so this actually
+	   draws them). A stair tread the eye is nearly level with sits right at
+	   its own plane (|dot| ~ 0); the plain back-face test culls it the instant
+	   the eye dips below, and at the grazing angle its absence reveals the
+	   level behind -- the seam that walks up the steps a few ahead of you.
+	   Keeping the sliver (edge-on, invisible) fills the gap. Cheap: only
+	   surfaces whose PLANE passes within QR_BACKFACE_KEEP of the eye. */
+	if (qr_cull_omni && fabs (dot) < QR_BACKFACE_KEEP)
+		return false;
 
 	if ((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK))
 		return true;
