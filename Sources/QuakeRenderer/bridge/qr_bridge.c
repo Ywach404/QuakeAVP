@@ -3977,23 +3977,40 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	{
 		if (qr_aim_active)
 		{
-			vec3_t	fwdv, rightv, upv, ba;
-			float	ax, ay, az;
+			aliashdr_t *vh = (aliashdr_t *) Mod_Extradata (cl.viewent.model);
+			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
+			float	ax, ay, az, cx, cy, cz;
 
-			/* Body frame (not the aim): put the muzzle where the hand is,
-			   the same eye + (wrist - head) reconstruction the wheel uses. */
+			/* Body frame (not the aim): the hand position in the world, the
+			   same eye + (wrist - head) reconstruction the wheel uses. */
 			ba[0] = 0; ba[1] = qr_body_yaw; ba[2] = 0;
 			AngleVectors (ba, fwdv, rightv, upv);
 			ax = qr_aim_org[0] - qr_head[0];
 			ay = qr_aim_org[1] - qr_head[1];
 			az = qr_aim_org[2] - qr_head[2];
-			VectorMA (r_refdef.vieworg, ax, fwdv, cl.viewent.origin);
-			VectorMA (cl.viewent.origin, ay, rightv, cl.viewent.origin);
-			cl.viewent.origin[2] += az + qr_height_trim;
+			VectorMA (r_refdef.vieworg, ax, fwdv, handpos);
+			VectorMA (handpos, ay, rightv, handpos);
+			handpos[2] += az + qr_height_trim;
+
 			/* Point the gun down the aim the shot used. */
 			cl.viewent.angles[0] = cl.viewangles[0];
 			cl.viewent.angles[1] = cl.viewangles[1];
 			cl.viewent.angles[2] = cl.viewangles[2];
+
+			/* Overlay the gun ON the hand. View-weapon MDLs are authored
+			   offset from their origin (so they sit low-right of the screen
+			   when view-locked), so anchoring the origin at the hand floats
+			   the gun ahead of it. Put the model's own centre at the hand
+			   instead: origin = hand - R(angles) * centre, where the centre in
+			   model space is scale_origin + scale*127.5 and Quake maps model
+			   +X->forward, +Y->left, +Z->up. */
+			cx = vh->scale_origin[0] + vh->scale[0] * 127.5f;
+			cy = vh->scale_origin[1] + vh->scale[1] * 127.5f;
+			cz = vh->scale_origin[2] + vh->scale[2] * 127.5f;
+			AngleVectors (cl.viewent.angles, cf, cr, cu);
+			cl.viewent.origin[0] = handpos[0] - (cf[0]*cx - cr[0]*cy + cu[0]*cz);
+			cl.viewent.origin[1] = handpos[1] - (cf[1]*cx - cr[1]*cy + cu[1]*cz);
+			cl.viewent.origin[2] = handpos[2] - (cf[2]*cx - cr[2]*cy + cu[2]*cz);
 
 			/* Visual recoil, purely cosmetic (the shot already left with
 			   cl.viewangles). The view weapon idles at frame 0 and steps
