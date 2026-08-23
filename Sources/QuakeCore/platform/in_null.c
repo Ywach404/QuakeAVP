@@ -607,7 +607,9 @@ void IN_Move (usercmd_t *cmd)
 	if (qr_aim_active)
 	{
 		V_StopPitchDrift ();
-		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_aim_pitch,
+		/* Negate: the fed ray pitch is +up in the tracking frame, Quake pitch
+		   is positive-DOWN. Point the hand down and the shot goes down. */
+		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, -qr_aim_pitch,
 					      cl_maxpitch.value);
 	}
 	else if (vr_headaim.value)
