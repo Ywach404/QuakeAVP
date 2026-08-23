@@ -54,6 +54,12 @@ extern float qr_head[3];		/* body-frame head offset from recenter */
 extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
+extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
+
+/* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
+   drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
+   and the gun draws in the world like any other alias entity. */
+static int qr_handweapon;
 extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
 extern int qr_wheel_open;		/* held-open intent (release commits) */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
@@ -3039,7 +3045,7 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 	rec.meshnum = e->model->meshvbo;
 	rec.pose1 = lerpdata.pose1;
 	rec.pose2 = lerpdata.pose2;
-	if (e == &cl.viewent)
+	if (e == &cl.viewent && !qr_handweapon)
 		rec.flags |= QC_ENTFLAG_VIEWMODEL;
 
 	entity = QR_AppendEntity (slot, &rec);
@@ -3953,12 +3959,44 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				QR_EmitAliasModel (slot, e);
 		}
 
-	/* the view weapon, last, like upstream R_DrawViewModel; the consumer
-	   decides whether to draw it (window yes, immersive no) */
+	/* The view weapon, last, like upstream R_DrawViewModel. M6: with a live
+	   hand aim (qr_aim_active) draw it AT THE HAND, oriented along the aim
+	   the engine actually fired with (cl.viewangles) -- what you see is what
+	   shoots, no late-latch, one frame of lag accepted. Emitted through the
+	   ordinary alias path with the VIEWMODEL flag suppressed so the immersive
+	   consumer draws it in the world. Without a hand it stays the body-locked
+	   view model (flag and all, window-only), exactly as before. */
 	if (r_drawviewmodel.value && r_drawentities.value && !chase_active.value
 	    && !(cl.items & IT_INVISIBILITY) && cl.stats[STAT_HEALTH] > 0
 	    && cl.viewent.model && cl.viewent.model->type == mod_alias)
-		QR_EmitAliasModel (slot, &cl.viewent);
+	{
+		if (qr_aim_active)
+		{
+			vec3_t	fwdv, rightv, upv, ba;
+			float	ax, ay, az;
+
+			/* Body frame (not the aim): put the muzzle where the hand is,
+			   the same eye + (wrist - head) reconstruction the wheel uses. */
+			ba[0] = 0; ba[1] = qr_body_yaw; ba[2] = 0;
+			AngleVectors (ba, fwdv, rightv, upv);
+			ax = qr_aim_org[0] - qr_head[0];
+			ay = qr_aim_org[1] - qr_head[1];
+			az = qr_aim_org[2] - qr_head[2];
+			VectorMA (r_refdef.vieworg, ax, fwdv, cl.viewent.origin);
+			VectorMA (cl.viewent.origin, ay, rightv, cl.viewent.origin);
+			cl.viewent.origin[2] += az + qr_height_trim;
+			/* Point the gun down the aim the shot used. */
+			cl.viewent.angles[0] = cl.viewangles[0];
+			cl.viewent.angles[1] = cl.viewangles[1];
+			cl.viewent.angles[2] = cl.viewangles[2];
+
+			qr_handweapon = 1;
+			QR_EmitAliasModel (slot, &cl.viewent);
+			qr_handweapon = 0;
+		}
+		else
+			QR_EmitAliasModel (slot, &cl.viewent);
+	}
 
 	QR_EmitParticles (slot);
 	QR_EmitWheel (slot);
