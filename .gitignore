@@ -19,3 +19,9 @@ rogue/
 
 # macOS
 .DS_Store
+
+# range: generated from the user's own pak0; never commit id-derived data
+*.bsp
+*.wad
+pak1.pak
+pop.lmp

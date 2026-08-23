@@ -44,7 +44,6 @@ final class ImmersiveRenderer {
     private var loggedSetup = false
 
     /// Culling fov last reported to the engine, to dedupe the C call.
-    private var reportedCullFov = SIMD2<Float>(0, 0)
 
     /// Seated recenter: when the packet's recenter_count bumps, capture a
     /// correction that maps the current head yaw and position to neutral,
@@ -87,6 +86,9 @@ final class ImmersiveRenderer {
     // MARK: - Render thread
 
     private func run() {
+        // Cull by PVS only: the head faces anywhere the compositor renders,
+        // so a body-forward frustum would drop the world behind the gaze.
+        QC_RendererSetCullingFov(360, 360)
         loop: while true {
             switch layerRenderer.state {
             case .invalidated:
@@ -103,6 +105,7 @@ final class ImmersiveRenderer {
         // The engine outlives any number of immersive sessions; hand the
         // packet stream back to the window and drop the layer.
         QC_RendererSetCullingFov(0, 0)
+        QC_InputSetHeadPitch(0)   // level the aim for a later flat-window session
         print("[immersive] layer invalidated, render thread exiting")
         onStop()
     }
@@ -206,10 +209,13 @@ final class ImmersiveRenderer {
         let originFromDevice = recenterCorrection * rawOriginFromDevice
 
         // Output channel: haptic pulses (damage rises) and the per-weapon
-        // trigger feel follow the packet.
+        // trigger feel follow the packet; the wheel learns what the player
+        // owns from the same source of truth the ring is built from.
         if let packet {
             ControllerOutput.shared.frame(damageFlash: packet.damage_flash,
                                           activeWeapon: packet.active_weapon)
+            WheelState.shared.frame(items: packet.items,
+                                    worldScale: packet.world_scale)
         }
 
         // World->tracking-origin: the Quake BODY basis, scaled to metres —
@@ -226,12 +232,27 @@ final class ImmersiveRenderer {
             let s = packet.world_scale > 0 ? packet.world_scale : 0.0254
 
             // Body-frame head offset in Quake units: the tracking origin's
-            // axes are the body's (yaw is baked into the basis below).
+            // axes are the body's (yaw is baked into the basis below). Only
+            // the horizontal offset walks the player box; the vertical is
+            // the real head height and drives the camera height directly.
             let d = originFromDevice.columns.3
             let fwd = -d.z / s
             let right = d.x / s
-            let up = d.y / s
+            let up = d.y / s   // metres-scaled head height above the floor
             QC_InputSetHeadOffset(fwd, right, up, packet.recenter_count)
+
+            // Head yaw relative to the body, for look-relative locomotion:
+            // the head forward in the (yaw-only) tracking frame is already
+            // body-relative. Quake yaw is CCW/left-positive.
+            let hf = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
+            let headYaw = atan2(-hf.x, -hf.z) * 180 / .pi
+            QC_InputSetHeadYaw(headYaw)
+
+            // Head pitch drives the shot (vr_headaim): elevation of the head
+            // forward, negated into Quake's sense where +pitch looks DOWN.
+            let horiz = (hf.x * hf.x + hf.z * hf.z).squareRoot()
+            let headPitch = -atan2(hf.y, horiz) * 180 / .pi
+            QC_InputSetHeadPitch(headPitch)
 
             let yaw = packet.viewangles.1 * .pi / 180
             let fwdW = SIMD2(cos(yaw), sin(yaw))
@@ -244,9 +265,16 @@ final class ImmersiveRenderer {
                 ? excess * ((excessLen - packet.lean_limit) / excessLen)
                 : SIMD2<Float>(0, 0)
 
+            // Eye-locked baseline: the anchor (Quake point at the tracking
+            // origin) is the game eye, trimmed up/down by the live height
+            // knob. Vertical head motion moves the eye from here naturally.
+            // + raises the viewpoint (taller), - lowers it. Fed to the
+            // engine too, so the wrist-locked wheel rises with the camera.
+            let heightTrim = VRSettings.shared.heightOffset / s
+            QC_InputSetHeightTrim(heightTrim)
             let anchor = SIMD3(packet.vieworg.0 - absorbed.x - overLimit.x,
                                packet.vieworg.1 - absorbed.y - overLimit.y,
-                               packet.vieworg.2)
+                               packet.vieworg.2 + heightTrim)
             let quakeView = RendererCore.quakeViewMatrix(
                 origin: anchor,
                 angles: SIMD3(0, packet.viewangles.1, 0))
@@ -269,10 +297,12 @@ final class ImmersiveRenderer {
 
         var eyeViewproj: [simd_float4x4] = []
         var eyeOrigin: [SIMD4<Float>] = []
+        var handViewproj: [simd_float4x4] = []   // tracking->clip, ignores height trim
         for index in views.indices {
             let originFromEye = originFromDevice * views[index].transform
             let projection = drawable.computeProjection(viewIndex: index)
             eyeViewproj.append(projection * originFromEye.inverse * originFromQuake)
+            handViewproj.append(projection * originFromEye.inverse)
             // Per-eye view origin back in Quake units, for the sky
             // projection — this is what keeps the sky from mismatching
             // between the eyes.
@@ -293,8 +323,25 @@ final class ImmersiveRenderer {
         //    correct premultiplied result — with alpha accumulating as
         //    src + dst*(1-src) ("over"), so water over a wall stays
         //    alpha 1 and water over passthrough keeps its own coverage.
-        let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        _ = packet   // clear_color intentionally unused on this path
+        // Seal the world during normal play. A Quake level is a closed box;
+        // the only intended see-through is the phase melt. But brush seams
+        // (stair T-junctions) leave sub-pixel cracks that, over a transparent
+        // clear, leak the real room -- the passthrough band that walks up the
+        // stairs. Clear to OPAQUE black so those gaps read black instead, and
+        // fade the clear to transparent as phase runs so the melt still
+        // reveals passthrough.
+        // Always FULLY OPAQUE. A Quake level is a sealed box; brush-seam
+        // cracks must read black, never leak passthrough. The phase melt
+        // reveals passthrough by making the melting SURFACES transparent
+        // (world_phase_fragment), not by thinning this clear -- tying the
+        // clear alpha to phase leaked everywhere the moment phase went
+        // nonzero (crown/effect-driven), which is the stair bug.
+        let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+        // Hand debug wireframe: the published bones are already in
+        // corrected-tracking space; drawn with handViewproj they sit on the
+        // real hand, untouched by the game-world height trim.
+        let handDebug: [Float] = HandDebug.shared.enabled ? HandDebug.shared.snapshot() : []
 
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
@@ -308,7 +355,9 @@ final class ImmersiveRenderer {
                     eyeorg0: eyeOrigin[0], eyeorg1: eyeOrigin[1])
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
-                            amplificationCount: 2, drawsViewmodel: true)
+                            amplificationCount: 2, drawsViewmodel: false)
+                core.drawHandDebug(handDebug, viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                   pipelines: pipelines, encoder: encoder)
             }
             encoder.endEncoding()
         } else {
@@ -330,7 +379,9 @@ final class ImmersiveRenderer {
                         eyeorg0: eyeOrigin[index], eyeorg1: eyeOrigin[index])
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
-                                amplificationCount: 1, drawsViewmodel: true)
+                                amplificationCount: 1, drawsViewmodel: false)
+                    core.drawHandDebug(handDebug, viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                       pipelines: pipelines, encoder: encoder)
                 }
                 encoder.endEncoding()
             }
@@ -392,32 +443,22 @@ final class ImmersiveRenderer {
         let color = drawable.colorTextures[0]
         QC_RendererSetDrawableSize(Int32(color.width), Int32(color.height))
 
-        // Widest symmetric fov across both eyes, from the projection
-        // matrices themselves (P00 = 2/(tanL+tanR), P20 = (tanR-tanL)/…).
-        var maxTanX: Float = 0
-        var maxTanY: Float = 0
-        for index in drawable.views.indices {
-            let p = drawable.computeProjection(viewIndex: index)
-            let tanRight = abs((1 + p.columns.2.x) / p.columns.0.x)
-            let tanLeft = abs((1 - p.columns.2.x) / p.columns.0.x)
-            let tanTop = abs((1 + p.columns.2.y) / p.columns.1.y)
-            let tanBottom = abs((1 - p.columns.2.y) / p.columns.1.y)
-            maxTanX = max(maxTanX, tanLeft, tanRight)
-            maxTanY = max(maxTanY, tanTop, tanBottom)
-        }
-        let fov = SIMD2<Float>(
-            2 * atan(maxTanX) * 180 / .pi,
-            2 * atan(maxTanY) * 180 / .pi)
-        if abs(fov.x - reportedCullFov.x) > 0.5 || abs(fov.y - reportedCullFov.y) > 0.5 {
-            reportedCullFov = fov
-            QC_RendererSetCullingFov(fov.x, fov.y)
-        }
+        // NB: no per-frame culling-fov report here. Immersive renders the
+        // WHOLE level (omni, set once in run()); reporting the drawable's
+        // ~100 deg binocular fov each frame here used to overwrite that back
+        // to a body-forward cone, which is what made the world drop out on
+        // move/turn/climb. The drawable size is all this needs to publish.
     }
 
     /// The correction that maps `pose`'s yaw and position to neutral —
-    /// pitch and roll are left alone, they are genuinely the head's. Seated
-    /// recenter is exactly this: the chair's rotation and drift become the
-    /// new zero.
+    /// pitch and roll are left alone, they are genuinely the head's. This
+    /// zeroes the head fully at recenter, so the baseline eye is the game
+    /// eye (vieworg) and vertical head motion tracks from there (stand up
+    /// and you rise). A floor-locked variant that preserved height and
+    /// pinned the game floor to the real floor was tried and reverted: it
+    /// depended on the tracking origin being at floor level, which did not
+    /// hold on device and left the height wrong in both postures. Eye
+    /// height is now trimmed live from the Comfort menu instead.
     private static func correction(zeroing pose: simd_float4x4) -> simd_float4x4 {
         // Device forward is -Z; its XZ heading is the yaw to undo.
         let f = -pose.columns.2

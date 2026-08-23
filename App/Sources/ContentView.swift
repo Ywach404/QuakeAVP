@@ -16,6 +16,15 @@ struct ContentView: View {
     @State private var commandText = ""
     @State private var autoOpened = false
     @State private var showScope = false
+    @State private var showComfort = false
+    @State private var heightOffset: Float = 0.4
+    @State private var rightHanded = true
+    @State private var lookRelative = true
+    @State private var fingerDebug = false
+    @State private var smoothTurn = false
+    @State private var wheelSlowmo = true
+    @State private var swapSenseHands = false
+    @State private var fullMenu = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -51,6 +60,11 @@ struct ContentView: View {
             engine.boot()
             gamepad.start()
             hands = HandInput(aggregator: gamepad.aggregator)
+            // The wheel commits through the one console route.
+            let engine = self.engine
+            WheelState.shared.sendCommand = { command in
+                Task { @MainActor in engine.send(command) }
+            }
         }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
@@ -62,12 +76,22 @@ struct ContentView: View {
         }
         .onChange(of: gamepad.hasPhysicalController) { _, _ in updateHands() }
         .onChange(of: engine.status) { _, status in
-            // Test harness: QAVP_AUTO_IMMERSIVE=1 opens the space as soon as
-            // the engine is up, so simctl/devicectl runs need no UI taps;
-            // =cycle additionally dismisses and reopens it once, which is
-            // the lifecycle test (no leak, no crash, engine keeps ticking).
+            // Force the phase melt OFF when the engine comes up. It's a
+            // head-centred sphere that dissolves nearby surfaces to
+            // passthrough; a stale/nonzero `phase` (from a prior config or a
+            // stray slider) leaves it melting the stairs you stand on. The UI
+            // starts at 0%, so match it.
+            if status == .running {
+                engine.send("phase 0")
+                phaseLevel = 0
+            }
+            // Open the immersive space as soon as the engine is up -- the flat
+            // window is only a mono debug view, so play should begin in the
+            // headset without a manual tap. QAVP_AUTO_IMMERSIVE=cycle also
+            // dismisses and reopens once (the lifecycle test: no leak, no
+            // crash, engine keeps ticking); =off opts out.
             let mode = ProcessInfo.processInfo.environment["QAVP_AUTO_IMMERSIVE"]
-            guard status == .running, !autoOpened, mode == "1" || mode == "cycle"
+            guard status == .running, !autoOpened, mode != "off"
             else { return }
             autoOpened = true
             Task {
@@ -106,6 +130,7 @@ struct ContentView: View {
             }
             Spacer()
             if engine.status == .running {
+                comfortMenu
                 Button {
                     showScope.toggle()
                 } label: {
@@ -115,6 +140,77 @@ struct ContentView: View {
             phaseButton
             immersiveButton
             statusBadge
+        }
+    }
+
+    /// Comfort controls in a POPOVER, not a Menu -- a Menu silently drops
+    /// Sliders (only buttons/toggles/pickers render), which is why the
+    /// height slider never appeared. A popover renders a real slider.
+    private var comfortMenu: some View {
+        Button {
+            showComfort.toggle()
+        } label: {
+            Label("Comfort", systemImage: "slider.horizontal.3")
+        }
+        .popover(isPresented: $showComfort, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Eye height  \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm")
+                        .font(.headline)
+                    Text("Raise until the floor sits at your real floor.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Slider(value: Binding(
+                        get: { Double(heightOffset) },
+                        set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0) }),
+                        in: -0.6...0.9)
+                    HStack {
+                        Button("Reset") {
+                            heightOffset = 0.4; VRSettings.shared.heightOffset = 0.4
+                        }
+                        Spacer()
+                        Button("Recenter") { engine.send("vr_recenter") }
+                    }
+                }
+                Divider()
+                Picker("Dominant hand", selection: Binding(
+                    get: { rightHanded },
+                    set: { rightHanded = $0; VRSettings.shared.rightHanded = $0 })) {
+                    Text("Right-handed").tag(true)
+                    Text("Left-handed").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Toggle("Move where I look", isOn: Binding(
+                    get: { lookRelative },
+                    set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
+                Toggle("Swap controller hands", isOn: Binding(
+                    get: { swapSenseHands },
+                    set: { swapSenseHands = $0; VRSettings.shared.swapSenseHands = $0 }))
+                Toggle("Full weapon menu (look to pick)", isOn: Binding(
+                    get: { fullMenu },
+                    set: { fullMenu = $0
+                           VRSettings.shared.fullMenu = $0
+                           engine.send("vr_fullmenu \($0 ? 1 : 0)") }))
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Turning", selection: Binding(
+                        get: { smoothTurn },
+                        set: { smoothTurn = $0; engine.send("vr_smoothturn \($0 ? 1 : 0)") })) {
+                        Text("Snap 45°").tag(false)
+                        Text("Smooth").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Flick the gun hand sideways (thumb-and-middle pinch) to turn.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
+                    get: { wheelSlowmo },
+                    set: { wheelSlowmo = $0; engine.send("wheel_timescale \($0 ? "0.2" : "1")") }))
+                Toggle("Finger debug wireframe", isOn: Binding(
+                    get: { fingerDebug },
+                    set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))
+            }
+            .padding(24)
+            .frame(width: 360)
         }
     }
 

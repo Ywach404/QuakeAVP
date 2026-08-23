@@ -26,6 +26,8 @@
 
 /* defined in cl_main.c; upstream externs them file-locally in cl_input.c */
 extern cvar_t cl_maxpitch, cl_minpitch;
+/* defined in host.c; no header declares it */
+extern cvar_t host_timescale;
 
 /* ========================================================================
  * any-thread producers
@@ -35,6 +37,14 @@ static pthread_mutex_t		qc_input_lock = PTHREAD_MUTEX_INITIALIZER;
 static qc_gamepad_state_t	qc_pad_shared;
 static float			qc_head_shared[3];	/* fwd, right, up */
 static uint32_t			qc_head_ack;		/* recenter echo */
+static int			qc_wheel_open_shared;
+static int			qc_wheel_anchor_shared;
+static float			qc_wheel_pos_shared[3];
+static int			qc_wheel_highlight_shared;
+static float			qc_head_yaw_shared;
+static float			qc_head_pitch_shared;
+static int			qc_slowmo_shared;	/* raw L3 button */
+static float			qc_height_trim_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
@@ -54,6 +64,47 @@ void QC_InputSetHeadOffset (float fwd, float right, float up,
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
+void QC_InputSetHeadYaw (float yaw_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_head_yaw_shared = yaw_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetHeadPitch (float pitch_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_head_pitch_shared = pitch_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetSlowmo (int pressed)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_slowmo_shared = pressed ? 1 : 0;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetHeightTrim (float units)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_height_trim_shared = units;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputSetWheel (int open, int has_anchor,
+		       float fwd, float right, float up, int highlight)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_wheel_open_shared = open;
+	qc_wheel_anchor_shared = has_anchor;
+	qc_wheel_pos_shared[0] = fwd;
+	qc_wheel_pos_shared[1] = right;
+	qc_wheel_pos_shared[2] = up;
+	qc_wheel_highlight_shared = highlight;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
 /* ========================================================================
  * engine-thread state
  * ===================================================================== */
@@ -64,12 +115,36 @@ void QC_InputSetHeadOffset (float fwd, float right, float up,
 float		qr_head_absorbed[2];
 uint32_t	qr_recenter_count;
 
+/* Weapon-wheel state, read by qr_bridge.c for the ring emission. The open
+   FRACTION eases on REAL time (the wheel must open at full speed while the
+   world it slows crawls -- that contrast is the whole effect), and the
+   same fraction drives host_timescale, so the two can never disagree. */
+float		qr_wheel_frac;			/* eased 0..1 */
+int		qr_wheel_open;			/* merged intent, this frame */
+int		qr_wheel_has_anchor;
+float		qr_wheel_anchor[3];		/* body frame: fwd, right, up */
+int		qr_wheel_highlight = -1;	/* owned-ring index, -1 none */
+float		qr_height_trim;			/* eye-height trim, Quake units */
+
+static int	qr_wheel_console_open;		/* +wheel / -wheel */
+static cvar_t	wheel_timescale = {"wheel_timescale", "0.2", CVAR_ARCHIVE};
+
+#define QR_WHEEL_RAMP_TIME	0.25
+
 static qc_gamepad_state_t	qr_pad, qr_pad_prev;
-static float			qr_head[3];
+float				qr_head[3];	/* body-frame head offset, read by qr_bridge.c */
+float				qr_head_yaw;	/* read by qr_bridge (full menu) */
+float				qr_head_pitch;
+static int			qr_slowmo_raw;		/* drained L3 button */
+static int			qr_slowmo_active;	/* toggled bullet-time */
 static uint32_t			qr_head_ack_seen;
 
 static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
 static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
+static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
+static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
+static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
+cvar_t		vr_fullmenu = {"vr_fullmenu", "0", CVAR_ARCHIVE};	/* fixed panel vs wrist ring */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
 
 /* Stick response: radial deadzone, then rescale so the curve still reaches
@@ -93,9 +168,85 @@ static void IN_SnapshotInputs (void)
 	qr_head[0] = qc_head_shared[0];
 	qr_head[1] = qc_head_shared[1];
 	qr_head[2] = qc_head_shared[2];
+	qr_head_yaw = qc_head_yaw_shared;
+	qr_head_pitch = qc_head_pitch_shared;
+	qr_slowmo_raw = qc_slowmo_shared;
 	qr_head_ack_seen = qc_head_ack;
+	qr_wheel_open = qc_wheel_open_shared || qr_wheel_console_open;
+	qr_wheel_has_anchor = qc_wheel_anchor_shared;
+	qr_wheel_anchor[0] = qc_wheel_pos_shared[0];
+	qr_wheel_anchor[1] = qc_wheel_pos_shared[1];
+	qr_wheel_anchor[2] = qc_wheel_pos_shared[2];
+	qr_wheel_highlight = qc_wheel_highlight_shared;
+	qr_height_trim = qc_height_trim_shared;
 	pthread_mutex_unlock (&qc_input_lock);
 }
+
+/*
+================
+IN_WheelRamp -- ease the open fraction on REAL time and drive
+host_timescale from it.
+
+Runs every IN_Commands, i.e. once per engine tick. The clock is the
+engine's `realtime`, which accumulates the unscaled dt QC_Frame feeds --
+the same clock Host_FilterTime paces ticks (and therefore packets) with,
+and the one clock host_timescale can never slow. That is also why
+host_timescale is the right lever: it multiplies only host_frametime, the
+simulation's dt, so the tick and packet rate stay at full speed while the
+world crawls. Scaling the QC_Frame dt at the boundary instead would
+starve the pacer and drop the packet rate with it.
+================
+*/
+static void IN_WheelRamp (void)
+{
+	static double	lasttime;
+	static float	qr_slowmo_frac;		/* eased 0..1 */
+	static int	slowmo_prev_raw;
+	double		dt = realtime - lasttime;
+	float		wtarget = qr_wheel_open ? 1.f : 0.f;
+	float		starget, we, se, ts_wheel, ts_slow, ts;
+
+	if (dt < 0 || dt > 1)
+		dt = 0;
+	lasttime = realtime;
+
+	/* L3 is a TOGGLE: flip bullet-time on the button's rising edge. */
+	if (qr_slowmo_raw && !slowmo_prev_raw)
+		qr_slowmo_active = !qr_slowmo_active;
+	slowmo_prev_raw = qr_slowmo_raw;
+	starget = qr_slowmo_active ? 1.f : 0.f;
+
+	if (qr_wheel_frac < wtarget)
+		qr_wheel_frac = q_min (qr_wheel_frac + (float)(dt / QR_WHEEL_RAMP_TIME), wtarget);
+	else if (qr_wheel_frac > wtarget)
+		qr_wheel_frac = q_max (qr_wheel_frac - (float)(dt / QR_WHEEL_RAMP_TIME), wtarget);
+
+	if (qr_slowmo_frac < starget)
+		qr_slowmo_frac = q_min (qr_slowmo_frac + (float)(dt / QR_WHEEL_RAMP_TIME), starget);
+	else if (qr_slowmo_frac > starget)
+		qr_slowmo_frac = q_max (qr_slowmo_frac - (float)(dt / QR_WHEEL_RAMP_TIME), starget);
+
+	if (qr_wheel_frac <= 0.f && qr_slowmo_frac <= 0.f)
+	{
+		/* nothing slowing time: hand the cvar back to its upstream meaning
+		   (0 = disabled) so console slow-mo experiments still work */
+		if (host_timescale.value != 0.f)
+			Cvar_SetValueQuick (&host_timescale, 0.f);
+		return;
+	}
+
+	/* The deeper slowdown wins, so opening the wheel mid-slowmo (or vice
+	   versa) never speeds the world back up. */
+	we = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
+	se = qr_slowmo_frac * qr_slowmo_frac * (3.f - 2.f * qr_slowmo_frac);
+	ts_wheel = 1.f + we * (CLAMP (0.05f, wheel_timescale.value, 1.f) - 1.f);
+	ts_slow  = 1.f + se * (CLAMP (0.05f, vr_slowmo.value, 1.f) - 1.f);
+	ts = q_min (ts_wheel, ts_slow);
+	Cvar_SetValueQuick (&host_timescale, ts);
+}
+
+static void IN_WheelDown_f (void) { qr_wheel_console_open = 1; }
+static void IN_WheelUp_f (void) { qr_wheel_console_open = 0; }
 
 /* ========================================================================
  * buttons -> Key_Event
@@ -144,6 +295,18 @@ void IN_Commands (void)
 	uint32_t changed;
 
 	IN_SnapshotInputs ();
+	IN_WheelRamp ();
+
+	/* While the wheel is open the trigger picks weapons, not fights:
+	   release a held attack and swallow new edges. */
+	if (qr_wheel_open)
+	{
+		if (qr_rt_down)
+		{
+			qr_rt_down = false;
+			Key_Event (K_RTRIGGER, false);
+		}
+	}
 
 	changed = qr_pad.buttons ^ qr_pad_prev.buttons;
 	for (i = 0; i < sizeof(qr_padkeys) / sizeof(qr_padkeys[0]); i++)
@@ -164,7 +327,8 @@ void IN_Commands (void)
 	if ((changed & QC_PAD_OPTIONS) && (qr_pad.buttons & QC_PAD_OPTIONS))
 		Cbuf_AddText ("vr_recenter\n");
 
-	IN_TriggerEdge (qr_pad.rt, &qr_rt_down, K_RTRIGGER);
+	if (!qr_wheel_open)
+		IN_TriggerEdge (qr_pad.rt, &qr_rt_down, K_RTRIGGER);
 	IN_TriggerEdge (qr_pad.lt, &qr_lt_down, K_LTRIGGER);
 
 	qr_pad_prev = qr_pad;
@@ -289,6 +453,10 @@ static void IN_Recenter_f (void)
 	IN_AbsorbHeadOffset ();
 	qr_head_absorbed[0] = 0.f;
 	qr_head_absorbed[1] = 0.f;
+	/* Level the aim too: the body pitch is stick-driven (head supplies the
+	   view pitch), so a drifting stick can rack it up to the clamp with no
+	   easy way back. Recenter is the recovery -- it puts the shot level. */
+	cl.viewangles[PITCH] = 0.f;
 	qr_recenter_count++;
 }
 
@@ -305,27 +473,73 @@ void IN_Move (usercmd_t *cmd)
 
 	IN_SnapshotInputs ();
 
-	lx = IN_DeadZone (qr_pad.lx);
-	ly = IN_DeadZone (qr_pad.ly);
+	/* Choosing a weapon, not moving: sticks go quiet while the wheel is
+	   open (stick locomotion through a time-scaled world is a comfort
+	   risk). The head-follow absorb below still runs -- physically
+	   walking is real motion and stays honoured. */
+	if (qr_wheel_open)
+	{
+		IN_AbsorbHeadOffset ();
+		return;
+	}
+
+	/* Radial deadzone on the left stick so a diagonal push keeps its
+	   direction -- a per-axis deadzone clips the corners and makes
+	   diagonals feel unreachable. The right stick stays per-axis: its
+	   axes are independent (X snaps, Y pitches). */
+	{
+		float mag = sqrtf (qr_pad.lx * qr_pad.lx + qr_pad.ly * qr_pad.ly);
+		if (mag > QR_STICK_DEADZONE)
+		{
+			float scale = (mag - QR_STICK_DEADZONE)
+				    / ((1.f - QR_STICK_DEADZONE) * mag);
+			lx = qr_pad.lx * scale;
+			ly = qr_pad.ly * scale;
+		}
+		else
+			lx = ly = 0.f;
+	}
 	rx = IN_DeadZone (qr_pad.rx);
 	ry = IN_DeadZone (qr_pad.ry);
 
-	/* Same speed-key contract as upstream CL_BaseMove: +speed (or
-	   cl_alwaysrun) scales by cl_movespeedkey. */
+	/* Full speed by DEFAULT. Upstream walks at cl_forwardspeed 200 while the
+	   server cap is 320 and strafe is 350, so forward crawls and strafe is
+	   already maxed -- asymmetric and sluggish on a single stick. Invert it:
+	   run by default, and +speed (the left trigger) becomes a WALK modifier
+	   for precision. cl_alwaysrun flips back to upstream walk-by-default. */
 	if ((in_speed.state & 1) ^ (cl_alwaysrun.value != 0.f))
-		speed = cl_movespeedkey.value;
-	else
 		speed = 1.f;
+	else
+		speed = cl_movespeedkey.value;
 
-	/* Left stick: strafe/forward along BODY yaw (usercmd is applied in
-	   the body basis server-side, and the head never touches it). */
-	cmd->sidemove += cl_sidespeed.value * speed * lx;
-	cmd->forwardmove += cl_forwardspeed.value * speed * ly;
+	/* Look-relative locomotion: rotate the stick by the head's yaw so
+	   "forward" is where you look, not where the body last snapped to.
+	   The server applies the usercmd in the body basis, so pre-rotate
+	   into it here. vr_moverelative 0 restores body-relative movement. */
+	{
+		float hy = vr_moverelative.value ? qr_head_yaw * M_PI / 180.f : 0.f;
+		float c = cosf (hy), s = sinf (hy);
+		/* stick as a body-frame vector (X forward, Y left): forward
+		   is +X, a right push is -Y */
+		float vx = ly, vy = -lx;
+		float rxv = vx * c - vy * s;	/* rotate CCW by head yaw */
+		float ryv = vx * s + vy * c;
+		cmd->forwardmove += cl_forwardspeed.value * speed * rxv;
+		cmd->sidemove += cl_sidespeed.value * speed * (-ryv);
+	}
 
-	/* Right stick Y: aim pitch. The immersive camera ignores body pitch
-	   (the head supplies its own), so this moves the gun and the shot,
-	   not the horizon. */
-	if (ry != 0.f)
+	/* Vertical aim. Default (vr_headaim): the SHOT pitches to where you LOOK
+	   -- the head pose the renderer draws with, fed as qr_head_pitch, becomes
+	   the body pitch, so looking down shoots down with no stick and nothing
+	   to drift. vr_headaim 0 falls back to the old right-stick rate control
+	   (and the flat debug window, which has no head, uses it too). */
+	if (vr_headaim.value)
+	{
+		V_StopPitchDrift ();
+		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_head_pitch,
+					      cl_maxpitch.value);
+	}
+	else if (ry != 0.f)
 	{
 		V_StopPitchDrift ();
 		cl.viewangles[PITCH] -= ry * cl_pitchspeed.value * host_frametime;
@@ -362,8 +576,15 @@ void IN_Init (void)
 {
 	Cvar_RegisterVariable (&vr_snapturn);
 	Cvar_RegisterVariable (&vr_smoothturn);
+	Cvar_RegisterVariable (&vr_moverelative);
+	Cvar_RegisterVariable (&vr_headaim);
+	Cvar_RegisterVariable (&vr_slowmo);
+	Cvar_RegisterVariable (&vr_fullmenu);
 	Cvar_RegisterVariable (&vr_lean_limit);
+	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);
+	Cmd_AddCommand ("+wheel", IN_WheelDown_f);
+	Cmd_AddCommand ("-wheel", IN_WheelUp_f);
 
 	/* Gameplay defaults for the controller keys. Queued before quake.rc
 	   executes, so config.cfg and autoexec.cfg can rebind them. */
@@ -376,6 +597,7 @@ void IN_Init (void)
 		"bind RSHOULDER \"impulse 10\"\n"
 		"bind RTRIGGER +attack\n"
 		"bind LTRIGGER +speed\n"
+		"bind LTHUMB +movedown\n"	/* hands crouch (thumb+pinky) */
 		"bind RTHUMB vr_recenter\n");
 }
 

@@ -45,6 +45,17 @@ extern float qr_head_absorbed[2];
 extern uint32_t qr_recenter_count;
 extern cvar_t vr_lean_limit;
 
+/* weapon-wheel state, owned by in_null.c on the engine thread */
+extern float qr_wheel_frac;
+extern int qr_wheel_has_anchor;
+extern float qr_wheel_anchor[3];
+extern int qr_wheel_highlight;
+extern float qr_head[3];		/* body-frame head offset from recenter */
+extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
+extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
+extern int qr_wheel_open;		/* held-open intent (release commits) */
+extern float qr_height_trim;		/* eye-height trim, Quake units */
+
 /* vr_worldscale's default and clamp range: ~1 inch per Quake unit, and the
    0.8x-1.2x band the comfort theory-craft allows before the world reads as
    miniature or gigantic. The sim stays in Quake units; only the consumer's
@@ -62,6 +73,17 @@ extern cvar_t vr_lean_limit;
    Quake units (~0.8 m). The sweep grows exponentially from here to the
    world diagonal -- see the phase block in QR_RenderView. */
 #define QR_PHASE_NEAR_RADIUS	32.0f
+
+/* World surfaces are grown this many Quake units outward in their own plane
+   at load, so abutting brush faces overlap and T-junction cracks -- the
+   sub-pixel seams that leak the level behind the stairs in VR -- are covered.
+   Small enough that the texture overhang is imperceptible. */
+#define QR_TJUNC_GROW		0.5f
+
+/* Immersive only: surfaces whose plane passes within this many units of the
+   eye are never back-face culled, so a stair tread the eye is grazing doesn't
+   wink out and reveal the level behind it. Roughly a step and a quarter. */
+#define QR_BACKFACE_KEEP	20.0f
 
 /* ========================================================================
  * globals the engine headers declare and upstream's renderer defined
@@ -145,6 +167,10 @@ typedef struct qr_frame_slot_s {
 	uint32_t	batch_capacity;
 	qc_entity_t	*entities;
 	uint32_t	entity_capacity;
+	float		*text_verts;		/* 9 floats/vert, grown as needed */
+	uint32_t	text_capacity;		/* in floats */
+	float		*particle_verts;	/* 7 floats/vert (xyz rgba) */
+	uint32_t	particle_capacity;	/* in floats */
 	int		state;
 	uint64_t	seq;
 } qr_frame_slot_t;
@@ -180,6 +206,7 @@ static pthread_mutex_t	qr_drawable_lock = PTHREAD_MUTEX_INITIALIZER;
    the consumer when the immersive layer knows its merged binocular frustum,
    read once per engine frame. */
 static float		qr_cull_fovx, qr_cull_fovy;
+static int		qr_cull_omni;	/* PVS-only, no frustum (immersive) */
 static pthread_mutex_t	qr_cullfov_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void QC_RendererSetDrawableSize (int width, int height)
@@ -1319,8 +1346,39 @@ static void QR_BuildWorldVertexArray (void)
 			msurface_t *s = &m->surfaces[i];
 			s->vbo_firstvert = varray_index;
 			if (s->polys)
-				memcpy (&varray[varray_index], s->polys->verts,
-					s->numedges * sizeof(qc_world_vertex_t));
+			{
+				qc_world_vertex_t *vs = &varray[varray_index];
+				int n = s->numedges, k;
+				float cx = 0.f, cy = 0.f, cz = 0.f;
+
+				memcpy (vs, s->polys->verts, n * sizeof(qc_world_vertex_t));
+
+				/* Grow the polygon outward from its centroid. It is planar,
+				   so this stays in-plane; neighbours overlap and cover the
+				   T-junction cracks. UVs stay at the original verts, so the
+				   overhang only stretches the texture a hair. */
+				for (k = 0; k < n; k++)
+				{
+					cx += vs[k].xyz[0];
+					cy += vs[k].xyz[1];
+					cz += vs[k].xyz[2];
+				}
+				cx /= n; cy /= n; cz /= n;
+				for (k = 0; k < n; k++)
+				{
+					float dx = vs[k].xyz[0] - cx;
+					float dy = vs[k].xyz[1] - cy;
+					float dz = vs[k].xyz[2] - cz;
+					float len = sqrtf (dx * dx + dy * dy + dz * dz);
+					if (len > 0.1f)
+					{
+						float g = QR_TJUNC_GROW / len;
+						vs[k].xyz[0] += dx * g;
+						vs[k].xyz[1] += dy * g;
+						vs[k].xyz[2] += dz * g;
+					}
+				}
+			}
 			varray_index += s->numedges;
 		}
 	}
@@ -1787,6 +1845,12 @@ qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
 {
 	int i;
 	mplane_t *p;
+	/* Omnidirectional pass (immersive): the head looks anywhere the moment
+	   after we cull, so a body-forward frustum would wrongly discard
+	   everything behind the gaze -- the world "falls out" as you turn. Cull
+	   by PVS alone; over-drawing the potentially-visible set is cheap. */
+	if (qr_cull_omni)
+		return false;
 	for (i = 0; i < 4; i++)
 	{
 		p = frustum + i;
@@ -1820,6 +1884,16 @@ static qboolean R_BackFaceCull (msurface_t *surf)
 	else
 		dot = DotProduct (r_refdef.vieworg, surf->plane->normal) - surf->plane->dist;
 
+	/* Near-grazing surfaces are KEPT (GPU culling is .none, so this actually
+	   draws them). A stair tread the eye is nearly level with sits right at
+	   its own plane (|dot| ~ 0); the plain back-face test culls it the instant
+	   the eye dips below, and at the grazing angle its absence reveals the
+	   level behind -- the seam that walks up the steps a few ahead of you.
+	   Keeping the sliver (edge-on, invisible) fills the gap. Cheap: only
+	   surfaces whose PLANE passes within QR_BACKFACE_KEEP of the eye. */
+	if (qr_cull_omni && fabs (dot) < QR_BACKFACE_KEEP)
+		return false;
+
 	if ((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK))
 		return true;
 
@@ -1848,8 +1922,14 @@ void R_MarkSurfaces (void)
 		if ((*mark)->flags & SURF_DRAWTURB)
 			nearwaterportal = true;
 
-	/* choose vis data */
-	if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
+	/* choose vis data. Omnidirectional (immersive) renders the WHOLE level,
+	   not the current leaf's PVS: the head translates freely as it turns and
+	   climbs, so a position-based visibility set pops and rebuilds as the eye
+	   crosses leaves, and drops the floor beneath you when you stand on a box
+	   (its PVS was baked without that vantage). Drawing every leaf is cheap
+	   for Quake maps and the only thing that holds the world together when you
+	   can look anywhere from anywhere. */
+	if (r_novis.value || qr_cull_omni || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
 		vis = Mod_NoVisPVS (cl.worldmodel);
 	else if (nearwaterportal)
 		vis = SV_FatPVS (r_origin, cl.worldmodel);
@@ -2977,6 +3057,853 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 
 /*
 ================
+Particles -- a faithful port of Quake's classic particle system (gl_rpart.c
+minus the GL draw). The spawn functions (R_ParticleExplosion, R_RocketTrail,
+...) are engine entry points, stubbed no-ops before this. CL_RunParticles
+ages and moves them once per host frame (host.c calls it); QR_EmitParticles
+billboards the live set into the packet as colour quads, drawn depth-tested
+with the wheel-guide pipeline. Dynamic lights already flashed on explosions;
+this is the missing visual body.
+================
+*/
+#define QR_MAX_PARTICLES	8192
+#define QR_PARTICLE_SIZE	1.3f
+
+extern cvar_t		sv_gravity;
+
+static particle_t	qr_particles[QR_MAX_PARTICLES];
+static particle_t	*qr_active_particles, *qr_free_particles;
+static int		qr_particles_inited;
+
+static const int	qr_ramp1[8] = {0x6f, 0x6d, 0x6b, 0x69, 0x67, 0x65, 0x63, 0x61};
+static const int	qr_ramp2[8] = {0x6f, 0x6e, 0x6d, 0x6c, 0x6b, 0x6a, 0x68, 0x66};
+static const int	qr_ramp3[8] = {0x6d, 0x6b, 0x06, 0x05, 0x04, 0x03, 0x00, 0x00};
+
+void R_ClearParticles (void)
+{
+	int i;
+
+	qr_free_particles = &qr_particles[0];
+	qr_active_particles = NULL;
+	for (i = 0; i < QR_MAX_PARTICLES - 1; i++)
+		qr_particles[i].next = &qr_particles[i + 1];
+	qr_particles[QR_MAX_PARTICLES - 1].next = NULL;
+	qr_particles_inited = 1;
+}
+
+static particle_t *QR_AllocParticle (void)
+{
+	particle_t *p;
+
+	if (!qr_particles_inited)
+		R_ClearParticles ();
+	if (!qr_free_particles)
+		return NULL;
+	p = qr_free_particles;
+	qr_free_particles = p->next;
+	p->next = qr_active_particles;
+	qr_active_particles = p;
+	return p;
+}
+
+void R_ParticleExplosion (vec3_t org)
+{
+	int		i, j;
+	particle_t	*p;
+
+	for (i = 0; i < 1024; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 5;
+		p->color = qr_ramp1[0];
+		p->ramp = rand () & 3;
+		p->type = (i & 1) ? pt_explode : pt_explode2;
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () % 32) - 16);
+			p->vel[j] = (rand () % 512) - 256;
+		}
+	}
+}
+
+void R_ParticleExplosion2 (vec3_t org, int colorStart, int colorLength)
+{
+	int		i, j, colorMod = 0;
+	particle_t	*p;
+
+	for (i = 0; i < 512; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 0.3f;
+		p->color = colorStart + (colorMod % colorLength);
+		colorMod++;
+		p->type = pt_blob;
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () % 32) - 16);
+			p->vel[j] = (rand () % 512) - 256;
+		}
+	}
+}
+
+void R_BlobExplosion (vec3_t org)
+{
+	int		i, j;
+	particle_t	*p;
+
+	for (i = 0; i < 1024; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 1 + (rand () & 8) * 0.05f;
+		if (i & 1)
+		{
+			p->type = pt_blob;
+			p->color = 66 + rand () % 6;
+		}
+		else
+		{
+			p->type = pt_blob2;
+			p->color = 150 + rand () % 6;
+		}
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () % 32) - 16);
+			p->vel[j] = (rand () % 512) - 256;
+		}
+	}
+}
+
+void R_RunParticleEffect (vec3_t org, vec3_t dir, int color, int count)
+{
+	int		i, j;
+	particle_t	*p;
+
+	for (i = 0; i < count; i++)
+	{
+		if (!(p = QR_AllocParticle ()))
+			return;
+		p->die = cl.time + 0.1f * (rand () % 5);
+		p->color = (color & ~7) + (rand () & 7);
+		p->type = pt_slowgrav;
+		for (j = 0; j < 3; j++)
+		{
+			p->org[j] = org[j] + ((rand () & 15) - 8);
+			p->vel[j] = dir[j] * 15;
+		}
+	}
+}
+
+void R_LavaSplash (vec3_t org)
+{
+	int		i, j, k;
+	particle_t	*p;
+	float		vel;
+	vec3_t		dir;
+
+	for (i = -16; i < 16; i++)
+		for (j = -16; j < 16; j++)
+			for (k = 0; k < 1; k++)
+			{
+				if (!(p = QR_AllocParticle ()))
+					return;
+				p->die = cl.time + 2 + (rand () & 31) * 0.02f;
+				p->color = 224 + (rand () & 7);
+				p->type = pt_slowgrav;
+				dir[0] = j * 8 + (rand () & 7);
+				dir[1] = i * 8 + (rand () & 7);
+				dir[2] = 256;
+				p->org[0] = org[0] + dir[0];
+				p->org[1] = org[1] + dir[1];
+				p->org[2] = org[2] + (rand () & 63);
+				VectorNormalize (dir);
+				vel = 50 + (rand () & 63);
+				VectorScale (dir, vel, p->vel);
+			}
+}
+
+void R_TeleportSplash (vec3_t org)
+{
+	int		i, j, k;
+	particle_t	*p;
+	float		vel;
+	vec3_t		dir;
+
+	for (i = -16; i < 16; i += 4)
+		for (j = -16; j < 16; j += 4)
+			for (k = -24; k < 32; k += 4)
+			{
+				if (!(p = QR_AllocParticle ()))
+					return;
+				p->die = cl.time + 0.2f + (rand () & 7) * 0.02f;
+				p->color = 7 + (rand () & 7);
+				p->type = pt_slowgrav;
+				dir[0] = j * 8;
+				dir[1] = i * 8;
+				dir[2] = k * 8;
+				p->org[0] = org[0] + i + (rand () & 3);
+				p->org[1] = org[1] + j + (rand () & 3);
+				p->org[2] = org[2] + k + (rand () & 3);
+				VectorNormalize (dir);
+				vel = 50 + (rand () & 63);
+				VectorScale (dir, vel, p->vel);
+			}
+}
+
+void R_RocketTrail (vec3_t start, vec3_t end, int type)
+{
+	vec3_t		vec;
+	float		len;
+	int		j, dec;
+	particle_t	*p;
+	static int	tracercount;
+
+	VectorSubtract (end, start, vec);
+	len = VectorNormalize (vec);
+	dec = (type < 128) ? 3 : (type -= 128, 1);
+
+	while (len > 0)
+	{
+		len -= dec;
+		if (!(p = QR_AllocParticle ()))
+			return;
+		VectorCopy (vec3_origin, p->vel);
+		p->die = cl.time + 2;
+		switch (type)
+		{
+		case 0:		/* rocket trail */
+			p->ramp = rand () & 3;
+			p->color = qr_ramp3[(int) p->ramp];
+			p->type = pt_fire;
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			break;
+		case 1:		/* smoke smoke */
+			p->ramp = (rand () & 3) + 2;
+			p->color = qr_ramp3[(int) p->ramp];
+			p->type = pt_fire;
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			break;
+		case 2:		/* blood */
+			p->type = pt_grav;
+			p->color = 67 + (rand () & 3);
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			break;
+		case 3:
+		case 5:		/* tracer */
+			p->die = cl.time + 0.5f;
+			p->type = pt_static;
+			p->color = (type == 3) ? 52 + ((tracercount & 4) << 1)
+					       : 230 + ((tracercount & 4) << 1);
+			tracercount++;
+			VectorCopy (start, p->org);
+			if (tracercount & 1)
+			{
+				p->vel[0] = 30 * vec[1];
+				p->vel[1] = 30 * -vec[0];
+			}
+			else
+			{
+				p->vel[0] = 30 * -vec[1];
+				p->vel[1] = 30 * vec[0];
+			}
+			break;
+		case 4:		/* slight blood */
+			p->type = pt_grav;
+			p->color = 67 + (rand () & 3);
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () % 6) - 3);
+			len -= 3;
+			break;
+		case 6:		/* voor trail */
+			p->color = 9 * 16 + 8 + (rand () & 3);
+			p->type = pt_static;
+			p->die = cl.time + 0.3f;
+			for (j = 0; j < 3; j++)
+				p->org[j] = start[j] + ((rand () & 15) - 8);
+			break;
+		}
+		VectorAdd (start, vec, start);
+	}
+}
+
+void R_EntityParticles (entity_t *ent)
+{
+	(void) ent;	/* the spawn-effect shell: rare, skip for now */
+}
+
+void CL_RunParticles (void)
+{
+	particle_t	*p, *kill;
+	int		i;
+	float		grav, dvel, time1, time2, time3, frametime;
+	static double	lasttime;
+
+	if (!qr_particles_inited)
+		R_ClearParticles ();
+
+	frametime = (float) (cl.time - lasttime);
+	lasttime = cl.time;
+	if (frametime < 0)		/* map change / demo restart */
+	{
+		R_ClearParticles ();
+		frametime = 0;
+	}
+	else if (frametime > 0.1f)
+		frametime = 0.1f;
+
+	time3 = frametime * 15;
+	time2 = frametime * 10;
+	time1 = frametime * 5;
+	grav = frametime * sv_gravity.value * 0.05f;
+	dvel = 4 * frametime;
+
+	for ( ; ; )	/* reap dead at the head */
+	{
+		kill = qr_active_particles;
+		if (kill && kill->die < cl.time)
+		{
+			qr_active_particles = kill->next;
+			kill->next = qr_free_particles;
+			qr_free_particles = kill;
+			continue;
+		}
+		break;
+	}
+
+	for (p = qr_active_particles; p; p = p->next)
+	{
+		for ( ; ; )	/* reap dead mid-list */
+		{
+			kill = p->next;
+			if (kill && kill->die < cl.time)
+			{
+				p->next = kill->next;
+				kill->next = qr_free_particles;
+				qr_free_particles = kill;
+				continue;
+			}
+			break;
+		}
+
+		p->org[0] += p->vel[0] * frametime;
+		p->org[1] += p->vel[1] * frametime;
+		p->org[2] += p->vel[2] * frametime;
+
+		switch (p->type)
+		{
+		case pt_fire:
+			p->ramp += time1;
+			if (p->ramp >= 6)
+				p->die = -1;
+			else
+				p->color = qr_ramp3[(int) p->ramp];
+			p->vel[2] += grav;
+			break;
+		case pt_explode:
+			p->ramp += time2;
+			if (p->ramp >= 8)
+				p->die = -1;
+			else
+				p->color = qr_ramp1[(int) p->ramp];
+			for (i = 0; i < 3; i++)
+				p->vel[i] += p->vel[i] * dvel;
+			p->vel[2] -= grav;
+			break;
+		case pt_explode2:
+			p->ramp += time3;
+			if (p->ramp >= 8)
+				p->die = -1;
+			else
+				p->color = qr_ramp2[(int) p->ramp];
+			for (i = 0; i < 3; i++)
+				p->vel[i] -= p->vel[i] * frametime;
+			p->vel[2] -= grav;
+			break;
+		case pt_blob:
+			for (i = 0; i < 3; i++)
+				p->vel[i] += p->vel[i] * dvel;
+			p->vel[2] -= grav;
+			break;
+		case pt_blob2:
+			for (i = 0; i < 2; i++)
+				p->vel[i] -= p->vel[i] * dvel;
+			p->vel[2] -= grav;
+			break;
+		case pt_grav:
+		case pt_slowgrav:
+			p->vel[2] -= grav;
+			break;
+		case pt_static:
+		default:
+			break;
+		}
+	}
+}
+
+static void QR_ParticleVert (qr_frame_slot_t *slot, const vec3_t p,
+			     float r, float g, float b)
+{
+	uint32_t	n = slot->frame.num_particle_verts;
+	float		*o;
+
+	if ((n + 1) * 7 > slot->particle_capacity)
+	{
+		slot->particle_capacity = slot->particle_capacity ? slot->particle_capacity * 2 : 8192;
+		slot->particle_verts = (float *) realloc (slot->particle_verts,
+				slot->particle_capacity * sizeof(float));
+	}
+	o = slot->particle_verts + n * 7;
+	o[0] = p[0]; o[1] = p[1]; o[2] = p[2];
+	o[3] = r; o[4] = g; o[5] = b; o[6] = 1.f;
+	slot->frame.num_particle_verts = n + 1;
+}
+
+static void QR_EmitParticles (qr_frame_slot_t *slot)
+{
+	particle_t	*p;
+	vec3_t		worldup = {0.f, 0.f, 1.f};
+	float		s = QR_PARTICLE_SIZE;
+
+	for (p = qr_active_particles; p; p = p->next)
+	{
+		unsigned int	c = d_8to24table[(int) p->color & 255];
+		float		r = (c & 0xff) / 255.f;
+		float		g = ((c >> 8) & 0xff) / 255.f;
+		float		b = ((c >> 16) & 0xff) / 255.f;
+		vec3_t		look, rt, up, c0, c1, c2, c3;
+		int		k;
+
+		VectorSubtract (r_origin, p->org, look);
+		if (VectorNormalize (look) < 0.01f)
+			continue;
+		CrossProduct (look, worldup, rt);
+		if (VectorNormalize (rt) < 0.01f)
+		{
+			rt[0] = 1.f; rt[1] = 0.f; rt[2] = 0.f;
+		}
+		CrossProduct (rt, look, up);	/* unit: rt and look are orthonormal */
+
+		for (k = 0; k < 3; k++)
+		{
+			c0[k] = p->org[k] - rt[k] * s - up[k] * s;
+			c1[k] = p->org[k] + rt[k] * s - up[k] * s;
+			c2[k] = p->org[k] + rt[k] * s + up[k] * s;
+			c3[k] = p->org[k] - rt[k] * s + up[k] * s;
+		}
+		QR_ParticleVert (slot, c0, r, g, b);
+		QR_ParticleVert (slot, c1, r, g, b);
+		QR_ParticleVert (slot, c2, r, g, b);
+		QR_ParticleVert (slot, c0, r, g, b);
+		QR_ParticleVert (slot, c2, r, g, b);
+		QR_ParticleVert (slot, c3, r, g, b);
+	}
+}
+
+/*
+================
+QR_EmitWheel -- the weapon wheel: the player's OWNED view-weapon models as
+a ring of synthetic alias entities around the off-hand wrist.
+
+Real models in world space, not an overlay: emitting through the ordinary
+entity side array buys lighting, lerp and stereo amplification for free,
+and a ring of floating shotguns reads far better in a headset than a flat
+radial menu. Unowned weapons are absent -- the wheel never offers a
+selection that would silently fail. The ring's radius follows the open
+fraction and the items spin on `realtime`, the WALL clock: the wheel moves
+at full speed while the weapons' own idle lerp (cl.time-driven) crawls
+with the world. That contrast is the effect.
+================
+*/
+static const uint32_t qr_wheel_bits[8] = {
+	IT_AXE, IT_SHOTGUN, IT_SUPER_SHOTGUN, IT_NAILGUN,
+	IT_SUPER_NAILGUN, IT_GRENADE_LAUNCHER, IT_ROCKET_LAUNCHER,
+	IT_LIGHTNING,
+};
+static const char *qr_wheel_modelnames[8] = {
+	"progs/v_axe.mdl", "progs/v_shot.mdl", "progs/v_shot2.mdl",
+	"progs/v_nail.mdl", "progs/v_nail2.mdl", "progs/v_rock.mdl",
+	"progs/v_rock2.mdl", "progs/v_light.mdl",
+};
+/* Clean pickup models, preferred over the viewmodels above. Axe and single
+   shotgun are start weapons with no pickup model -- their viewmodels carry no
+   projectile anyway, so NULL falls straight through. */
+#define QR_MENU_SPACING	6.0f	/* full-menu row pitch, Quake units */
+
+static const char *qr_wheel_pickupnames[8] = {
+	NULL, NULL, "progs/g_shot.mdl",
+	"progs/g_nail.mdl", "progs/g_nail2.mdl", "progs/g_rock.mdl",
+	"progs/g_rock2.mdl", "progs/g_light.mdl",
+};
+static const char *qr_wheel_labels[8] = {
+	"AXE", "SHOTGUN", "SUPER SHOTGUN", "NAILGUN",
+	"SUPER NAILGUN", "GRENADE LAUNCHER", "ROCKET LAUNCHER", "THUNDERBOLT",
+};
+
+/*
+================
+2D text as billboarded glyph quads from Quake's conchars atlas -- the
+foundation for wheel labels, the item selector and the HUD. conchars is a
+128x128 8bpp lump living in the already-resident gfx.wad; index 0 and 255
+are transparent under TEXPREF_CONCHARS. Uploaded once, lazily, through the
+same queue every other texture uses. Each glyph is an 8x8 cell in a 16x16
+grid; character c sits at column (c & 15), row (c >> 4).
+================
+*/
+uint32_t	qr_conchars_texnum;		/* atlas handle; 0 until loaded */
+
+static void QR_EnsureConchars (void)
+{
+	byte		*data;
+	gltexture_t	*glt;
+
+	if (qr_conchars_texnum)
+		return;
+	data = (byte *) W_GetLumpName ("conchars");
+	if (!data)
+		return;
+	glt = QR_TexMgr_LoadImage (NULL, "conchars", 128, 128, SRC_INDEXED,
+			data, WADFILENAME, (src_offset_t) data,
+			TEXPREF_ALPHA | TEXPREF_NEAREST | TEXPREF_CONCHARS);
+	if (glt)
+		qr_conchars_texnum = glt->texnum;
+}
+
+static void QR_TextVert (qr_frame_slot_t *slot, const vec3_t p,
+			 float u, float v, const float col[4])
+{
+	uint32_t	n = slot->frame.num_text_verts;
+	float		*o;
+
+	if ((n + 1) * 9 > slot->text_capacity)
+	{
+		slot->text_capacity = slot->text_capacity ? slot->text_capacity * 2 : 4096;
+		slot->text_verts = (float *) realloc (slot->text_verts,
+				slot->text_capacity * sizeof(float));
+	}
+	o = slot->text_verts + n * 9;
+	o[0] = p[0]; o[1] = p[1]; o[2] = p[2];
+	o[3] = u;    o[4] = v;
+	o[5] = col[0]; o[6] = col[1]; o[7] = col[2]; o[8] = col[3];
+	slot->frame.num_text_verts = n + 1;
+}
+
+/* Lay a string out centred on `org`, glyphs advancing along `right` and
+   standing `up`, each cell `cw` units square. Billboarding is the caller's
+   job: pass a (right, up) basis that faces the eye. */
+static void QR_EmitText (qr_frame_slot_t *slot, const char *s, const vec3_t org,
+			 const vec3_t right, const vec3_t up, float cw,
+			 const float col[4])
+{
+	int	len = (int) strlen (s);
+	float	half = len * cw * 0.5f;
+	float	top = cw * 0.5f, bot = -cw * 0.5f;
+	int	i, a;
+
+	for (i = 0; i < len; i++)
+	{
+		int	ch = (unsigned char) s[i];
+		int	cxi = ch & 15, cyi = ch >> 4;
+		float	u0 = cxi / 16.f, u1 = u0 + 1.f / 16.f;
+		float	v0 = cyi / 16.f, v1 = v0 + 1.f / 16.f;
+		float	x0 = -half + i * cw, x1 = x0 + cw;
+		vec3_t	tl, tr, bl, br;
+
+		if (ch == ' ')
+			continue;	/* blank cell: skip the six wasted verts */
+		for (a = 0; a < 3; a++)
+		{
+			tl[a] = org[a] + right[a] * x0 + up[a] * top;
+			tr[a] = org[a] + right[a] * x1 + up[a] * top;
+			bl[a] = org[a] + right[a] * x0 + up[a] * bot;
+			br[a] = org[a] + right[a] * x1 + up[a] * bot;
+		}
+		QR_TextVert (slot, tl, u0, v0, col);
+		QR_TextVert (slot, tr, u1, v0, col);
+		QR_TextVert (slot, bl, u0, v1, col);
+		QR_TextVert (slot, tr, u1, v0, col);
+		QR_TextVert (slot, br, u1, v1, col);
+		QR_TextVert (slot, bl, u0, v1, col);
+	}
+}
+
+static void QR_EmitWheel (qr_frame_slot_t *slot)
+{
+	static qmodel_t	*models[8];
+	static qmodel_t	*cachekey;
+	/* the ring locks in world space the instant it opens: you reach INTO a
+	   fixed ring, not one that chases your wrist. Cleared when it closes. */
+	static int	locked;
+	static vec3_t	lock_center;
+	/* full-menu gaze state, function scope so a close can reset it. The menu
+	   commits on RELEASE: you hold to open, look at a weapon, let go to pick. */
+	static int	menu_held = -1, menu_open_prev;
+	float		frac, radius, step, theta, spin;
+	vec3_t		fwdv, rightv, upv, angles, center;
+	int		i, owned, k;
+
+	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
+	{
+		locked = 0;
+		menu_open_prev = 0;
+		menu_held = -1;
+		return;
+	}
+
+	/* Resolve each slot's model once per worldmodel. Prefer the clean PICKUP
+	   model (g_*.mdl) -- the weapon as it sits on the ground, no held nail or
+	   rocket poking out -- and fall back to the first-person viewmodel
+	   (v_*.mdl, always precached) when the map didn't precache the pickup. */
+	if (cachekey != cl.worldmodel)
+	{
+		cachekey = cl.worldmodel;
+		for (i = 0; i < 8; i++)
+		{
+			int m;
+			models[i] = NULL;
+			if (qr_wheel_pickupnames[i])
+				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
+					if (!strcmp (cl.model_precache[m]->name, qr_wheel_pickupnames[i]))
+					{
+						models[i] = cl.model_precache[m];
+						break;
+					}
+			if (!models[i])
+				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
+					if (!strcmp (cl.model_precache[m]->name, qr_wheel_modelnames[i]))
+					{
+						models[i] = cl.model_precache[m];
+						break;
+					}
+		}
+	}
+
+	owned = 0;
+	for (i = 0; i < 8; i++)
+		if ((cl.items & qr_wheel_bits[i]) && models[i])
+			owned++;
+	if (!owned)
+		return;
+
+	QR_EnsureConchars ();
+
+	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
+	/* A wide ring the wrist sits inside, Skyrim-VR style: it stands off the
+	   wrist far enough that moving the whole hand toward a weapon is the
+	   selection gesture, not a cramped finger flick. */
+	radius = 14.f * frac;
+	spin = (float) fmod (realtime * 30.0, 360.0);
+
+	angles[0] = 0;
+	angles[1] = cl.viewangles[YAW];
+	angles[2] = 0;
+	AngleVectors (angles, fwdv, rightv, upv);
+	/* AngleVectors' right points right; keep the ring plane spanned by
+	   (rightv, world up), facing the player */
+	if (vr_fullmenu.value)
+	{
+		/* Full menu: a fixed panel a comfortable stride ahead of the view,
+		   selected by looking at a weapon (below) -- no wrist, no pointer,
+		   so it works no matter where in the level you've walked. */
+		VectorMA (r_refdef.vieworg, 40.f, fwdv, center);
+		center[2] += qr_height_trim - 2.f;
+	}
+	else if (qr_wheel_has_anchor)
+	{
+		/* Both the wrist anchor and the head offset are body-frame Quake
+		   units from the same recenter origin, so their difference is the
+		   wrist RELATIVE TO THE HEAD -- add that to the eye and the ring
+		   sits on the wrist no matter where the player has walked. Adding
+		   the raw anchor (as before) pinned it to the recenter origin, so
+		   it drifted off the wrist the moment you moved. */
+		float ax = qr_wheel_anchor[0] - qr_head[0];
+		float ay = qr_wheel_anchor[1] - qr_head[1];
+		float az = qr_wheel_anchor[2] - qr_head[2];
+		VectorMA (r_refdef.vieworg, ax, fwdv, center);
+		VectorMA (center, ay, rightv, center);
+		/* rise with the height-trimmed camera so the ring does not sink
+		   out of view as the eye-height slider raises the viewpoint */
+		center[2] += az + qr_height_trim;
+	}
+	else
+	{
+		/* no wrist (flat window): fixed offset ahead of the view */
+		VectorMA (r_refdef.vieworg, 36.f, fwdv, center);
+		center[2] -= 2.f;
+	}
+
+	/* Freeze the ring at the pose it opened with. After this the wrist is
+	   free to move toward a slot without dragging the ring along; the
+	   consumer turns that wrist travel into the highlight. */
+	if (!locked)
+	{
+		VectorCopy (center, lock_center);
+		locked = 1;
+	}
+	VectorCopy (lock_center, center);
+
+	step = 360.f / owned;
+
+	/* Full menu selects by GAZE, engine-side: cast the head-forward ray
+	   (body yaw + head yaw, head pitch) onto the ring plane and pick the
+	   nearest slot; resting on one for a beat commits it. This has to live
+	   here -- only the engine knows the eye position and the panel's world
+	   pose, so the consumer's wrist-frame pointer can't do it once you move.
+	   It overrides the fed highlight and drives the impulse itself. */
+	if (vr_fullmenu.value)
+	{
+		vec3_t		gaze_ang, gf, gr, gu, toplane, hit, rel;
+		int		gsel = -1;
+		float		denom;
+
+		gaze_ang[0] = qr_head_pitch;
+		gaze_ang[1] = cl.viewangles[YAW] + qr_head_yaw;
+		gaze_ang[2] = 0;
+		AngleVectors (gaze_ang, gf, gr, gu);
+		denom = DotProduct (gf, fwdv);
+		if (fabsf (denom) > 0.001f)
+		{
+			float t;
+			VectorSubtract (center, r_refdef.vieworg, toplane);
+			t = DotProduct (toplane, fwdv) / denom;
+			if (t > 0.f)
+			{
+				float hr, hu;
+				VectorMA (r_refdef.vieworg, t, gf, hit);
+				VectorSubtract (hit, center, rel);
+				hr = DotProduct (rel, rightv);
+				hu = rel[2];
+				/* Vertical list: weapon k sits QR_MENU_SPACING below the
+				   one above -- weapon order already puts each super under
+				   its base. Gaze HEIGHT picks the row; looking off to the
+				   side of the column picks nothing. */
+				{
+					float top = (owned - 1) * 0.5f * QR_MENU_SPACING;
+					gsel = (int) floorf ((top - hu) / QR_MENU_SPACING + 0.5f);
+					if (fabsf (hr) > 11.f || gsel < 0 || gsel >= owned)
+						gsel = -1;
+				}
+			}
+		}
+
+		/* Commit on RELEASE. While the grip is held, track and show the
+		   gazed row; when it lets go, fire the impulse for whatever was
+		   highlighted. Freeze the highlight during the close ramp so a
+		   glance away as you release can't change the pick. */
+		if (qr_wheel_open)
+		{
+			menu_held = gsel;
+			qr_wheel_highlight = gsel;
+		}
+		else
+			qr_wheel_highlight = menu_held;
+
+		if (menu_open_prev && !qr_wheel_open && menu_held >= 0)
+		{
+			int b, seen = 0;
+			for (b = 0; b < 8; b++)
+				if (cl.items & qr_wheel_bits[b])
+				{
+					if (seen == menu_held)
+					{
+						Cbuf_AddText (va ("impulse %d\n", b + 1));
+						break;
+					}
+					seen++;
+				}
+		}
+		menu_open_prev = qr_wheel_open;
+	}
+
+	/* publish the guide ring so the consumer can draw the wireframe circle
+	   and highlight marker in the same plane the models sit in */
+	slot->frame.wheel_center[0] = center[0];
+	slot->frame.wheel_center[1] = center[1];
+	slot->frame.wheel_center[2] = center[2];
+	/* Full menu draws no ring (it's a list): negative radius tells the
+	   consumer to skip the wireframe circle. */
+	slot->frame.wheel_radius = vr_fullmenu.value ? -1.f : radius;
+	slot->frame.wheel_frac = frac;
+	slot->frame.wheel_count = owned;
+	slot->frame.wheel_highlight = qr_wheel_highlight;
+	k = 0;
+	for (i = 0; i < 8; i++)
+	{
+		entity_t	e;
+		qc_entity_t	*rec;
+		uint32_t	before;
+		int		highlighted;
+		int		c;
+
+		if (!(cl.items & qr_wheel_bits[i]) || !models[i])
+			continue;
+
+		highlighted = (k == qr_wheel_highlight);
+		theta = (90.f - k * step) * M_PI / 180.f;
+
+		memset (&e, 0, sizeof(e));
+		e.model = models[i];
+		if (vr_fullmenu.value)
+		{
+			/* vertical list, weapon order (super under base) */
+			float top = (owned - 1) * 0.5f * QR_MENU_SPACING;
+			VectorCopy (center, e.origin);
+			e.origin[2] += top - k * QR_MENU_SPACING;
+		}
+		else
+		{
+			VectorMA (center, radius * cosf (theta), rightv, e.origin);
+			e.origin[2] += radius * sinf (theta);
+		}
+		e.angles[0] = 0;
+		e.angles[1] = spin + k * 45.f;
+		e.angles[2] = 0;
+		e.frame = 0;
+		e.skinnum = 0;
+		e.scale = (unsigned char)(highlighted ? 8 : 5);	/* /16; smaller to fit the tight ring */
+		e.lerpflags = LERP_RESETANIM | LERP_RESETMOVE;
+
+		before = slot->frame.num_entities;
+		QR_EmitAliasModel (slot, &e);
+		if (slot->frame.num_entities > before)
+		{
+			/* room lighting is right in spirit but a wheel item
+			   must never be unreadable in a dark corridor: floor
+			   it, and let the highlight glow */
+			rec = &slot->entities[slot->frame.num_entities - 1];
+			for (c = 0; c < 3; c++)
+			{
+				rec->light[c] = q_max (rec->light[c], 0.45f);
+				if (highlighted)
+					rec->light[c] = q_min (rec->light[c] * 1.7f, 2.f);
+			}
+		}
+
+		/* the weapon's name below its model, billboarded in the ring plane
+		   (body-right, world-up) so it faces the player. The highlighted
+		   slot's label glows white; the rest are dimmer. */
+		if (qr_conchars_texnum)
+		{
+			vec3_t	labelorg, worldup = {0.f, 0.f, 1.f};
+			float	lcol[4];
+
+			VectorCopy (e.origin, labelorg);
+			labelorg[2] -= 4.5f;
+			lcol[0] = lcol[1] = lcol[2] = highlighted ? 1.f : 0.7f;
+			lcol[3] = 1.f;
+			QR_EmitText (slot, qr_wheel_labels[i], labelorg, rightv,
+				     worldup, 1.6f, lcol);
+		}
+		k++;
+	}
+}
+
+/*
+================
 QR_BuildFramePacket -- flatten this frame into typed batches, in upstream
 R_RenderScene order: sky, opaque world, opaque entities, world liquids,
 translucent entities. Runs where upstream issued the GL draws; instead it
@@ -3029,6 +3956,9 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	    && !(cl.items & IT_INVISIBILITY) && cl.stats[STAT_HEALTH] > 0
 	    && cl.viewent.model && cl.viewent.model->type == mod_alias)
 		QR_EmitAliasModel (slot, &cl.viewent);
+
+	QR_EmitParticles (slot);
+	QR_EmitWheel (slot);
 }
 
 /* ========================================================================
@@ -3060,6 +3990,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_indices = 0;
 	slot->frame.num_batches = 0;
 	slot->frame.num_entities = 0;
+	slot->frame.num_text_verts = 0;
+	slot->frame.num_particle_verts = 0;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
@@ -3075,6 +4007,12 @@ void QR_BeginFrame (void)
 	slot->frame.vignette = 0;
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
+	slot->frame.items = 0;
+	slot->frame.wheel_frac = 0;
+	slot->frame.wheel_radius = 0;
+	slot->frame.wheel_count = 0;
+	slot->frame.wheel_highlight = -1;
+	memset (slot->frame.wheel_center, 0, sizeof(slot->frame.wheel_center));
 	/* stays live even in empty packets so the consumer's recenter
 	   handshake can't wedge at the console or during demos */
 	slot->frame.recenter_count = qr_recenter_count;
@@ -3135,12 +4073,24 @@ void QR_RenderView (void)
 		cully = qr_cull_fovy;
 		pthread_mutex_unlock (&qr_cullfov_lock);
 
-		if (cullx > 0 && cully > 0)
+		/* >= 360 requests omnidirectional (the head can face anywhere):
+		   render the whole PVS, no frustum. Still build a valid frustum for
+		   any consumer of the planes; R_CullBox short-circuits on the flag. */
+		qr_cull_omni = (cullx >= 359.f || cully >= 359.f);
+		if (qr_cull_omni)
 		{
-			cullx = q_min (cullx + QR_CULL_FOV_MARGIN, 170.f);
-			cully = q_min (cully + QR_CULL_FOV_MARGIN, 170.f);
+			/* keep the planes valid (R_CullBox ignores them anyway) */
+			R_SetFrustum (r_fovx, r_fovy);
 		}
-		R_SetFrustum (q_max (r_fovx, cullx), q_max (r_fovy, cully));
+		else
+		{
+			if (cullx > 0 && cully > 0)
+			{
+				cullx = q_min (cullx + QR_CULL_FOV_MARGIN, 170.f);
+				cully = q_min (cully + QR_CULL_FOV_MARGIN, 170.f);
+			}
+			R_SetFrustum (q_max (r_fovx, cullx), q_max (r_fovy, cully));
+		}
 	}
 
 	R_MarkSurfaces ();
@@ -3172,7 +4122,12 @@ void QR_RenderView (void)
 			dt = 0;
 		qr_phase_lasttime = cl.time;
 
-		if (qr_phase_value < target)
+		/* Turning the effect OFF is INSTANT -- no lingering melt sphere to
+		   dissolve the stairs you're standing on for a couple of seconds
+		   after `phase 0`. Melting IN still eases for the cinematic sweep. */
+		if (target <= 0.f)
+			qr_phase_value = 0.f;
+		else if (qr_phase_value < target)
 			qr_phase_value = q_min (qr_phase_value + (float)dt / ptime, target);
 		else if (qr_phase_value > target)
 			qr_phase_value = q_max (qr_phase_value - (float)dt / ptime, target);
@@ -3242,6 +4197,7 @@ void QR_RenderView (void)
 	   pulses and per-weapon trigger feel on the consumer side */
 	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
 	slot->frame.active_weapon = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+	slot->frame.items = cl.items;
 
 	/* room-scale head follow: what IN_AbsorbHeadOffset already walked the
 	   player after, and the lean allowance for the remainder */
@@ -3287,6 +4243,9 @@ void QR_PublishFrame (void)
 	slot->frame.indices = slot->indices;
 	slot->frame.batches = slot->batches;
 	slot->frame.entities = slot->entities;
+	slot->frame.text_verts = slot->text_verts;
+	slot->frame.conchars_texnum = qr_conchars_texnum;
+	slot->frame.particle_verts = slot->particle_verts;
 
 	/* upstream R_Clear clears to r_clearcolor (a palette index) when
 	   gl_clear is set; keep that, else clear to black */
