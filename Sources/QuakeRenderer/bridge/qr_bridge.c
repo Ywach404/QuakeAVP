@@ -74,6 +74,12 @@ extern float qr_height_trim;		/* eye-height trim, Quake units */
    world diagonal -- see the phase block in QR_RenderView. */
 #define QR_PHASE_NEAR_RADIUS	32.0f
 
+/* World surfaces are grown this many Quake units outward in their own plane
+   at load, so abutting brush faces overlap and T-junction cracks -- the
+   sub-pixel seams that leak the level behind the stairs in VR -- are covered.
+   Small enough that the texture overhang is imperceptible. */
+#define QR_TJUNC_GROW		0.5f
+
 /* ========================================================================
  * globals the engine headers declare and upstream's renderer defined
  * ===================================================================== */
@@ -1335,8 +1341,39 @@ static void QR_BuildWorldVertexArray (void)
 			msurface_t *s = &m->surfaces[i];
 			s->vbo_firstvert = varray_index;
 			if (s->polys)
-				memcpy (&varray[varray_index], s->polys->verts,
-					s->numedges * sizeof(qc_world_vertex_t));
+			{
+				qc_world_vertex_t *vs = &varray[varray_index];
+				int n = s->numedges, k;
+				float cx = 0.f, cy = 0.f, cz = 0.f;
+
+				memcpy (vs, s->polys->verts, n * sizeof(qc_world_vertex_t));
+
+				/* Grow the polygon outward from its centroid. It is planar,
+				   so this stays in-plane; neighbours overlap and cover the
+				   T-junction cracks. UVs stay at the original verts, so the
+				   overhang only stretches the texture a hair. */
+				for (k = 0; k < n; k++)
+				{
+					cx += vs[k].xyz[0];
+					cy += vs[k].xyz[1];
+					cz += vs[k].xyz[2];
+				}
+				cx /= n; cy /= n; cz /= n;
+				for (k = 0; k < n; k++)
+				{
+					float dx = vs[k].xyz[0] - cx;
+					float dy = vs[k].xyz[1] - cy;
+					float dz = vs[k].xyz[2] - cz;
+					float len = sqrtf (dx * dx + dy * dy + dz * dz);
+					if (len > 0.1f)
+					{
+						float g = QR_TJUNC_GROW / len;
+						vs[k].xyz[0] += dx * g;
+						vs[k].xyz[1] += dy * g;
+						vs[k].xyz[2] += dz * g;
+					}
+				}
+			}
 			varray_index += s->numedges;
 		}
 	}
