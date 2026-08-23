@@ -222,9 +222,22 @@ typedef struct qc_frame_s {
 	   consumer composes per-eye matrices from this *after* sampling the head
 	   pose (late latch); building them engine-side would cost a frame of
 	   head-tracking latency. viewproj above stays the mono/window path and
-	   is derived from the same basis. */
+	   is derived from the same basis.
+
+	   M6 aim/body split: viewangles is now the AIM (the hand/controller ray,
+	   what cl.viewangles became so shots leave the server going where you
+	   point) and stays the mono/window camera and the fired-shot direction.
+	   The immersive camera and room-scale head-follow must NOT track the aim
+	   -- looking or pointing may never steer the eye -- so they read body_yaw
+	   below instead. The two are equal only when no hand aims (body-anchored
+	   fallback). Keep them named apart so the distinction can't be misread. */
 	float		vieworg[3];	/* view origin; also the sky projection origin */
-	float		viewangles[3];	/* pitch, yaw, roll -- Quake order, degrees */
+	float		viewangles[3];	/* AIM: pitch, yaw, roll -- Quake order, degrees */
+	float		body_yaw;	/* BODY basis yaw (deg): the immersive camera and
+					   head-follow frame. Movement is the body basis
+					   too, applied server-side; the aim (viewangles)
+					   is pre-compensated in IN_Move so the stick still
+					   walks along the body, not the hand. */
 	float		world_scale;	/* metres per Quake unit (vr_worldscale, clamped) */
 	uint32_t	sky_solid_texnum;   /* classic sky back layer, 0 = none */
 	uint32_t	sky_alpha_texnum;   /* classic sky cloud layer, 0 = none */
@@ -405,6 +418,19 @@ void QC_InputSetHeadYaw (float yaw_deg);
    stops so a later flat-window session starts level. Callable from any
    thread. */
 void QC_InputSetHeadPitch (float pitch_deg);
+
+/* The dominant hand's aim, M6. `valid` 0 releases it and the shot falls back
+   to the body-anchored aim (vr_handaim 0, or no hand this frame). The
+   direction is the aim ray RELATIVE to the recenter-neutral (room forward),
+   Quake degrees: yaw CCW/left-positive, pitch positive-down. The engine adds
+   the body yaw, so snap turns rotate the aim with the body. org_* is the
+   hand's position in the BODY frame (fwd/right/up from the recenter origin,
+   Quake units) -- the same convention as the wheel anchor -- where the
+   view-weapon entity is drawn. The engine writes cl.viewangles from this, so
+   the server fires along the ray with no engine surgery. Callable from any
+   thread. */
+void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
+		     float yaw_deg, float pitch_deg);
 
 /* The eye-height trim (vr comfort slider) in QUAKE UNITS, fed by the render
    thread which applies the same trim to the camera. Head/wrist-locked

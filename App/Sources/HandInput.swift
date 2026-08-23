@@ -20,8 +20,9 @@
 //
 //  Drag vectors are rotated by the render thread's recenter correction
 //  (TrackingSpace) so "forward" is the body's forward, not the room's
-//  arbitrary axis. Aim stays on the body for now: hand-attached weaponry
-//  needs the aim/body packet split (M6).
+//  arbitrary axis. M6: the dominant hand's index ray is fed to the engine as
+//  the aim (feedAim -> QC_InputSetAim), so the gun lives in the hand and
+//  shots leave along the finger, decoupled from the body and the gaze.
 //
 
 import ARKit
@@ -112,6 +113,16 @@ final class HandInput: @unchecked Sendable {
     private func emit(left: inout HandState, right: inout HandState) {
         var slice = PadAggregator.Slice()
 
+        // Handedness: the OFF (non-gun) hand moves, jumps, crouches; the
+        // DOMINANT (gun) hand aims and fires.
+        let rightHanded = VRSettings.shared.rightHanded
+        let move = rightHanded ? left : right
+        let aim = rightHanded ? right : left
+
+        // M6: feed the dominant hand's aim ray to the engine every update,
+        // even while the wheel is open, so the gun keeps tracking the hand.
+        feedAim(aim)
+
         // While the wheel is open, ALL other gestures are suppressed --
         // you are choosing a weapon, not fighting or moving. This is why
         // the dominant hand stopped "confusing it": open the wheel and the
@@ -124,12 +135,6 @@ final class HandInput: @unchecked Sendable {
         // Body-frame axes: rotate room-frame drags by the same correction
         // the renderer composes under the head pose.
         let basis = TrackingSpace.rotation
-
-        // Handedness: the OFF (non-gun) hand moves, jumps, crouches; the
-        // DOMINANT (gun) hand aims and fires.
-        let rightHanded = VRSettings.shared.rightHanded
-        let move = rightHanded ? left : right
-        let aim = rightHanded ? right : left
 
         // Movement, VRChat-style holds on the move hand (not drags -- a
         // drag reset whenever the pinch flickered): thumb+middle walks
@@ -171,6 +176,29 @@ final class HandInput: @unchecked Sendable {
         aggregator.update(.hands, slice)
     }
 
+
+    /// M6 aim: turn the dominant hand's index ray into the engine's aim.
+    /// The ray (knuckle -> tip, room frame) is corrected into the
+    /// recenter-neutral frame — the same TrackingSpace correction the wheel
+    /// and the renderer use — then to Quake's body axes: yaw CCW/left-positive
+    /// relative to room forward (the engine adds the body yaw), pitch
+    /// positive-down, muzzle origin in body-frame Quake units. `valid 0` when
+    /// the finger isn't extended, so the shot falls back to the body aim.
+    private func feedAim(_ hand: HandState) {
+        guard let o = hand.indexRayOrigin, let d = hand.indexRayDirection else {
+            QC_InputSetAim(0, 0, 0, 0, 0, 0)
+            return
+        }
+        let corr = TrackingSpace.correction
+        let op = corr * SIMD4(o, 1)
+        let dp = corr * SIMD4(d, 0)          // direction: rotation only (w = 0)
+        let dir = simd_normalize(SIMD3(dp.x, dp.y, dp.z))
+        let aimYaw = atan2(-dir.x, -dir.z) * 180 / .pi
+        let horiz = (dir.x * dir.x + dir.z * dir.z).squareRoot()
+        let aimPitch = -atan2(dir.y, horiz) * 180 / .pi
+        let s = WheelState.shared.currentWorldScale
+        QC_InputSetAim(1, -op.z / s, op.x / s, op.y / s, aimYaw, aimPitch)
+    }
 
     /// Weapon wheel, ONE-HANDED. The off-hand palm gesture holds the ring
     /// open; the ring then LOCKS in place and the same wrist is the selector
