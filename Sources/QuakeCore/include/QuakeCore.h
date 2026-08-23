@@ -258,6 +258,19 @@ typedef struct qc_frame_s {
 	float		lean_limit;	/* vr_lean_limit, Quake units */
 	uint32_t	recenter_count;
 
+	/* Weapon-wheel guide, drawn by the consumer as a wireframe ring in
+	   world space so the radial layout is legible: wheel_center is the
+	   ring centre (Quake units, the off-hand wrist), wheel_radius its
+	   radius, wheel_frac the eased open amount (0 = draw nothing),
+	   wheel_count the number of owned slots, wheel_highlight the selected
+	   slot (-1 none). The ring plane is spanned by body-right and world
+	   up, matching where QR_EmitWheel places the models. */
+	float		wheel_center[3];
+	float		wheel_radius;
+	float		wheel_frac;
+	int32_t		wheel_count;
+	int32_t		wheel_highlight;
+
 	/* Comfort vignette, eased 0..1 on the engine clock: vr_vignette
 	   strength while ARTIFICIAL locomotion exceeds vr_vignette_threshold,
 	   zero at rest. Physical (room-scale) walking never trips it -- real
@@ -273,6 +286,9 @@ typedef struct qc_frame_s {
 	   feel. */
 	float		damage_flash;
 	uint32_t	active_weapon;
+	uint32_t	items;		/* cl.items: owned-weapon IT_* bits,
+					   the wheel's source of truth for
+					   what may be offered */
 
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
@@ -280,6 +296,23 @@ typedef struct qc_frame_s {
 	const qc_draw_batch_t *batches;
 	uint32_t	num_entities;
 	const qc_entity_t *entities;
+
+	/* 2D text as billboarded glyph quads from the conchars atlas. All text
+	   this frame -- weapon-wheel labels, HUD, the item selector -- shares
+	   one atlas and one flat vertex run, drawn in a single overlay pass.
+	   Nine floats per vertex: xyz position (Quake units), uv into the
+	   atlas, rgba premultiply-ready colour; six vertices per glyph quad.
+	   conchars_texnum is the atlas handle (0 until it uploads). */
+	uint32_t	conchars_texnum;
+	uint32_t	num_text_verts;
+	const float	*text_verts;
+
+	/* Particles as billboarded colour quads (explosions, gunshots, rocket
+	   trails). Seven floats per vertex: xyz position (Quake units) and rgba,
+	   six vertices per quad -- the same layout the wheel-guide pipeline
+	   draws, so no new shader. Depth-tested against the world, no write. */
+	uint32_t	num_particle_verts;
+	const float	*particle_verts;
 } qc_frame_t;
 
 /* Latest published frame, or NULL only if nothing has been published yet
@@ -336,6 +369,48 @@ typedef struct qc_gamepad_state_s {
 /* Latest whole-pad snapshot; the engine diffs consecutive snapshots for
    button edges. Callable from any thread. */
 void QC_InputSetGamepad (const qc_gamepad_state_t *state);
+
+/* Weapon-wheel state, fed by whichever input source owns the gesture
+   (palm-up hands, a held Sense face button, the +wheel console command
+   engine-side). While open the engine ramps host_timescale down toward
+   wheel_timescale -- simulation time slows, the tick and packet rate do
+   not -- blocks locomotion and fire, and emits the owned view-weapon
+   models as a ring of alias entities anchored at `anchor` (body frame,
+   Quake units: fwd/right/up from the eye). has_anchor 0 means no wrist to
+   anchor to (flat window): the ring sits at a fixed offset ahead of the
+   view. highlight is the index into the OWNED-weapon ring (impulse
+   order), -1 for none; committing the selection is the caller's job via
+   QC_ExecuteCommand("impulse N"). Callable from any thread. */
+void QC_InputSetWheel (int open, int has_anchor,
+		       float fwd, float right, float up, int highlight);
+
+/* Slow-motion TOGGLE from a controller button (L3), independent of the
+   weapon wheel. Pass the raw button state; the engine flips bullet-time on
+   the rising edge. host_timescale takes the DEEPER of this and the wheel's
+   slowdown, so opening the wheel during a slow-mo hold never speeds up.
+   Callable from any thread. */
+void QC_InputSetSlowmo (int pressed);
+
+/* The head's yaw relative to the body, degrees, Quake sense (CCW/left
+   positive), fed by the render thread from the same pose it draws with.
+   Look-relative locomotion (vr_moverelative) rotates the movement stick by
+   this so "forward" tracks where the head looks; body-relative locomotion
+   ignores it. Callable from any thread. */
+void QC_InputSetHeadYaw (float yaw_deg);
+
+/* The head's pitch, degrees, Quake sense (positive looks DOWN), fed by the
+   render thread from the pose it draws with. With vr_headaim on (default) the
+   shot pitches to where you look -- head aim replaces the old right-stick
+   pitch, which had no head coupling and drifted. Feed 0 when head tracking
+   stops so a later flat-window session starts level. Callable from any
+   thread. */
+void QC_InputSetHeadPitch (float pitch_deg);
+
+/* The eye-height trim (vr comfort slider) in QUAKE UNITS, fed by the render
+   thread which applies the same trim to the camera. Head/wrist-locked
+   overlays -- the weapon wheel -- add it so they rise with the raised
+   camera instead of sinking out of view. Callable from any thread. */
+void QC_InputSetHeightTrim (float units);
 
 /* The head's offset from the tracking origin in BODY frame, Quake units
    (+fwd along body forward, +right along body right, +up), sampled by the

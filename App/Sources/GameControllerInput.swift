@@ -64,17 +64,28 @@ final class GameControllerInput {
 
     private func attach(_ controller: GCController) {
         if isSpatial(controller) {
-            // Chirality: GameController doesn't expose it directly; the
-            // vendor name does ("...Left"/"...Right"). ARKit's Accessory
-            // is the authority, but slice routing only needs the guess.
-            let name = controller.vendorName ?? ""
-            let left = name.localizedCaseInsensitiveContains("left")
-                || (!name.localizedCaseInsensitiveContains("right")
-                    && !spatialControllers.contains(where: { c in
-                        (c.vendorName ?? "").localizedCaseInsensitiveContains("left")
-                    }) && spatialControllers.isEmpty)
+            // Handedness from the controller's NAME first -- the AVP labels
+            // the pair Left/Right, but which string carries the label is
+            // undocumented, so check them all and LOG them so we can see it.
+            let names = [controller.vendorName ?? "",
+                         controller.productCategory,
+                         String(describing: controller)]
+            print("[input] spatial controller names: \(names)")
+            var nameLeft: Bool?
+            for s in names {
+                // PSVR2 Sense names the pair "... Sense Controller (L)" / "(R)"
+                // -- match the parenthesised side, and the words as a bonus.
+                if s.localizedCaseInsensitiveContains("(l)")
+                    || s.localizedCaseInsensitiveContains("left") { nameLeft = true; break }
+                if s.localizedCaseInsensitiveContains("(r)")
+                    || s.localizedCaseInsensitiveContains("right") { nameLeft = false; break }
+            }
+            // Fallback only if the name is sideless: connection order.
+            let guessLeft = nameLeft ?? spatialControllers.isEmpty
+            print("[input] -> \(guessLeft ? "LEFT" : "RIGHT") hand (fromName=\(nameLeft != nil))")
             spatialControllers.append(controller)
-            SenseMapper.install(on: controller, left: left, into: aggregator)
+            SenseMapper.install(on: controller, nameLeft: nameLeft,
+                                guessLeft: guessLeft, into: aggregator)
             SenseMapper.logElements(of: controller)
         } else if let pad = controller.extendedGamepad {
             pad.valueChangedHandler = { [aggregator] pad, _ in
@@ -205,28 +216,39 @@ final class PadAggregator: @unchecked Sendable {
 }
 
 /// Maps one PSVR2 Sense controller's per-hand profile onto its slice of the
-/// virtual pad. Left hand: movement stick, run trigger, weapon-cycle face
-/// buttons, create = recenter. Right hand: aim stick, fire trigger,
-/// jump/use face buttons, options = menu.
+/// virtual pad. Left hand: movement stick, walk trigger, L1 = weapon wheel,
+/// face buttons cycle weapons, L3 = slow-mo toggle, create = menu. Right
+/// hand: aim stick, fire trigger, Cross + R1 = jump, Circle = use,
+/// R3 = recenter, options = menu.
 private enum SenseMapper {
 
     static func slice(forLeft left: Bool) -> PadAggregator.Source {
         left ? .senseLeft : .senseRight
     }
 
-    static func install(on controller: GCController, left: Bool,
-                        into aggregator: PadAggregator) {
+    static func install(on controller: GCController, nameLeft: Bool?,
+                        guessLeft: Bool, into aggregator: PadAggregator) {
         let profile = controller.physicalInputProfile
-        let source = slice(forLeft: left)
+        let source = slice(forLeft: nameLeft ?? guessLeft)
         profile.valueDidChangeHandler = { profile, _ in
-            aggregator.update(source, build(profile, left: left))
+            aggregator.update(source, build(profile, controller: controller,
+                                            nameLeft: nameLeft, guessLeft: guessLeft))
         }
-        aggregator.update(source, build(profile, left: left))
+        aggregator.update(source, build(profile, controller: controller,
+                                        nameLeft: nameLeft, guessLeft: guessLeft))
     }
 
     private static func build(_ profile: GCPhysicalInputProfile,
-                              left: Bool) -> PadAggregator.Slice {
+                              controller: GCController,
+                              nameLeft: Bool?,
+                              guessLeft: Bool) -> PadAggregator.Slice {
         var slice = PadAggregator.Slice()
+
+        // Handedness, most-authoritative first: the NAME the AVP gave it, then
+        // live position (left-most = left), then connection order. The user's
+        // swap override always wins on top.
+        let rawLeft = nameLeft ?? SpatialControllerTracker.shared.isLeft(controller) ?? guessLeft
+        let left = VRSettings.shared.swapSenseHands ? !rawLeft : rawLeft
 
         if let stick = dpad(profile, containing: "Thumbstick") {
             if left {
@@ -248,17 +270,24 @@ private enum SenseMapper {
             }
         }
         if left {
-            // Square / triangle cycle weapons via the X/Y bindings.
-            set(QC_PAD_X, ["Button X", "Square", "Button A"])
-            set(QC_PAD_Y, ["Button Y", "Triangle", "Button B"])
-            set(QC_PAD_LSHOULDER, ["Grip", "Shoulder"])
-            set(QC_PAD_LTHUMB, ["Thumbstick Button", "Thumbstick , Button"])
+            // L1 (grip) is the weapon wheel: hold to open, release to commit
+            // the highlighted weapon. It never reaches the engine as a key.
+            let grip = button(profile, containing: "Grip")
+                ?? button(profile, containing: "Shoulder")
+            WheelState.shared.setHold(grip?.isPressed == true, source: .sense)
+            // L3 (stick click) toggles slow-motion -- separate from the wheel,
+            // routed straight to the engine so it never reaches a key.
+            let l3 = button(profile, containing: "Thumbstick Button")
+                ?? button(profile, containing: "Thumbstick , Button")
+            QC_InputSetSlowmo(l3?.isPressed == true ? 1 : 0)
+            // Weapon cycle lives on the face buttons now (grip is the wheel).
+            set(QC_PAD_LSHOULDER, ["Button X", "Square"])          // prev weapon
+            set(QC_PAD_Y, ["Button Y", "Triangle", "Button B"])    // next weapon
             set(QC_PAD_OPTIONS, ["Create", "Share", "Options", "Menu"])
         } else {
-            // Cross jumps, circle uses, via the A/B bindings.
-            set(QC_PAD_A, ["Button A", "Cross"])
+            // Cross AND R1 (grip) jump; circle uses.
+            set(QC_PAD_A, ["Button A", "Cross", "Grip", "Shoulder"])
             set(QC_PAD_B, ["Button B", "Circle"])
-            set(QC_PAD_RSHOULDER, ["Grip", "Shoulder"])
             set(QC_PAD_RTHUMB, ["Thumbstick Button", "Thumbstick , Button"])
             set(QC_PAD_MENU, ["Options", "Menu"])
         }

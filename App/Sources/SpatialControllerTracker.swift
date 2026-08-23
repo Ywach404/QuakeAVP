@@ -25,6 +25,15 @@ final class SpatialControllerTracker: @unchecked Sendable {
     private var _leftPose: simd_float4x4?
     private var _rightPose: simd_float4x4?
     private var _tracking = false
+    /// ARKit's inherentChirality per controller -- a fallback only; it's
+    /// undocumented for PSVR2 and often resolves to .none, which is why the
+    /// old routing fell through to the connection-order coin flip.
+    private var _chirality: [ObjectIdentifier: Bool] = [:]
+    /// The far more reliable signal: each controller's live X in the tracking
+    /// frame (+X is right). Whichever is further left IS the left hand, no
+    /// matter how the pair paired. Keyed by the accessory the anchor carries.
+    private var _controllerForAccessory: [Accessory.ID: ObjectIdentifier] = [:]
+    private var _posX: [ObjectIdentifier: Float] = [:]
 
     private var session: ARKitSession?
     private var task: Task<Void, Never>?
@@ -38,6 +47,18 @@ final class SpatialControllerTracker: @unchecked Sendable {
     func pose(left: Bool) -> simd_float4x4? {
         lock.lock(); defer { lock.unlock() }
         return left ? _leftPose : _rightPose
+    }
+
+    /// Which hand this controller is, or nil if not yet known (caller falls
+    /// back to the GameController guess). Prefers live position -- the
+    /// left-most controller is the left hand -- over ARKit's chirality.
+    func isLeft(_ controller: GCController) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        let key = ObjectIdentifier(controller)
+        if let myX = _posX[key], let otherX = _posX.first(where: { $0.key != key })?.value {
+            return myX < otherX     // +X is right, so smaller X = left hand
+        }
+        return _chirality[key]      // fallback until both are tracked
     }
 
     /// Restart tracking for the current accessory set. Main-actor callers
@@ -56,7 +77,15 @@ final class SpatialControllerTracker: @unchecked Sendable {
             do {
                 var accessories: [Accessory] = []
                 for controller in controllers {
-                    accessories.append(try await Accessory(device: controller))
+                    let accessory = try await Accessory(device: controller)
+                    accessories.append(accessory)
+                    let key = ObjectIdentifier(controller)
+                    let chir = accessory.inherentChirality
+                    print("[input] accessory \(controller.vendorName ?? "?") chirality=\(chir)")
+                    self.lock.lock()
+                    self._controllerForAccessory[accessory.id] = key
+                    if chir == .left || chir == .right { self._chirality[key] = chir == .left }
+                    self.lock.unlock()
                 }
                 let provider = AccessoryTrackingProvider(accessories: accessories)
                 let session = ARKitSession()
@@ -75,12 +104,17 @@ final class SpatialControllerTracker: @unchecked Sendable {
     }
 
     private func store(_ anchor: AccessoryAnchor) {
-        let left = anchor.accessory.inherentChirality == .left
+        let xform = anchor.originFromAnchorTransform
         lock.lock()
-        if left {
-            _leftPose = anchor.originFromAnchorTransform
+        // Track each controller's X so isLeft() can compare positions.
+        if let key = _controllerForAccessory[anchor.accessory.id] {
+            _posX[key] = xform.columns.3.x
+        }
+        // Pose slots still labelled by chirality (only the aim work reads them).
+        if anchor.accessory.inherentChirality == .left {
+            _leftPose = xform
         } else {
-            _rightPose = anchor.originFromAnchorTransform
+            _rightPose = xform
         }
         lock.unlock()
     }
@@ -91,6 +125,9 @@ final class SpatialControllerTracker: @unchecked Sendable {
         if !value {
             _leftPose = nil
             _rightPose = nil
+            _chirality.removeAll()
+            _controllerForAccessory.removeAll()
+            _posX.removeAll()
         }
         lock.unlock()
     }

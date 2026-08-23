@@ -166,7 +166,7 @@ fragment float4 world_phase_fragment(WorldVaryings in [[stage_in]],
         float threshold = phase.headorg_radius.w
             + (qavp_noise3(in.worldpos * 0.09) - 0.5) * 60.0;
         if (d < threshold)
-            discard_fragment();
+            return float4(0.0, 0.0, 0.0, 0.0);  // melt to passthrough (transparent)
         // ember rim in a ~14-unit band outside the boundary
         float rim = 1.0 - saturate((d - threshold) * (1.0 / 14.0));
         rgb = min(rgb + rim * rim * phase.rimcolor.rgb, 1.0);

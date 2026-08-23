@@ -112,6 +112,12 @@ targets:
         MARKETING_VERSION: "0.1"
         TARGETED_DEVICE_FAMILY: "7"
         ENABLE_PREVIEWS: YES
+        # The world draws twice -- depth prepass, then a colour pass with
+        # depthCompare == .equal. The shared vertex output is [[position,
+        # invariant]], but that attribute is a NO-OP unless the Metal compiler
+        # is told to preserve invariance; without this the two pipelines drift
+        # by a ULP and .equal sparkles to passthrough, worst in the near field.
+        MTL_PRESERVE_INVARIANCE: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/App/Sources/QuakeAVP-Bridging-Header.h"
         HEADER_SEARCH_PATHS:

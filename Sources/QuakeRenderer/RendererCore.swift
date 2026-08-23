@@ -39,6 +39,14 @@ struct RenderPipelines {
     let aliasBlend: MTLRenderPipelineState
     /// Comfort vignette: fullscreen periphery fade, drawn last.
     let vignette: MTLRenderPipelineState
+    /// Weapon-wheel guide: wireframe ring + highlight, line primitives.
+    let wheelGuide: MTLRenderPipelineState
+    /// Billboarded 2D text (wheel labels, item selector, HUD) from conchars.
+    /// Optional on purpose: a failure to build this NEW pipeline must never
+    /// nil out the whole set and take the renderer down with it (that bails
+    /// renderFrame before startSubmission and trips queryNextFrame's
+    /// __BUG_IN_CLIENT__ abort). Worst case: no labels, everything else draws.
+    let text: MTLRenderPipelineState?
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
     /// For pass B: pass exactly the prepass depth, write nothing.
@@ -283,18 +291,27 @@ final class RendererCore {
             let aliasOpaque = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: false),
             let aliasBlend = pipeline(vertex: "alias_vertex", fragment: "alias_fragment", blended: true),
             let vignette = pipeline(vertex: "vignette_vertex", fragment: "vignette_fragment", blended: true),
+            let wheelGuide = pipeline(vertex: "wheel_guide_vertex", fragment: "wheel_guide_fragment", blended: true),
             let depthWrite = device.makeDepthStencilState(descriptor: writeDescriptor),
             let depthNoWrite = device.makeDepthStencilState(descriptor: noWriteDescriptor),
             let depthEqualNoWrite = device.makeDepthStencilState(descriptor: equalDescriptor),
             let depthAlways = device.makeDepthStencilState(descriptor: alwaysDescriptor)
         else { return nil }
 
+        // Non-fatal: build the text pipeline separately so its failure leaves
+        // the rest of the renderer intact. Log the outcome so a device run
+        // tells us whether labels are available there.
+        let textPipeline = pipeline(vertex: "text_vertex",
+                                    fragment: "text_fragment", blended: true)
+        print("[renderer] text pipeline: \(textPipeline == nil ? "FAILED (labels off)" : "ok")")
+
         return RenderPipelines(
             world: world, worldDepthOnly: worldDepthOnly, worldEqual: worldEqual,
             worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
-            vignette: vignette,
+            vignette: vignette, wheelGuide: wheelGuide,
+            text: textPipeline,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
             depthEqualNoWrite: depthEqualNoWrite,
             depthAlways: depthAlways)
@@ -552,6 +569,75 @@ final class RendererCore {
                 indexBufferOffset: Int(batch.first_index) * MemoryLayout<UInt32>.size)
         }
 
+        // Particles (explosions, rocket trails, gunshots): billboarded colour
+        // quads (7 floats/vert, xyz + rgba) built by the bridge. They reuse
+        // the wheel-guide pipeline — colour triangles, no texture — but are
+        // DEPTH-TESTED (depthNoWrite) so the world occludes them, unlike the
+        // always-on-top overlays below.
+        if frame.num_particle_verts >= 3, let src = frame.particle_verts {
+            let floatCount = Int(frame.num_particle_verts) * 7
+            if let buf = device.makeBuffer(bytes: src,
+                                           length: floatCount * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
+                setPipeline(pipelines.wheelGuide, depth: pipelines.depthNoWrite)
+                var u = GuideUniforms(viewproj0: uniforms.viewproj0,
+                                      viewproj1: uniforms.viewproj1)
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                withUnsafeBytes(of: &u) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                }
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                       vertexCount: Int(frame.num_particle_verts))
+            }
+        }
+
+        // Weapon-wheel guide ring, over the world, before the vignette (so
+        // locomotion vignette — never on while the wheel is open — could
+        // still darken it, harmlessly).
+        if frame.wheel_frac > 0.01, frame.wheel_count > 0, frame.wheel_radius > 0.5 {
+            let guide = Self.wheelGuideGeometry(frame: frame)
+            // A per-frame buffer, not setVertexBytes: the triangle geometry
+            // exceeds the 4 KB setVertexBytes limit.
+            if guide.count >= 21,
+               let buf = device.makeBuffer(bytes: guide,
+                                           length: guide.count * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
+                setPipeline(pipelines.wheelGuide, depth: pipelines.depthAlways)
+                var guideUniforms = GuideUniforms(viewproj0: uniforms.viewproj0,
+                                                  viewproj1: uniforms.viewproj1)
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                withUnsafeBytes(of: &guideUniforms) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                }
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                       vertexCount: guide.count / 7)
+            }
+        }
+
+        // Billboarded 2D text — wheel labels now, item selector and HUD next
+        // — over the world and under the vignette. One conchars atlas, one
+        // flat vertex run (9 floats/vert: xyz, uv, rgba), per-frame buffer.
+        if let textPipeline = pipelines.text,
+           frame.num_text_verts >= 3, frame.conchars_texnum != 0,
+           let atlas = textures[frame.conchars_texnum],
+           let src = frame.text_verts {
+            let floatCount = Int(frame.num_text_verts) * 9
+            if let buf = device.makeBuffer(bytes: src,
+                                           length: floatCount * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
+                setPipeline(textPipeline, depth: pipelines.depthAlways)
+                var textUniforms = GuideUniforms(viewproj0: uniforms.viewproj0,
+                                                 viewproj1: uniforms.viewproj1)
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                withUnsafeBytes(of: &textUniforms) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                }
+                encoder.setFragmentTexture(atlas, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                       vertexCount: Int(frame.num_text_verts))
+            }
+        }
+
         // Comfort vignette, last over everything, engine-eased strength.
         if frame.vignette > 0.001 {
             setPipeline(pipelines.vignette, depth: pipelines.depthAlways)
@@ -561,6 +647,91 @@ final class RendererCore {
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
+    }
+
+    /// Draw the finger debug wireframe. `verts` are 7-float TRIANGLE
+    /// vertices (xyz + rgba) in corrected-TRACKING space -- thin quads, not
+    /// lines, because line primitives are illegal under the device's
+    /// foveation rasterization-rate map. The viewprojs map that space
+    /// straight to clip (projection * originFromEye.inverse), NOT through
+    /// the game world, so the wires sit on the real hand and ignore the
+    /// eye-height trim.
+    func drawHandDebug(_ verts: [Float], viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                       pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard verts.count >= 21,
+              let buf = device.makeBuffer(bytes: verts,
+                                          length: verts.count * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
+        encoder.setRenderPipelineState(pipelines.wheelGuide)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        var u = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
+        withUnsafeBytes(of: &u) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / 7)
+    }
+
+    /// Append a thin quad (two triangles) between A and B into a 7-float
+    /// vertex list, so a "line" survives foveation. `perp` is a unit vector
+    /// off the segment; `t` its half-thickness.
+    static func addRibbon(_ a: SIMD3<Float>, _ b: SIMD3<Float>, perp: SIMD3<Float>,
+                          t: Float, color col: SIMD4<Float>, into v: inout [Float]) {
+        let a0 = a - perp * t, a1 = a + perp * t
+        let b0 = b - perp * t, b1 = b + perp * t
+        for p in [a0, a1, b0, a1, b1, b0] {
+            v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w]
+        }
+    }
+
+    /// Build the wheel guide as a flat [Float] of 7-component line
+    /// vertices (xyz + rgba, matching GuideVertex): a dim ring in the
+    /// body-right / world-up plane, a radial spoke at each owned slot, and
+    /// the highlighted slot's spoke long and bright so the selection reads
+    /// at a glance. Layout mirrors QR_EmitWheel's slot angles exactly.
+    private static func wheelGuideGeometry(frame: qc_frame_t) -> [Float] {
+        let c = SIMD3(frame.wheel_center.0, frame.wheel_center.1, frame.wheel_center.2)
+        let r = frame.wheel_radius
+        let count = Int(frame.wheel_count)
+        let yaw = frame.viewangles.1 * .pi / 180
+        let right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
+        let up = SIMD3<Float>(0, 0, 1)
+        func pt(_ angle: Float, _ rad: Float) -> SIMD3<Float> {
+            c + rad * cos(angle) * right + rad * sin(angle) * up
+        }
+        var v: [Float] = []
+        func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ cc: SIMD3<Float>, _ col: SIMD4<Float>) {
+            for p in [a, b, cc] { v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w] }
+        }
+        let dim = SIMD4<Float>(0.6, 0.85, 1.0, 0.6)
+        let hot = SIMD4<Float>(1.0, 0.85, 0.35, 0.95)
+        // Thin quads in the ring plane, not lines (foveation forbids line
+        // primitives), so the band and spokes read face-on to the player.
+        let ringT = max(r * 0.04, 0.2)
+
+        // ring as an in-plane annulus (inner..outer radius) of quads
+        let seg = 48
+        for i in 0..<seg {
+            let a0 = 2 * Float.pi * Float(i) / Float(seg)
+            let a1 = 2 * Float.pi * Float(i + 1) / Float(seg)
+            let i0 = pt(a0, r - ringT), o0 = pt(a0, r + ringT)
+            let i1 = pt(a1, r - ringT), o1 = pt(a1, r + ringT)
+            tri(i0, o0, i1, dim); tri(o0, o1, i1, dim)
+        }
+        // a radial spoke at each slot; the highlighted one longer + hot,
+        // thickened tangentially so it shows face-on
+        let step = 360 / Float(count)
+        for k in 0..<count {
+            let theta = (90 - Float(k) * step) * .pi / 180
+            let isHi = k == Int(frame.wheel_highlight)
+            let col = isHi ? hot : dim
+            let tangent = -sin(theta) * right + cos(theta) * up
+            let inner = pt(theta, r * (isHi ? 0.55 : 0.82))
+            let outer = pt(theta, r * (isHi ? 1.35 : 1.12))
+            addRibbon(inner, outer, perp: tangent, t: ringT * 1.6, color: col, into: &v)
+        }
+        return v
     }
 
     /// qc_entity_t.transform (a 16-float C array, column-major) as simd.
@@ -599,6 +770,12 @@ final class RendererCore {
     /// Layout must match VignetteUniforms in Vignette.metal.
     private struct VignetteUniforms {
         var strength: Float
+    }
+
+    /// Layout must match GuideUniforms in WheelGuide.metal: two matrices.
+    private struct GuideUniforms {
+        var viewproj0: simd_float4x4
+        var viewproj1: simd_float4x4
     }
 
     /// Layout must match AliasUniforms in Alias.metal.
