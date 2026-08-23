@@ -182,6 +182,9 @@ static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
    hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
    head-pitch elevation) -- the A/B for judging feel, one cvar to flip. */
 static cvar_t	vr_handaim = {"vr_handaim", "1", CVAR_ARCHIVE};
+/* M6: a laser line from the muzzle down the aim, an aiming aid. Read by
+   qr_bridge; non-static so it externs cleanly like the other vr_ cvars. */
+cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
 static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
 cvar_t		vr_fullmenu = {"vr_fullmenu", "0", CVAR_ARCHIVE};	/* fixed panel vs wrist ring */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
@@ -607,9 +610,11 @@ void IN_Move (usercmd_t *cmd)
 	if (qr_aim_active)
 	{
 		V_StopPitchDrift ();
-		/* Negate: the fed ray pitch is +up in the tracking frame, Quake pitch
-		   is positive-DOWN. Point the hand down and the shot goes down. */
-		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, -qr_aim_pitch,
+		/* The feeder already emits Quake's sense (positive-DOWN): point the
+		   hand down, qr_aim_pitch goes positive, the shot goes down. The gun
+		   MODEL takes the opposite sign in qr_bridge (QR_EntityMatrix pitches
+		   a world model the other way), so the two are decoupled on purpose. */
+		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_aim_pitch,
 					      cl_maxpitch.value);
 	}
 	else if (vr_headaim.value)
@@ -665,6 +670,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
+	Cvar_RegisterVariable (&vr_laser);
 	Cvar_RegisterVariable (&vr_slowmo);
 	Cvar_RegisterVariable (&vr_fullmenu);
 	Cvar_RegisterVariable (&vr_lean_limit);

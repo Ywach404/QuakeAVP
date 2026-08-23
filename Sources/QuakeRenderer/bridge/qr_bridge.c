@@ -55,6 +55,7 @@ extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
+extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -65,6 +66,12 @@ static int qr_handweapon;
    view weapon animates a new fire frame and decayed on the sim clock. */
 static int qr_recoil_prevframe = -1;
 static float qr_recoil;
+
+/* Cap the hand weapon's longest model dimension, Quake units. View weapons
+   run ~42 (shotgun) to ~95 (rocket launcher); at hand scale the long ones
+   look oversized, so shrink anything past this uniformly. The shotgun and
+   smaller are left at 1.0. */
+#define QR_WEAPON_MAXLEN	45.f
 extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
 extern int qr_wheel_open;		/* held-open intent (release commits) */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
@@ -3476,6 +3483,48 @@ static void QR_ParticleVert (qr_frame_slot_t *slot, const vec3_t p,
 	slot->frame.num_particle_verts = n + 1;
 }
 
+/*
+================
+QR_EmitLaser -- an aiming laser from the muzzle down the aim (vr_laser). A
+thin view-facing quad appended to the particle channel, which is depth-tested
+against the world with no write -- so the beam clips exactly where the shot
+would hit, no trace needed. `angles` is cl.viewangles, the fired aim, so the
+line lands where the bullets do.
+================
+*/
+static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
+			  const vec3_t angles)
+{
+	vec3_t	fwd, right, up, end, mid, look, perp;
+	vec3_t	a0, a1, b0, b1;
+	float	hw = 0.35f;	/* half width, Quake units */
+	int	k;
+
+	AngleVectors (angles, fwd, right, up);
+	VectorMA (start, 4096.f, fwd, end);
+	for (k = 0; k < 3; k++)
+		mid[k] = 0.5f * (start[k] + end[k]);
+	VectorSubtract (r_origin, mid, look);	/* face the eye */
+	CrossProduct (fwd, look, perp);
+	if (VectorNormalize (perp) < 0.01f)
+	{
+		perp[0] = 1.f; perp[1] = 0.f; perp[2] = 0.f;
+	}
+	for (k = 0; k < 3; k++)
+	{
+		a0[k] = start[k] - perp[k] * hw;
+		a1[k] = start[k] + perp[k] * hw;
+		b0[k] = end[k] - perp[k] * hw;
+		b1[k] = end[k] + perp[k] * hw;
+	}
+	QR_ParticleVert (slot, a0, 1.f, 0.15f, 0.12f);
+	QR_ParticleVert (slot, a1, 1.f, 0.15f, 0.12f);
+	QR_ParticleVert (slot, b1, 1.f, 0.15f, 0.12f);
+	QR_ParticleVert (slot, a0, 1.f, 0.15f, 0.12f);
+	QR_ParticleVert (slot, b1, 1.f, 0.15f, 0.12f);
+	QR_ParticleVert (slot, b0, 1.f, 0.15f, 0.12f);
+}
+
 static void QR_EmitParticles (qr_frame_slot_t *slot)
 {
 	particle_t	*p;
@@ -3979,7 +4028,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		{
 			aliashdr_t *vh = (aliashdr_t *) Mod_Extradata (cl.viewent.model);
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
-			float	ax, ay, az, cx, cy, cz;
+			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
 
 			/* Body frame (not the aim): the hand position in the world, the
 			   same eye + (wrist - head) reconstruction the wheel uses. */
@@ -3992,8 +4041,12 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			VectorMA (handpos, ay, rightv, handpos);
 			handpos[2] += az + qr_height_trim;
 
-			/* Point the gun down the aim the shot used. */
-			cl.viewent.angles[0] = cl.viewangles[0];
+			/* Point the gun down the aim the shot used. The pitch is
+			   NEGATED against the shot: QR_EntityMatrix rotates a world
+			   model by Ry(-pitch), so the barrel (+X) ends up at world-z
+			   sin(angles[0]) while the shot's forward is -sin(pitch) --
+			   opposite. Feed -pitch and the barrel points where it fires. */
+			cl.viewent.angles[0] = -cl.viewangles[0];
 			cl.viewent.angles[1] = cl.viewangles[1];
 			cl.viewent.angles[2] = cl.viewangles[2];
 
@@ -4004,13 +4057,26 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			   instead: origin = hand - R(angles) * centre, where the centre in
 			   model space is scale_origin + scale*127.5 and Quake maps model
 			   +X->forward, +Y->left, +Z->up. */
+			mx = cl.viewent.model->maxs[0] - cl.viewent.model->mins[0];
+			my = cl.viewent.model->maxs[1] - cl.viewent.model->mins[1];
+			mz = cl.viewent.model->maxs[2] - cl.viewent.model->mins[2];
+			maxdim = q_max (mx, q_max (my, mz));
+			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
+			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
+
 			cx = vh->scale_origin[0] + vh->scale[0] * 127.5f;
 			cy = vh->scale_origin[1] + vh->scale[1] * 127.5f;
 			cz = vh->scale_origin[2] + vh->scale[2] * 127.5f;
 			AngleVectors (cl.viewent.angles, cf, cr, cu);
-			cl.viewent.origin[0] = handpos[0] - (cf[0]*cx - cr[0]*cy + cu[0]*cz);
-			cl.viewent.origin[1] = handpos[1] - (cf[1]*cx - cr[1]*cy + cu[1]*cz);
-			cl.viewent.origin[2] = handpos[2] - (cf[2]*cx - cr[2]*cy + cu[2]*cz);
+			/* The transform scales the whole model, offset included, so scale
+			   the centre offset by sf too or the shrunk gun drifts off hand. */
+			cl.viewent.origin[0] = handpos[0] - sf * (cf[0]*cx - cr[0]*cy + cu[0]*cz);
+			cl.viewent.origin[1] = handpos[1] - sf * (cf[1]*cx - cr[1]*cy + cu[1]*cz);
+			cl.viewent.origin[2] = handpos[2] - sf * (cf[2]*cx - cr[2]*cy + cu[2]*cz);
+
+			/* Aiming laser from the muzzle down the fired aim. */
+			if (vr_laser.value)
+				QR_EmitLaser (slot, handpos, cl.viewangles);
 
 			/* Visual recoil, purely cosmetic (the shot already left with
 			   cl.viewangles). The view weapon idles at frame 0 and steps
@@ -4032,7 +4098,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 					VectorMA (cl.viewent.origin, -qr_recoil * 2.5f, gf,
 						  cl.viewent.origin);
 					cl.viewent.origin[2] += qr_recoil * 0.6f;
-					cl.viewent.angles[0] -= qr_recoil * 6.f;   /* muzzle rises */
+					cl.viewent.angles[0] += qr_recoil * 6.f;   /* muzzle rises (negated model pitch) */
 					qr_recoil -= (float) host_frametime * 5.f;
 					if (qr_recoil < 0.f)
 						qr_recoil = 0.f;
