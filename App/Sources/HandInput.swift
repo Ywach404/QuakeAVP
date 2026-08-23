@@ -20,9 +20,10 @@
 //
 //  Drag vectors are rotated by the render thread's recenter correction
 //  (TrackingSpace) so "forward" is the body's forward, not the room's
-//  arbitrary axis. M6: the dominant hand's index ray is fed to the engine as
-//  the aim (feedAim -> QC_InputSetAim), so the gun lives in the hand and
-//  shots leave along the finger, decoupled from the body and the gaze.
+//  arbitrary axis. M6: the dominant hand's WRIST ray (forearm->knuckle, not
+//  the index finger — pinching to fire must not move the aim) is fed to the
+//  engine as the aim (feedAim -> QC_InputSetAim), so the gun tracks the wrist
+//  and shots leave along the arm, decoupled from the body and the gaze.
 //
 
 import ARKit
@@ -180,15 +181,16 @@ final class HandInput: @unchecked Sendable {
     }
 
 
-    /// M6 aim: turn the dominant hand's index ray into the engine's aim.
-    /// The ray (knuckle -> tip, room frame) is corrected into the
+    /// M6 aim: turn the dominant hand's WRIST ray into the engine's aim. The
+    /// ray (wrist origin, forearm->knuckle direction — deliberately NOT the
+    /// index finger, which moves when you pinch to fire) is corrected into the
     /// recenter-neutral frame — the same TrackingSpace correction the wheel
     /// and the renderer use — then to Quake's body axes: yaw CCW/left-positive
     /// relative to room forward (the engine adds the body yaw), pitch
     /// positive-down, muzzle origin in body-frame Quake units. `valid 0` when
-    /// the finger isn't extended, so the shot falls back to the body aim.
+    /// the wrist isn't tracked, so the shot falls back to the body aim.
     private func feedAim(_ hand: HandState) {
-        guard let o = hand.indexRayOrigin, let d = hand.indexRayDirection else {
+        guard let o = hand.aimOrigin, let d = hand.aimDir else {
             QC_InputSetAim(0, 0, 0, 0, 0, 0)
             return
         }
@@ -251,8 +253,8 @@ private struct HandState {
     /// Wrist velocity, room frame, metres/sec -- drives the flick snap turn.
     var wristVel: SIMD3<Float>?
     var palmUp = false
-    var indexRayOrigin: SIMD3<Float>?
-    var indexRayDirection: SIMD3<Float>?
+    var aimOrigin: SIMD3<Float>?      // wrist, room frame
+    var aimDir: SIMD3<Float>?         // forearm->knuckle, room frame
 
     /// Coloured finger bones for the debug overlay, corrected-tracking
     /// space, 7 floats/vertex (xyz + rgba), line list. Built in ingest.
@@ -355,13 +357,26 @@ private struct HandState {
         } else {
             palmUp = false
         }
-        if let knuckle = tip(.indexFingerKnuckle), let tipPos = index,
-           simd_distance(knuckle, tipPos) > 0.02 {
-            indexRayOrigin = knuckle
-            indexRayDirection = simd_normalize(tipPos - knuckle)
+        // Aim ray from the WRIST/forearm, not the index finger. The index tip
+        // curls toward the thumb when you pinch to fire, which yanked the shot
+        // on every trigger pull; the wrist and the finger BASES don't move
+        // when you pinch, so the aim holds through the shot. Origin is the
+        // wrist (the gun tracks the wrist), direction is the forearm->middle-
+        // knuckle line -- the way the whole hand/arm points -- falling back to
+        // wrist->knuckle if the forearm joint isn't tracked.
+        if let w = wrist, let knuckle = tip(.middleFingerKnuckle) {
+            let base = tip(.forearmArm) ?? w
+            let dir = knuckle - base
+            if simd_length(dir) > 0.05 {
+                aimOrigin = w
+                aimDir = simd_normalize(dir)
+            } else {
+                aimOrigin = nil
+                aimDir = nil
+            }
         } else {
-            indexRayOrigin = nil
-            indexRayDirection = nil
+            aimOrigin = nil
+            aimDir = nil
         }
 
         buildDebug(tip: tip)
