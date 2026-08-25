@@ -366,7 +366,9 @@ final class ImmersiveRenderer {
         // The virtual hand stands in while the world is solid and fades out
         // (1 - phase) as the melt reveals the real hand through passthrough.
         // Same corrected-tracking space and handViewproj as the debug bones.
-        let virtualHand: [Float] = VirtualHand.shared.snapshot()
+        // Suppressed while the green wireframe is up -- otherwise the solid
+        // skin/cuff hand draws over the wireframe (the stray skin/blue polys).
+        let virtualHand: [Float] = HandDebug.shared.enabled ? [] : VirtualHand.shared.snapshot()
         let handOpacity: Float = 1 - (packet?.phase ?? 0)
 
         if singlePassStereo, views.count == 2 {
