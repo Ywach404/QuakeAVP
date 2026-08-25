@@ -185,6 +185,10 @@ static cvar_t	vr_handaim = {"vr_handaim", "1", CVAR_ARCHIVE};
 /* M6: a laser line from the muzzle down the aim, an aiming aid. Read by
    qr_bridge; non-static so it externs cleanly like the other vr_ cvars. */
 cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
+/* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
+   (muzzle). Low values push the barrel forward off the hand -- megaman
+   arm-cannon. Read by qr_bridge; tune live on device. */
+cvar_t		vr_weapongrip = {"vr_weapongrip", "0.15", CVAR_ARCHIVE};
 static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
 cvar_t		vr_fullmenu = {"vr_fullmenu", "0", CVAR_ARCHIVE};	/* fixed panel vs wrist ring */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
@@ -671,6 +675,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
 	Cvar_RegisterVariable (&vr_laser);
+	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_slowmo);
 	Cvar_RegisterVariable (&vr_fullmenu);
 	Cvar_RegisterVariable (&vr_lean_limit);

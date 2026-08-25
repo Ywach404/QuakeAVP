@@ -20,10 +20,10 @@
 //
 //  Drag vectors are rotated by the render thread's recenter correction
 //  (TrackingSpace) so "forward" is the body's forward, not the room's
-//  arbitrary axis. M6: the dominant hand's WRIST ray (forearm->knuckle, not
-//  the index finger — pinching to fire must not move the aim) is fed to the
-//  engine as the aim (feedAim -> QC_InputSetAim), so the gun tracks the wrist
-//  and shots leave along the arm, decoupled from the body and the gaze.
+//  arbitrary axis. M6: the dominant hand's FOREARM axis (elbow->wrist, not
+//  a finger — pinching to fire, a fist, or an open hand must not move or drop
+//  the aim) is fed to the engine as the aim (feedAim -> QC_InputSetAim), so
+//  the gun is an arm-cannon along the forearm, decoupled from body and gaze.
 //
 
 import ARKit
@@ -43,7 +43,7 @@ final class HandInput: @unchecked Sendable {
     // `flickPulse` after a trigger so the engine's tick reliably samples it
     // (a single-frame pulse landed between ticks and got dropped -- that was
     // the "turning doesn't work" bug). Watch the on-hand gauge to calibrate.
-    private static let flickSpeed: Float = 0.85    // m/s to trigger
+    // Trigger speed is live-tunable: VRSettings.turnFlickSpeed (Comfort menu).
     private static let flickReset: Float = 0.35    // m/s to re-arm
     private static let flickCooldown = 0.35        // s to swallow the return
     private static let flickPulse = 0.09           // s to hold the pad pulse
@@ -176,10 +176,11 @@ final class HandInput: @unchecked Sendable {
             if abs(d.x) > 0.06 { slice.rx = d.x > 0 ? 1 : -1; turnedByPinch = true }
         }
         let speed = aim.wristVel.map { (basis * $0).x } ?? 0   // body-right m/s
+        let flickSpeed = max(0.2, VRSettings.shared.turnFlickSpeed)   // live-tunable
         let now = CACurrentMediaTime()
         var firing = false
         if !turnedByPinch {
-            if flickArmed, now >= flickCooldownUntil, abs(speed) > Self.flickSpeed {
+            if flickArmed, now >= flickCooldownUntil, abs(speed) > flickSpeed {
                 flickDir = speed > 0 ? 1 : -1
                 flickArmed = false
                 flickPulseUntil = now + Self.flickPulse         // HOLD so the engine samples it
@@ -191,7 +192,8 @@ final class HandInput: @unchecked Sendable {
             if firing { slice.rx = flickDir }
         }
         // Drive the on-hand turn gauge so the flick is visible/debuggable.
-        buildTurnGauge(wrist: aim.wrist, speed: speed, armed: flickArmed, firing: firing)
+        buildTurnGauge(wrist: aim.wrist, speed: speed, threshold: flickSpeed,
+                       armed: flickArmed, firing: firing)
 
         aggregator.update(.hands, slice)
     }
@@ -205,7 +207,7 @@ final class HandInput: @unchecked Sendable {
     /// whip came) instead of guessing why the turn didn't take. Built in the
     /// corrected tracking frame where +X is body-right (the flick axis); drawn
     /// with the debug overlay through handViewproj. Triangles, not lines.
-    private func buildTurnGauge(wrist: SIMD3<Float>?, speed: Float,
+    private func buildTurnGauge(wrist: SIMD3<Float>?, speed: Float, threshold: Float,
                                 armed: Bool, firing: Bool) {
         guard HandDebug.shared.enabled, let w = wrist else { turnGaugeVerts = []; return }
         let c4 = TrackingSpace.correction * SIMD4(w, 1)
@@ -227,16 +229,17 @@ final class HandInput: @unchecked Sendable {
         quad(-halfW, 0.004, 0.016, tick)             // threshold ticks = flickSpeed
         quad( halfW, 0.004, 0.016, tick)
         quad(0, 0.003, 0.012, track)                 // centre
-        let frac = max(-1.2, min(1.2, speed / Self.flickSpeed))
+        let frac = max(-1.2, min(1.2, speed / threshold))   // edge = current threshold
         quad(frac * halfW, 0.008, 0.020,             // moving marker
              firing ? fireC : (armed ? armedC : coolC))
         turnGaugeVerts = v
     }
 
-    /// M6 aim: turn the dominant hand's WRIST ray into the engine's aim. The
-    /// ray (wrist origin, forearm->knuckle direction — deliberately NOT the
-    /// index finger, which moves when you pinch to fire) is corrected into the
-    /// recenter-neutral frame — the same TrackingSpace correction the wheel
+    /// M6 aim: turn the dominant hand's FOREARM axis into the engine's aim.
+    /// The ray (wrist origin, elbow->wrist direction — deliberately NOT a
+    /// finger, which moves when you pinch to fire and drops out in a fist or
+    /// open hand) is corrected into the recenter-neutral frame — the same
+    /// TrackingSpace correction the wheel
     /// and the renderer use — then to Quake's body axes: yaw CCW/left-positive
     /// relative to room forward (the engine adds the body yaw), pitch
     /// positive-down, muzzle origin in body-frame Quake units. `valid 0` when
@@ -409,21 +412,22 @@ private struct HandState {
         } else {
             palmUp = false
         }
-        // Aim ray from the WRIST/forearm, not the index finger. The index tip
-        // curls toward the thumb when you pinch to fire, which yanked the shot
-        // on every trigger pull; the wrist and the finger BASES don't move
-        // when you pinch, so the aim holds through the shot. Origin is the
-        // wrist (the gun tracks the wrist), direction is the forearm->middle-
-        // knuckle line -- the way the whole hand/arm points -- falling back to
-        // wrist->knuckle if the forearm joint isn't tracked.
-        if let w = wrist, let knuckle = tip(.middleFingerKnuckle) {
-            let base = tip(.forearmArm) ?? w
-            let dir = knuckle - base
-            if simd_length(dir) > 0.05 {
-                aimOrigin = w
-                aimDir = simd_normalize(dir)
+        // Aim along the FOREARM axis -- a "megaman cannon" that points where
+        // the arm points. Crucially this does NOT depend on finger tracking,
+        // so the gun holds steady through a fist, an open hand, a turned wrist
+        // or a fire pinch (the old wrist->knuckle ray lost the middle knuckle
+        // in those poses and the gun winked out). Direction is elbow-side
+        // forearm joint -> wrist, extended out the hand; origin is the wrist,
+        // which tracks whenever the hand does. Fall back to wrist->knuckle
+        // only if the forearm joint is missing.
+        if let w = wrist {
+            aimOrigin = w
+            if let arm = tip(.forearmArm), simd_length(w - arm) > 0.05 {
+                aimDir = simd_normalize(w - arm)
+            } else if let knuckle = tip(.middleFingerKnuckle),
+                      simd_length(knuckle - w) > 0.03 {
+                aimDir = simd_normalize(knuckle - w)
             } else {
-                aimOrigin = nil
                 aimDir = nil
             }
         } else {
