@@ -211,14 +211,21 @@ final class HandInput: @unchecked Sendable {
                                 armed: Bool, firing: Bool) {
         guard HandDebug.shared.enabled, let w = wrist else { turnGaugeVerts = []; return }
         let c4 = TrackingSpace.correction * SIMD4(w, 1)
-        let center = SIMD3(c4.x, c4.y + 0.14, c4.z - 0.02)   // above/ahead of the wrist
+        let center = SIMD3(c4.x, c4.y + 0.14, c4.z)   // above the wrist
         let halfW: Float = 0.09
+        // Billboard: face the eye so the gauge stays readable when the head
+        // turns instead of going edge-on. Its plane is spanned by (right, up)
+        // both perpendicular to the eye direction.
+        let toEye = simd_normalize(ViewerPose.shared.eye - center)
+        var right = simd_cross(SIMD3<Float>(0, 1, 0), toEye)
+        right = simd_length(right) > 1e-4 ? simd_normalize(right) : SIMD3(1, 0, 0)
+        let up = simd_normalize(simd_cross(toEye, right))
         var v: [Float] = []
         func quad(_ cx: Float, _ hw: Float, _ hh: Float, _ col: SIMD4<Float>) {
-            let x = center.x + cx, y = center.y, z = center.z
-            let a = SIMD3(x - hw, y - hh, z), b = SIMD3(x + hw, y - hh, z)
-            let c = SIMD3(x + hw, y + hh, z), d = SIMD3(x - hw, y + hh, z)
-            for q in [a, b, c, a, c, d] { v += [q.x, q.y, q.z, col.x, col.y, col.z, col.w] }
+            let c = center + right * cx
+            let a = c - right * hw - up * hh, b = c + right * hw - up * hh
+            let d = c + right * hw + up * hh, e = c - right * hw + up * hh
+            for q in [a, b, d, a, d, e] { v += [q.x, q.y, q.z, col.x, col.y, col.z, col.w] }
         }
         let track = SIMD4<Float>(0.10, 0.30, 0.14, 0.70)
         let tick  = SIMD4<Float>(1.0, 0.55, 0.20, 0.95)
@@ -422,7 +429,13 @@ private struct HandState {
         // only if the forearm joint is missing.
         if let w = wrist {
             aimOrigin = w
-            if let arm = tip(.forearmArm), simd_length(w - arm) > 0.05 {
+            // Prefer the pure forearm BONE (elbow joint -> wrist joint): the
+            // most stable "where the arm points" line, and level when the
+            // forearm is level. Fall back to elbow->wrist, then wrist->knuckle.
+            if let armJ = tip(.forearmArm), let wristJ = tip(.forearmWrist),
+               simd_length(wristJ - armJ) > 0.05 {
+                aimDir = simd_normalize(wristJ - armJ)
+            } else if let arm = tip(.forearmArm), simd_length(w - arm) > 0.05 {
                 aimDir = simd_normalize(w - arm)
             } else if let knuckle = tip(.middleFingerKnuckle),
                       simd_length(knuckle - w) > 0.03 {
@@ -589,6 +602,18 @@ final class VirtualHand: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return verts
     }
+}
+
+/// The viewer's eye position in the SAME corrected-tracking space the debug
+/// hands and the turn gauge are drawn in (handViewproj). The render thread
+/// publishes it each frame so on-hand HUD can billboard toward the head
+/// instead of hanging at a fixed angle that goes edge-on when you look away.
+final class ViewerPose: @unchecked Sendable {
+    static let shared = ViewerPose()
+    private let lock = NSLock()
+    private var _eye = SIMD3<Float>(0, 1.2, 0)
+    func setEye(_ e: SIMD3<Float>) { lock.lock(); _eye = e; lock.unlock() }
+    var eye: SIMD3<Float> { lock.lock(); defer { lock.unlock() }; return _eye }
 }
 
 /// The recenter correction, shared from the render thread: the rotation

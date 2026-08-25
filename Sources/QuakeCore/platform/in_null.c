@@ -182,6 +182,10 @@ static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
    hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
    head-pitch elevation) -- the A/B for judging feel, one cvar to flip. */
 static cvar_t	vr_handaim = {"vr_handaim", "1", CVAR_ARCHIVE};
+/* M6: pitch trim for the hand aim, degrees, positive = aim LOWER. Corrects a
+   systematic high/low bias from how the forearm rests when pointing; applies
+   to the shot and the gun model together. Tune live against the laser. */
+static cvar_t	vr_aimpitch = {"vr_aimpitch", "0", CVAR_ARCHIVE};
 /* M6: a laser line from the muzzle down the aim, an aiming aid. Read by
    qr_bridge; non-static so it externs cleanly like the other vr_ cvars. */
 cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
@@ -617,8 +621,10 @@ void IN_Move (usercmd_t *cmd)
 		/* The feeder already emits Quake's sense (positive-DOWN): point the
 		   hand down, qr_aim_pitch goes positive, the shot goes down. The gun
 		   MODEL takes the opposite sign in qr_bridge (QR_EntityMatrix pitches
-		   a world model the other way), so the two are decoupled on purpose. */
-		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_aim_pitch,
+		   a world model the other way), so the two are decoupled on purpose.
+		   vr_aimpitch trims a resting-forearm bias (positive = aim lower). */
+		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value,
+					      qr_aim_pitch + vr_aimpitch.value,
 					      cl_maxpitch.value);
 	}
 	else if (vr_headaim.value)
@@ -674,6 +680,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
+	Cvar_RegisterVariable (&vr_aimpitch);
 	Cvar_RegisterVariable (&vr_laser);
 	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_slowmo);
