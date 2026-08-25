@@ -20,8 +20,10 @@
 //
 //  Drag vectors are rotated by the render thread's recenter correction
 //  (TrackingSpace) so "forward" is the body's forward, not the room's
-//  arbitrary axis. Aim stays on the body for now: hand-attached weaponry
-//  needs the aim/body packet split (M6).
+//  arbitrary axis. M6: the dominant hand's WRIST ray (forearm->knuckle, not
+//  the index finger — pinching to fire must not move the aim) is fed to the
+//  engine as the aim (feedAim -> QC_InputSetAim), so the gun tracks the wrist
+//  and shots leave along the arm, decoupled from the body and the gaze.
 //
 
 import ARKit
@@ -62,6 +64,7 @@ final class HandInput: @unchecked Sendable {
             session?.stop()
             session = nil
             aggregator.remove(.hands)
+            VirtualHand.shared.publish([])
         }
     }
 
@@ -103,14 +106,26 @@ final class HandInput: @unchecked Sendable {
             if HandDebug.shared.enabled {
                 HandDebug.shared.publish(left.debugVerts + right.debugVerts)
             }
+            VirtualHand.shared.publish(left.virtualVerts + right.virtualVerts)
         }
         aggregator.remove(.hands)
+        VirtualHand.shared.publish([])   // hands gone: no stand-in to draw
     }
 
     // MARK: - Gesture synthesis
 
     private func emit(left: inout HandState, right: inout HandState) {
         var slice = PadAggregator.Slice()
+
+        // Handedness: the OFF (non-gun) hand moves, jumps, crouches; the
+        // DOMINANT (gun) hand aims and fires.
+        let rightHanded = VRSettings.shared.rightHanded
+        let move = rightHanded ? left : right
+        let aim = rightHanded ? right : left
+
+        // M6: feed the dominant hand's aim ray to the engine every update,
+        // even while the wheel is open, so the gun keeps tracking the hand.
+        feedAim(aim)
 
         // While the wheel is open, ALL other gestures are suppressed --
         // you are choosing a weapon, not fighting or moving. This is why
@@ -124,12 +139,6 @@ final class HandInput: @unchecked Sendable {
         // Body-frame axes: rotate room-frame drags by the same correction
         // the renderer composes under the head pose.
         let basis = TrackingSpace.rotation
-
-        // Handedness: the OFF (non-gun) hand moves, jumps, crouches; the
-        // DOMINANT (gun) hand aims and fires.
-        let rightHanded = VRSettings.shared.rightHanded
-        let move = rightHanded ? left : right
-        let aim = rightHanded ? right : left
 
         // Movement, VRChat-style holds on the move hand (not drags -- a
         // drag reset whenever the pinch flickered): thumb+middle walks
@@ -171,6 +180,30 @@ final class HandInput: @unchecked Sendable {
         aggregator.update(.hands, slice)
     }
 
+
+    /// M6 aim: turn the dominant hand's WRIST ray into the engine's aim. The
+    /// ray (wrist origin, forearm->knuckle direction — deliberately NOT the
+    /// index finger, which moves when you pinch to fire) is corrected into the
+    /// recenter-neutral frame — the same TrackingSpace correction the wheel
+    /// and the renderer use — then to Quake's body axes: yaw CCW/left-positive
+    /// relative to room forward (the engine adds the body yaw), pitch
+    /// positive-down, muzzle origin in body-frame Quake units. `valid 0` when
+    /// the wrist isn't tracked, so the shot falls back to the body aim.
+    private func feedAim(_ hand: HandState) {
+        guard let o = hand.aimOrigin, let d = hand.aimDir else {
+            QC_InputSetAim(0, 0, 0, 0, 0, 0)
+            return
+        }
+        let corr = TrackingSpace.correction
+        let op = corr * SIMD4(o, 1)
+        let dp = corr * SIMD4(d, 0)          // direction: rotation only (w = 0)
+        let dir = simd_normalize(SIMD3(dp.x, dp.y, dp.z))
+        let aimYaw = atan2(-dir.x, -dir.z) * 180 / .pi
+        let horiz = (dir.x * dir.x + dir.z * dir.z).squareRoot()
+        let aimPitch = -atan2(dir.y, horiz) * 180 / .pi
+        let s = WheelState.shared.currentWorldScale
+        QC_InputSetAim(1, -op.z / s, op.x / s, op.y / s, aimYaw, aimPitch)
+    }
 
     /// Weapon wheel, ONE-HANDED. The off-hand palm gesture holds the ring
     /// open; the ring then LOCKS in place and the same wrist is the selector
@@ -220,12 +253,17 @@ private struct HandState {
     /// Wrist velocity, room frame, metres/sec -- drives the flick snap turn.
     var wristVel: SIMD3<Float>?
     var palmUp = false
-    var indexRayOrigin: SIMD3<Float>?
-    var indexRayDirection: SIMD3<Float>?
+    var aimOrigin: SIMD3<Float>?      // wrist, room frame
+    var aimDir: SIMD3<Float>?         // forearm->knuckle, room frame
 
     /// Coloured finger bones for the debug overlay, corrected-tracking
     /// space, 7 floats/vertex (xyz + rgba), line list. Built in ingest.
     var debugVerts: [Float] = []
+
+    /// The stylised solid hand (forearm + palm + fingers), corrected-tracking
+    /// space, 7 floats/vertex (xyz + rgba), triangle list. Built every ingest,
+    /// drawn by the render thread at opacity 1 - phase. See VirtualHand.
+    var virtualVerts: [Float] = []
 
     /// Flips the palm-normal convention if the skeleton's winding turns
     /// out mirrored on hardware; calibrate on device, not by argument.
@@ -319,16 +357,87 @@ private struct HandState {
         } else {
             palmUp = false
         }
-        if let knuckle = tip(.indexFingerKnuckle), let tipPos = index,
-           simd_distance(knuckle, tipPos) > 0.02 {
-            indexRayOrigin = knuckle
-            indexRayDirection = simd_normalize(tipPos - knuckle)
+        // Aim ray from the WRIST/forearm, not the index finger. The index tip
+        // curls toward the thumb when you pinch to fire, which yanked the shot
+        // on every trigger pull; the wrist and the finger BASES don't move
+        // when you pinch, so the aim holds through the shot. Origin is the
+        // wrist (the gun tracks the wrist), direction is the forearm->middle-
+        // knuckle line -- the way the whole hand/arm points -- falling back to
+        // wrist->knuckle if the forearm joint isn't tracked.
+        if let w = wrist, let knuckle = tip(.middleFingerKnuckle) {
+            let base = tip(.forearmArm) ?? w
+            let dir = knuckle - base
+            if simd_length(dir) > 0.05 {
+                aimOrigin = w
+                aimDir = simd_normalize(dir)
+            } else {
+                aimOrigin = nil
+                aimDir = nil
+            }
         } else {
-            indexRayOrigin = nil
-            indexRayDirection = nil
+            aimOrigin = nil
+            aimDir = nil
         }
 
         buildDebug(tip: tip)
+        buildVirtual(tip: tip, isLeft: isLeft)
+    }
+
+    /// The stylised virtual hand: a sleeve-toned forearm stub, a skin palm
+    /// fan from the wrist to the knuckles, and tapered finger ribbons — enough
+    /// to read as a hand without arm IK (there is no shoulder to solve to, and
+    /// a guessed elbow looks worse than none, so the forearm is just the
+    /// ARKit forearm joint). Corrected-tracking space, triangles, 7 floats
+    /// each. Colours are sRGB-ish; the guide fragment linearises them.
+    private mutating func buildVirtual(tip: (HandSkeleton.JointName) -> SIMD3<Float>?,
+                                       isLeft: Bool) {
+        guard let wristPt = tip(.wrist) else { virtualVerts = []; return }
+        let corr = TrackingSpace.correction
+        let skin = SIMD4<Float>(0.80, 0.60, 0.48, 1)
+        let cuff = SIMD4<Float>(0.30, 0.34, 0.44, 1)
+        let up = SIMD3<Float>(0, 1, 0)
+        var v: [Float] = []
+        func c(_ p: SIMD3<Float>) -> SIMD3<Float> {
+            let q = corr * SIMD4(p, 1); return SIMD3(q.x, q.y, q.z)
+        }
+        func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ d: SIMD3<Float>, _ col: SIMD4<Float>) {
+            for p in [c(a), c(b), c(d)] { v += [p.x, p.y, p.z, col.x, col.y, col.z, col.w] }
+        }
+        func ribbon(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ t: Float, _ col: SIMD4<Float>) {
+            var perp = simd_cross(b - a, up)
+            if simd_length(perp) < 1e-5 { perp = simd_cross(b - a, SIMD3(1, 0, 0)) }
+            perp = simd_length(perp) > 0 ? simd_normalize(perp) * t : SIMD3(t, 0, 0)
+            tri(a - perp, a + perp, b - perp, col)
+            tri(a + perp, b + perp, b - perp, col)
+        }
+        // Forearm stub from the ARKit forearm joint to the wrist.
+        if let arm = tip(.forearmArm) { ribbon(arm, wristPt, 0.026, cuff) }
+        // Palm: a fan from the wrist across the knuckle line.
+        let knuckles = [HandSkeleton.JointName.indexFingerKnuckle, .middleFingerKnuckle,
+                        .ringFingerKnuckle, .littleFingerKnuckle].compactMap { tip($0) }
+        for i in 0..<max(0, knuckles.count - 1) {
+            tri(wristPt, knuckles[i], knuckles[i + 1], skin)
+        }
+        if let thumbK = tip(.thumbKnuckle), let idxK = knuckles.first {
+            tri(wristPt, thumbK, idxK, skin)
+        }
+        // Fingers as tapered ribbons.
+        let fingers: [[HandSkeleton.JointName]] = [
+            [.thumbKnuckle, .thumbIntermediateBase, .thumbIntermediateTip, .thumbTip],
+            [.indexFingerKnuckle, .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip],
+            [.middleFingerKnuckle, .middleFingerIntermediateBase, .middleFingerIntermediateTip, .middleFingerTip],
+            [.ringFingerKnuckle, .ringFingerIntermediateBase, .ringFingerIntermediateTip, .ringFingerTip],
+            [.littleFingerKnuckle, .littleFingerIntermediateBase, .littleFingerIntermediateTip, .littleFingerTip],
+        ]
+        for joints in fingers {
+            var prev: SIMD3<Float>?
+            for (i, j) in joints.enumerated() {
+                guard let cur = tip(j) else { prev = nil; continue }
+                if let p = prev { ribbon(p, cur, i <= 1 ? 0.009 : 0.007, skin) }
+                prev = cur
+            }
+        }
+        virtualVerts = v
     }
 
     /// Colour each finger by whether its gesture is firing, so the overlay
@@ -391,6 +500,25 @@ private struct HandState {
         guard middleReleasedClean else { return false }
         middleReleasedClean = false
         return true
+    }
+}
+
+/// The stylised virtual hand mesh, shared from HandInput to the render
+/// thread. Corrected-tracking space, 7 floats/vertex (xyz + rgba), triangle
+/// list — the render thread scales the alpha by 1 - phase and draws it on the
+/// real hand with the wheel-guide pipeline. Empty while no hand is tracked.
+final class VirtualHand: @unchecked Sendable {
+    static let shared = VirtualHand()
+    private let lock = NSLock()
+    private var verts: [Float] = []
+
+    func publish(_ v: [Float]) {
+        lock.lock(); verts = v; lock.unlock()
+    }
+
+    func snapshot() -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return verts
     }
 }
 

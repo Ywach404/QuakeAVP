@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var wheelSlowmo = true
     @State private var swapSenseHands = false
     @State private var fullMenu = false
+    @State private var laser = false
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -190,6 +191,9 @@ struct ContentView: View {
                     set: { fullMenu = $0
                            VRSettings.shared.fullMenu = $0
                            engine.send("vr_fullmenu \($0 ? 1 : 0)") }))
+                Toggle("Aiming laser", isOn: Binding(
+                    get: { laser },
+                    set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)") }))
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("Turning", selection: Binding(

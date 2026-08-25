@@ -106,6 +106,7 @@ final class ImmersiveRenderer {
         // packet stream back to the window and drop the layer.
         QC_RendererSetCullingFov(0, 0)
         QC_InputSetHeadPitch(0)   // level the aim for a later flat-window session
+        QC_InputSetAim(0, 0, 0, 0, 0, 0)   // release the hand aim; body-anchored on the flat window
         print("[immersive] layer invalidated, render thread exiting")
         onStop()
     }
@@ -219,9 +220,9 @@ final class ImmersiveRenderer {
         }
 
         // World->tracking-origin: the Quake BODY basis, scaled to metres —
-        // yaw only, because pitch and roll belong to the head. The engine's
-        // aim pitch (right stick) moves the gun and the shot, never the
-        // horizon; the flat window keeps the full angles as its debug view.
+        // yaw only (packet.body_yaw), because pitch and roll belong to the
+        // head. This is deliberately the body, NOT the aim (viewangles): the
+        // gun and the shot follow the hand ray, but the eye never does.
         // The anchor sits at vieworg minus what the engine already absorbed
         // of the head offset — absorption walks the box, not the eye — and
         // the un-absorbed lean is clamped to the packet's limit so the head
@@ -248,13 +249,32 @@ final class ImmersiveRenderer {
             let headYaw = atan2(-hf.x, -hf.z) * 180 / .pi
             QC_InputSetHeadYaw(headYaw)
 
-            // Head pitch drives the shot (vr_headaim): elevation of the head
+            // Head pitch (vr_headaim fallback): elevation of the head
             // forward, negated into Quake's sense where +pitch looks DOWN.
             let horiz = (hf.x * hf.x + hf.z * hf.z).squareRoot()
             let headPitch = -atan2(hf.y, horiz) * 180 / .pi
             QC_InputSetHeadPitch(headPitch)
 
-            let yaw = packet.viewangles.1 * .pi / 180
+            // M6 aim: the dominant Sense controller's 6DOF pose becomes the
+            // shot ray. Corrected into the recenter-neutral frame (the same
+            // correction the head uses), then to Quake's body-frame angles:
+            // yaw CCW/left-positive relative to room forward (the engine adds
+            // the body yaw), pitch positive-down, and the muzzle origin in
+            // body-frame Quake units. Hands feed the same setter from
+            // HandInput; when neither is present the engine falls back to the
+            // body-anchored aim. Controller forward is -Z.
+            let rightHanded = VRSettings.shared.rightHanded
+            if let domPose = SpatialControllerTracker.shared.pose(left: !rightHanded) {
+                let c = recenterCorrection * domPose
+                let o = c.columns.3
+                let fwd0 = -c.columns.2          // controller forward, corrected
+                let aimYaw = atan2(-fwd0.x, -fwd0.z) * 180 / .pi
+                let aimHoriz = (fwd0.x * fwd0.x + fwd0.z * fwd0.z).squareRoot()
+                let aimPitch = -atan2(fwd0.y, aimHoriz) * 180 / .pi
+                QC_InputSetAim(1, -o.z / s, o.x / s, o.y / s, aimYaw, aimPitch)
+            }
+
+            let yaw = packet.body_yaw * .pi / 180
             let fwdW = SIMD2(cos(yaw), sin(yaw))
             let rightW = SIMD2(sin(yaw), -cos(yaw))
             let offsetW = fwd * fwdW + right * rightW
@@ -277,7 +297,7 @@ final class ImmersiveRenderer {
                                packet.vieworg.2 + heightTrim)
             let quakeView = RendererCore.quakeViewMatrix(
                 origin: anchor,
-                angles: SIMD3(0, packet.viewangles.1, 0))
+                angles: SIMD3(0, packet.body_yaw, 0))
             let scale = simd_float4x4(diagonal: SIMD4(s, s, s, 1))
             originFromQuake = scale * quakeView
             quakeFromOrigin = originFromQuake.inverse
@@ -343,6 +363,12 @@ final class ImmersiveRenderer {
         // real hand, untouched by the game-world height trim.
         let handDebug: [Float] = HandDebug.shared.enabled ? HandDebug.shared.snapshot() : []
 
+        // The virtual hand stands in while the world is solid and fades out
+        // (1 - phase) as the melt reveals the real hand through passthrough.
+        // Same corrected-tracking space and handViewproj as the debug bones.
+        let virtualHand: [Float] = VirtualHand.shared.snapshot()
+        let handOpacity: Float = 1 - (packet?.phase ?? 0)
+
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
                 for: drawable, textureIndex: 0, slice: nil, clear: clear)
@@ -356,6 +382,9 @@ final class ImmersiveRenderer {
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
                             amplificationCount: 2, drawsViewmodel: false)
+                core.drawVirtualHand(virtualHand, opacity: handOpacity,
+                                     viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                     pipelines: pipelines, encoder: encoder)
                 core.drawHandDebug(handDebug, viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                    pipelines: pipelines, encoder: encoder)
             }
@@ -380,6 +409,9 @@ final class ImmersiveRenderer {
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
                                 amplificationCount: 1, drawsViewmodel: false)
+                    core.drawVirtualHand(virtualHand, opacity: handOpacity,
+                                         viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                         pipelines: pipelines, encoder: encoder)
                     core.drawHandDebug(handDebug, viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                        pipelines: pipelines, encoder: encoder)
                 }
