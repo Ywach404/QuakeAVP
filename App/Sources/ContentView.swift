@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var swapSenseHands = false
     @State private var fullMenu = false
     @State private var laser = false
+    @State private var turnFlick: Float = 0.85
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -203,8 +204,18 @@ struct ContentView: View {
                         Text("Smooth").tag(true)
                     }
                     .pickerStyle(.segmented)
-                    Text("Flick the gun hand sideways (thumb-and-middle pinch) to turn.")
+                    Text("Whip the gun hand sideways to turn. Turn on the wireframe to see the flick gauge.")
                         .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Text("Flick ease").font(.caption)
+                        Slider(value: Binding(
+                            get: { Double(turnFlick) },
+                            set: { turnFlick = Float($0)
+                                   VRSettings.shared.turnFlickSpeed = Float($0) }),
+                               in: 0.4...1.6)
+                        Text(String(format: "%.2f", turnFlick))
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
                 }
                 Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
                     get: { wheelSlowmo },

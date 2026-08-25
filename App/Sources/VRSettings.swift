@@ -57,6 +57,15 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _fullMenu = newValue; lock.unlock() }
     }
 
+    /// Gun-hand flick snap-turn trigger speed, m/s of body-right wrist motion.
+    /// Lower = easier to trigger (but more accidental turns). Tuned live from
+    /// the Comfort menu against the on-hand turn gauge, read per input frame.
+    private var _turnFlickSpeed: Float = 0.85
+    var turnFlickSpeed: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _turnFlickSpeed }
+        set { lock.lock(); _turnFlickSpeed = newValue; lock.unlock() }
+    }
+
     /// True when `chirality` is the hand that aims / fires / points the
     /// wheel. The off hand moves and anchors the wheel.
     func isDominant(left: Bool) -> Bool {
