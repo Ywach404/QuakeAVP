@@ -56,6 +56,7 @@ extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
+extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -72,11 +73,6 @@ static float qr_recoil;
    look oversized, so shrink anything past this uniformly. The shotgun and
    smaller are left at 1.0. */
 #define QR_WEAPON_MAXLEN	45.f
-
-/* Where along the model the hand grips, as a fraction from the rear (mins) to
-   the muzzle (maxs). ~0.3 puts the wrist a third back so the barrel extends
-   forward, held. Tune on device. */
-#define QR_WEAPON_GRIP		0.30f
 extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
 extern int qr_wheel_open;		/* held-open intent (release commits) */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
@@ -4071,7 +4067,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
 			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
 
-			cx = cl.viewent.model->mins[0] + QR_WEAPON_GRIP * mx;   /* rear third */
+			cx = cl.viewent.model->mins[0]
+			     + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
 			cy = 0.5f * (cl.viewent.model->mins[1] + cl.viewent.model->maxs[1]);
 			cz = 0.5f * (cl.viewent.model->mins[2] + cl.viewent.model->maxs[2]);
 			AngleVectors (cl.viewent.angles, cf, cr, cu);
