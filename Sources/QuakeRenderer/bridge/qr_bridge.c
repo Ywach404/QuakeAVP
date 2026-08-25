@@ -72,6 +72,11 @@ static float qr_recoil;
    look oversized, so shrink anything past this uniformly. The shotgun and
    smaller are left at 1.0. */
 #define QR_WEAPON_MAXLEN	45.f
+
+/* Where along the model the hand grips, as a fraction from the rear (mins) to
+   the muzzle (maxs). ~0.3 puts the wrist a third back so the barrel extends
+   forward, held. Tune on device. */
+#define QR_WEAPON_GRIP		0.30f
 extern cvar_t vr_fullmenu;		/* fixed gaze-selected panel vs wrist ring */
 extern int qr_wheel_open;		/* held-open intent (release commits) */
 extern float qr_height_trim;		/* eye-height trim, Quake units */
@@ -4026,7 +4031,6 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	{
 		if (qr_aim_active)
 		{
-			aliashdr_t *vh = (aliashdr_t *) Mod_Extradata (cl.viewent.model);
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
 
@@ -4050,13 +4054,16 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			cl.viewent.angles[1] = cl.viewangles[1];
 			cl.viewent.angles[2] = cl.viewangles[2];
 
-			/* Overlay the gun ON the hand. View-weapon MDLs are authored
-			   offset from their origin (so they sit low-right of the screen
-			   when view-locked), so anchoring the origin at the hand floats
-			   the gun ahead of it. Put the model's own centre at the hand
-			   instead: origin = hand - R(angles) * centre, where the centre in
-			   model space is scale_origin + scale*127.5 and Quake maps model
-			   +X->forward, +Y->left, +Z->up. */
+			/* Grip the gun IN the hand. View-weapon MDLs are authored offset
+			   from their origin (so they sit low-right of the screen when
+			   view-locked), and they extend forward (+X) from a grip near the
+			   rear. Anchoring the origin at the hand floats the gun ahead of
+			   it; anchoring the bbox CENTRE straddles the hand. Anchor a GRIP
+			   point instead -- rear third along the barrel, laterally and
+			   vertically centred -- so the grip sits at the wrist and the
+			   barrel extends forward, held rather than hovering. Model bounds
+			   are in the same space as scale_origin + scale*byte; Quake maps
+			   model +X->forward, +Y->left, +Z->up. */
 			mx = cl.viewent.model->maxs[0] - cl.viewent.model->mins[0];
 			my = cl.viewent.model->maxs[1] - cl.viewent.model->mins[1];
 			mz = cl.viewent.model->maxs[2] - cl.viewent.model->mins[2];
@@ -4064,12 +4071,12 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
 			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
 
-			cx = vh->scale_origin[0] + vh->scale[0] * 127.5f;
-			cy = vh->scale_origin[1] + vh->scale[1] * 127.5f;
-			cz = vh->scale_origin[2] + vh->scale[2] * 127.5f;
+			cx = cl.viewent.model->mins[0] + QR_WEAPON_GRIP * mx;   /* rear third */
+			cy = 0.5f * (cl.viewent.model->mins[1] + cl.viewent.model->maxs[1]);
+			cz = 0.5f * (cl.viewent.model->mins[2] + cl.viewent.model->maxs[2]);
 			AngleVectors (cl.viewent.angles, cf, cr, cu);
 			/* The transform scales the whole model, offset included, so scale
-			   the centre offset by sf too or the shrunk gun drifts off hand. */
+			   the grip offset by sf too or the shrunk gun drifts off hand. */
 			cl.viewent.origin[0] = handpos[0] - sf * (cf[0]*cx - cr[0]*cy + cu[0]*cz);
 			cl.viewent.origin[1] = handpos[1] - sf * (cf[1]*cx - cr[1]*cy + cu[1]*cz);
 			cl.viewent.origin[2] = handpos[2] - sf * (cf[2]*cx - cr[2]*cy + cu[2]*cz);
