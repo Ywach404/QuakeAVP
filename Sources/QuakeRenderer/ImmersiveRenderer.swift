@@ -209,6 +209,11 @@ final class ImmersiveRenderer {
         }
         let originFromDevice = recenterCorrection * rawOriginFromDevice
 
+        // Publish the eye position (corrected-tracking space, same frame as the
+        // debug hands / turn gauge) so on-hand HUD can billboard toward it.
+        let eyeCol = originFromDevice.columns.3
+        ViewerPose.shared.setEye(SIMD3(eyeCol.x, eyeCol.y, eyeCol.z))
+
         // Output channel: haptic pulses (damage rises) and the per-weapon
         // trigger feel follow the packet; the wheel learns what the player
         // owns from the same source of truth the ring is built from.
