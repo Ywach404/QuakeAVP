@@ -673,6 +673,36 @@ final class RendererCore {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / 7)
     }
 
+    /// The M6 virtual hand: a stylised forearm/palm/fingers mesh built in
+    /// corrected-tracking space by HandInput (7 floats/vertex, xyz + rgba,
+    /// triangles), drawn on the real hand through handViewproj like the debug
+    /// wireframe. Opacity is 1 - phase: it stands in for the hand while the
+    /// world is solid (phase 0, opaque world hides the room) and fades out as
+    /// the melt reveals the real hand through passthrough (phase 1). Reuses
+    /// the wheel-guide pipeline (stereo-amplified, premultiplied blend);
+    /// depth-tested against the world, no write, so a wall in front occludes
+    /// it. The per-vertex alpha is scaled by opacity before upload.
+    func drawVirtualHand(_ verts: [Float], opacity: Float,
+                         viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                         pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard opacity > 0.01, verts.count >= 21 else { return }
+        var scaled = verts
+        var i = 6
+        while i < scaled.count { scaled[i] *= opacity; i += 7 }   // alpha per vertex
+        guard let buf = device.makeBuffer(bytes: scaled,
+                                          length: scaled.count * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
+        encoder.setRenderPipelineState(pipelines.wheelGuide)
+        encoder.setDepthStencilState(pipelines.depthNoWrite)
+        var u = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
+        withUnsafeBytes(of: &u) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: scaled.count / 7)
+    }
+
     /// Append a thin quad (two triangles) between A and B into a 7-float
     /// vertex list, so a "line" survives foveation. `perp` is a unit vector
     /// off the segment; `t` its half-thickness.
@@ -694,7 +724,9 @@ final class RendererCore {
         let c = SIMD3(frame.wheel_center.0, frame.wheel_center.1, frame.wheel_center.2)
         let r = frame.wheel_radius
         let count = Int(frame.wheel_count)
-        let yaw = frame.viewangles.1 * .pi / 180
+        // Body frame (M6): QR_EmitWheel lays the ring out in body_yaw, not the
+        // aim, so the guide's plane must match or it rotates off the models.
+        let yaw = frame.body_yaw * .pi / 180
         let right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
         let up = SIMD3<Float>(0, 0, 1)
         func pt(_ angle: Float, _ rad: Float) -> SIMD3<Float> {

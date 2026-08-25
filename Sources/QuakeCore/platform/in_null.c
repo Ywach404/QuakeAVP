@@ -45,6 +45,10 @@ static float			qc_head_yaw_shared;
 static float			qc_head_pitch_shared;
 static int			qc_slowmo_shared;	/* raw L3 button */
 static float			qc_height_trim_shared;
+static int			qc_aim_valid_shared;	/* dominant-hand aim live? */
+static float			qc_aim_org_shared[3];	/* body frame fwd,right,up */
+static float			qc_aim_yaw_shared;	/* room-relative, Quake deg */
+static float			qc_aim_pitch_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
@@ -92,6 +96,19 @@ void QC_InputSetHeightTrim (float units)
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
+void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
+		     float yaw_deg, float pitch_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_aim_valid_shared = valid ? 1 : 0;
+	qc_aim_org_shared[0] = org_fwd;
+	qc_aim_org_shared[1] = org_right;
+	qc_aim_org_shared[2] = org_up;
+	qc_aim_yaw_shared = yaw_deg;
+	qc_aim_pitch_shared = pitch_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
 void QC_InputSetWheel (int open, int has_anchor,
 		       float fwd, float right, float up, int highlight)
 {
@@ -135,6 +152,24 @@ static qc_gamepad_state_t	qr_pad, qr_pad_prev;
 float				qr_head[3];	/* body-frame head offset, read by qr_bridge.c */
 float				qr_head_yaw;	/* read by qr_bridge (full menu) */
 float				qr_head_pitch;
+
+/* M6 aim/body split. The body yaw is the movement + immersive-camera frame;
+   it lives here now instead of in cl.viewangles[YAW], which carries the AIM
+   (body yaw + the hand ray) so the server fires where you point. Both are
+   read by qr_bridge.c: qr_body_yaw into the packet, the aim rides
+   cl.viewangles. qr_expected_yaw is what IN_Move last wrote to
+   cl.viewangles[YAW]; a mismatch next frame means the server set the angle
+   (spawn, teleport svc_setangle) and the body must adopt it. */
+float				qr_body_yaw;
+float				qr_aim_org[3];		/* dominant hand, body frame */
+int				qr_aim_active;		/* hand aim live (vr_handaim &&
+							   valid); read by qr_bridge to
+							   anchor the weapon at the hand */
+static int			qr_aim_valid;
+static float			qr_aim_yaw;		/* room-relative, Quake deg */
+static float			qr_aim_pitch;
+static float			qr_expected_yaw;
+
 static int			qr_slowmo_raw;		/* drained L3 button */
 static int			qr_slowmo_active;	/* toggled bullet-time */
 static uint32_t			qr_head_ack_seen;
@@ -143,6 +178,13 @@ static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
 static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
+/* M6: aim from the dominant hand/controller ray. 1 = the gun lives in your
+   hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
+   head-pitch elevation) -- the A/B for judging feel, one cvar to flip. */
+static cvar_t	vr_handaim = {"vr_handaim", "1", CVAR_ARCHIVE};
+/* M6: a laser line from the muzzle down the aim, an aiming aid. Read by
+   qr_bridge; non-static so it externs cleanly like the other vr_ cvars. */
+cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
 static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
 cvar_t		vr_fullmenu = {"vr_fullmenu", "0", CVAR_ARCHIVE};	/* fixed panel vs wrist ring */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
@@ -171,6 +213,12 @@ static void IN_SnapshotInputs (void)
 	qr_head_yaw = qc_head_yaw_shared;
 	qr_head_pitch = qc_head_pitch_shared;
 	qr_slowmo_raw = qc_slowmo_shared;
+	qr_aim_valid = qc_aim_valid_shared;
+	qr_aim_org[0] = qc_aim_org_shared[0];
+	qr_aim_org[1] = qc_aim_org_shared[1];
+	qr_aim_org[2] = qc_aim_org_shared[2];
+	qr_aim_yaw = qc_aim_yaw_shared;
+	qr_aim_pitch = qc_aim_pitch_shared;
 	qr_head_ack_seen = qc_head_ack;
 	qr_wheel_open = qc_wheel_open_shared || qr_wheel_console_open;
 	qr_wheel_has_anchor = qc_wheel_anchor_shared;
@@ -357,7 +405,9 @@ static void IN_HeadOffsetWorld (float out[2])
 {
 	vec3_t fwd, right;
 
-	IN_YawVectors (cl.viewangles[YAW], fwd, right);
+	/* The body basis, not the aim: the head offset is a body-frame feed, so
+	   snap turn rotates it with the body (qr_body_yaw), never with the hand. */
+	IN_YawVectors (qr_body_yaw, fwd, right);
 	out[0] = qr_head[0] * fwd[0] + qr_head[1] * right[0];
 	out[1] = qr_head[0] * fwd[1] + qr_head[1] * right[1];
 }
@@ -441,7 +491,9 @@ static void IN_SnapTurn (float degrees)
 	qr_head_absorbed[0] = c * ax - s * ay;
 	qr_head_absorbed[1] = s * ax + c * ay;
 
-	cl.viewangles[YAW] += degrees;
+	/* Turn the BODY. cl.viewangles[YAW] (the aim) is recomposed from
+	   qr_body_yaw + the hand ray at the end of IN_Move, so it turns too. */
+	qr_body_yaw += degrees;
 }
 
 /* vr_recenter: current head pose becomes neutral. Absorb what we can so
@@ -469,9 +521,27 @@ static qboolean	qr_snap_armed = true;
 
 void IN_Move (usercmd_t *cmd)
 {
-	float speed, lx, ly, rx, ry;
+	float speed, lx, ly, rx, ry, aim_yaw_rel;
 
 	IN_SnapshotInputs ();
+
+	/* Adopt server-driven angle changes into the body yaw. cl.viewangles
+	   [YAW] is written only here (qr_body_yaw + the aim ray) and by the
+	   server (spawn, teleport svc_setangle); if it no longer matches what we
+	   last wrote, the server moved it and the body must face the new way --
+	   the aim re-adds below. Also seeds the body yaw from the spawn angle on
+	   the first tick, when qr_expected_yaw is still zero. */
+	if (fabsf (cl.viewangles[YAW] - qr_expected_yaw) > 0.01f)
+		qr_body_yaw = cl.viewangles[YAW];
+
+	/* One source of truth for "the gun is in the hand this tick": the aim
+	   feeds a ray AND vr_handaim allows it. The shot, the move compensation,
+	   and the weapon anchor (qr_bridge) all read it, so they can't disagree.
+	   The hand ray's room-relative yaw is added to the body yaw for the shot,
+	   and subtracted from the move pre-rotation so the stick still walks the
+	   body while the gun points elsewhere. */
+	qr_aim_active = (vr_handaim.value && qr_aim_valid);
+	aim_yaw_rel = qr_aim_active ? qr_aim_yaw : 0.f;
 
 	/* Choosing a weapon, not moving: sticks go quiet while the wheel is
 	   open (stick locomotion through a time-scaled world is a comfort
@@ -514,26 +584,40 @@ void IN_Move (usercmd_t *cmd)
 
 	/* Look-relative locomotion: rotate the stick by the head's yaw so
 	   "forward" is where you look, not where the body last snapped to.
-	   The server applies the usercmd in the body basis, so pre-rotate
-	   into it here. vr_moverelative 0 restores body-relative movement. */
+	   The server applies the usercmd along cl.viewangles[YAW], which is now
+	   the AIM (body yaw + hand ray), so ALSO subtract the hand ray here --
+	   the two rotations cancel it back to the body and the stick walks the
+	   body no matter where the gun points. With no hand aim aim_yaw_rel is
+	   zero and this is exactly the M4 look-relative pre-rotation.
+	   vr_moverelative 0 drops the head term for body-relative movement. */
 	{
-		float hy = vr_moverelative.value ? qr_head_yaw * M_PI / 180.f : 0.f;
+		float hy = ((vr_moverelative.value ? qr_head_yaw : 0.f)
+			    - aim_yaw_rel) * M_PI / 180.f;
 		float c = cosf (hy), s = sinf (hy);
 		/* stick as a body-frame vector (X forward, Y left): forward
 		   is +X, a right push is -Y */
 		float vx = ly, vy = -lx;
-		float rxv = vx * c - vy * s;	/* rotate CCW by head yaw */
+		float rxv = vx * c - vy * s;	/* rotate CCW */
 		float ryv = vx * s + vy * c;
 		cmd->forwardmove += cl_forwardspeed.value * speed * rxv;
 		cmd->sidemove += cl_sidespeed.value * speed * (-ryv);
 	}
 
-	/* Vertical aim. Default (vr_headaim): the SHOT pitches to where you LOOK
-	   -- the head pose the renderer draws with, fed as qr_head_pitch, becomes
-	   the body pitch, so looking down shoots down with no stick and nothing
-	   to drift. vr_headaim 0 falls back to the old right-stick rate control
-	   (and the flat debug window, which has no head, uses it too). */
-	if (vr_headaim.value)
+	/* AIM pitch. With a live hand (vr_handaim) the shot pitches along the
+	   hand ray -- point down, shoot down. Otherwise the M5 body-anchored
+	   feel: head-pitch elevation (vr_headaim), or the right-stick rate
+	   control (also the flat debug window, which has no head or hand). */
+	if (qr_aim_active)
+	{
+		V_StopPitchDrift ();
+		/* The feeder already emits Quake's sense (positive-DOWN): point the
+		   hand down, qr_aim_pitch goes positive, the shot goes down. The gun
+		   MODEL takes the opposite sign in qr_bridge (QR_EntityMatrix pitches
+		   a world model the other way), so the two are decoupled on purpose. */
+		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_aim_pitch,
+					      cl_maxpitch.value);
+	}
+	else if (vr_headaim.value)
 	{
 		V_StopPitchDrift ();
 		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value, qr_head_pitch,
@@ -548,10 +632,10 @@ void IN_Move (usercmd_t *cmd)
 					      cl_maxpitch.value);
 	}
 
-	/* Right stick X: snap turn (or smooth, for those who opt in). */
+	/* Right stick X turns the BODY (snap, or smooth for those who opt in). */
 	if (vr_smoothturn.value)
 	{
-		cl.viewangles[YAW] -= rx * cl_yawspeed.value * host_frametime;
+		qr_body_yaw -= rx * cl_yawspeed.value * host_frametime;
 	}
 	else
 	{
@@ -564,6 +648,13 @@ void IN_Move (usercmd_t *cmd)
 		else if (!qr_snap_armed && fabsf (rx) < QR_SNAP_RELEASE)
 			qr_snap_armed = true;
 	}
+
+	/* Compose the aim yaw from the (possibly just-turned) body plus the hand
+	   ray, and remember it so next frame's adopt-guard can tell a server
+	   setangle from our own write. */
+	cl.viewangles[YAW] = qr_body_yaw + aim_yaw_rel;
+	cl.viewangles[ROLL] = 0.f;
+	qr_expected_yaw = cl.viewangles[YAW];
 
 	IN_AbsorbHeadOffset ();
 }
@@ -578,6 +669,8 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_smoothturn);
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
+	Cvar_RegisterVariable (&vr_handaim);
+	Cvar_RegisterVariable (&vr_laser);
 	Cvar_RegisterVariable (&vr_slowmo);
 	Cvar_RegisterVariable (&vr_fullmenu);
 	Cvar_RegisterVariable (&vr_lean_limit);

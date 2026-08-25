@@ -61,6 +61,13 @@ final class WheelState: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Metres per Quake unit, latest from the packet — shared so other input
+    /// sources (the M6 hand aim) can place body-frame points in Quake units.
+    var currentWorldScale: Float {
+        lock.lock(); defer { lock.unlock() }
+        return worldScale
+    }
+
     // MARK: - Hold / commit
 
     /// Point-dwell selection (VRChat's gauge idea): resting the pointer on a

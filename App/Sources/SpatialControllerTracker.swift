@@ -6,11 +6,11 @@
 //  tracking one); the anchor loop stores the latest per-hand transform in
 //  tracking-origin space behind a lock.
 //
-//  Nothing consumes the poses yet: controller-aimed weaponry needs the
-//  aim/body split in the packet (M6 — the same split hand-attached weapons
-//  need). The tracker exists now so the input stack detects, authorizes,
-//  and observes the accessories correctly, and so the poses are one field
-//  read away when the aim work lands.
+//  M6: the render thread reads the dominant controller's pose each frame and
+//  feeds it to the engine as the aim (QC_InputSetAim), so a Sense controller
+//  aims the gun exactly as a hand does. The off-hand pose still anchors the
+//  weapon wheel. Chirality is resolved by live X position (isLeft), not
+//  ARKit's undocumented inherentChirality.
 //
 
 import ARKit
