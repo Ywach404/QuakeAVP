@@ -37,6 +37,8 @@ struct ContentView: View {
     @State private var laserForward: Float = 0
     @State private var laserUp: Float = 0
     @State private var laserSide: Float = 0
+    @State private var laserPitch: Float = 0
+    @State private var laserYaw: Float = 0
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -282,9 +284,13 @@ struct ContentView: View {
                         placementSlider("Fwd", $laserForward, in: -10...60, cvar: "vr_laserforward")
                         placementSlider("Up", $laserUp, in: -15...15, cvar: "vr_laserup")
                         placementSlider("Side", $laserSide, in: -15...15, cvar: "vr_laserside")
+                        placementSlider("Tilt°", $laserPitch, in: -10...10, cvar: "vr_laserpitch", fmt: "%.1f")
+                        placementSlider("Pan°", $laserYaw, in: -10...10, cvar: "vr_laseryaw", fmt: "%.1f")
                         Button("Reset laser") {
                             laserForward = 0; laserUp = 0; laserSide = 0
-                            for c in ["vr_laserforward 0", "vr_laserup 0", "vr_laserside 0"] {
+                            laserPitch = 0; laserYaw = 0
+                            for c in ["vr_laserforward 0", "vr_laserup 0", "vr_laserside 0",
+                                      "vr_laserpitch 0", "vr_laseryaw 0"] {
                                 engine.send(c)
                             }
                         }

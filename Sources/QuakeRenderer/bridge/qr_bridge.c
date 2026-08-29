@@ -59,6 +59,7 @@ extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
+extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -4100,14 +4101,21 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			   side}. */
 			if (vr_laser.value)
 			{
-				vec3_t	lf, lr, lu, lstart;
+				vec3_t	lf, lr, lu, lstart, langles;
 
+				/* START offset in the SHOT frame -- forward runs to the
+				   muzzle regardless of the tilt below. */
 				AngleVectors (cl.viewangles, lf, lr, lu);
 				VectorCopy (handpos, lstart);
 				VectorMA (lstart, vr_laserforward.value, lf, lstart);
 				VectorMA (lstart, vr_laserup.value,      lu, lstart);
 				VectorMA (lstart, vr_laserside.value,    lr, lstart);
-				QR_EmitLaser (slot, lstart, cl.viewangles);
+				/* DIRECTION tilted off the shot so the beam lines up with the
+				   barrel (vr_laserpitch/yaw); the shot itself is unchanged. */
+				langles[0] = cl.viewangles[0] + vr_laserpitch.value;
+				langles[1] = cl.viewangles[1] + vr_laseryaw.value;
+				langles[2] = cl.viewangles[2];
+				QR_EmitLaser (slot, lstart, langles);
 			}
 
 			/* Visual recoil, purely cosmetic (the shot already left with
