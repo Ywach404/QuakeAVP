@@ -11,12 +11,25 @@
 import SwiftUI
 import CompositorServices
 
+/// Whether the viewer's real hands and controllers composite over the
+/// rendered world (upper-limb passthrough). Observable + shared so the
+/// Comfort toggle in the window flips it and the immersive scene reacts.
+@MainActor
+@Observable
+final class ImmersionSettings {
+    static let shared = ImmersionSettings()
+    var handsVisible = true
+    private init() {}
+}
+
 @main
 struct QuakeAVPApp: App {
 
     static let immersiveSpaceID = "quake-immersive"
 
     static let consoleWindowID = "quake-console"
+
+    @State private var immersion = ImmersionSettings.shared
 
     var body: some Scene {
         WindowGroup(id: Self.consoleWindowID) {
@@ -38,6 +51,10 @@ struct QuakeAVPApp: App {
         // rebuilds the CompositorServices layer. At phase 0 the world draws
         // opaque and covers the room, indistinguishable from .full.
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
+        // Real hands/controllers over the rendered world, toggleable from the
+        // Comfort menu: .visible composites the limbs on top (see your hands
+        // holding the gun), .hidden drops them (virtual hand / gun only).
+        .upperLimbVisibility(immersion.handsVisible ? .visible : .hidden)
     }
 }
 

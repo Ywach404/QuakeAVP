@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var fullMenu = false
     @State private var laser = false
     @State private var turnFlick: Float = 0.85
+    @State private var showLimbs = true
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -223,6 +224,9 @@ struct ContentView: View {
                 Toggle("Finger debug wireframe", isOn: Binding(
                     get: { fingerDebug },
                     set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))
+                Toggle("Show real hands / controllers", isOn: Binding(
+                    get: { showLimbs },
+                    set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
             }
             .padding(24)
             .frame(width: 360)
