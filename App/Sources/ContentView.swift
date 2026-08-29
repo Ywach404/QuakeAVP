@@ -28,11 +28,15 @@ struct ContentView: View {
     @State private var laser = false
     @State private var turnFlick: Float = 0.85
     @State private var showLimbs = true
+    @State private var showWeapon = false
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
     @State private var weaponSide: Float = 0
     @State private var weaponGrip: Float = 0.15
     @State private var aimPitch: Float = 0
+    @State private var laserForward: Float = 0
+    @State private var laserUp: Float = 0
+    @State private var laserSide: Float = 0
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -139,6 +143,7 @@ struct ContentView: View {
             Spacer()
             if engine.status == .running {
                 comfortMenu
+                weaponMenu
                 Button {
                     showScope.toggle()
                 } label: {
@@ -199,9 +204,6 @@ struct ContentView: View {
                     set: { fullMenu = $0
                            VRSettings.shared.fullMenu = $0
                            engine.send("vr_fullmenu \($0 ? 1 : 0)") }))
-                Toggle("Aiming laser", isOn: Binding(
-                    get: { laser },
-                    set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)") }))
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("Turning", selection: Binding(
@@ -233,27 +235,64 @@ struct ContentView: View {
                 Toggle("Show real hands / controllers", isOn: Binding(
                     get: { showLimbs },
                     set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
-                Divider()
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Weapon placement").font(.headline)
-                    Text("Slide the gun onto your hand — updates live in the headset.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    placementSlider("Back", $weaponBack, in: -20...30, cvar: "vr_weaponback")
-                    placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup")
-                    placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside")
-                    placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f")
-                    placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch")
-                    Button("Reset placement") {
-                        weaponBack = 0; weaponUp = 0; weaponSide = 0
-                        weaponGrip = 0.15; aimPitch = 0
-                        for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
-                                  "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
-                    }
-                    .font(.caption)
-                }
             }
             .padding(24)
             .frame(width: 360)
+            }
+            .frame(maxHeight: 620)
+        }
+    }
+
+    /// Weapon rig: gun placement and the aiming laser, in their own popover so
+    /// the Comfort panel isn't buried. Every slider pushes its cvar live.
+    private var weaponMenu: some View {
+        Button {
+            showWeapon.toggle()
+        } label: {
+            Label("Weapon", systemImage: "scope")
+        }
+        .popover(isPresented: $showWeapon, arrowEdge: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Gun placement").font(.headline)
+                        Text("Slide the gun onto your hand — updates live in the headset.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        placementSlider("Back", $weaponBack, in: -20...30, cvar: "vr_weaponback")
+                        placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup")
+                        placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside")
+                        placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f")
+                        placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch")
+                        Button("Reset gun") {
+                            weaponBack = 0; weaponUp = 0; weaponSide = 0
+                            weaponGrip = 0.15; aimPitch = 0
+                            for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
+                                      "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
+                        }
+                        .font(.caption)
+                    }
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Aiming laser", isOn: Binding(
+                            get: { laser },
+                            set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)") }))
+                            .font(.headline)
+                        Text("Move the beam's start to the barrel tip. Forward reaches the muzzle.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        placementSlider("Fwd", $laserForward, in: -10...60, cvar: "vr_laserforward")
+                        placementSlider("Up", $laserUp, in: -15...15, cvar: "vr_laserup")
+                        placementSlider("Side", $laserSide, in: -15...15, cvar: "vr_laserside")
+                        Button("Reset laser") {
+                            laserForward = 0; laserUp = 0; laserSide = 0
+                            for c in ["vr_laserforward 0", "vr_laserup 0", "vr_laserside 0"] {
+                                engine.send(c)
+                            }
+                        }
+                        .font(.caption)
+                    }
+                }
+                .padding(24)
+                .frame(width: 360)
             }
             .frame(maxHeight: 620)
         }

@@ -199,6 +199,12 @@ cvar_t		vr_weapongrip = {"vr_weapongrip", "0.15", CVAR_ARCHIVE};
 cvar_t		vr_weaponback = {"vr_weaponback", "0", CVAR_ARCHIVE};
 cvar_t		vr_weaponup   = {"vr_weaponup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_ARCHIVE};
+/* M6: where the aiming laser STARTS, Quake units along the aim axes from the
+   wrist -- forward reaches the muzzle so the beam emits from the barrel tip
+   instead of behind the gun, up/side fine-tune to the barrel line. */
+cvar_t		vr_laserforward = {"vr_laserforward", "0", CVAR_ARCHIVE};
+cvar_t		vr_laserup      = {"vr_laserup",      "0", CVAR_ARCHIVE};
+cvar_t		vr_laserside    = {"vr_laserside",    "0", CVAR_ARCHIVE};
 static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
 cvar_t		vr_fullmenu = {"vr_fullmenu", "0", CVAR_ARCHIVE};	/* fixed panel vs wrist ring */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
@@ -692,6 +698,9 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_weaponback);
 	Cvar_RegisterVariable (&vr_weaponup);
 	Cvar_RegisterVariable (&vr_weaponside);
+	Cvar_RegisterVariable (&vr_laserforward);
+	Cvar_RegisterVariable (&vr_laserup);
+	Cvar_RegisterVariable (&vr_laserside);
 	Cvar_RegisterVariable (&vr_slowmo);
 	Cvar_RegisterVariable (&vr_fullmenu);
 	Cvar_RegisterVariable (&vr_lean_limit);
