@@ -28,6 +28,11 @@ struct ContentView: View {
     @State private var laser = false
     @State private var turnFlick: Float = 0.85
     @State private var showLimbs = true
+    @State private var weaponBack: Float = 0
+    @State private var weaponUp: Float = 0
+    @State private var weaponSide: Float = 0
+    @State private var weaponGrip: Float = 0.15
+    @State private var aimPitch: Float = 0
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -156,6 +161,7 @@ struct ContentView: View {
             Label("Comfort", systemImage: "slider.horizontal.3")
         }
         .popover(isPresented: $showComfort, arrowEdge: .bottom) {
+            ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Eye height  \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm")
@@ -227,9 +233,48 @@ struct ContentView: View {
                 Toggle("Show real hands / controllers", isOn: Binding(
                     get: { showLimbs },
                     set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Weapon placement").font(.headline)
+                    Text("Slide the gun onto your hand — updates live in the headset.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    placementSlider("Back", $weaponBack, in: -20...30, cvar: "vr_weaponback")
+                    placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup")
+                    placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside")
+                    placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f")
+                    placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch")
+                    Button("Reset placement") {
+                        weaponBack = 0; weaponUp = 0; weaponSide = 0
+                        weaponGrip = 0.15; aimPitch = 0
+                        for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
+                                  "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
+                    }
+                    .font(.caption)
+                }
             }
             .padding(24)
             .frame(width: 360)
+            }
+            .frame(maxHeight: 620)
+        }
+    }
+
+    /// One row of the weapon-placement panel: a labelled slider that pushes
+    /// its cvar to the engine on every change, so the gun moves live in the
+    /// headset. No console typing, no autocomplete needed.
+    private func placementSlider(_ label: String, _ value: Binding<Float>,
+                                 in range: ClosedRange<Double>, cvar: String,
+                                 fmt: String = "%.0f") -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 40, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Float($0)
+                       engine.send("\(cvar) \(Float($0))") }),
+                in: range)
+            Text(String(format: fmt, value.wrappedValue))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
         }
     }
 
