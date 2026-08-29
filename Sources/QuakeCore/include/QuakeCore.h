@@ -302,6 +302,12 @@ typedef struct qc_frame_s {
 	uint32_t	items;		/* cl.items: owned-weapon IT_* bits,
 					   the wheel's source of truth for
 					   what may be offered */
+	/* Monotonic counter the engine bumps each time the held weapon ACTUALLY
+	   fires (ammo spent, weapon unchanged), so the consumer pulses the fire
+	   haptic on the real shot cadence -- respecting a weapon's refire delay
+	   -- instead of on every trigger pull, which buzzed through the cooldown.
+	   Consumer fires a kick whenever this increases. */
+	uint32_t	weapon_fire_seq;
 
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */

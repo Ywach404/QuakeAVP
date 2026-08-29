@@ -35,6 +35,8 @@ final class ControllerOutput: @unchecked Sendable {
     private var adaptiveTriggers: [GCDualSenseAdaptiveTrigger] = []
     private var lastDamage: Float = 0
     private var lastWeapon: UInt32 = 0
+    private var lastFireSeq: UInt32 = 0
+    private var fireSeeded = false
 
     /// For the UI: nil until a controller attaches, then whether the
     /// resistive triggers are actually reachable on this OS.
@@ -70,20 +72,24 @@ final class ControllerOutput: @unchecked Sendable {
 
     // MARK: - Events
 
-    /// Trigger crossed the fire threshold (any source). The kick lands on the
-    /// FIRING hand — the dominant one — and is scaled by the held weapon, so a
-    /// rocket shoves and a nailgun stutters. Local echo: the shot is the
-    /// engine's call, but the feel must not wait a round trip.
+    /// Trigger crossed the fire threshold (any source). This only echoes to
+    /// the trigger scope now — the KICK is driven by the engine's actual-fire
+    /// counter (frame(), below), so holding the trigger through a weapon's
+    /// refire cooldown no longer buzzes on every pull, only on shots that land.
     func noteFire() {
         InputTelemetry.shared.fire()
+    }
+
+    /// Kick the firing (dominant) hand, scaled by the held weapon — a rocket
+    /// shoves, a nailgun stutters. Falls back to both engines until the
+    /// per-hand pairing resolves. Called on the queue.
+    private func kickFiringHand() {
         let dominantLeft = !VRSettings.shared.rightHanded
-        queue.async {
-            let intensity = Self.fireIntensity(weapon: self.lastWeapon)
-            if let engine = self.engineForHand(left: dominantLeft) {
-                self.transient(on: [engine], intensity: intensity, sharpness: 0.7)
-            } else {
-                self.transient(on: self.engines, intensity: intensity, sharpness: 0.7)
-            }
+        let intensity = Self.fireIntensity(weapon: lastWeapon)
+        if let engine = engineForHand(left: dominantLeft) {
+            transient(on: [engine], intensity: intensity, sharpness: 0.7)
+        } else {
+            transient(on: engines, intensity: intensity, sharpness: 0.7)
         }
     }
 
@@ -113,7 +119,7 @@ final class ControllerOutput: @unchecked Sendable {
     }
 
     /// Once per rendered frame, from the packet's output channel.
-    func frame(damageFlash: Float, activeWeapon: UInt32) {
+    func frame(damageFlash: Float, activeWeapon: UInt32, fireSeq: UInt32) {
         queue.async {
             // Damage pulses on the RISE of the cshift percent; the decay
             // (V_UpdateBlend) brings it back down between hits.
@@ -124,10 +130,24 @@ final class ControllerOutput: @unchecked Sendable {
             }
             self.lastDamage = damageFlash
 
+            // Weapon change first, so the fire kick below scales by the weapon
+            // actually in hand this frame.
             if activeWeapon != self.lastWeapon {
                 self.lastWeapon = activeWeapon
                 self.applyTriggerFeel(weapon: activeWeapon)
                 InputTelemetry.shared.setWeapon(activeWeapon)
+            }
+
+            // Actual shot: the engine bumps weapon_fire_seq only when a round
+            // leaves, so this kicks on the weapon's real refire cadence, not on
+            // every trigger pull through the cooldown. Seed on first sight so a
+            // shot fired before the space opened doesn't kick on entry.
+            if !self.fireSeeded {
+                self.fireSeeded = true
+                self.lastFireSeq = fireSeq
+            } else if fireSeq != self.lastFireSeq {
+                self.lastFireSeq = fireSeq
+                self.kickFiringHand()
             }
         }
     }

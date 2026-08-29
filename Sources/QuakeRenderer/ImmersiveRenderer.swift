@@ -219,7 +219,8 @@ final class ImmersiveRenderer {
         // owns from the same source of truth the ring is built from.
         if let packet {
             ControllerOutput.shared.frame(damageFlash: packet.damage_flash,
-                                          activeWeapon: packet.active_weapon)
+                                          activeWeapon: packet.active_weapon,
+                                          fireSeq: packet.weapon_fire_seq)
             WheelState.shared.frame(items: packet.items,
                                     worldScale: packet.world_scale)
         }
