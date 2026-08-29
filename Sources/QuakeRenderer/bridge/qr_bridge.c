@@ -4082,7 +4082,13 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			     + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
 			cy = 0.5f * (cl.viewent.model->mins[1] + cl.viewent.model->maxs[1]);
 			cz = 0.5f * (cl.viewent.model->mins[2] + cl.viewent.model->maxs[2]);
-			AngleVectors (cl.viewent.angles, cf, cr, cu);
+			/* Place in the SHOT frame -- NOT AngleVectors(viewent.angles).
+			   QR_EntityMatrix draws the negated-pitch model so its barrel
+			   points where the shot goes, i.e. the model's drawn basis IS the
+			   shot frame; AngleVectors(viewent.angles) is pitch-inverted against
+			   it and only agrees at level aim, which is why the gun (and the
+			   laser welded to it below) drifted apart when pitched up or down. */
+			AngleVectors (cl.viewangles, cf, cr, cu);
 			/* The transform scales the whole model, offset included, so scale
 			   the grip offset by sf too or the shrunk gun drifts off hand.
 			   Then the live nudge along the aim axes (vr_weapon{back,up,side}),
@@ -4094,22 +4100,20 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 					+ vr_weaponup.value   * cu[k]
 					+ vr_weaponside.value * cr[k];
 
-			/* Aiming laser down the fired aim, starting from an offset off
-			   the wrist so it emits from the barrel tip instead of behind the
-			   gun. Offsets are in the SHOT frame (forward = toward the muzzle
-			   along the actual aim line), tuned live via vr_laser{forward,up,
-			   side}. */
+			/* Aiming laser, WELDED to the gun: it starts at the placed gun
+			   origin and offsets in the gun's own drawn frame (cf/cr/cu, the
+			   shot frame), so it rides the barrel at every aim angle AND follows
+			   the placement cvars -- no more detaching when you pitch. forward
+			   runs to the muzzle. */
 			if (vr_laser.value)
 			{
-				vec3_t	lf, lr, lu, lstart, langles;
+				vec3_t	lstart, langles;
 
-				/* START offset in the SHOT frame -- forward runs to the
-				   muzzle regardless of the tilt below. */
-				AngleVectors (cl.viewangles, lf, lr, lu);
-				VectorCopy (handpos, lstart);
-				VectorMA (lstart, vr_laserforward.value, lf, lstart);
-				VectorMA (lstart, vr_laserup.value,      lu, lstart);
-				VectorMA (lstart, vr_laserside.value,    lr, lstart);
+				for (k = 0; k < 3; k++)
+					lstart[k] = cl.viewent.origin[k]
+						+ vr_laserforward.value * cf[k]
+						+ vr_laserup.value      * cu[k]
+						+ vr_laserside.value    * cr[k];
 				/* DIRECTION tilted off the shot so the beam lines up with the
 				   barrel (vr_laserpitch/yaw); the shot itself is unchanged. */
 				langles[0] = cl.viewangles[0] + vr_laserpitch.value;
@@ -4134,7 +4138,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 
 				if (qr_recoil > 0.f)
 				{
-					AngleVectors (cl.viewent.angles, gf, gr, gu);
+					AngleVectors (cl.viewangles, gf, gr, gu);	/* shot frame = barrel */
 					VectorMA (cl.viewent.origin, -qr_recoil * 2.5f, gf,
 						  cl.viewent.origin);
 					cl.viewent.origin[2] += qr_recoil * 0.6f;
