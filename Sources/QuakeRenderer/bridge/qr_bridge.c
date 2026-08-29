@@ -3496,20 +3496,28 @@ line lands where the bullets do.
 static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
 			  const vec3_t angles)
 {
-	vec3_t	fwd, right, up, end, mid, look, perp;
+	vec3_t	fwd, right, up, end, look, perp;
 	vec3_t	a0, a1, b0, b1;
 	float	hw = 0.35f;	/* half width, Quake units */
 	int	k;
 
 	AngleVectors (angles, fwd, right, up);
 	VectorMA (start, 4096.f, fwd, end);
-	for (k = 0; k < 3; k++)
-		mid[k] = 0.5f * (start[k] + end[k]);
-	VectorSubtract (r_origin, mid, look);	/* face the eye */
+	/* Face the eye from the START, not the beam midpoint. The midpoint sits
+	   ~2000 units down the aim, so eye->midpoint is almost antiparallel to
+	   fwd and fwd x that collapses to zero -- the width axis then fell back to
+	   world-X and the beam showed edge-on at most view angles. From the start
+	   (right by the gun) the view direction is well clear of fwd. */
+	VectorSubtract (r_origin, start, look);
 	CrossProduct (fwd, look, perp);
 	if (VectorNormalize (perp) < 0.01f)
 	{
-		perp[0] = 1.f; perp[1] = 0.f; perp[2] = 0.f;
+		/* aiming straight at/away from the eye: any axis normal to fwd */
+		CrossProduct (fwd, up, perp);
+		if (VectorNormalize (perp) < 0.01f)
+		{
+			perp[0] = 1.f; perp[1] = 0.f; perp[2] = 0.f;
+		}
 	}
 	for (k = 0; k < 3; k++)
 	{
@@ -3698,10 +3706,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
 	static qmodel_t	*cachekey;
-	/* the ring locks in world space the instant it opens: you reach INTO a
-	   fixed ring, not one that chases your wrist. Cleared when it closes. */
-	static int	locked;
-	static vec3_t	lock_center;
 	/* full-menu gaze state, function scope so a close can reset it. The menu
 	   commits on RELEASE: you hold to open, look at a weapon, let go to pick. */
 	static int	menu_held = -1, menu_open_prev;
@@ -3711,7 +3715,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 
 	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
 	{
-		locked = 0;
 		menu_open_prev = 0;
 		menu_held = -1;
 		return;
@@ -3800,15 +3803,12 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		center[2] -= 2.f;
 	}
 
-	/* Freeze the ring at the pose it opened with. After this the wrist is
-	   free to move toward a slot without dragging the ring along; the
-	   consumer turns that wrist travel into the highlight. */
-	if (!locked)
-	{
-		VectorCopy (center, lock_center);
-		locked = 1;
-	}
-	VectorCopy (lock_center, center);
+	/* The ring FOLLOWS the player: center is rebuilt each frame from the
+	   current vieworg and the body-frame anchor WheelState froze at open
+	   (qr_wheel_anchor), so walking or falling off a cliff carries the ring
+	   with you instead of stranding it where you opened it. It still doesn't
+	   chase the live wrist -- the anchor is frozen consumer-side, and the
+	   highlight comes from how far the wrist has since travelled from it. */
 
 	step = 360.f / owned;
 
