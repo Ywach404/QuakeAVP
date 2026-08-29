@@ -57,6 +57,7 @@ extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
+extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -67,6 +68,13 @@ static int qr_handweapon;
    view weapon animates a new fire frame and decayed on the sim clock. */
 static int qr_recoil_prevframe = -1;
 static float qr_recoil;
+
+/* Fire cadence for haptics: a monotonic counter bumped on each real shot,
+   detected as the current weapon's ammo dropping while the weapon is
+   unchanged. Lets the consumer kick on the refire rate, not on trigger spam. */
+static uint32_t qr_weapon_fire_seq;
+static int	qr_last_ammo = -1;	/* -1 = not yet known */
+static uint32_t	qr_last_weapon;
 
 /* Cap the hand weapon's longest model dimension, Quake units. View weapons
    run ~42 (shotgun) to ~95 (rocket launcher); at hand scale the long ones
@@ -4029,6 +4037,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		{
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
+			int	k;
 
 			/* Body frame (not the aim): the hand position in the world, the
 			   same eye + (wrist - head) reconstruction the wheel uses. */
@@ -4073,10 +4082,15 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			cz = 0.5f * (cl.viewent.model->mins[2] + cl.viewent.model->maxs[2]);
 			AngleVectors (cl.viewent.angles, cf, cr, cu);
 			/* The transform scales the whole model, offset included, so scale
-			   the grip offset by sf too or the shrunk gun drifts off hand. */
-			cl.viewent.origin[0] = handpos[0] - sf * (cf[0]*cx - cr[0]*cy + cu[0]*cz);
-			cl.viewent.origin[1] = handpos[1] - sf * (cf[1]*cx - cr[1]*cy + cu[1]*cz);
-			cl.viewent.origin[2] = handpos[2] - sf * (cf[2]*cx - cr[2]*cy + cu[2]*cz);
+			   the grip offset by sf too or the shrunk gun drifts off hand.
+			   Then the live nudge along the aim axes (vr_weapon{back,up,side}),
+			   Quake units: back toward the player, up raise, side to the right. */
+			for (k = 0; k < 3; k++)
+				cl.viewent.origin[k] = handpos[k]
+					- sf * (cf[k]*cx - cr[k]*cy + cu[k]*cz)
+					- vr_weaponback.value * cf[k]
+					+ vr_weaponup.value   * cu[k]
+					+ vr_weaponside.value * cr[k];
 
 			/* Aiming laser from the muzzle down the fired aim. */
 			if (vr_laser.value)
@@ -4168,6 +4182,9 @@ void QR_BeginFrame (void)
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
 	slot->frame.items = 0;
+	/* monotonic -- publish the live counter, never reset it to 0, or the
+	   consumer would read the wrap-back as a fresh shot */
+	slot->frame.weapon_fire_seq = qr_weapon_fire_seq;
 	slot->frame.wheel_frac = 0;
 	slot->frame.wheel_radius = 0;
 	slot->frame.wheel_count = 0;
@@ -4363,6 +4380,28 @@ void QR_RenderView (void)
 	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
 	slot->frame.active_weapon = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
 	slot->frame.items = cl.items;
+
+	/* A shot fired iff the held weapon's ammo dropped while the weapon stayed
+	   the same. A weapon switch also changes STAT_AMMO, so gate on the weapon
+	   being unchanged; and reset across a map load so the new map's ammo does
+	   not read as a shot. The axe spends no ammo, so axe swings do not kick --
+	   acceptable for now. */
+	{
+		static qmodel_t	*fire_worldkey;
+		int		ammo = cl.stats[STAT_AMMO];
+		uint32_t	wpn = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+
+		if (fire_worldkey != cl.worldmodel)
+		{
+			fire_worldkey = cl.worldmodel;
+			qr_last_ammo = -1;
+		}
+		if (qr_last_ammo >= 0 && wpn == qr_last_weapon && ammo < qr_last_ammo)
+			qr_weapon_fire_seq++;
+		qr_last_ammo = ammo;
+		qr_last_weapon = wpn;
+	}
+	slot->frame.weapon_fire_seq = qr_weapon_fire_seq;
 
 	/* room-scale head follow: what IN_AbsorbHeadOffset already walked the
 	   player after, and the lean allowance for the remainder */
