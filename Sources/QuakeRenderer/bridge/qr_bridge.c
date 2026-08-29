@@ -4100,17 +4100,20 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 					+ vr_weaponup.value   * cu[k]
 					+ vr_weaponside.value * cr[k];
 
-			/* Aiming laser, WELDED to the gun: it starts at the placed gun
-			   origin and offsets in the gun's own drawn frame (cf/cr/cu, the
-			   shot frame), so it rides the barrel at every aim angle AND follows
-			   the placement cvars -- no more detaching when you pitch. forward
-			   runs to the muzzle. */
+			/* Aiming laser, WELDED to the gun at the MUZZLE: it starts at the
+			   model's forward-face centre (maxs[0] along the barrel, laterally
+			   and vertically centred) carried through the gun's own drawn frame
+			   (cf/cr/cu, the shot frame), so with the sliders at zero the beam
+			   already emits from the barrel tip and rides it at every aim angle.
+			   The vr_laser{forward,up,side} offsets are then just fine-tune. */
 			if (vr_laser.value)
 			{
 				vec3_t	lstart, langles;
+				float	lx = cl.viewent.model->maxs[0];   /* muzzle, along barrel */
 
 				for (k = 0; k < 3; k++)
 					lstart[k] = cl.viewent.origin[k]
+						+ sf * (cf[k]*lx - cr[k]*cy + cu[k]*cz)
 						+ vr_laserforward.value * cf[k]
 						+ vr_laserup.value      * cu[k]
 						+ vr_laserside.value    * cr[k];
