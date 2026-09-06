@@ -4137,6 +4137,24 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				bmin[k] = ah->frames[0].bboxmin.v[k] * ah->scale[k] + ah->scale_origin[k];
 				bmax[k] = ah->frames[0].bboxmax.v[k] * ah->scale[k] + ah->scale_origin[k];
 			}
+			/* RE-SEAT: the trim planes that hide the baked round also drive the
+			   grip bounds, so trimming the rear pulls the gun back onto the hand
+			   instead of the round's tail shoving the whole model forward. The
+			   grip and size below use the TRIMMED body, not the full bbox. */
+			{
+				float wc[4];
+				QR_WeaponClip (ah, wc);
+				if (wc[1] >= 0.f)
+				{
+					float rx = wc[1] * ah->scale[0] + ah->scale_origin[0];
+					if (rx > bmin[0]) bmin[0] = rx;
+				}
+				if (wc[0] < 255.f)
+				{
+					float fx = wc[0] * ah->scale[0] + ah->scale_origin[0];
+					if (fx < bmax[0]) bmax[0] = fx;
+				}
+			}
 			mx = bmax[0] - bmin[0];
 			my = bmax[1] - bmin[1];
 			mz = bmax[2] - bmin[2];
