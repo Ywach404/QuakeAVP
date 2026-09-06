@@ -35,7 +35,7 @@ struct ContentView: View {
     @State private var weaponGrip: Float = 0.15
     @State private var aimPitch: Float = 0
     @State private var weaponClip: Float = 1
-    @State private var weaponClipBack: Float = 1
+    @State private var weaponClipBack: Float = 0.79
     @State private var laserForward: Float = 0
     @State private var laserUp: Float = 0
     @State private var laserSide: Float = 0
@@ -273,10 +273,10 @@ struct ContentView: View {
                             .font(.caption2).foregroundStyle(.secondary)
                         Button("Reset gun") {
                             weaponBack = 0; weaponUp = 0; weaponSide = 0
-                            weaponGrip = 0.15; aimPitch = 0; weaponClip = 1; weaponClipBack = 1
+                            weaponGrip = 0.15; aimPitch = 0; weaponClip = 1; weaponClipBack = 0.79
                             for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
                                       "vr_weapongrip 0.15", "vr_aimpitch 0",
-                                      "vr_weaponclip 1", "vr_weaponclipback 1"] { engine.send(c) }
+                                      "vr_weaponclip 1", "vr_weaponclipback 0.79"] { engine.send(c) }
                         }
                         .font(.caption)
                     }

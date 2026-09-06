@@ -204,7 +204,10 @@ cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_ARCHIVE};
    the receiver). vr_weaponclip trims the BARREL end, vr_weaponclipback the
    ARM end. Manual, because projectile-vs-gun can't be told from geometry. */
 cvar_t		vr_weaponclip     = {"vr_weaponclip",     "1", CVAR_ARCHIVE};
-cvar_t		vr_weaponclipback = {"vr_weaponclipback", "1", CVAR_ARCHIVE};
+/* 0.79 default: the view models bake a round/nail into the rear ~21% of the
+   model (near the hand); clipping it there clears it on every weapon (found
+   on device). Barrel end is left whole. */
+cvar_t		vr_weaponclipback = {"vr_weaponclipback", "0.79", CVAR_ARCHIVE};
 /* M6: where the aiming laser STARTS, Quake units along the aim axes from the
    wrist -- forward reaches the muzzle so the beam emits from the barrel tip
    instead of behind the gun, up/side fine-tune to the barrel line. */
