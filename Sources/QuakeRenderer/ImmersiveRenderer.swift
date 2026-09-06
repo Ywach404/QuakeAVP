@@ -223,6 +223,7 @@ final class ImmersiveRenderer {
                                           fireSeq: packet.weapon_fire_seq)
             WheelState.shared.frame(items: packet.items,
                                     worldScale: packet.world_scale)
+            WeaponTrim.shared.frame(activeWeapon: packet.active_weapon)
         }
 
         // World->tracking-origin: the Quake BODY basis, scaled to metres —

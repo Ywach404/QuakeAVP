@@ -81,6 +81,9 @@ struct ContentView: View {
             WheelState.shared.sendCommand = { command in
                 Task { @MainActor in engine.send(command) }
             }
+            WeaponTrim.shared.sendCommand = { command in
+                Task { @MainActor in engine.send(command) }
+            }
         }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
@@ -267,16 +270,18 @@ struct ContentView: View {
                         placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside")
                         placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f")
                         placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch")
-                        placementSlider("Trim front", $weaponClip, in: 0.5...1, cvar: "vr_weaponclip", fmt: "%.2f")
-                        placementSlider("Trim rear", $weaponClipBack, in: 0.5...1, cvar: "vr_weaponclipback", fmt: "%.2f")
-                        Text("Trim < 1 retracts baked-in geometry — front = barrel end, rear = arm end.")
+                        trimSlider("Trim front", $weaponClip) { WeaponTrim.shared.setFront($0) }
+                        trimSlider("Trim rear", $weaponClipBack) { WeaponTrim.shared.setRear($0) }
+                        Text("Per-weapon: front = barrel end, rear = arm end. Trimming the rear also re-seats the gun on your hand.")
                             .font(.caption2).foregroundStyle(.secondary)
                         Button("Reset gun") {
                             weaponBack = 0; weaponUp = 0; weaponSide = 0
-                            weaponGrip = 0.15; aimPitch = 0; weaponClip = 1; weaponClipBack = 0.79
+                            weaponGrip = 0.15; aimPitch = 0
                             for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
-                                      "vr_weapongrip 0.15", "vr_aimpitch 0",
-                                      "vr_weaponclip 1", "vr_weaponclipback 0.79"] { engine.send(c) }
+                                      "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
+                            WeaponTrim.shared.resetCurrent()
+                            weaponClip = WeaponTrim.shared.currentFront
+                            weaponClipBack = WeaponTrim.shared.currentRear
                         }
                         .font(.caption)
                     }
@@ -308,6 +313,28 @@ struct ContentView: View {
                 .frame(width: 360)
             }
             .frame(maxHeight: 620)
+            // Load the HELD weapon's saved trim when the panel opens, so the
+            // sliders show and edit whatever gun you're holding.
+            .onAppear {
+                weaponClip = WeaponTrim.shared.currentFront
+                weaponClipBack = WeaponTrim.shared.currentRear
+            }
+        }
+    }
+
+    /// A Trim slider (0.5...1) routed through WeaponTrim, which persists the
+    /// value for the held weapon and pushes the cvar.
+    private func trimSlider(_ label: String, _ value: Binding<Float>,
+                            set: @escaping (Float) -> Void) -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 60, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Float($0); set(Float($0)) }),
+                in: 0.5...1)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
         }
     }
 
