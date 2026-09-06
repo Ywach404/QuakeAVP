@@ -4165,6 +4165,17 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				}
 			}
 
+			/* Draw the IDLE pose (frame 0): the fire frames model the loaded
+			   round / muzzle flash poking out of the barrel, which looked like
+			   a stray projectile welded to the gun. Our synthetic recoil above
+			   already carries the fire feel, so we don't need the model's own
+			   fire animation. The recoil block above already read the real
+			   frame for its shot detection, so this only changes what's drawn.
+			   (Forced every hand emit, so the pose never lerps off a fire
+			   frame.) The body-anchored fallback below keeps the animation --
+			   it's the window-only debug view. */
+			cl.viewent.frame = 0;
+
 			qr_handweapon = 1;
 			QR_EmitAliasModel (slot, &cl.viewent);
 			qr_handweapon = 0;
