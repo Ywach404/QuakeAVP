@@ -43,7 +43,17 @@ struct AliasUniforms {
     float4x4 model;
     float4 light;           // rgb = light color, a = entity alpha
     float4 shadeblend;      // xyz = shadevector, w = pose blend
+    float4 clip;            // byte-space forward clip for the hand weapon:
+                            // byte-x > clip.x collapses to clip.xyz. x>=255 off.
 };
+
+// Retract the loaded round / nail the view models bake past the barrel: any
+// vertex forward of the clip plane is pulled back onto a point at the muzzle
+// so its triangles degenerate away, leaving the gun body untouched.
+static inline float3 alias_clip(float3 p, float4 clip)
+{
+    return (p.x > clip.x) ? clip.xyz : p;
+}
 
 struct AliasVaryings {
     float4 position [[position]];
@@ -73,8 +83,8 @@ vertex AliasVaryings alias_vertex(uint vid [[vertex_id]],
     float blend = uniforms.shadeblend.w;
     float3 shade = uniforms.shadeblend.xyz;
 
-    float3 p1 = float3(pose1[vid].xyz.x, pose1[vid].xyz.y, pose1[vid].xyz.z);
-    float3 p2 = float3(pose2[vid].xyz.x, pose2[vid].xyz.y, pose2[vid].xyz.z);
+    float3 p1 = alias_clip(float3(pose1[vid].xyz.x, pose1[vid].xyz.y, pose1[vid].xyz.z), uniforms.clip);
+    float3 p2 = alias_clip(float3(pose2[vid].xyz.x, pose2[vid].xyz.y, pose2[vid].xyz.z), uniforms.clip);
     float4 world = uniforms.model * float4(mix(p1, p2, blend), 1.0);
 
     float dot1 = avertexnormal_dot(float3(pose1[vid].normal.x, pose1[vid].normal.y, pose1[vid].normal.z) * (1.0 / 127.0), shade);

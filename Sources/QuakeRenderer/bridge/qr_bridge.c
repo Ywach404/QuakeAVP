@@ -2995,6 +2995,45 @@ static void QR_SetupAliasLighting (entity_t *e, vec3_t shadevector_out)
 
 /*
 =================
+QR_WeaponClip -- the byte-x plane forward of which the view weapon's geometry
+is retracted to the muzzle, to hide the loaded round / nail the models bake
+past the barrel. Auto-detecting a projectile from a thin barrel proved
+unreliable (a launcher's barrel looks the same as a nail in the vertex data),
+so it's a manual knob: vr_weaponclip is the fraction of the model's forward
+span to KEEP (1 = keep all / off, lower = cut more off the front). Tune it live
+per weapon in the Weapon menu -- you can see the model, the math can't.
+=================
+*/
+extern cvar_t vr_weaponclip;
+
+static void QR_WeaponClip (aliashdr_t *h, float out[4])
+{
+	int		i, nv, minb = 255, maxb = 0, thr, nb = 0;
+	trivertx_t	*v;
+	double		sy = 0, sz = 0;
+	float		frac = CLAMP (0.3f, vr_weaponclip.value, 1.f);
+
+	if (frac >= 0.999f) { out[0] = 255.f; out[1] = out[2] = out[3] = 0.f; return; }
+
+	nv = h->numverts_vbo;
+	v = (trivertx_t *)((byte *)h + h->vertexes) + h->frames[0].firstpose * nv;
+	for (i = 0; i < nv; i++)
+	{
+		int x = v[i].v[0];
+		if (x < minb) minb = x;
+		if (x > maxb) maxb = x;
+	}
+	thr = minb + (int)((maxb - minb) * frac);
+	for (i = 0; i < nv; i++)
+		if (v[i].v[0] <= thr) { sy += v[i].v[1]; sz += v[i].v[2]; nb++; }
+	out[0] = (float) thr;
+	out[1] = nb ? (float)(sy / nb) : 128.f;
+	out[2] = nb ? (float)(sz / nb) : 128.f;
+	out[3] = 0.f;
+}
+
+/*
+=================
 QR_EmitAliasModel -- port of R_DrawAliasModel, emitting an entity record
 and one QC_BATCH_ALIAS batch instead of GL state and a draw.
 =================
@@ -3070,6 +3109,13 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 	rec.pose2 = lerpdata.pose2;
 	if (e == &cl.viewent && !qr_handweapon)
 		rec.flags |= QC_ENTFLAG_VIEWMODEL;
+
+	/* Clip disabled by default (255 = no byte-x exceeds it). Only the
+	   hand-held weapon retracts its baked-in projectile spike. */
+	rec.clip[0] = 255.f;
+	rec.clip[1] = rec.clip[2] = rec.clip[3] = 0.f;
+	if (qr_handweapon)
+		QR_WeaponClip (paliashdr, rec.clip);
 
 	entity = QR_AppendEntity (slot, &rec);
 
