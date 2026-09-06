@@ -4039,6 +4039,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		{
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
+			float	bmin[3], bmax[3];
+			aliashdr_t *ah;
 			int	k;
 
 			/* Body frame (not the aim): the hand position in the world, the
@@ -4068,20 +4070,31 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			   it; anchoring the bbox CENTRE straddles the hand. Anchor a GRIP
 			   point instead -- rear third along the barrel, laterally and
 			   vertically centred -- so the grip sits at the wrist and the
-			   barrel extends forward, held rather than hovering. Model bounds
-			   are in the same space as scale_origin + scale*byte; Quake maps
-			   model +X->forward, +Y->left, +Z->up. */
-			mx = cl.viewent.model->maxs[0] - cl.viewent.model->mins[0];
-			my = cl.viewent.model->maxs[1] - cl.viewent.model->mins[1];
-			mz = cl.viewent.model->maxs[2] - cl.viewent.model->mins[2];
+			   barrel extends forward, held rather than hovering. Model maps
+			   +X->forward, +Y->left, +Z->up.
+
+			   Bounds from the IDLE frame (frame 0), NOT model->mins/maxs: the
+			   latter is the union over ALL frames, and the FIRE frames model
+			   the loaded round / muzzle flash sticking out past the barrel
+			   (grenade +12, super-nail +15, ... verified). Sizing and the muzzle
+			   off that union shrank the gun and threw the laser start out past
+			   the real barrel. Frame 0 is the clean held gun. */
+			ah = (aliashdr_t *) Mod_Extradata (cl.viewent.model);
+			for (k = 0; k < 3; k++)
+			{
+				bmin[k] = ah->frames[0].bboxmin.v[k] * ah->scale[k] + ah->scale_origin[k];
+				bmax[k] = ah->frames[0].bboxmax.v[k] * ah->scale[k] + ah->scale_origin[k];
+			}
+			mx = bmax[0] - bmin[0];
+			my = bmax[1] - bmin[1];
+			mz = bmax[2] - bmin[2];
 			maxdim = q_max (mx, q_max (my, mz));
 			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
 			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
 
-			cx = cl.viewent.model->mins[0]
-			     + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
-			cy = 0.5f * (cl.viewent.model->mins[1] + cl.viewent.model->maxs[1]);
-			cz = 0.5f * (cl.viewent.model->mins[2] + cl.viewent.model->maxs[2]);
+			cx = bmin[0] + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
+			cy = 0.5f * (bmin[1] + bmax[1]);
+			cz = 0.5f * (bmin[2] + bmax[2]);
 			/* Place in the SHOT frame -- NOT AngleVectors(viewent.angles).
 			   QR_EntityMatrix draws the negated-pitch model so its barrel
 			   points where the shot goes, i.e. the model's drawn basis IS the
@@ -4109,7 +4122,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			if (vr_laser.value)
 			{
 				vec3_t	lstart, langles;
-				float	lx = cl.viewent.model->maxs[0];   /* muzzle, along barrel */
+				float	lx = bmax[0];   /* idle-frame muzzle, along barrel */
 
 				for (k = 0; k < 3; k++)
 					lstart[k] = cl.viewent.origin[k]
