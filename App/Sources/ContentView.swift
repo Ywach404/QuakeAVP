@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var weaponSide: Float = 0
     @State private var weaponGrip: Float = 0.15
     @State private var aimPitch: Float = 0
+    @State private var weaponClip: Float = 1
     @State private var laserForward: Float = 0
     @State private var laserUp: Float = 0
     @State private var laserSide: Float = 0
@@ -265,11 +266,14 @@ struct ContentView: View {
                         placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside")
                         placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f")
                         placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch")
+                        placementSlider("Trim", $weaponClip, in: 0.5...1, cvar: "vr_weaponclip", fmt: "%.2f")
+                        Text("Trim < 1 retracts a baked-in projectile/nail past the barrel.")
+                            .font(.caption2).foregroundStyle(.secondary)
                         Button("Reset gun") {
                             weaponBack = 0; weaponUp = 0; weaponSide = 0
-                            weaponGrip = 0.15; aimPitch = 0
+                            weaponGrip = 0.15; aimPitch = 0; weaponClip = 1
                             for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
-                                      "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
+                                      "vr_weapongrip 0.15", "vr_aimpitch 0", "vr_weaponclip 1"] { engine.send(c) }
                         }
                         .font(.caption)
                     }

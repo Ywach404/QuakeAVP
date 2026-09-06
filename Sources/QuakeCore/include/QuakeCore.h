@@ -188,6 +188,11 @@ typedef struct qc_entity_s {
 	uint32_t	meshnum;	/* alias mesh handle; 0 for brush entities */
 	uint32_t	pose1, pose2;
 	uint32_t	flags;		/* QC_ENTFLAG_* */
+	/* Vertex forward-clip in MODEL BYTE space, for the hand weapon: any vertex
+	   with byte-x > clip[0] is collapsed to (clip[0], clip[1], clip[2]) in the
+	   shader, retracting the loaded round / nail the view models bake into
+	   their geometry. clip[0] >= 255 disables it (every other entity). */
+	float		clip[4];
 } qc_entity_t;
 
 /* One draw batch: a run of triangle-list indices sharing textures. */
