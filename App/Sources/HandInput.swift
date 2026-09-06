@@ -20,10 +20,10 @@
 //
 //  Drag vectors are rotated by the render thread's recenter correction
 //  (TrackingSpace) so "forward" is the body's forward, not the room's
-//  arbitrary axis. M6: the dominant hand's WRIST ray (forearm->knuckle, not
-//  the index finger — pinching to fire must not move the aim) is fed to the
-//  engine as the aim (feedAim -> QC_InputSetAim), so the gun tracks the wrist
-//  and shots leave along the arm, decoupled from the body and the gaze.
+//  arbitrary axis. M6: the dominant hand's FOREARM axis (elbow->wrist, not
+//  a finger — pinching to fire, a fist, or an open hand must not move or drop
+//  the aim) is fed to the engine as the aim (feedAim -> QC_InputSetAim), so
+//  the gun is an arm-cannon along the forearm, decoupled from body and gaze.
 //
 
 import ARKit
@@ -39,12 +39,22 @@ final class HandInput: @unchecked Sendable {
     // Flick snap-turn on the gun hand: a horizontal wrist speed past
     // `flickSpeed` fires one snap, then the gesture is disarmed until the
     // hand slows below `flickReset` AND the cooldown lapses -- so the return
-    // stroke and a continued sweep can't spin you.
-    private static let flickSpeed: Float = 1.1     // m/s to trigger
-    private static let flickReset: Float = 0.4     // m/s to re-arm
+    // stroke and a continued sweep can't spin you. The pad rx is HELD for
+    // `flickPulse` after a trigger so the engine's tick reliably samples it
+    // (a single-frame pulse landed between ticks and got dropped -- that was
+    // the "turning doesn't work" bug). Watch the on-hand gauge to calibrate.
+    // Trigger speed is live-tunable: VRSettings.turnFlickSpeed (Comfort menu).
+    private static let flickReset: Float = 0.35    // m/s to re-arm
     private static let flickCooldown = 0.35        // s to swallow the return
+    private static let flickPulse = 0.09           // s to hold the pad pulse
     private var flickArmed = true
     private var flickCooldownUntil = 0.0
+    private var flickPulseUntil = 0.0
+    private var flickDir: Float = 0
+
+    /// Turn-gauge geometry (corrected tracking space, 7 floats/vertex),
+    /// published alongside the debug wireframe when the overlay is on.
+    private var turnGaugeVerts: [Float] = []
 
     init(aggregator: PadAggregator) {
         self.aggregator = aggregator
@@ -104,7 +114,7 @@ final class HandInput: @unchecked Sendable {
             emit(left: &left, right: &right)
             wheel(left: left, right: right)
             if HandDebug.shared.enabled {
-                HandDebug.shared.publish(left.debugVerts + right.debugVerts)
+                HandDebug.shared.publish(left.debugVerts + right.debugVerts + turnGaugeVerts)
             }
             VirtualHand.shared.publish(left.virtualVerts + right.virtualVerts)
         }
@@ -133,6 +143,7 @@ final class HandInput: @unchecked Sendable {
         // only live gestures are point (highlight) and release (commit).
         if WheelState.shared.isOpen {
             aggregator.update(.hands, slice)   // zeroed
+            turnGaugeVerts = []                // no turning while choosing a weapon
             return
         }
 
@@ -141,11 +152,11 @@ final class HandInput: @unchecked Sendable {
         let basis = TrackingSpace.rotation
 
         // Movement, VRChat-style holds on the move hand (not drags -- a
-        // drag reset whenever the pinch flickered): thumb+middle walks
-        // FORWARD where you look, thumb+index walks BACKWARD. Steer with
+        // drag reset whenever the pinch flickered): thumb+INDEX walks
+        // FORWARD where you look, thumb+MIDDLE walks BACKWARD. Steer with
         // your head (vr_moverelative).
-        if move.middlePinched { slice.ly += 1 }   // forward
-        if move.indexPinched { slice.ly -= 1 }    // backward
+        if move.indexPinched { slice.ly += 1 }    // forward
+        if move.middlePinched { slice.ly -= 1 }   // backward
 
         // Jump: move-hand thumb+ring pinch. Crouch: thumb+pinky (held).
         if move.ringPinched { slice.buttons |= UInt32(QC_PAD_A) }        // +jump
@@ -164,27 +175,78 @@ final class HandInput: @unchecked Sendable {
             let d = basis * drag
             if abs(d.x) > 0.06 { slice.rx = d.x > 0 ? 1 : -1; turnedByPinch = true }
         }
-        if !turnedByPinch, let vel = aim.wristVel {
-            let speed = (basis * vel).x          // body-right component, m/s
-            let now = CACurrentMediaTime()
-            if flickArmed, now >= flickCooldownUntil, abs(speed) > Self.flickSpeed {
-                // One clean pulse; the engine's snap logic turns it into 45°.
-                slice.rx = speed > 0 ? 1 : -1
+        let speed = aim.wristVel.map { (basis * $0).x } ?? 0   // body-right m/s
+        let flickSpeed = max(0.2, VRSettings.shared.turnFlickSpeed)   // live-tunable
+        let now = CACurrentMediaTime()
+        var firing = false
+        if !turnedByPinch {
+            if flickArmed, now >= flickCooldownUntil, abs(speed) > flickSpeed {
+                flickDir = speed > 0 ? 1 : -1
                 flickArmed = false
+                flickPulseUntil = now + Self.flickPulse         // HOLD so the engine samples it
                 flickCooldownUntil = now + Self.flickCooldown   // swallow the return stroke
             } else if abs(speed) < Self.flickReset {
                 flickArmed = true                // hand slowed: ready for the next flick
             }
+            firing = now < flickPulseUntil
+            if firing { slice.rx = flickDir }
         }
+        // Drive the on-hand turn gauge so the flick is visible/debuggable.
+        buildTurnGauge(wrist: aim.wrist, speed: speed, threshold: flickSpeed,
+                       armed: flickArmed, firing: firing)
 
         aggregator.update(.hands, slice)
     }
 
 
-    /// M6 aim: turn the dominant hand's WRIST ray into the engine's aim. The
-    /// ray (wrist origin, forearm->knuckle direction — deliberately NOT the
-    /// index finger, which moves when you pinch to fire) is corrected into the
-    /// recenter-neutral frame — the same TrackingSpace correction the wheel
+    /// A world-space gauge floating above the gun-hand wrist that shows the
+    /// flick snap-turn signal live: a horizontal track with threshold ticks at
+    /// +/- flickSpeed, and a marker that slides with the body-right wrist speed
+    /// -- green while ARMED, yellow during the cooldown, white when a flick
+    /// FIRES. So you can see the whip cross the line (and how close a too-slow
+    /// whip came) instead of guessing why the turn didn't take. Built in the
+    /// corrected tracking frame where +X is body-right (the flick axis); drawn
+    /// with the debug overlay through handViewproj. Triangles, not lines.
+    private func buildTurnGauge(wrist: SIMD3<Float>?, speed: Float, threshold: Float,
+                                armed: Bool, firing: Bool) {
+        guard HandDebug.shared.enabled, let w = wrist else { turnGaugeVerts = []; return }
+        let c4 = TrackingSpace.correction * SIMD4(w, 1)
+        let center = SIMD3(c4.x, c4.y + 0.14, c4.z)   // above the wrist
+        let halfW: Float = 0.09
+        // Billboard: face the eye so the gauge stays readable when the head
+        // turns instead of going edge-on. Its plane is spanned by (right, up)
+        // both perpendicular to the eye direction.
+        let toEye = simd_normalize(ViewerPose.shared.eye - center)
+        var right = simd_cross(SIMD3<Float>(0, 1, 0), toEye)
+        right = simd_length(right) > 1e-4 ? simd_normalize(right) : SIMD3(1, 0, 0)
+        let up = simd_normalize(simd_cross(toEye, right))
+        var v: [Float] = []
+        func quad(_ cx: Float, _ hw: Float, _ hh: Float, _ col: SIMD4<Float>) {
+            let c = center + right * cx
+            let a = c - right * hw - up * hh, b = c + right * hw - up * hh
+            let d = c + right * hw + up * hh, e = c - right * hw + up * hh
+            for q in [a, b, d, a, d, e] { v += [q.x, q.y, q.z, col.x, col.y, col.z, col.w] }
+        }
+        let track = SIMD4<Float>(0.10, 0.30, 0.14, 0.70)
+        let tick  = SIMD4<Float>(1.0, 0.55, 0.20, 0.95)
+        let armedC = SIMD4<Float>(0.25, 1.0, 0.45, 0.98)
+        let coolC  = SIMD4<Float>(0.90, 0.80, 0.20, 0.90)
+        let fireC  = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
+        quad(0, halfW, 0.004, track)                 // track
+        quad(-halfW, 0.004, 0.016, tick)             // threshold ticks = flickSpeed
+        quad( halfW, 0.004, 0.016, tick)
+        quad(0, 0.003, 0.012, track)                 // centre
+        let frac = max(-1.2, min(1.2, speed / threshold))   // edge = current threshold
+        quad(frac * halfW, 0.008, 0.020,             // moving marker
+             firing ? fireC : (armed ? armedC : coolC))
+        turnGaugeVerts = v
+    }
+
+    /// M6 aim: turn the dominant hand's FOREARM axis into the engine's aim.
+    /// The ray (wrist origin, elbow->wrist direction — deliberately NOT a
+    /// finger, which moves when you pinch to fire and drops out in a fist or
+    /// open hand) is corrected into the recenter-neutral frame — the same
+    /// TrackingSpace correction the wheel
     /// and the renderer use — then to Quake's body axes: yaw CCW/left-positive
     /// relative to room forward (the engine adds the body yaw), pitch
     /// positive-down, muzzle origin in body-frame Quake units. `valid 0` when
@@ -357,21 +419,28 @@ private struct HandState {
         } else {
             palmUp = false
         }
-        // Aim ray from the WRIST/forearm, not the index finger. The index tip
-        // curls toward the thumb when you pinch to fire, which yanked the shot
-        // on every trigger pull; the wrist and the finger BASES don't move
-        // when you pinch, so the aim holds through the shot. Origin is the
-        // wrist (the gun tracks the wrist), direction is the forearm->middle-
-        // knuckle line -- the way the whole hand/arm points -- falling back to
-        // wrist->knuckle if the forearm joint isn't tracked.
-        if let w = wrist, let knuckle = tip(.middleFingerKnuckle) {
-            let base = tip(.forearmArm) ?? w
-            let dir = knuckle - base
-            if simd_length(dir) > 0.05 {
-                aimOrigin = w
-                aimDir = simd_normalize(dir)
+        // Aim along the FOREARM axis -- a "megaman cannon" that points where
+        // the arm points. Crucially this does NOT depend on finger tracking,
+        // so the gun holds steady through a fist, an open hand, a turned wrist
+        // or a fire pinch (the old wrist->knuckle ray lost the middle knuckle
+        // in those poses and the gun winked out). Direction is elbow-side
+        // forearm joint -> wrist, extended out the hand; origin is the wrist,
+        // which tracks whenever the hand does. Fall back to wrist->knuckle
+        // only if the forearm joint is missing.
+        if let w = wrist {
+            aimOrigin = w
+            // Prefer the pure forearm BONE (elbow joint -> wrist joint): the
+            // most stable "where the arm points" line, and level when the
+            // forearm is level. Fall back to elbow->wrist, then wrist->knuckle.
+            if let armJ = tip(.forearmArm), let wristJ = tip(.forearmWrist),
+               simd_length(wristJ - armJ) > 0.05 {
+                aimDir = simd_normalize(wristJ - armJ)
+            } else if let arm = tip(.forearmArm), simd_length(w - arm) > 0.05 {
+                aimDir = simd_normalize(w - arm)
+            } else if let knuckle = tip(.middleFingerKnuckle),
+                      simd_length(knuckle - w) > 0.03 {
+                aimDir = simd_normalize(knuckle - w)
             } else {
-                aimOrigin = nil
                 aimDir = nil
             }
         } else {
@@ -440,28 +509,29 @@ private struct HandState {
         virtualVerts = v
     }
 
-    /// Colour each finger by whether its gesture is firing, so the overlay
-    /// shows detection live. Points are pushed through the recenter
-    /// correction into the same frame the renderer draws in.
+    /// A GREEN WIREFRAME skeleton: thin bones between joints and a small
+    /// sphere-ish node at each joint, so the tracked hand reads like a
+    /// classic wireframe rig. Still doubles as the gesture debugger -- a
+    /// finger brightens when its pinch/gesture fires, so a dim finger you're
+    /// pinching means the gesture isn't registering. Bones are thin quads and
+    /// nodes are octahedra, not lines/points (foveation forbids those on
+    /// device). Corrected-tracking space, 7 floats/vertex (xyz + rgba).
     private mutating func buildDebug(tip: (HandSkeleton.JointName) -> SIMD3<Float>?) {
         guard HandDebug.shared.enabled else { debugVerts = []; return }
-        let dim = SIMD4<Float>(0.7, 0.7, 0.7, 0.5)
-        let green = SIMD4<Float>(0.1, 1.0, 0.4, 0.95)
-        let blue = SIMD4<Float>(0.3, 0.6, 1.0, 0.95)
-        let red = SIMD4<Float>(1.0, 0.3, 0.3, 0.95)
-        let cyan = SIMD4<Float>(0.3, 0.9, 1.0, 0.9)
+        let dimGreen = SIMD4<Float>(0.10, 0.55, 0.20, 0.85)
+        let hotGreen = SIMD4<Float>(0.25, 1.0, 0.45, 0.98)
 
-        let fingers: [(joints: [HandSkeleton.JointName], color: SIMD4<Float>)] = [
+        let fingers: [(joints: [HandSkeleton.JointName], active: Bool)] = [
             ([.thumbKnuckle, .thumbIntermediateBase, .thumbIntermediateTip, .thumbTip],
-             middlePinched || ringPinched ? green : dim),
+             middlePinched || ringPinched),
             ([.indexFingerKnuckle, .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip],
-             indexPinched ? red : dim),
+             indexPinched),
             ([.middleFingerKnuckle, .middleFingerIntermediateBase, .middleFingerIntermediateTip, .middleFingerTip],
-             middlePinched ? green : dim),
+             middlePinched),
             ([.ringFingerKnuckle, .ringFingerIntermediateBase, .ringFingerIntermediateTip, .ringFingerTip],
-             ringPinched ? green : dim),
+             ringPinched),
             ([.littleFingerKnuckle, .littleFingerIntermediateBase, .littleFingerIntermediateTip, .littleFingerTip],
-             pinkyPinched ? blue : dim),
+             pinkyPinched),
         ]
         let correction = TrackingSpace.correction
         var v: [Float] = []
@@ -469,29 +539,41 @@ private struct HandState {
             let q = correction * SIMD4(p, 1)
             v += [q.x, q.y, q.z, c.x, c.y, c.z, c.w]
         }
-        // Each bone is a thin quad, not a line (foveation forbids line
-        // primitives on device). ~4 mm half-thickness, perpendicular chosen
-        // off world-up so it shows from most angles.
-        let t: Float = 0.004
+        // Thin quad bone (~2.5 mm half-thickness), perpendicular off world-up
+        // so a "line" shows from most angles.
         let up = SIMD3<Float>(0, 1, 0)
         func bone(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD4<Float>) {
             var perp = simd_cross(b - a, up)
             if simd_length(perp) < 1e-5 { perp = simd_cross(b - a, SIMD3(1, 0, 0)) }
-            perp = simd_length(perp) > 0 ? simd_normalize(perp) * t : SIMD3(t, 0, 0)
+            perp = simd_length(perp) > 0 ? simd_normalize(perp) * 0.0025 : SIMD3(0.0025, 0, 0)
             let a0 = a - perp, a1 = a + perp, b0 = b - perp, b1 = b + perp
             corner(a0, c); corner(a1, c); corner(b0, c)
             corner(a1, c); corner(b1, c); corner(b0, c)
         }
+        // Octahedron node: 6 axis points, 8 faces -- a cheap round dot that
+        // reads as a joint sphere from any angle.
+        func node(_ p: SIMD3<Float>, _ r: Float, _ c: SIMD4<Float>) {
+            let px = p + SIMD3(r,0,0), nx = p - SIMD3(r,0,0)
+            let py = p + SIMD3(0,r,0), ny = p - SIMD3(0,r,0)
+            let pz = p + SIMD3(0,0,r), nz = p - SIMD3(0,0,r)
+            func f(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ d: SIMD3<Float>) {
+                corner(a, c); corner(b, c); corner(d, c)
+            }
+            f(px,py,pz); f(py,nx,pz); f(nx,ny,pz); f(ny,px,pz)
+            f(py,px,nz); f(nx,py,nz); f(ny,nx,nz); f(px,ny,nz)
+        }
         let wristPt = tip(.wrist)
-        for (joints, baseColor) in fingers {
-            let color = palmUp ? cyan : baseColor
+        for (joints, active) in fingers {
+            let color = (palmUp || active) ? hotGreen : dimGreen
             var prev = wristPt
             for j in joints {
                 guard let cur = tip(j) else { prev = nil; continue }
                 if let p = prev { bone(p, cur, color) }
+                node(cur, 0.006, color)
                 prev = cur
             }
         }
+        if let w = wristPt { node(w, 0.010, palmUp ? hotGreen : dimGreen) }
         debugVerts = v
     }
 
@@ -520,6 +602,18 @@ final class VirtualHand: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return verts
     }
+}
+
+/// The viewer's eye position in the SAME corrected-tracking space the debug
+/// hands and the turn gauge are drawn in (handViewproj). The render thread
+/// publishes it each frame so on-hand HUD can billboard toward the head
+/// instead of hanging at a fixed angle that goes edge-on when you look away.
+final class ViewerPose: @unchecked Sendable {
+    static let shared = ViewerPose()
+    private let lock = NSLock()
+    private var _eye = SIMD3<Float>(0, 1.2, 0)
+    func setEye(_ e: SIMD3<Float>) { lock.lock(); _eye = e; lock.unlock() }
+    var eye: SIMD3<Float> { lock.lock(); defer { lock.unlock() }; return _eye }
 }
 
 /// The recenter correction, shared from the render thread: the rotation
