@@ -43,16 +43,20 @@ struct AliasUniforms {
     float4x4 model;
     float4 light;           // rgb = light color, a = entity alpha
     float4 shadeblend;      // xyz = shadevector, w = pose blend
-    float4 clip;            // byte-space forward clip for the hand weapon:
-                            // byte-x > clip.x collapses to clip.xyz. x>=255 off.
+    float4 clip;            // byte-space clip window for the hand weapon:
+                            // x = front plane, y = rear plane, zw = collapse
+                            // centre (y,z). x>=255 & y<0 disable each end.
 };
 
-// Retract the loaded round / nail the view models bake past the barrel: any
-// vertex forward of the clip plane is pulled back onto a point at the muzzle
+// Retract geometry the view models bake past EITHER end of the gun (a nail
+// out the barrel, a round behind the receiver): any vertex forward of the
+// front plane or behind the rear plane is pulled onto a point on that plane
 // so its triangles degenerate away, leaving the gun body untouched.
 static inline float3 alias_clip(float3 p, float4 clip)
 {
-    return (p.x > clip.x) ? clip.xyz : p;
+    if (p.x > clip.x) return float3(clip.x, clip.z, clip.w);
+    if (p.x < clip.y) return float3(clip.y, clip.z, clip.w);
+    return p;
 }
 
 struct AliasVaryings {

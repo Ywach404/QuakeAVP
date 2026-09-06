@@ -199,10 +199,12 @@ cvar_t		vr_weapongrip = {"vr_weapongrip", "0.15", CVAR_ARCHIVE};
 cvar_t		vr_weaponback = {"vr_weaponback", "0", CVAR_ARCHIVE};
 cvar_t		vr_weaponup   = {"vr_weaponup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_ARCHIVE};
-/* M6: fraction of the hand weapon's forward span to KEEP -- 1 = whole model,
-   lower retracts the loaded round / nail the view models bake past the barrel.
-   Manual because projectile-vs-barrel can't be told apart from geometry. */
-cvar_t		vr_weaponclip = {"vr_weaponclip", "1", CVAR_ARCHIVE};
+/* M6: how much of the hand weapon to KEEP, from each end (1 = whole model,
+   lower retracts baked-in geometry -- a nail out the barrel, or a round behind
+   the receiver). vr_weaponclip trims the BARREL end, vr_weaponclipback the
+   ARM end. Manual, because projectile-vs-gun can't be told from geometry. */
+cvar_t		vr_weaponclip     = {"vr_weaponclip",     "1", CVAR_ARCHIVE};
+cvar_t		vr_weaponclipback = {"vr_weaponclipback", "1", CVAR_ARCHIVE};
 /* M6: where the aiming laser STARTS, Quake units along the aim axes from the
    wrist -- forward reaches the muzzle so the beam emits from the barrel tip
    instead of behind the gun, up/side fine-tune to the barrel line. */
@@ -709,6 +711,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_weaponup);
 	Cvar_RegisterVariable (&vr_weaponside);
 	Cvar_RegisterVariable (&vr_weaponclip);
+	Cvar_RegisterVariable (&vr_weaponclipback);
 	Cvar_RegisterVariable (&vr_laserforward);
 	Cvar_RegisterVariable (&vr_laserup);
 	Cvar_RegisterVariable (&vr_laserside);

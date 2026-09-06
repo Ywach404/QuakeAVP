@@ -3004,16 +3004,19 @@ span to KEEP (1 = keep all / off, lower = cut more off the front). Tune it live
 per weapon in the Weapon menu -- you can see the model, the math can't.
 =================
 */
-extern cvar_t vr_weaponclip;
+extern cvar_t vr_weaponclip, vr_weaponclipback;
 
 static void QR_WeaponClip (aliashdr_t *h, float out[4])
 {
-	int		i, nv, minb = 255, maxb = 0, thr, nb = 0;
+	int		i, nv, minb = 255, maxb = 0, front, rear, nb = 0;
 	trivertx_t	*v;
 	double		sy = 0, sz = 0;
-	float		frac = CLAMP (0.3f, vr_weaponclip.value, 1.f);
+	float		ff = CLAMP (0.3f, vr_weaponclip.value, 1.f);       /* keep from rear */
+	float		fb = CLAMP (0.3f, vr_weaponclipback.value, 1.f);   /* keep from front */
 
-	if (frac >= 0.999f) { out[0] = 255.f; out[1] = out[2] = out[3] = 0.f; return; }
+	/* disabled: front plane above every byte, rear plane below every byte */
+	out[0] = 255.f; out[1] = -1.f; out[2] = out[3] = 128.f;
+	if (ff >= 0.999f && fb >= 0.999f) return;
 
 	nv = h->numverts_vbo;
 	v = (trivertx_t *)((byte *)h + h->vertexes) + h->frames[0].firstpose * nv;
@@ -3023,13 +3026,16 @@ static void QR_WeaponClip (aliashdr_t *h, float out[4])
 		if (x < minb) minb = x;
 		if (x > maxb) maxb = x;
 	}
-	thr = minb + (int)((maxb - minb) * frac);
+	front = minb + (int)((maxb - minb) * ff);          /* clip verts above this */
+	rear  = minb + (int)((maxb - minb) * (1.f - fb));  /* clip verts below this */
+
+	/* collapse centre = mean y,z of the body that survives both planes */
 	for (i = 0; i < nv; i++)
-		if (v[i].v[0] <= thr) { sy += v[i].v[1]; sz += v[i].v[2]; nb++; }
-	out[0] = (float) thr;
-	out[1] = nb ? (float)(sy / nb) : 128.f;
-	out[2] = nb ? (float)(sz / nb) : 128.f;
-	out[3] = 0.f;
+		if (v[i].v[0] <= front && v[i].v[0] >= rear) { sy += v[i].v[1]; sz += v[i].v[2]; nb++; }
+	out[0] = (ff  >= 0.999f) ? 255.f : (float) front;
+	out[1] = (fb  >= 0.999f) ? -1.f  : (float) rear;
+	out[2] = nb ? (float)(sy / nb) : 128.f;
+	out[3] = nb ? (float)(sz / nb) : 128.f;
 }
 
 /*
