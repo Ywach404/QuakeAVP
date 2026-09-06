@@ -26,6 +26,19 @@ struct ContentView: View {
     @State private var swapSenseHands = false
     @State private var fullMenu = false
     @State private var laser = false
+    @State private var turnFlick: Float = 0.85
+    @State private var showLimbs = true
+    @State private var showWeapon = false
+    @State private var weaponBack: Float = 0
+    @State private var weaponUp: Float = 0
+    @State private var weaponSide: Float = 0
+    @State private var weaponGrip: Float = 0.15
+    @State private var aimPitch: Float = 0
+    @State private var laserForward: Float = 0
+    @State private var laserUp: Float = 0
+    @State private var laserSide: Float = 0
+    @State private var laserPitch: Float = 0
+    @State private var laserYaw: Float = 0
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
@@ -132,6 +145,7 @@ struct ContentView: View {
             Spacer()
             if engine.status == .running {
                 comfortMenu
+                weaponMenu
                 Button {
                     showScope.toggle()
                 } label: {
@@ -154,6 +168,7 @@ struct ContentView: View {
             Label("Comfort", systemImage: "slider.horizontal.3")
         }
         .popover(isPresented: $showComfort, arrowEdge: .bottom) {
+            ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Eye height  \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm")
@@ -191,9 +206,6 @@ struct ContentView: View {
                     set: { fullMenu = $0
                            VRSettings.shared.fullMenu = $0
                            engine.send("vr_fullmenu \($0 ? 1 : 0)") }))
-                Toggle("Aiming laser", isOn: Binding(
-                    get: { laser },
-                    set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)") }))
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("Turning", selection: Binding(
@@ -203,8 +215,18 @@ struct ContentView: View {
                         Text("Smooth").tag(true)
                     }
                     .pickerStyle(.segmented)
-                    Text("Flick the gun hand sideways (thumb-and-middle pinch) to turn.")
+                    Text("Whip the gun hand sideways to turn. Turn on the wireframe to see the flick gauge.")
                         .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Text("Flick ease").font(.caption)
+                        Slider(value: Binding(
+                            get: { Double(turnFlick) },
+                            set: { turnFlick = Float($0)
+                                   VRSettings.shared.turnFlickSpeed = Float($0) }),
+                               in: 0.4...1.6)
+                        Text(String(format: "%.2f", turnFlick))
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
                 }
                 Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
                     get: { wheelSlowmo },
@@ -212,9 +234,92 @@ struct ContentView: View {
                 Toggle("Finger debug wireframe", isOn: Binding(
                     get: { fingerDebug },
                     set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))
+                Toggle("Show real hands / controllers", isOn: Binding(
+                    get: { showLimbs },
+                    set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
             }
             .padding(24)
             .frame(width: 360)
+            }
+            .frame(maxHeight: 620)
+        }
+    }
+
+    /// Weapon rig: gun placement and the aiming laser, in their own popover so
+    /// the Comfort panel isn't buried. Every slider pushes its cvar live.
+    private var weaponMenu: some View {
+        Button {
+            showWeapon.toggle()
+        } label: {
+            Label("Weapon", systemImage: "scope")
+        }
+        .popover(isPresented: $showWeapon, arrowEdge: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Gun placement").font(.headline)
+                        Text("Slide the gun onto your hand — updates live in the headset.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        placementSlider("Back", $weaponBack, in: -20...30, cvar: "vr_weaponback")
+                        placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup")
+                        placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside")
+                        placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f")
+                        placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch")
+                        Button("Reset gun") {
+                            weaponBack = 0; weaponUp = 0; weaponSide = 0
+                            weaponGrip = 0.15; aimPitch = 0
+                            for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
+                                      "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
+                        }
+                        .font(.caption)
+                    }
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Aiming laser", isOn: Binding(
+                            get: { laser },
+                            set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)") }))
+                            .font(.headline)
+                        Text("Move the beam's start to the barrel tip. Forward reaches the muzzle.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        placementSlider("Fwd", $laserForward, in: -10...60, cvar: "vr_laserforward")
+                        placementSlider("Up", $laserUp, in: -15...15, cvar: "vr_laserup")
+                        placementSlider("Side", $laserSide, in: -15...15, cvar: "vr_laserside")
+                        placementSlider("Tilt°", $laserPitch, in: -10...10, cvar: "vr_laserpitch", fmt: "%.1f")
+                        placementSlider("Pan°", $laserYaw, in: -10...10, cvar: "vr_laseryaw", fmt: "%.1f")
+                        Button("Reset laser") {
+                            laserForward = 0; laserUp = 0; laserSide = 0
+                            laserPitch = 0; laserYaw = 0
+                            for c in ["vr_laserforward 0", "vr_laserup 0", "vr_laserside 0",
+                                      "vr_laserpitch 0", "vr_laseryaw 0"] {
+                                engine.send(c)
+                            }
+                        }
+                        .font(.caption)
+                    }
+                }
+                .padding(24)
+                .frame(width: 360)
+            }
+            .frame(maxHeight: 620)
+        }
+    }
+
+    /// One row of the weapon-placement panel: a labelled slider that pushes
+    /// its cvar to the engine on every change, so the gun moves live in the
+    /// headset. No console typing, no autocomplete needed.
+    private func placementSlider(_ label: String, _ value: Binding<Float>,
+                                 in range: ClosedRange<Double>, cvar: String,
+                                 fmt: String = "%.0f") -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 40, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Float($0)
+                       engine.send("\(cvar) \(Float($0))") }),
+                in: range)
+            Text(String(format: fmt, value.wrappedValue))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
         }
     }
 

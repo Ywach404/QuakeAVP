@@ -56,6 +56,10 @@ extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
+extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
+extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
+extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
+extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -66,6 +70,13 @@ static int qr_handweapon;
    view weapon animates a new fire frame and decayed on the sim clock. */
 static int qr_recoil_prevframe = -1;
 static float qr_recoil;
+
+/* Fire cadence for haptics: a monotonic counter bumped on each real shot,
+   detected as the current weapon's ammo dropping while the weapon is
+   unchanged. Lets the consumer kick on the refire rate, not on trigger spam. */
+static uint32_t qr_weapon_fire_seq;
+static int	qr_last_ammo = -1;	/* -1 = not yet known */
+static uint32_t	qr_last_weapon;
 
 /* Cap the hand weapon's longest model dimension, Quake units. View weapons
    run ~42 (shotgun) to ~95 (rocket launcher); at hand scale the long ones
@@ -3495,20 +3506,28 @@ line lands where the bullets do.
 static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
 			  const vec3_t angles)
 {
-	vec3_t	fwd, right, up, end, mid, look, perp;
+	vec3_t	fwd, right, up, end, look, perp;
 	vec3_t	a0, a1, b0, b1;
 	float	hw = 0.35f;	/* half width, Quake units */
 	int	k;
 
 	AngleVectors (angles, fwd, right, up);
 	VectorMA (start, 4096.f, fwd, end);
-	for (k = 0; k < 3; k++)
-		mid[k] = 0.5f * (start[k] + end[k]);
-	VectorSubtract (r_origin, mid, look);	/* face the eye */
+	/* Face the eye from the START, not the beam midpoint. The midpoint sits
+	   ~2000 units down the aim, so eye->midpoint is almost antiparallel to
+	   fwd and fwd x that collapses to zero -- the width axis then fell back to
+	   world-X and the beam showed edge-on at most view angles. From the start
+	   (right by the gun) the view direction is well clear of fwd. */
+	VectorSubtract (r_origin, start, look);
 	CrossProduct (fwd, look, perp);
 	if (VectorNormalize (perp) < 0.01f)
 	{
-		perp[0] = 1.f; perp[1] = 0.f; perp[2] = 0.f;
+		/* aiming straight at/away from the eye: any axis normal to fwd */
+		CrossProduct (fwd, up, perp);
+		if (VectorNormalize (perp) < 0.01f)
+		{
+			perp[0] = 1.f; perp[1] = 0.f; perp[2] = 0.f;
+		}
 	}
 	for (k = 0; k < 3; k++)
 	{
@@ -3697,10 +3716,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
 	static qmodel_t	*cachekey;
-	/* the ring locks in world space the instant it opens: you reach INTO a
-	   fixed ring, not one that chases your wrist. Cleared when it closes. */
-	static int	locked;
-	static vec3_t	lock_center;
 	/* full-menu gaze state, function scope so a close can reset it. The menu
 	   commits on RELEASE: you hold to open, look at a weapon, let go to pick. */
 	static int	menu_held = -1, menu_open_prev;
@@ -3710,7 +3725,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 
 	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
 	{
-		locked = 0;
 		menu_open_prev = 0;
 		menu_held = -1;
 		return;
@@ -3799,15 +3813,12 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		center[2] -= 2.f;
 	}
 
-	/* Freeze the ring at the pose it opened with. After this the wrist is
-	   free to move toward a slot without dragging the ring along; the
-	   consumer turns that wrist travel into the highlight. */
-	if (!locked)
-	{
-		VectorCopy (center, lock_center);
-		locked = 1;
-	}
-	VectorCopy (lock_center, center);
+	/* The ring FOLLOWS the player: center is rebuilt each frame from the
+	   current vieworg and the body-frame anchor WheelState froze at open
+	   (qr_wheel_anchor), so walking or falling off a cliff carries the ring
+	   with you instead of stranding it where you opened it. It still doesn't
+	   chase the live wrist -- the anchor is frozen consumer-side, and the
+	   highlight comes from how far the wrist has since travelled from it. */
 
 	step = 360.f / owned;
 
@@ -4026,9 +4037,9 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	{
 		if (qr_aim_active)
 		{
-			aliashdr_t *vh = (aliashdr_t *) Mod_Extradata (cl.viewent.model);
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
+			int	k;
 
 			/* Body frame (not the aim): the hand position in the world, the
 			   same eye + (wrist - head) reconstruction the wheel uses. */
@@ -4050,13 +4061,16 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			cl.viewent.angles[1] = cl.viewangles[1];
 			cl.viewent.angles[2] = cl.viewangles[2];
 
-			/* Overlay the gun ON the hand. View-weapon MDLs are authored
-			   offset from their origin (so they sit low-right of the screen
-			   when view-locked), so anchoring the origin at the hand floats
-			   the gun ahead of it. Put the model's own centre at the hand
-			   instead: origin = hand - R(angles) * centre, where the centre in
-			   model space is scale_origin + scale*127.5 and Quake maps model
-			   +X->forward, +Y->left, +Z->up. */
+			/* Grip the gun IN the hand. View-weapon MDLs are authored offset
+			   from their origin (so they sit low-right of the screen when
+			   view-locked), and they extend forward (+X) from a grip near the
+			   rear. Anchoring the origin at the hand floats the gun ahead of
+			   it; anchoring the bbox CENTRE straddles the hand. Anchor a GRIP
+			   point instead -- rear third along the barrel, laterally and
+			   vertically centred -- so the grip sits at the wrist and the
+			   barrel extends forward, held rather than hovering. Model bounds
+			   are in the same space as scale_origin + scale*byte; Quake maps
+			   model +X->forward, +Y->left, +Z->up. */
 			mx = cl.viewent.model->maxs[0] - cl.viewent.model->mins[0];
 			my = cl.viewent.model->maxs[1] - cl.viewent.model->mins[1];
 			mz = cl.viewent.model->maxs[2] - cl.viewent.model->mins[2];
@@ -4064,19 +4078,52 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
 			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
 
-			cx = vh->scale_origin[0] + vh->scale[0] * 127.5f;
-			cy = vh->scale_origin[1] + vh->scale[1] * 127.5f;
-			cz = vh->scale_origin[2] + vh->scale[2] * 127.5f;
-			AngleVectors (cl.viewent.angles, cf, cr, cu);
+			cx = cl.viewent.model->mins[0]
+			     + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
+			cy = 0.5f * (cl.viewent.model->mins[1] + cl.viewent.model->maxs[1]);
+			cz = 0.5f * (cl.viewent.model->mins[2] + cl.viewent.model->maxs[2]);
+			/* Place in the SHOT frame -- NOT AngleVectors(viewent.angles).
+			   QR_EntityMatrix draws the negated-pitch model so its barrel
+			   points where the shot goes, i.e. the model's drawn basis IS the
+			   shot frame; AngleVectors(viewent.angles) is pitch-inverted against
+			   it and only agrees at level aim, which is why the gun (and the
+			   laser welded to it below) drifted apart when pitched up or down. */
+			AngleVectors (cl.viewangles, cf, cr, cu);
 			/* The transform scales the whole model, offset included, so scale
-			   the centre offset by sf too or the shrunk gun drifts off hand. */
-			cl.viewent.origin[0] = handpos[0] - sf * (cf[0]*cx - cr[0]*cy + cu[0]*cz);
-			cl.viewent.origin[1] = handpos[1] - sf * (cf[1]*cx - cr[1]*cy + cu[1]*cz);
-			cl.viewent.origin[2] = handpos[2] - sf * (cf[2]*cx - cr[2]*cy + cu[2]*cz);
+			   the grip offset by sf too or the shrunk gun drifts off hand.
+			   Then the live nudge along the aim axes (vr_weapon{back,up,side}),
+			   Quake units: back toward the player, up raise, side to the right. */
+			for (k = 0; k < 3; k++)
+				cl.viewent.origin[k] = handpos[k]
+					- sf * (cf[k]*cx - cr[k]*cy + cu[k]*cz)
+					- vr_weaponback.value * cf[k]
+					+ vr_weaponup.value   * cu[k]
+					+ vr_weaponside.value * cr[k];
 
-			/* Aiming laser from the muzzle down the fired aim. */
+			/* Aiming laser, WELDED to the gun at the MUZZLE: it starts at the
+			   model's forward-face centre (maxs[0] along the barrel, laterally
+			   and vertically centred) carried through the gun's own drawn frame
+			   (cf/cr/cu, the shot frame), so with the sliders at zero the beam
+			   already emits from the barrel tip and rides it at every aim angle.
+			   The vr_laser{forward,up,side} offsets are then just fine-tune. */
 			if (vr_laser.value)
-				QR_EmitLaser (slot, handpos, cl.viewangles);
+			{
+				vec3_t	lstart, langles;
+				float	lx = cl.viewent.model->maxs[0];   /* muzzle, along barrel */
+
+				for (k = 0; k < 3; k++)
+					lstart[k] = cl.viewent.origin[k]
+						+ sf * (cf[k]*lx - cr[k]*cy + cu[k]*cz)
+						+ vr_laserforward.value * cf[k]
+						+ vr_laserup.value      * cu[k]
+						+ vr_laserside.value    * cr[k];
+				/* DIRECTION tilted off the shot so the beam lines up with the
+				   barrel (vr_laserpitch/yaw); the shot itself is unchanged. */
+				langles[0] = cl.viewangles[0] + vr_laserpitch.value;
+				langles[1] = cl.viewangles[1] + vr_laseryaw.value;
+				langles[2] = cl.viewangles[2];
+				QR_EmitLaser (slot, lstart, langles);
+			}
 
 			/* Visual recoil, purely cosmetic (the shot already left with
 			   cl.viewangles). The view weapon idles at frame 0 and steps
@@ -4094,7 +4141,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 
 				if (qr_recoil > 0.f)
 				{
-					AngleVectors (cl.viewent.angles, gf, gr, gu);
+					AngleVectors (cl.viewangles, gf, gr, gu);	/* shot frame = barrel */
 					VectorMA (cl.viewent.origin, -qr_recoil * 2.5f, gf,
 						  cl.viewent.origin);
 					cl.viewent.origin[2] += qr_recoil * 0.6f;
@@ -4164,6 +4211,9 @@ void QR_BeginFrame (void)
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
 	slot->frame.items = 0;
+	/* monotonic -- publish the live counter, never reset it to 0, or the
+	   consumer would read the wrap-back as a fresh shot */
+	slot->frame.weapon_fire_seq = qr_weapon_fire_seq;
 	slot->frame.wheel_frac = 0;
 	slot->frame.wheel_radius = 0;
 	slot->frame.wheel_count = 0;
@@ -4359,6 +4409,28 @@ void QR_RenderView (void)
 	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
 	slot->frame.active_weapon = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
 	slot->frame.items = cl.items;
+
+	/* A shot fired iff the held weapon's ammo dropped while the weapon stayed
+	   the same. A weapon switch also changes STAT_AMMO, so gate on the weapon
+	   being unchanged; and reset across a map load so the new map's ammo does
+	   not read as a shot. The axe spends no ammo, so axe swings do not kick --
+	   acceptable for now. */
+	{
+		static qmodel_t	*fire_worldkey;
+		int		ammo = cl.stats[STAT_AMMO];
+		uint32_t	wpn = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+
+		if (fire_worldkey != cl.worldmodel)
+		{
+			fire_worldkey = cl.worldmodel;
+			qr_last_ammo = -1;
+		}
+		if (qr_last_ammo >= 0 && wpn == qr_last_weapon && ammo < qr_last_ammo)
+			qr_weapon_fire_seq++;
+		qr_last_ammo = ammo;
+		qr_last_weapon = wpn;
+	}
+	slot->frame.weapon_fire_seq = qr_weapon_fire_seq;
 
 	/* room-scale head follow: what IN_AbsorbHeadOffset already walked the
 	   player after, and the lean allowance for the remainder */

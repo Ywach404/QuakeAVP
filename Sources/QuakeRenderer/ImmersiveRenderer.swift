@@ -209,12 +209,18 @@ final class ImmersiveRenderer {
         }
         let originFromDevice = recenterCorrection * rawOriginFromDevice
 
+        // Publish the eye position (corrected-tracking space, same frame as the
+        // debug hands / turn gauge) so on-hand HUD can billboard toward it.
+        let eyeCol = originFromDevice.columns.3
+        ViewerPose.shared.setEye(SIMD3(eyeCol.x, eyeCol.y, eyeCol.z))
+
         // Output channel: haptic pulses (damage rises) and the per-weapon
         // trigger feel follow the packet; the wheel learns what the player
         // owns from the same source of truth the ring is built from.
         if let packet {
             ControllerOutput.shared.frame(damageFlash: packet.damage_flash,
-                                          activeWeapon: packet.active_weapon)
+                                          activeWeapon: packet.active_weapon,
+                                          fireSeq: packet.weapon_fire_seq)
             WheelState.shared.frame(items: packet.items,
                                     worldScale: packet.world_scale)
         }
@@ -366,7 +372,9 @@ final class ImmersiveRenderer {
         // The virtual hand stands in while the world is solid and fades out
         // (1 - phase) as the melt reveals the real hand through passthrough.
         // Same corrected-tracking space and handViewproj as the debug bones.
-        let virtualHand: [Float] = VirtualHand.shared.snapshot()
+        // Suppressed while the green wireframe is up -- otherwise the solid
+        // skin/cuff hand draws over the wireframe (the stray skin/blue polys).
+        let virtualHand: [Float] = HandDebug.shared.enabled ? [] : VirtualHand.shared.snapshot()
         let handOpacity: Float = 1 - (packet?.phase ?? 0)
 
         if singlePassStereo, views.count == 2 {
