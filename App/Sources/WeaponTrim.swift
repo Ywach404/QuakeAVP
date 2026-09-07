@@ -19,12 +19,16 @@ final class WeaponTrim: @unchecked Sendable {
     /// IT_* bits in weapon order, matching WheelState and the engine ring:
     /// axe, shotgun, super shotgun, nailgun, super nailgun, GL, RL, lightning.
     private static let bits: [UInt32] = [4096, 1, 2, 4, 8, 16, 32, 64]
-    private static let defaultFront: Float = 1
-    private static let defaultRear: Float = 0.79
+    /// Order: axe, shotgun, super shotgun, nailgun, super nailgun, GL, RL,
+    /// lightning. The axe (melee) and lightning gun (hitscan beam) load no
+    /// round, so their model has no projectile to trim -- default them to 1
+    /// (untouched); the projectile weapons default to a rear shave.
+    private static let defaultFront = [Float](repeating: 1, count: 8)
+    private static let defaultRear:  [Float] = [1, 0.79, 0.79, 0.79, 0.79, 0.79, 0.79, 1]
 
     private let lock = NSLock()
-    private var front = [Float](repeating: defaultFront, count: 8)
-    private var rear  = [Float](repeating: defaultRear, count: 8)
+    private var front = defaultFront
+    private var rear  = defaultRear
     private var current = 1                 // held-weapon index (shotgun default)
     private var lastWeapon: UInt32 = 0
 
@@ -60,10 +64,14 @@ final class WeaponTrim: @unchecked Sendable {
         sendCommand?("vr_weaponclipback \(v)\n"); save()
     }
 
-    /// Reset only the held weapon to defaults.
+    /// Reset only the held weapon to its default.
     func resetCurrent() {
-        lock.lock(); front[current] = Self.defaultFront; rear[current] = Self.defaultRear; lock.unlock()
-        push(Self.defaultFront, Self.defaultRear); save()
+        lock.lock()
+        let i = current
+        let f = Self.defaultFront[i], r = Self.defaultRear[i]
+        front[i] = f; rear[i] = r
+        lock.unlock()
+        push(f, r); save()
     }
 
     private func push(_ f: Float, _ r: Float) {
