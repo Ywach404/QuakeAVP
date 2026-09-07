@@ -46,6 +46,7 @@ struct AliasUniforms {
     float4 clip;            // byte-space clip window for the hand weapon:
                             // x = front plane, y = rear plane, zw = collapse
                             // centre (y,z). x>=255 & y<0 disable each end.
+    float4 dbg;             // dbg.x > 0.5 => draw solid green (identify tint)
 };
 
 // Retract geometry the view models bake past EITHER end of the gun (a nail
@@ -63,6 +64,7 @@ struct AliasVaryings {
     float4 position [[position]];
     float2 st;
     float4 color;
+    float dbgHi [[flat]];   // > 0.5 => solid-green identify tint
 };
 
 // From MH (via upstream's GLSL vertex shader): reproduces the anorm_dots
@@ -98,6 +100,7 @@ vertex AliasVaryings alias_vertex(uint vid [[vertex_id]],
     out.position = uniforms.viewproj[amp] * world;
     out.st = texcoords[vid];
     out.color = float4(uniforms.light.rgb * mix(dot1, dot2, blend), uniforms.light.a);
+    out.dbgHi = uniforms.dbg.x;
     return out;
 }
 
@@ -106,6 +109,10 @@ fragment float4 alias_fragment(AliasVaryings in [[stage_in]],
                                texture2d<float> fullbright [[texture(1)]],
                                sampler skinSampler [[sampler(0)]])
 {
+    // Debug identify: paint the whole entity solid green, skin and all.
+    if (in.dbgHi > 0.5)
+        return qavp_out(float4(0.0, 1.0, 0.0, 1.0));
+
     float4 tex = skin.sample(skinSampler, in.st);
 
     // MF_HOLEY fence-style skins; opaque skins have a == 1 so the test is

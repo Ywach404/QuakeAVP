@@ -60,6 +60,7 @@ extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
+extern cvar_t vr_weapontint;					/* debug: green hand weapon */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -3121,7 +3122,11 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 	rec.clip[0] = 255.f;
 	rec.clip[1] = rec.clip[2] = rec.clip[3] = 0.f;
 	if (qr_handweapon)
+	{
 		QR_WeaponClip (paliashdr, rec.clip);
+		if (vr_weapontint.value)
+			rec.dbg[0] = 1.f;   /* debug: paint the hand weapon green */
+	}
 
 	entity = QR_AppendEntity (slot, &rec);
 
