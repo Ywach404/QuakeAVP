@@ -3827,8 +3827,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
 	/* A wide ring the wrist sits inside, Skyrim-VR style: it stands off the
 	   wrist far enough that moving the whole hand toward a weapon is the
-	   selection gesture, not a cramped finger flick. */
-	radius = 14.f * frac;
+	   selection gesture, not a cramped finger flick. Grow the radius with the
+	   owned count so 8 weapons don't overlap on a fixed ring (selection is
+	   angle-based, so a wider ring doesn't change how far the wrist travels). */
+	radius = (9.f + 2.1f * owned) * frac;
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
 	angles[0] = 0;
@@ -3969,6 +3971,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		uint32_t	before;
 		int		highlighted;
 		int		c;
+		vec3_t		slotpos;	/* the ring slot the model must sit ON */
 
 		if (!(cl.items & qr_wheel_bits[i]) || !models[i])
 			continue;
@@ -3982,13 +3985,13 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		{
 			/* vertical list, weapon order (super under base) */
 			float top = (owned - 1) * 0.5f * QR_MENU_SPACING;
-			VectorCopy (center, e.origin);
-			e.origin[2] += top - k * QR_MENU_SPACING;
+			VectorCopy (center, slotpos);
+			slotpos[2] += top - k * QR_MENU_SPACING;
 		}
 		else
 		{
-			VectorMA (center, radius * cosf (theta), rightv, e.origin);
-			e.origin[2] += radius * sinf (theta);
+			VectorMA (center, radius * cosf (theta), rightv, slotpos);
+			slotpos[2] += radius * sinf (theta);
 		}
 		e.angles[0] = 0;
 		e.angles[1] = spin + k * 45.f;
@@ -3997,6 +4000,25 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		e.skinnum = 0;
 		e.scale = (unsigned char)(highlighted ? 8 : 5);	/* /16; smaller to fit the tight ring */
 		e.lerpflags = LERP_RESETANIM | LERP_RESETMOVE;
+
+		/* Sit the model's VISUAL CENTRE on the slot, not its origin. The view
+		   models' origin is at a rear grip with the body offset forward, so
+		   placing e.origin on the slot floated the model off its labelled
+		   position. Subtract the rotated frame-0 bbox centre (same fix as the
+		   hand weapon) so each model is centred on its spoke and label. */
+		{
+			aliashdr_t	*mh = (aliashdr_t *) Mod_Extradata (e.model);
+			float		sfc = ENTSCALE_DECODE (e.scale);
+			vec3_t		mc, ef, er, eu;
+			int		a;
+
+			for (a = 0; a < 3; a++)
+				mc[a] = 0.5f * (mh->frames[0].bboxmin.v[a] + mh->frames[0].bboxmax.v[a])
+					* mh->scale[a] + mh->scale_origin[a];
+			AngleVectors (e.angles, ef, er, eu);
+			for (a = 0; a < 3; a++)
+				e.origin[a] = slotpos[a] - sfc * (ef[a]*mc[0] - er[a]*mc[1] + eu[a]*mc[2]);
+		}
 
 		before = slot->frame.num_entities;
 		QR_EmitAliasModel (slot, &e);
@@ -4022,7 +4044,8 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			vec3_t	labelorg, worldup = {0.f, 0.f, 1.f};
 			float	lcol[4];
 
-			VectorCopy (e.origin, labelorg);
+			/* under the slot (the model's visual centre), not e.origin */
+			VectorCopy (slotpos, labelorg);
 			labelorg[2] -= 4.5f;
 			lcol[0] = lcol[1] = lcol[2] = highlighted ? 1.f : 0.7f;
 			lcol[3] = 1.f;
