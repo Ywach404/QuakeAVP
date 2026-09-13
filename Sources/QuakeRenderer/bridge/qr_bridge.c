@@ -61,6 +61,7 @@ extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nud
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 extern cvar_t vr_weapontint;					/* debug: green hand weapon */
+extern cvar_t vr_pathdebug;					/* debug: enemy AI trails */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -3601,6 +3602,204 @@ static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
 	QR_ParticleVert (slot, b0, 1.f, 0.15f, 0.12f);
 }
 
+/*
+================
+QR_EmitDebugLine -- a coloured world-space line between two points, as a thin
+view-facing quad in the particle channel (foveation forbids GL_LINES on
+device). Depth-tested against the world, so a segment behind a wall is hidden.
+================
+*/
+static void QR_EmitDebugLine (qr_frame_slot_t *slot, const vec3_t a, const vec3_t b,
+			      float r, float g, float bl, float hw)
+{
+	vec3_t	dir, mid, look, perp, a0, a1, b0, b1;
+	int	k;
+
+	VectorSubtract (b, a, dir);
+	if (VectorNormalize (dir) < 0.01f)
+		return;
+	for (k = 0; k < 3; k++)
+		mid[k] = 0.5f * (a[k] + b[k]);
+	VectorSubtract (r_origin, mid, look);
+	CrossProduct (dir, look, perp);
+	if (VectorNormalize (perp) < 0.01f)
+	{
+		perp[0] = 0.f; perp[1] = 0.f; perp[2] = 1.f;
+	}
+	for (k = 0; k < 3; k++)
+	{
+		a0[k] = a[k] - perp[k] * hw;
+		a1[k] = a[k] + perp[k] * hw;
+		b0[k] = b[k] - perp[k] * hw;
+		b1[k] = b[k] + perp[k] * hw;
+	}
+	QR_ParticleVert (slot, a0, r, g, bl);
+	QR_ParticleVert (slot, a1, r, g, bl);
+	QR_ParticleVert (slot, b1, r, g, bl);
+	QR_ParticleVert (slot, a0, r, g, bl);
+	QR_ParticleVert (slot, b1, r, g, bl);
+	QR_ParticleVert (slot, b0, r, g, bl);
+}
+
+/*
+================
+QR_EmitPathDebug -- the enemy AI overlay (vr_pathdebug). Quake AI is greedy
+(SV_MoveToGoal steps toward the goal each think, no planned path), so there is
+no route to draw. Instead, per live monster: a BREADCRUMB trail of where it has
+actually walked (recorded when it travels past QR_PATH_MINDIST), plus an INTENT
+line to its current target (enemy, else goalentity). Coloured per monster by
+edict number. Server-side data, single-player only.
+================
+*/
+#define QR_PATH_SLOTS	64
+#define QR_PATH_CRUMBS	16
+#define QR_PATH_MINDIST	24.f
+
+typedef struct {
+	int	ednum;			/* 0 = free slot */
+	int	count;
+	int	head;			/* next write into the ring */
+	vec3_t	pts[QR_PATH_CRUMBS];
+} qr_path_t;
+
+static qr_path_t	qr_paths[QR_PATH_SLOTS];
+static qmodel_t		*qr_path_worldkey;
+
+static void QR_PathColor (int ednum, float *r, float *g, float *b)
+{
+	/* spread hues around the wheel by edict number (HSV, s=v=1) */
+	float	h = (float)((ednum * 47) % 360);
+	float	c = 1.f, x = c * (1.f - fabsf (fmodf (h / 60.f, 2.f) - 1.f));
+
+	if (h < 60)	{ *r = c; *g = x; *b = 0; }
+	else if (h < 120) { *r = x; *g = c; *b = 0; }
+	else if (h < 180) { *r = 0; *g = c; *b = x; }
+	else if (h < 240) { *r = 0; *g = x; *b = c; }
+	else if (h < 300) { *r = x; *g = 0; *b = c; }
+	else		{ *r = c; *g = 0; *b = x; }
+}
+
+static qr_path_t *QR_PathSlot (int ednum)
+{
+	int	i, free = -1;
+
+	for (i = 0; i < QR_PATH_SLOTS; i++)
+	{
+		if (qr_paths[i].ednum == ednum)
+			return &qr_paths[i];
+		if (free < 0 && qr_paths[i].ednum == 0)
+			free = i;
+	}
+	if (free < 0)
+		return NULL;		/* pool full: skip the trail (intent still drawn) */
+	qr_paths[free].ednum = ednum;
+	qr_paths[free].count = 0;
+	qr_paths[free].head = 0;
+	return &qr_paths[free];
+}
+
+static void QR_EmitPathDebug (qr_frame_slot_t *slot)
+{
+	int	e, i;
+
+	if (!vr_pathdebug.value || !sv.active)
+		return;
+
+	/* clear the pool across map loads (edict numbers are reused) */
+	if (qr_path_worldkey != cl.worldmodel)
+	{
+		qr_path_worldkey = cl.worldmodel;
+		memset (qr_paths, 0, sizeof qr_paths);
+	}
+
+	/* release slots whose monster died or freed */
+	for (i = 0; i < QR_PATH_SLOTS; i++)
+	{
+		edict_t *m;
+		if (!qr_paths[i].ednum)
+			continue;
+		m = EDICT_NUM (qr_paths[i].ednum);
+		if (m->free || !((int)m->v.flags & FL_MONSTER) || m->v.health <= 0)
+			qr_paths[i].ednum = 0;
+	}
+
+	for (e = 1; e < sv.num_edicts; e++)
+	{
+		edict_t		*ent = EDICT_NUM (e);
+		edict_t		*goal;
+		qr_path_t	*p;
+		vec3_t		org, tgt;
+		float		cr, cg, cb;
+
+		if (ent->free || !((int)ent->v.flags & FL_MONSTER) || ent->v.health <= 0)
+			continue;
+
+		org[0] = ent->v.origin[0];
+		org[1] = ent->v.origin[1];
+		org[2] = ent->v.origin[2] + 8.f;	/* lift off the floor a touch */
+		QR_PathColor (e, &cr, &cg, &cb);
+
+		/* breadcrumb trail */
+		p = QR_PathSlot (e);
+		if (p)
+		{
+			int	last = (p->head - 1 + QR_PATH_CRUMBS) % QR_PATH_CRUMBS;
+			int	moved = 1, n, j, first, have = 0;
+			vec3_t	prev;
+
+			if (p->count > 0)
+			{
+				vec3_t d;
+				VectorSubtract (org, p->pts[last], d);
+				moved = (VectorLength (d) > QR_PATH_MINDIST);
+			}
+			if (moved)
+			{
+				VectorCopy (org, p->pts[p->head]);
+				p->head = (p->head + 1) % QR_PATH_CRUMBS;
+				if (p->count < QR_PATH_CRUMBS)
+					p->count++;
+			}
+			n = p->count;
+			first = (p->head - n + QR_PATH_CRUMBS) % QR_PATH_CRUMBS;
+			for (j = 0; j < n; j++)
+			{
+				int idx = (first + j) % QR_PATH_CRUMBS;
+				if (have)
+					QR_EmitDebugLine (slot, prev, p->pts[idx],
+							  cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f);
+				VectorCopy (p->pts[idx], prev);
+				have = 1;
+			}
+			if (have)
+				QR_EmitDebugLine (slot, prev, org,
+						  cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f);
+		}
+
+		/* intent line: what it is chasing, brighter and thicker */
+		goal = NULL;
+		if (ent->v.enemy)
+		{
+			edict_t *en = PROG_TO_EDICT (ent->v.enemy);
+			if (!en->free)
+				goal = en;
+		}
+		if (!goal && ent->v.goalentity)
+		{
+			edict_t *g = PROG_TO_EDICT (ent->v.goalentity);
+			if (!g->free)
+				goal = g;
+		}
+		if (goal)
+		{
+			tgt[0] = goal->v.origin[0];
+			tgt[1] = goal->v.origin[1];
+			tgt[2] = goal->v.origin[2] + 8.f;
+			QR_EmitDebugLine (slot, org, tgt, cr, cg, cb, 1.2f);
+		}
+	}
+}
+
 static void QR_EmitParticles (qr_frame_slot_t *slot)
 {
 	particle_t	*p;
@@ -4283,6 +4482,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	}
 
 	QR_EmitParticles (slot);
+	QR_EmitPathDebug (slot);
 	QR_EmitWheel (slot);
 }
 
