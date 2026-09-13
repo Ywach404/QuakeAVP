@@ -28,6 +28,7 @@ struct ContentView: View {
     @State private var laser = false
     @State private var turnFlick: Float = 0.85
     @State private var showLimbs = true
+    @State private var pathDebug = false
     @State private var showWeapon = false
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
@@ -242,6 +243,9 @@ struct ContentView: View {
                 Toggle("Show real hands / controllers", isOn: Binding(
                     get: { showLimbs },
                     set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
+                Toggle("Enemy AI debug (trails + targets)", isOn: Binding(
+                    get: { pathDebug },
+                    set: { pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
             }
             .padding(24)
             .frame(width: 360)
