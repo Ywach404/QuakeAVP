@@ -199,6 +199,22 @@ cvar_t		vr_weapongrip = {"vr_weapongrip", "0.15", CVAR_ARCHIVE};
 cvar_t		vr_weaponback = {"vr_weaponback", "0", CVAR_ARCHIVE};
 cvar_t		vr_weaponup   = {"vr_weaponup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_ARCHIVE};
+/* M6: how much of the hand weapon to KEEP, from each end (1 = whole model,
+   lower retracts baked-in geometry -- a nail out the barrel, or a round behind
+   the receiver). vr_weaponclip trims the BARREL end, vr_weaponclipback the
+   ARM end. Manual, because projectile-vs-gun can't be told from geometry. */
+cvar_t		vr_weaponclip     = {"vr_weaponclip",     "1", CVAR_ARCHIVE};
+/* 0.79 default: the view models bake a round/nail into the rear ~21% of the
+   model (near the hand); clipping it there clears it on every weapon (found
+   on device). Barrel end is left whole. */
+cvar_t		vr_weaponclipback = {"vr_weaponclipback", "0.79", CVAR_ARCHIVE};
+/* Debug: 1 draws the hand weapon SOLID GREEN, to identify it on screen. */
+cvar_t		vr_weapontint = {"vr_weapontint", "0", 0};
+/* Debug: 1 draws enemy AI overlay -- each live monster's traveled trail
+   (breadcrumbs) and its intent line to its target. Quake AI is greedy (no
+   planned path), so this shows where each monster HAS walked and what it is
+   chasing, coloured per monster. */
+cvar_t		vr_pathdebug = {"vr_pathdebug", "0", 0};
 /* M6: where the aiming laser STARTS, Quake units along the aim axes from the
    wrist -- forward reaches the muzzle so the beam emits from the barrel tip
    instead of behind the gun, up/side fine-tune to the barrel line. */
@@ -704,6 +720,10 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_weaponback);
 	Cvar_RegisterVariable (&vr_weaponup);
 	Cvar_RegisterVariable (&vr_weaponside);
+	Cvar_RegisterVariable (&vr_weaponclip);
+	Cvar_RegisterVariable (&vr_weaponclipback);
+	Cvar_RegisterVariable (&vr_weapontint);
+	Cvar_RegisterVariable (&vr_pathdebug);
 	Cvar_RegisterVariable (&vr_laserforward);
 	Cvar_RegisterVariable (&vr_laserup);
 	Cvar_RegisterVariable (&vr_laserside);

@@ -60,6 +60,8 @@ extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
+extern cvar_t vr_weapontint;					/* debug: green hand weapon */
+extern cvar_t vr_pathdebug;					/* debug: enemy AI trails */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -2995,6 +2997,51 @@ static void QR_SetupAliasLighting (entity_t *e, vec3_t shadevector_out)
 
 /*
 =================
+QR_WeaponClip -- the byte-x plane forward of which the view weapon's geometry
+is retracted to the muzzle, to hide the loaded round / nail the models bake
+past the barrel. Auto-detecting a projectile from a thin barrel proved
+unreliable (a launcher's barrel looks the same as a nail in the vertex data),
+so it's a manual knob: vr_weaponclip is the fraction of the model's forward
+span to KEEP (1 = keep all / off, lower = cut more off the front). Tune it live
+per weapon in the Weapon menu -- you can see the model, the math can't.
+=================
+*/
+extern cvar_t vr_weaponclip, vr_weaponclipback;
+
+static void QR_WeaponClip (aliashdr_t *h, float out[4])
+{
+	int		i, nv, minb = 255, maxb = 0, front, rear, nb = 0;
+	trivertx_t	*v;
+	double		sy = 0, sz = 0;
+	float		ff = CLAMP (0.3f, vr_weaponclip.value, 1.f);       /* keep from rear */
+	float		fb = CLAMP (0.3f, vr_weaponclipback.value, 1.f);   /* keep from front */
+
+	/* disabled: front plane above every byte, rear plane below every byte */
+	out[0] = 255.f; out[1] = -1.f; out[2] = out[3] = 128.f;
+	if (ff >= 0.999f && fb >= 0.999f) return;
+
+	nv = h->numverts_vbo;
+	v = (trivertx_t *)((byte *)h + h->vertexes) + h->frames[0].firstpose * nv;
+	for (i = 0; i < nv; i++)
+	{
+		int x = v[i].v[0];
+		if (x < minb) minb = x;
+		if (x > maxb) maxb = x;
+	}
+	front = minb + (int)((maxb - minb) * ff);          /* clip verts above this */
+	rear  = minb + (int)((maxb - minb) * (1.f - fb));  /* clip verts below this */
+
+	/* collapse centre = mean y,z of the body that survives both planes */
+	for (i = 0; i < nv; i++)
+		if (v[i].v[0] <= front && v[i].v[0] >= rear) { sy += v[i].v[1]; sz += v[i].v[2]; nb++; }
+	out[0] = (ff  >= 0.999f) ? 255.f : (float) front;
+	out[1] = (fb  >= 0.999f) ? -1.f  : (float) rear;
+	out[2] = nb ? (float)(sy / nb) : 128.f;
+	out[3] = nb ? (float)(sz / nb) : 128.f;
+}
+
+/*
+=================
 QR_EmitAliasModel -- port of R_DrawAliasModel, emitting an entity record
 and one QC_BATCH_ALIAS batch instead of GL state and a draw.
 =================
@@ -3070,6 +3117,17 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 	rec.pose2 = lerpdata.pose2;
 	if (e == &cl.viewent && !qr_handweapon)
 		rec.flags |= QC_ENTFLAG_VIEWMODEL;
+
+	/* Clip disabled by default (255 = no byte-x exceeds it). Only the
+	   hand-held weapon retracts its baked-in projectile spike. */
+	rec.clip[0] = 255.f;
+	rec.clip[1] = rec.clip[2] = rec.clip[3] = 0.f;
+	if (qr_handweapon)
+	{
+		QR_WeaponClip (paliashdr, rec.clip);
+		if (vr_weapontint.value)
+			rec.dbg[0] = 1.f;   /* debug: paint the hand weapon green */
+	}
 
 	entity = QR_AppendEntity (slot, &rec);
 
@@ -3544,6 +3602,269 @@ static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
 	QR_ParticleVert (slot, b0, 1.f, 0.15f, 0.12f);
 }
 
+/*
+================
+QR_EmitDebugLine -- a coloured world-space line between two points, as a thin
+view-facing quad in the particle channel (foveation forbids GL_LINES on
+device). Depth-tested against the world, so a segment behind a wall is hidden.
+================
+*/
+static void QR_EmitDebugLine (qr_frame_slot_t *slot, const vec3_t a, const vec3_t b,
+			      float r, float g, float bl, float hw)
+{
+	vec3_t	dir, mid, look, perp, a0, a1, b0, b1;
+	int	k;
+
+	VectorSubtract (b, a, dir);
+	if (VectorNormalize (dir) < 0.01f)
+		return;
+	for (k = 0; k < 3; k++)
+		mid[k] = 0.5f * (a[k] + b[k]);
+	VectorSubtract (r_origin, mid, look);
+	CrossProduct (dir, look, perp);
+	if (VectorNormalize (perp) < 0.01f)
+	{
+		perp[0] = 0.f; perp[1] = 0.f; perp[2] = 1.f;
+	}
+	for (k = 0; k < 3; k++)
+	{
+		a0[k] = a[k] - perp[k] * hw;
+		a1[k] = a[k] + perp[k] * hw;
+		b0[k] = b[k] - perp[k] * hw;
+		b1[k] = b[k] + perp[k] * hw;
+	}
+	QR_ParticleVert (slot, a0, r, g, bl);
+	QR_ParticleVert (slot, a1, r, g, bl);
+	QR_ParticleVert (slot, b1, r, g, bl);
+	QR_ParticleVert (slot, a0, r, g, bl);
+	QR_ParticleVert (slot, b1, r, g, bl);
+	QR_ParticleVert (slot, b0, r, g, bl);
+}
+
+/*
+================
+QR_EmitDebugDashes -- QR_EmitDebugLine broken into a marching-ants dashed line.
+`runlen` accumulates arc length across the whole polyline so dashes stay
+continuous over breadcrumb joints; `phase` (advanced from cl.time by the caller)
+crawls the ants along the trail. Quake units.
+================
+*/
+#define QR_DASH_ON	7.f		/* dash length */
+#define QR_DASH_OFF	7.f		/* gap length */
+#define QR_DASH_SPEED	28.f		/* units/sec the ants march */
+
+static void QR_EmitDebugDashes (qr_frame_slot_t *slot, const vec3_t a, const vec3_t b,
+				float r, float g, float bl, float hw,
+				float *runlen, float phase)
+{
+	vec3_t	dir, pa, pb;
+	float	seglen, period, g0, g1, ds, de, cs, ce;
+	int	k;
+
+	VectorSubtract (b, a, dir);
+	seglen = VectorNormalize (dir);
+	if (seglen < 0.01f)
+		return;
+
+	period = QR_DASH_ON + QR_DASH_OFF;
+	g0 = *runlen;
+	g1 = *runlen + seglen;
+	/* first dash whose start is at or before g0, in global arc coords */
+	ds = floorf ((g0 + phase) / period) * period - phase;
+	for (; ds < g1; ds += period)
+	{
+		de = ds + QR_DASH_ON;
+		cs = ds > g0 ? ds : g0;			/* clip the dash to this segment */
+		ce = de < g1 ? de : g1;
+		if (ce <= cs)
+			continue;
+		for (k = 0; k < 3; k++)
+		{
+			pa[k] = a[k] + dir[k] * (cs - g0);
+			pb[k] = a[k] + dir[k] * (ce - g0);
+		}
+		QR_EmitDebugLine (slot, pa, pb, r, g, bl, hw);
+	}
+	*runlen = g1;
+}
+
+/*
+================
+QR_EmitPathDebug -- the enemy AI overlay (vr_pathdebug). Quake AI is greedy
+(SV_MoveToGoal steps toward the goal each think, no planned path), so there is
+no route to draw. Instead, per live monster: a BREADCRUMB trail of where it has
+actually walked (recorded when it travels past QR_PATH_MINDIST), plus an INTENT
+line to its current target (enemy, else goalentity). Coloured per monster by
+edict number. Server-side data, single-player only.
+================
+*/
+#define QR_PATH_SLOTS	64
+#define QR_PATH_CRUMBS	16
+#define QR_PATH_MINDIST	24.f
+
+typedef struct {
+	int	ednum;			/* 0 = free slot */
+	int	count;
+	int	head;			/* next write into the ring */
+	vec3_t	pts[QR_PATH_CRUMBS];
+} qr_path_t;
+
+static qr_path_t	qr_paths[QR_PATH_SLOTS];
+static qmodel_t		*qr_path_worldkey;
+
+static void QR_PathColor (int ednum, float *r, float *g, float *b)
+{
+	/* spread hues around the wheel by edict number (HSV, s=v=1) */
+	float	h = (float)((ednum * 47) % 360);
+	float	c = 1.f, x = c * (1.f - fabsf (fmodf (h / 60.f, 2.f) - 1.f));
+
+	if (h < 60)	{ *r = c; *g = x; *b = 0; }
+	else if (h < 120) { *r = x; *g = c; *b = 0; }
+	else if (h < 180) { *r = 0; *g = c; *b = x; }
+	else if (h < 240) { *r = 0; *g = x; *b = c; }
+	else if (h < 300) { *r = x; *g = 0; *b = c; }
+	else		{ *r = c; *g = 0; *b = x; }
+}
+
+static qr_path_t *QR_PathSlot (int ednum)
+{
+	int	i, free = -1;
+
+	for (i = 0; i < QR_PATH_SLOTS; i++)
+	{
+		if (qr_paths[i].ednum == ednum)
+			return &qr_paths[i];
+		if (free < 0 && qr_paths[i].ednum == 0)
+			free = i;
+	}
+	if (free < 0)
+		return NULL;		/* pool full: skip the trail (intent still drawn) */
+	qr_paths[free].ednum = ednum;
+	qr_paths[free].count = 0;
+	qr_paths[free].head = 0;
+	return &qr_paths[free];
+}
+
+static void QR_EmitPathDebug (qr_frame_slot_t *slot)
+{
+	int	e, i;
+
+	if (!vr_pathdebug.value || !sv.active)
+		return;
+
+	/* clear the pool across map loads (edict numbers are reused) */
+	if (qr_path_worldkey != cl.worldmodel)
+	{
+		qr_path_worldkey = cl.worldmodel;
+		memset (qr_paths, 0, sizeof qr_paths);
+	}
+
+	/* release slots whose monster died or freed */
+	for (i = 0; i < QR_PATH_SLOTS; i++)
+	{
+		edict_t *m;
+		if (!qr_paths[i].ednum)
+			continue;
+		m = EDICT_NUM (qr_paths[i].ednum);
+		if (m->free || !((int)m->v.flags & FL_MONSTER) || m->v.health <= 0)
+			qr_paths[i].ednum = 0;
+	}
+
+	for (e = 1; e < sv.num_edicts; e++)
+	{
+		edict_t		*ent = EDICT_NUM (e);
+		edict_t		*goal;
+		qr_path_t	*p;
+		vec3_t		org, tgt;
+		float		cr, cg, cb;
+
+		if (ent->free || !((int)ent->v.flags & FL_MONSTER) || ent->v.health <= 0)
+			continue;
+
+		org[0] = ent->v.origin[0];
+		org[1] = ent->v.origin[1];
+		org[2] = ent->v.origin[2] + ent->v.mins[2] + 2.f;	/* on the floor */
+		/* colour by monster TYPE (shared model), not per edict, so every
+		   grunt reads the same hue as every other grunt */
+		QR_PathColor ((int)ent->v.modelindex, &cr, &cg, &cb);
+
+		/* breadcrumb trail */
+		p = QR_PathSlot (e);
+		if (p)
+		{
+			int	last = (p->head - 1 + QR_PATH_CRUMBS) % QR_PATH_CRUMBS;
+			int	moved = 1, n, j, first, have = 0;
+			vec3_t	prev;
+
+			if (p->count > 0)
+			{
+				vec3_t d;
+				VectorSubtract (org, p->pts[last], d);
+				moved = (VectorLength (d) > QR_PATH_MINDIST);
+			}
+			if (moved)
+			{
+				VectorCopy (org, p->pts[p->head]);
+				p->head = (p->head + 1) % QR_PATH_CRUMBS;
+				if (p->count < QR_PATH_CRUMBS)
+					p->count++;
+			}
+			n = p->count;
+			first = (p->head - n + QR_PATH_CRUMBS) % QR_PATH_CRUMBS;
+			{
+				/* marching ants: dashes crawl toward the monster's
+				   current position, continuous across crumb joints */
+				float	period = QR_DASH_ON + QR_DASH_OFF;
+				float	phase = fmodf ((float)cl.time * QR_DASH_SPEED, period);
+				float	runlen = 0.f;
+
+				for (j = 0; j < n; j++)
+				{
+					int idx = (first + j) % QR_PATH_CRUMBS;
+					if (have)
+						QR_EmitDebugDashes (slot, prev, p->pts[idx],
+								    cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f,
+								    &runlen, phase);
+					VectorCopy (p->pts[idx], prev);
+					have = 1;
+				}
+				if (have)
+					QR_EmitDebugDashes (slot, prev, org,
+							    cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f,
+							    &runlen, phase);
+			}
+		}
+
+		/* intent line: what it is chasing, brighter and thicker */
+		goal = NULL;
+		if (ent->v.enemy)
+		{
+			edict_t *en = PROG_TO_EDICT (ent->v.enemy);
+			if (!en->free)
+				goal = en;
+		}
+		if (!goal && ent->v.goalentity)
+		{
+			edict_t *g = PROG_TO_EDICT (ent->v.goalentity);
+			if (!g->free)
+				goal = g;
+		}
+		if (goal)
+		{
+			/* the "path to me": a marching-ants trail along the FLOOR to the
+			   target, not a solid bar at chest height */
+			float	period = QR_DASH_ON + QR_DASH_OFF;
+			float	phase = fmodf ((float)cl.time * QR_DASH_SPEED, period);
+			float	runlen = 0.f;
+
+			tgt[0] = goal->v.origin[0];
+			tgt[1] = goal->v.origin[1];
+			tgt[2] = goal->v.origin[2] + goal->v.mins[2] + 2.f;
+			QR_EmitDebugDashes (slot, org, tgt, cr, cg, cb, 1.2f, &runlen, phase);
+		}
+	}
+}
+
 static void QR_EmitParticles (qr_frame_slot_t *slot)
 {
 	particle_t	*p;
@@ -3770,8 +4091,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	frac = qr_wheel_frac * qr_wheel_frac * (3.f - 2.f * qr_wheel_frac);
 	/* A wide ring the wrist sits inside, Skyrim-VR style: it stands off the
 	   wrist far enough that moving the whole hand toward a weapon is the
-	   selection gesture, not a cramped finger flick. */
-	radius = 14.f * frac;
+	   selection gesture, not a cramped finger flick. Grow the radius with the
+	   owned count so 8 weapons don't overlap on a fixed ring (selection is
+	   angle-based, so a wider ring doesn't change how far the wrist travels). */
+	radius = (9.f + 2.1f * owned) * frac;
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
 	angles[0] = 0;
@@ -3912,6 +4235,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		uint32_t	before;
 		int		highlighted;
 		int		c;
+		vec3_t		slotpos;	/* the ring slot the model must sit ON */
 
 		if (!(cl.items & qr_wheel_bits[i]) || !models[i])
 			continue;
@@ -3925,13 +4249,13 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		{
 			/* vertical list, weapon order (super under base) */
 			float top = (owned - 1) * 0.5f * QR_MENU_SPACING;
-			VectorCopy (center, e.origin);
-			e.origin[2] += top - k * QR_MENU_SPACING;
+			VectorCopy (center, slotpos);
+			slotpos[2] += top - k * QR_MENU_SPACING;
 		}
 		else
 		{
-			VectorMA (center, radius * cosf (theta), rightv, e.origin);
-			e.origin[2] += radius * sinf (theta);
+			VectorMA (center, radius * cosf (theta), rightv, slotpos);
+			slotpos[2] += radius * sinf (theta);
 		}
 		e.angles[0] = 0;
 		e.angles[1] = spin + k * 45.f;
@@ -3940,6 +4264,25 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		e.skinnum = 0;
 		e.scale = (unsigned char)(highlighted ? 8 : 5);	/* /16; smaller to fit the tight ring */
 		e.lerpflags = LERP_RESETANIM | LERP_RESETMOVE;
+
+		/* Sit the model's VISUAL CENTRE on the slot, not its origin. The view
+		   models' origin is at a rear grip with the body offset forward, so
+		   placing e.origin on the slot floated the model off its labelled
+		   position. Subtract the rotated frame-0 bbox centre (same fix as the
+		   hand weapon) so each model is centred on its spoke and label. */
+		{
+			aliashdr_t	*mh = (aliashdr_t *) Mod_Extradata (e.model);
+			float		sfc = ENTSCALE_DECODE (e.scale);
+			vec3_t		mc, ef, er, eu;
+			int		a;
+
+			for (a = 0; a < 3; a++)
+				mc[a] = 0.5f * (mh->frames[0].bboxmin.v[a] + mh->frames[0].bboxmax.v[a])
+					* mh->scale[a] + mh->scale_origin[a];
+			AngleVectors (e.angles, ef, er, eu);
+			for (a = 0; a < 3; a++)
+				e.origin[a] = slotpos[a] - sfc * (ef[a]*mc[0] - er[a]*mc[1] + eu[a]*mc[2]);
+		}
 
 		before = slot->frame.num_entities;
 		QR_EmitAliasModel (slot, &e);
@@ -3965,7 +4308,8 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			vec3_t	labelorg, worldup = {0.f, 0.f, 1.f};
 			float	lcol[4];
 
-			VectorCopy (e.origin, labelorg);
+			/* under the slot (the model's visual centre), not e.origin */
+			VectorCopy (slotpos, labelorg);
 			labelorg[2] -= 4.5f;
 			lcol[0] = lcol[1] = lcol[2] = highlighted ? 1.f : 0.7f;
 			lcol[3] = 1.f;
@@ -4039,6 +4383,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		{
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
+			float	bmin[3], bmax[3];
+			aliashdr_t *ah;
 			int	k;
 
 			/* Body frame (not the aim): the hand position in the world, the
@@ -4068,20 +4414,49 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			   it; anchoring the bbox CENTRE straddles the hand. Anchor a GRIP
 			   point instead -- rear third along the barrel, laterally and
 			   vertically centred -- so the grip sits at the wrist and the
-			   barrel extends forward, held rather than hovering. Model bounds
-			   are in the same space as scale_origin + scale*byte; Quake maps
-			   model +X->forward, +Y->left, +Z->up. */
-			mx = cl.viewent.model->maxs[0] - cl.viewent.model->mins[0];
-			my = cl.viewent.model->maxs[1] - cl.viewent.model->mins[1];
-			mz = cl.viewent.model->maxs[2] - cl.viewent.model->mins[2];
+			   barrel extends forward, held rather than hovering. Model maps
+			   +X->forward, +Y->left, +Z->up.
+
+			   Bounds from the IDLE frame (frame 0), NOT model->mins/maxs: the
+			   latter is the union over ALL frames, and the FIRE frames model
+			   the loaded round / muzzle flash sticking out past the barrel
+			   (grenade +12, super-nail +15, ... verified). Sizing and the muzzle
+			   off that union shrank the gun and threw the laser start out past
+			   the real barrel. Frame 0 is the clean held gun. */
+			ah = (aliashdr_t *) Mod_Extradata (cl.viewent.model);
+			for (k = 0; k < 3; k++)
+			{
+				bmin[k] = ah->frames[0].bboxmin.v[k] * ah->scale[k] + ah->scale_origin[k];
+				bmax[k] = ah->frames[0].bboxmax.v[k] * ah->scale[k] + ah->scale_origin[k];
+			}
+			/* RE-SEAT: the trim planes that hide the baked round also drive the
+			   grip bounds, so trimming the rear pulls the gun back onto the hand
+			   instead of the round's tail shoving the whole model forward. The
+			   grip and size below use the TRIMMED body, not the full bbox. */
+			{
+				float wc[4];
+				QR_WeaponClip (ah, wc);
+				if (wc[1] >= 0.f)
+				{
+					float rx = wc[1] * ah->scale[0] + ah->scale_origin[0];
+					if (rx > bmin[0]) bmin[0] = rx;
+				}
+				if (wc[0] < 255.f)
+				{
+					float fx = wc[0] * ah->scale[0] + ah->scale_origin[0];
+					if (fx < bmax[0]) bmax[0] = fx;
+				}
+			}
+			mx = bmax[0] - bmin[0];
+			my = bmax[1] - bmin[1];
+			mz = bmax[2] - bmin[2];
 			maxdim = q_max (mx, q_max (my, mz));
 			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
 			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
 
-			cx = cl.viewent.model->mins[0]
-			     + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
-			cy = 0.5f * (cl.viewent.model->mins[1] + cl.viewent.model->maxs[1]);
-			cz = 0.5f * (cl.viewent.model->mins[2] + cl.viewent.model->maxs[2]);
+			cx = bmin[0] + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
+			cy = 0.5f * (bmin[1] + bmax[1]);
+			cz = 0.5f * (bmin[2] + bmax[2]);
 			/* Place in the SHOT frame -- NOT AngleVectors(viewent.angles).
 			   QR_EntityMatrix draws the negated-pitch model so its barrel
 			   points where the shot goes, i.e. the model's drawn basis IS the
@@ -4109,7 +4484,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			if (vr_laser.value)
 			{
 				vec3_t	lstart, langles;
-				float	lx = cl.viewent.model->maxs[0];   /* muzzle, along barrel */
+				float	lx = bmax[0];   /* idle-frame muzzle, along barrel */
 
 				for (k = 0; k < 3; k++)
 					lstart[k] = cl.viewent.origin[k]
@@ -4152,6 +4527,17 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				}
 			}
 
+			/* Draw the IDLE pose (frame 0): the fire frames model the loaded
+			   round / muzzle flash poking out of the barrel, which looked like
+			   a stray projectile welded to the gun. Our synthetic recoil above
+			   already carries the fire feel, so we don't need the model's own
+			   fire animation. The recoil block above already read the real
+			   frame for its shot detection, so this only changes what's drawn.
+			   (Forced every hand emit, so the pose never lerps off a fire
+			   frame.) The body-anchored fallback below keeps the animation --
+			   it's the window-only debug view. */
+			cl.viewent.frame = 0;
+
 			qr_handweapon = 1;
 			QR_EmitAliasModel (slot, &cl.viewent);
 			qr_handweapon = 0;
@@ -4161,6 +4547,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	}
 
 	QR_EmitParticles (slot);
+	QR_EmitPathDebug (slot);
 	QR_EmitWheel (slot);
 }
 
