@@ -30,6 +30,20 @@ final class HandDebug: @unchecked Sendable {
         set { lock.lock(); _enabled = newValue; if !newValue { verts = [] }; lock.unlock() }
     }
 
+    /// Figure overlays, independent of the wireframe so they can be captured on
+    /// top of the stylised oval hand: the aim-ray decomposition and the motion
+    /// strobe. HandInput folds their geometry into the same published buffer.
+    private var _aimRays = false
+    var aimRays: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _aimRays }
+        set { lock.lock(); _aimRays = newValue; lock.unlock() }
+    }
+    private var _strobe = false
+    var strobe: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _strobe }
+        set { lock.lock(); _strobe = newValue; lock.unlock() }
+    }
+
     func publish(_ v: [Float]) {
         lock.lock(); verts = v; lock.unlock()
     }

@@ -223,6 +223,7 @@ final class ImmersiveRenderer {
                                           fireSeq: packet.weapon_fire_seq)
             WheelState.shared.frame(items: packet.items,
                                     worldScale: packet.world_scale)
+            WeaponTrim.shared.frame(activeWeapon: packet.active_weapon)
         }
 
         // World->tracking-origin: the Quake BODY basis, scaled to metres —
@@ -367,7 +368,8 @@ final class ImmersiveRenderer {
         // Hand debug wireframe: the published bones are already in
         // corrected-tracking space; drawn with handViewproj they sit on the
         // real hand, untouched by the game-world height trim.
-        let handDebug: [Float] = HandDebug.shared.enabled ? HandDebug.shared.snapshot() : []
+        let handOverlays = HandDebug.shared.enabled || HandDebug.shared.aimRays || HandDebug.shared.strobe
+        let handDebug: [Float] = handOverlays ? HandDebug.shared.snapshot() : []
 
         // The virtual hand stands in while the world is solid and fades out
         // (1 - phase) as the melt reveals the real hand through passthrough.

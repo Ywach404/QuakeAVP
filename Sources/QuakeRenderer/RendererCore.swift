@@ -446,7 +446,9 @@ final class RendererCore {
                     model: Self.matrix(from: entity.transform),
                     light: SIMD4(entity.light.0, entity.light.1, entity.light.2, entity.alpha),
                     shadeblend: SIMD4(entity.shadevector.0, entity.shadevector.1,
-                                      entity.shadevector.2, entity.blend))
+                                      entity.shadevector.2, entity.blend),
+                    clip: SIMD4(entity.clip.0, entity.clip.1, entity.clip.2, entity.clip.3),
+                    dbg: SIMD4(entity.dbg.0, entity.dbg.1, entity.dbg.2, entity.dbg.3))
                 withUnsafeBytes(of: &aliasUniforms) { raw in
                     encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 3)
                 }
@@ -817,6 +819,8 @@ final class RendererCore {
         var model: simd_float4x4
         var light: SIMD4<Float>
         var shadeblend: SIMD4<Float>
+        var clip: SIMD4<Float>
+        var dbg: SIMD4<Float>
     }
 
     /// Mirror the engine's world vertex array on generation change. The

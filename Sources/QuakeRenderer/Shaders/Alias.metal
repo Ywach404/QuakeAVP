@@ -43,12 +43,28 @@ struct AliasUniforms {
     float4x4 model;
     float4 light;           // rgb = light color, a = entity alpha
     float4 shadeblend;      // xyz = shadevector, w = pose blend
+    float4 clip;            // byte-space clip window for the hand weapon:
+                            // x = front plane, y = rear plane, zw = collapse
+                            // centre (y,z). x>=255 & y<0 disable each end.
+    float4 dbg;             // dbg.x > 0.5 => draw solid green (identify tint)
 };
+
+// Retract geometry the view models bake past EITHER end of the gun (a nail
+// out the barrel, a round behind the receiver): any vertex forward of the
+// front plane or behind the rear plane is pulled onto a point on that plane
+// so its triangles degenerate away, leaving the gun body untouched.
+static inline float3 alias_clip(float3 p, float4 clip)
+{
+    if (p.x > clip.x) return float3(clip.x, clip.z, clip.w);
+    if (p.x < clip.y) return float3(clip.y, clip.z, clip.w);
+    return p;
+}
 
 struct AliasVaryings {
     float4 position [[position]];
     float2 st;
     float4 color;
+    float dbgHi [[flat]];   // > 0.5 => solid-green identify tint
 };
 
 // From MH (via upstream's GLSL vertex shader): reproduces the anorm_dots
@@ -73,8 +89,8 @@ vertex AliasVaryings alias_vertex(uint vid [[vertex_id]],
     float blend = uniforms.shadeblend.w;
     float3 shade = uniforms.shadeblend.xyz;
 
-    float3 p1 = float3(pose1[vid].xyz.x, pose1[vid].xyz.y, pose1[vid].xyz.z);
-    float3 p2 = float3(pose2[vid].xyz.x, pose2[vid].xyz.y, pose2[vid].xyz.z);
+    float3 p1 = alias_clip(float3(pose1[vid].xyz.x, pose1[vid].xyz.y, pose1[vid].xyz.z), uniforms.clip);
+    float3 p2 = alias_clip(float3(pose2[vid].xyz.x, pose2[vid].xyz.y, pose2[vid].xyz.z), uniforms.clip);
     float4 world = uniforms.model * float4(mix(p1, p2, blend), 1.0);
 
     float dot1 = avertexnormal_dot(float3(pose1[vid].normal.x, pose1[vid].normal.y, pose1[vid].normal.z) * (1.0 / 127.0), shade);
@@ -84,6 +100,7 @@ vertex AliasVaryings alias_vertex(uint vid [[vertex_id]],
     out.position = uniforms.viewproj[amp] * world;
     out.st = texcoords[vid];
     out.color = float4(uniforms.light.rgb * mix(dot1, dot2, blend), uniforms.light.a);
+    out.dbgHi = uniforms.dbg.x;
     return out;
 }
 
@@ -92,6 +109,10 @@ fragment float4 alias_fragment(AliasVaryings in [[stage_in]],
                                texture2d<float> fullbright [[texture(1)]],
                                sampler skinSampler [[sampler(0)]])
 {
+    // Debug identify: paint the whole entity solid green, skin and all.
+    if (in.dbgHi > 0.5)
+        return qavp_out(float4(0.0, 1.0, 0.0, 1.0));
+
     float4 tex = skin.sample(skinSampler, in.st);
 
     // MF_HOLEY fence-style skins; opaque skins have a == 1 so the test is
