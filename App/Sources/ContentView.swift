@@ -29,6 +29,15 @@ struct ContentView: View {
     @State private var turnFlick: Float = 0.85
     @State private var showLimbs = true
     @State private var pathDebug = false
+    @State private var aimRayDebug = false
+    @State private var strobeDebug = false
+    @State private var fireMode: FireMode = .pinch
+    @State private var turnStyle: TurnStyle = .stick
+    @State private var aimSmoothUI: Float = 0.4
+    @State private var aimBlendUI: Float = 0.35
+    @State private var curlSensUI: Float = 0.72
+    @State private var hammerDropUI: Float = 45
+    @State private var inputLog = false
     @State private var showWeapon = false
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
@@ -221,7 +230,18 @@ struct ContentView: View {
                         Text("Smooth").tag(true)
                     }
                     .pickerStyle(.segmented)
-                    Text("Whip the gun hand sideways to turn. Turn on the wireframe to see the flick gauge.")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Turn style").font(.caption).foregroundStyle(.secondary)
+                        Picker("Turn style", selection: Binding(
+                            get: { turnStyle },
+                            set: { turnStyle = $0; VRSettings.shared.turnStyle = $0 })) {
+                            Text("Stick").tag(TurnStyle.stick)
+                            Text("Clutch").tag(TurnStyle.clutch)
+                            Text("Flick").tag(TurnStyle.flick)
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                    }
+                    Text("Stick: hold the off hand out to turn. Clutch: hold the aim-hand middle pinch and drag. Flick: whip the gun hand (gauge on the wireframe).")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Text("Flick ease").font(.caption)
@@ -234,6 +254,25 @@ struct ContentView: View {
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Fire gesture").font(.caption).foregroundStyle(.secondary)
+                    Picker("Fire gesture", selection: Binding(
+                        get: { fireMode },
+                        set: { fireMode = $0; VRSettings.shared.fireMode = $0 })) {
+                        Text("Pinch").tag(FireMode.pinch)
+                        Text("Curl").tag(FireMode.curl)
+                        Text("Bang").tag(FireMode.hammer)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Gesture tuning").font(.caption).foregroundStyle(.secondary)
+                    tuneRow("Aim smoothing", $aimSmoothUI, 0.1...1.0) { VRSettings.shared.aimSmooth = $0 }
+                    tuneRow("Aim finger-mix", $aimBlendUI, 0.0...1.0) { VRSettings.shared.aimBlend = $0 }
+                    tuneRow("Curl ease", $curlSensUI, 0.6...0.85) { VRSettings.shared.curlSensitivity = $0 }
+                    tuneRow("Hammer angle", $hammerDropUI, 30...60, fmt: "%.0f°") { VRSettings.shared.hammerDropDeg = $0 }
+                }
                 Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
                     get: { wheelSlowmo },
                     set: { wheelSlowmo = $0; engine.send("wheel_timescale \($0 ? "0.2" : "1")") }))
@@ -243,9 +282,18 @@ struct ContentView: View {
                 Toggle("Show real hands / controllers", isOn: Binding(
                     get: { showLimbs },
                     set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
+                Toggle("Input telemetry log (console)", isOn: Binding(
+                    get: { inputLog },
+                    set: { inputLog = $0; VRSettings.shared.inputLog = $0 }))
                 Toggle("Enemy AI debug (trails + targets)", isOn: Binding(
                     get: { pathDebug },
                     set: { pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
+                Toggle("Aim-ray decomposition (figure)", isOn: Binding(
+                    get: { aimRayDebug },
+                    set: { aimRayDebug = $0; HandDebug.shared.aimRays = $0 }))
+                Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
+                    get: { strobeDebug },
+                    set: { strobeDebug = $0; HandDebug.shared.strobe = $0 }))
             }
             .padding(24)
             .frame(width: 360)
@@ -337,6 +385,24 @@ struct ContentView: View {
                 set: { value.wrappedValue = Float($0); set(Float($0)) }),
                 in: 0.5...1)
             Text(String(format: "%.2f", value.wrappedValue))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    /// One row of the gesture-tuning panel: a labelled slider over a custom
+    /// range that pushes the value straight to VRSettings, so the hand-input
+    /// feel changes live in the headset without a rebuild.
+    private func tuneRow(_ label: String, _ value: Binding<Float>,
+                         _ range: ClosedRange<Float>, fmt: String = "%.2f",
+                         apply: @escaping (Float) -> Void) -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 100, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
+                in: Double(range.lowerBound)...Double(range.upperBound))
+            Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
