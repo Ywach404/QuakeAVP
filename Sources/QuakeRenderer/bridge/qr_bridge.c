@@ -3643,6 +3643,53 @@ static void QR_EmitDebugLine (qr_frame_slot_t *slot, const vec3_t a, const vec3_
 
 /*
 ================
+QR_EmitDebugDashes -- QR_EmitDebugLine broken into a marching-ants dashed line.
+`runlen` accumulates arc length across the whole polyline so dashes stay
+continuous over breadcrumb joints; `phase` (advanced from cl.time by the caller)
+crawls the ants along the trail. Quake units.
+================
+*/
+#define QR_DASH_ON	7.f		/* dash length */
+#define QR_DASH_OFF	7.f		/* gap length */
+#define QR_DASH_SPEED	28.f		/* units/sec the ants march */
+
+static void QR_EmitDebugDashes (qr_frame_slot_t *slot, const vec3_t a, const vec3_t b,
+				float r, float g, float bl, float hw,
+				float *runlen, float phase)
+{
+	vec3_t	dir, pa, pb;
+	float	seglen, period, g0, g1, ds, de, cs, ce;
+	int	k;
+
+	VectorSubtract (b, a, dir);
+	seglen = VectorNormalize (dir);
+	if (seglen < 0.01f)
+		return;
+
+	period = QR_DASH_ON + QR_DASH_OFF;
+	g0 = *runlen;
+	g1 = *runlen + seglen;
+	/* first dash whose start is at or before g0, in global arc coords */
+	ds = floorf ((g0 + phase) / period) * period - phase;
+	for (; ds < g1; ds += period)
+	{
+		de = ds + QR_DASH_ON;
+		cs = ds > g0 ? ds : g0;			/* clip the dash to this segment */
+		ce = de < g1 ? de : g1;
+		if (ce <= cs)
+			continue;
+		for (k = 0; k < 3; k++)
+		{
+			pa[k] = a[k] + dir[k] * (cs - g0);
+			pb[k] = a[k] + dir[k] * (ce - g0);
+		}
+		QR_EmitDebugLine (slot, pa, pb, r, g, bl, hw);
+	}
+	*runlen = g1;
+}
+
+/*
+================
 QR_EmitPathDebug -- the enemy AI overlay (vr_pathdebug). Quake AI is greedy
 (SV_MoveToGoal steps toward the goal each think, no planned path), so there is
 no route to draw. Instead, per live monster: a BREADCRUMB trail of where it has
@@ -3736,8 +3783,10 @@ static void QR_EmitPathDebug (qr_frame_slot_t *slot)
 
 		org[0] = ent->v.origin[0];
 		org[1] = ent->v.origin[1];
-		org[2] = ent->v.origin[2] + 8.f;	/* lift off the floor a touch */
-		QR_PathColor (e, &cr, &cg, &cb);
+		org[2] = ent->v.origin[2] + ent->v.mins[2] + 2.f;	/* on the floor */
+		/* colour by monster TYPE (shared model), not per edict, so every
+		   grunt reads the same hue as every other grunt */
+		QR_PathColor ((int)ent->v.modelindex, &cr, &cg, &cb);
 
 		/* breadcrumb trail */
 		p = QR_PathSlot (e);
@@ -3762,18 +3811,28 @@ static void QR_EmitPathDebug (qr_frame_slot_t *slot)
 			}
 			n = p->count;
 			first = (p->head - n + QR_PATH_CRUMBS) % QR_PATH_CRUMBS;
-			for (j = 0; j < n; j++)
 			{
-				int idx = (first + j) % QR_PATH_CRUMBS;
+				/* marching ants: dashes crawl toward the monster's
+				   current position, continuous across crumb joints */
+				float	period = QR_DASH_ON + QR_DASH_OFF;
+				float	phase = fmodf ((float)cl.time * QR_DASH_SPEED, period);
+				float	runlen = 0.f;
+
+				for (j = 0; j < n; j++)
+				{
+					int idx = (first + j) % QR_PATH_CRUMBS;
+					if (have)
+						QR_EmitDebugDashes (slot, prev, p->pts[idx],
+								    cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f,
+								    &runlen, phase);
+					VectorCopy (p->pts[idx], prev);
+					have = 1;
+				}
 				if (have)
-					QR_EmitDebugLine (slot, prev, p->pts[idx],
-							  cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f);
-				VectorCopy (p->pts[idx], prev);
-				have = 1;
+					QR_EmitDebugDashes (slot, prev, org,
+							    cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f,
+							    &runlen, phase);
 			}
-			if (have)
-				QR_EmitDebugLine (slot, prev, org,
-						  cr * 0.55f, cg * 0.55f, cb * 0.55f, 0.7f);
 		}
 
 		/* intent line: what it is chasing, brighter and thicker */
@@ -3792,10 +3851,16 @@ static void QR_EmitPathDebug (qr_frame_slot_t *slot)
 		}
 		if (goal)
 		{
+			/* the "path to me": a marching-ants trail along the FLOOR to the
+			   target, not a solid bar at chest height */
+			float	period = QR_DASH_ON + QR_DASH_OFF;
+			float	phase = fmodf ((float)cl.time * QR_DASH_SPEED, period);
+			float	runlen = 0.f;
+
 			tgt[0] = goal->v.origin[0];
 			tgt[1] = goal->v.origin[1];
-			tgt[2] = goal->v.origin[2] + 8.f;
-			QR_EmitDebugLine (slot, org, tgt, cr, cg, cb, 1.2f);
+			tgt[2] = goal->v.origin[2] + goal->v.mins[2] + 2.f;
+			QR_EmitDebugDashes (slot, org, tgt, cr, cg, cb, 1.2f, &runlen, phase);
 		}
 	}
 }
