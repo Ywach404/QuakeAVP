@@ -31,6 +31,15 @@ struct ContentView: View {
     @State private var pathDebug = false
     @State private var aimRayDebug = false
     @State private var strobeDebug = false
+    @State private var turnDebug = false
+    @State private var fireDebug = false
+    @State private var hudFwdUI: Float = 0
+    @State private var hudUpUI: Float = 0.14
+    @State private var hudSideUI: Float = 0
+    @State private var hudPitchUI: Float = 0
+    @State private var hudRollUI: Float = 0
+    @State private var hudFaceUI: Float = 0.8
+    @State private var hudScaleUI: Float = 1
     @State private var fireMode: FireMode = .pinch
     @State private var turnStyle: TurnStyle = .stick
     @State private var aimSmoothUI: Float = 0.4
@@ -94,6 +103,15 @@ struct ContentView: View {
             WeaponTrim.shared.sendCommand = { command in
                 Task { @MainActor in engine.send(command) }
             }
+            // Persisted per-input profiles: pick Hands/PSVR2 by what's attached,
+            // push its feel to VRSettings now (the rig cvars land once the engine
+            // is running, below), and load its values into the sliders.
+            ProfileStore.shared.sendCommand = { command in
+                Task { @MainActor in engine.send(command) }
+            }
+            ProfileStore.shared.refreshActiveFromInput()
+            ProfileStore.shared.apply()
+            syncFromProfile()
         }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
@@ -103,7 +121,14 @@ struct ContentView: View {
             // windowed, it stays behind its toggle.
             if active { showScope = true }
         }
-        .onChange(of: gamepad.hasPhysicalController) { _, _ in updateHands() }
+        .onChange(of: gamepad.hasPhysicalController) { _, _ in
+            updateHands()
+            // Auto-switch the active profile when a controller connects/leaves
+            // (unless the user pinned one), then reflect it in the sliders.
+            ProfileStore.shared.refreshActiveFromInput()
+            ProfileStore.shared.apply()
+            syncFromProfile()
+        }
         .onChange(of: engine.status) { _, status in
             // Force the phase melt OFF when the engine comes up. It's a
             // head-centred sphere that dissolves nearby surfaces to
@@ -113,6 +138,8 @@ struct ContentView: View {
             if status == .running {
                 engine.send("phase 0")
                 phaseLevel = 0
+                // Engine's up: push the active profile's weapon/laser rig cvars.
+                ProfileStore.shared.applyRig()
             }
             // Open the immersive space as soon as the engine is up -- the flat
             // window is only a mono debug view, so play should begin in the
@@ -185,6 +212,24 @@ struct ContentView: View {
         .popover(isPresented: $showComfort, arrowEdge: .bottom) {
             ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Input profile (auto-follows what's attached)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Picker("Input profile", selection: Binding(
+                        get: { ProfileStore.shared.active },
+                        set: { ProfileStore.shared.manualOverride = true
+                               ProfileStore.shared.active = $0
+                               ProfileStore.shared.apply(); syncFromProfile() })) {
+                        Text("Hands").tag(InputMode.hands)
+                        Text("PSVR2").tag(InputMode.psvr2)
+                    }
+                    .pickerStyle(.segmented)
+                    Button("Reset this profile") {
+                        ProfileStore.shared.resetCurrent(); syncFromProfile()
+                    }
+                    .font(.caption)
+                }
+                Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Eye height  \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm")
                         .font(.headline)
@@ -192,11 +237,13 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Slider(value: Binding(
                         get: { Double(heightOffset) },
-                        set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0) }),
+                        set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0)
+                               ProfileStore.shared.current.heightOffset = Float($0) }),
                         in: -0.6...0.9)
                     HStack {
                         Button("Reset") {
                             heightOffset = 0.4; VRSettings.shared.heightOffset = 0.4
+                            ProfileStore.shared.current.heightOffset = 0.4
                         }
                         Spacer()
                         Button("Recenter") { engine.send("vr_recenter") }
@@ -234,7 +281,8 @@ struct ContentView: View {
                         Text("Turn style").font(.caption).foregroundStyle(.secondary)
                         Picker("Turn style", selection: Binding(
                             get: { turnStyle },
-                            set: { turnStyle = $0; VRSettings.shared.turnStyle = $0 })) {
+                            set: { turnStyle = $0; VRSettings.shared.turnStyle = $0
+                                   ProfileStore.shared.current.turnStyle = $0.rawValue })) {
                             Text("Stick").tag(TurnStyle.stick)
                             Text("Clutch").tag(TurnStyle.clutch)
                             Text("Flick").tag(TurnStyle.flick)
@@ -248,8 +296,9 @@ struct ContentView: View {
                         Slider(value: Binding(
                             get: { Double(turnFlick) },
                             set: { turnFlick = Float($0)
-                                   VRSettings.shared.turnFlickSpeed = Float($0) }),
-                               in: 0.4...1.6)
+                                   VRSettings.shared.turnFlickSpeed = Float($0)
+                                   ProfileStore.shared.current.turnFlickSpeed = Float($0) }),
+                               in: 0.2...1.6)
                         Text(String(format: "%.2f", turnFlick))
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -258,7 +307,8 @@ struct ContentView: View {
                     Text("Fire gesture").font(.caption).foregroundStyle(.secondary)
                     Picker("Fire gesture", selection: Binding(
                         get: { fireMode },
-                        set: { fireMode = $0; VRSettings.shared.fireMode = $0 })) {
+                        set: { fireMode = $0; VRSettings.shared.fireMode = $0
+                               ProfileStore.shared.current.fireMode = $0.rawValue })) {
                         Text("Pinch").tag(FireMode.pinch)
                         Text("Curl").tag(FireMode.curl)
                         Text("Bang").tag(FireMode.hammer)
@@ -268,10 +318,14 @@ struct ContentView: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Gesture tuning").font(.caption).foregroundStyle(.secondary)
-                    tuneRow("Aim smoothing", $aimSmoothUI, 0.1...1.0) { VRSettings.shared.aimSmooth = $0 }
-                    tuneRow("Aim finger-mix", $aimBlendUI, 0.0...1.0) { VRSettings.shared.aimBlend = $0 }
-                    tuneRow("Curl ease", $curlSensUI, 0.6...0.85) { VRSettings.shared.curlSensitivity = $0 }
-                    tuneRow("Hammer angle", $hammerDropUI, 30...60, fmt: "%.0f°") { VRSettings.shared.hammerDropDeg = $0 }
+                    tuneRow("Aim smoothing", $aimSmoothUI, 0.1...1.0) {
+                        VRSettings.shared.aimSmooth = $0; ProfileStore.shared.current.aimSmooth = $0 }
+                    tuneRow("Aim finger-mix", $aimBlendUI, 0.0...1.0) {
+                        VRSettings.shared.aimBlend = $0; ProfileStore.shared.current.aimBlend = $0 }
+                    tuneRow("Curl ease", $curlSensUI, 0.6...0.85) {
+                        VRSettings.shared.curlSensitivity = $0; ProfileStore.shared.current.curlSensitivity = $0 }
+                    tuneRow("Hammer angle", $hammerDropUI, 30...60, fmt: "%.0f°") {
+                        VRSettings.shared.hammerDropDeg = $0; ProfileStore.shared.current.hammerDropDeg = $0 }
                 }
                 Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
                     get: { wheelSlowmo },
@@ -294,6 +348,29 @@ struct ContentView: View {
                 Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
                     get: { strobeDebug },
                     set: { strobeDebug = $0; HandDebug.shared.strobe = $0 }))
+                Toggle("Turn trigger meter (stick/clutch/flick)", isOn: Binding(
+                    get: { turnDebug },
+                    set: { turnDebug = $0; HandDebug.shared.turnDebug = $0 }))
+                Toggle("Fire threshold meter (pinch/curl/bang)", isOn: Binding(
+                    get: { fireDebug },
+                    set: { fireDebug = $0; HandDebug.shared.fireDebug = $0 }))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Debug HUD placement (on-arm)").font(.caption).foregroundStyle(.secondary)
+                    tuneRow("Forward", $hudFwdUI, -0.2...0.2) {
+                        VRSettings.shared.hudForward = $0; ProfileStore.shared.current.hudForward = $0 }
+                    tuneRow("Up", $hudUpUI, -0.1...0.4) {
+                        VRSettings.shared.hudUp = $0; ProfileStore.shared.current.hudUp = $0 }
+                    tuneRow("Side", $hudSideUI, -0.2...0.2) {
+                        VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
+                    tuneRow("Pitch", $hudPitchUI, -90...90, fmt: "%.0f°") {
+                        VRSettings.shared.hudPitch = $0; ProfileStore.shared.current.hudPitch = $0 }
+                    tuneRow("Roll", $hudRollUI, -90...90, fmt: "%.0f°") {
+                        VRSettings.shared.hudRoll = $0; ProfileStore.shared.current.hudRoll = $0 }
+                    tuneRow("Face me", $hudFaceUI, 0...1) {
+                        VRSettings.shared.hudFaceMe = $0; ProfileStore.shared.current.hudFaceMe = $0 }
+                    tuneRow("Scale", $hudScaleUI, 0.4...2.0) {
+                        VRSettings.shared.hudScale = $0; ProfileStore.shared.current.hudScale = $0 }
+                }
             }
             .padding(24)
             .frame(width: 360)
@@ -317,11 +394,11 @@ struct ContentView: View {
                         Text("Gun placement").font(.headline)
                         Text("Slide the gun onto your hand — updates live in the headset.")
                             .font(.caption).foregroundStyle(.secondary)
-                        placementSlider("Back", $weaponBack, in: -20...30, cvar: "vr_weaponback")
-                        placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup")
-                        placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside")
-                        placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f")
-                        placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch")
+                        placementSlider("Back", $weaponBack, in: -20...30, cvar: "vr_weaponback", persist: \.weaponBack)
+                        placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup", persist: \.weaponUp)
+                        placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside", persist: \.weaponSide)
+                        placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f", persist: \.weaponGrip)
+                        placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch", persist: \.aimPitch)
                         trimSlider("Trim front", $weaponClip) { WeaponTrim.shared.setFront($0) }
                         trimSlider("Trim rear", $weaponClipBack) { WeaponTrim.shared.setRear($0) }
                         Text("Per-weapon: front = barrel end, rear = arm end. Trimming the rear also re-seats the gun on your hand.")
@@ -331,6 +408,10 @@ struct ContentView: View {
                             weaponGrip = 0.15; aimPitch = 0
                             for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
                                       "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
+                            var p = ProfileStore.shared.current
+                            p.weaponBack = 0; p.weaponUp = 0; p.weaponSide = 0
+                            p.weaponGrip = 0.15; p.aimPitch = 0
+                            ProfileStore.shared.current = p
                             WeaponTrim.shared.resetCurrent()
                             weaponClip = WeaponTrim.shared.currentFront
                             weaponClipBack = WeaponTrim.shared.currentRear
@@ -341,15 +422,16 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Toggle("Aiming laser", isOn: Binding(
                             get: { laser },
-                            set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)") }))
+                            set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)")
+                                   ProfileStore.shared.current.laser = $0 }))
                             .font(.headline)
                         Text("Move the beam's start to the barrel tip. Forward reaches the muzzle.")
                             .font(.caption).foregroundStyle(.secondary)
-                        placementSlider("Fwd", $laserForward, in: -10...60, cvar: "vr_laserforward")
-                        placementSlider("Up", $laserUp, in: -15...15, cvar: "vr_laserup")
-                        placementSlider("Side", $laserSide, in: -15...15, cvar: "vr_laserside")
-                        placementSlider("Tilt°", $laserPitch, in: -10...10, cvar: "vr_laserpitch", fmt: "%.1f")
-                        placementSlider("Pan°", $laserYaw, in: -10...10, cvar: "vr_laseryaw", fmt: "%.1f")
+                        placementSlider("Fwd", $laserForward, in: -10...60, cvar: "vr_laserforward", persist: \.laserForward)
+                        placementSlider("Up", $laserUp, in: -15...15, cvar: "vr_laserup", persist: \.laserUp)
+                        placementSlider("Side", $laserSide, in: -15...15, cvar: "vr_laserside", persist: \.laserSide)
+                        placementSlider("Tilt°", $laserPitch, in: -10...10, cvar: "vr_laserpitch", fmt: "%.1f", persist: \.laserPitch)
+                        placementSlider("Pan°", $laserYaw, in: -10...10, cvar: "vr_laseryaw", fmt: "%.1f", persist: \.laserYaw)
                         Button("Reset laser") {
                             laserForward = 0; laserUp = 0; laserSide = 0
                             laserPitch = 0; laserYaw = 0
@@ -357,6 +439,10 @@ struct ContentView: View {
                                       "vr_laserpitch 0", "vr_laseryaw 0"] {
                                 engine.send(c)
                             }
+                            var p = ProfileStore.shared.current
+                            p.laserForward = 0; p.laserUp = 0; p.laserSide = 0
+                            p.laserPitch = 0; p.laserYaw = 0
+                            ProfileStore.shared.current = p
                         }
                         .font(.caption)
                     }
@@ -408,18 +494,40 @@ struct ContentView: View {
         }
     }
 
+    /// Load the active profile's values into the slider mirrors, so the UI
+    /// shows what was persisted (called on launch and on a profile switch).
+    private func syncFromProfile() {
+        let p = ProfileStore.shared.current
+        heightOffset = p.heightOffset
+        turnFlick = p.turnFlickSpeed
+        fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
+        turnStyle = TurnStyle(rawValue: p.turnStyle) ?? .stick
+        aimSmoothUI = p.aimSmooth; aimBlendUI = p.aimBlend
+        curlSensUI = p.curlSensitivity; hammerDropUI = p.hammerDropDeg
+        hudFwdUI = p.hudForward; hudUpUI = p.hudUp; hudSideUI = p.hudSide
+        hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll
+        hudFaceUI = p.hudFaceMe; hudScaleUI = p.hudScale
+        weaponBack = p.weaponBack; weaponUp = p.weaponUp; weaponSide = p.weaponSide
+        weaponGrip = p.weaponGrip; aimPitch = p.aimPitch
+        laser = p.laser
+        laserForward = p.laserForward; laserUp = p.laserUp; laserSide = p.laserSide
+        laserPitch = p.laserPitch; laserYaw = p.laserYaw
+    }
+
     /// One row of the weapon-placement panel: a labelled slider that pushes
-    /// its cvar to the engine on every change, so the gun moves live in the
-    /// headset. No console typing, no autocomplete needed.
+    /// its cvar to the engine AND persists into the active profile on every
+    /// change, so the gun moves live and the value survives relaunch.
     private func placementSlider(_ label: String, _ value: Binding<Float>,
                                  in range: ClosedRange<Double>, cvar: String,
-                                 fmt: String = "%.0f") -> some View {
+                                 fmt: String = "%.0f",
+                                 persist kp: WritableKeyPath<InputProfile, Float>? = nil) -> some View {
         HStack {
             Text(label).font(.caption).frame(width: 40, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
                 set: { value.wrappedValue = Float($0)
-                       engine.send("\(cvar) \(Float($0))") }),
+                       engine.send("\(cvar) \(Float($0))")
+                       if let kp { ProfileStore.shared.current[keyPath: kp] = Float($0) } }),
                 in: range)
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)

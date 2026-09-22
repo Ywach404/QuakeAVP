@@ -121,6 +121,32 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _inputLog = newValue; lock.unlock() }
     }
 
+    /// Debug-HUD dock: where the on-arm meters sit. Offsets are metres in the
+    /// forearm frame (Forward along the arm, Up out of it, Side across it);
+    /// pitch/roll are degrees; faceMe blends 0 = rigidly arm-locked → 1 = fully
+    /// eye-facing; scale sizes the panel. Read live by the meter builders.
+    private var _hudForward: Float = 0
+    var hudForward: Float { get { lock.lock(); defer { lock.unlock() }; return _hudForward }
+                            set { lock.lock(); _hudForward = newValue; lock.unlock() } }
+    private var _hudUp: Float = 0.14
+    var hudUp: Float { get { lock.lock(); defer { lock.unlock() }; return _hudUp }
+                       set { lock.lock(); _hudUp = newValue; lock.unlock() } }
+    private var _hudSide: Float = 0
+    var hudSide: Float { get { lock.lock(); defer { lock.unlock() }; return _hudSide }
+                         set { lock.lock(); _hudSide = newValue; lock.unlock() } }
+    private var _hudPitch: Float = 0
+    var hudPitch: Float { get { lock.lock(); defer { lock.unlock() }; return _hudPitch }
+                          set { lock.lock(); _hudPitch = newValue; lock.unlock() } }
+    private var _hudRoll: Float = 0
+    var hudRoll: Float { get { lock.lock(); defer { lock.unlock() }; return _hudRoll }
+                         set { lock.lock(); _hudRoll = newValue; lock.unlock() } }
+    private var _hudFaceMe: Float = 0.8
+    var hudFaceMe: Float { get { lock.lock(); defer { lock.unlock() }; return _hudFaceMe }
+                           set { lock.lock(); _hudFaceMe = newValue; lock.unlock() } }
+    private var _hudScale: Float = 1
+    var hudScale: Float { get { lock.lock(); defer { lock.unlock() }; return _hudScale }
+                          set { lock.lock(); _hudScale = newValue; lock.unlock() } }
+
     /// Gun-hand flick snap-turn ABSOLUTE floor, m/s of body-right wrist motion:
     /// the minimum whip speed that can ever trigger, below which motion is
     /// treated as tracking jitter. The live per-direction trigger auto-balances
