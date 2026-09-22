@@ -11,7 +11,7 @@ import UIKit
 
 /// Which section the persistent control panel shows. Replaces the old Comfort
 /// and Weapon pop-out popovers, which auto-dismissed and hid your values.
-private enum PanelTab: Hashable { case comfort, weapon, levels, admin, debug }
+private enum PanelTab: Hashable { case comfort, weapon, admin, debug }
 
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
@@ -103,6 +103,7 @@ struct ContentView: View {
                         .frame(maxHeight: engine.status == .running && !coordinator.isImmersiveActive
                                ? 96 : .infinity)
                     commandBar
+                    levelBar
                 }
             }
         }
@@ -226,7 +227,6 @@ struct ContentView: View {
             Picker("Panel", selection: $activeTab) {
                 Text("Comfort").tag(PanelTab.comfort)
                 Text("Weapon").tag(PanelTab.weapon)
-                Text("Levels").tag(PanelTab.levels)
                 Text("Admin").tag(PanelTab.admin)
                 Text("Debug").tag(PanelTab.debug)
             }
@@ -237,7 +237,6 @@ struct ContentView: View {
                     switch activeTab {
                     case .comfort: comfortContent
                     case .weapon: weaponContent
-                    case .levels: levelsContent
                     case .admin: adminContent
                     case .debug: debugContent
                     }
@@ -376,10 +375,10 @@ struct ContentView: View {
     /// Levels tab: a Half-Life-2-style horizontal carousel per episode. Each
     /// card is a map preview + name; tapping sends `map <id>`. Previews load
     /// from Documents/thumbnails/<id>.png when present, else a placeholder.
-    private var levelsContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Pick an episode, slide through its maps, tap to warp. Watch the console.")
-                .font(.caption).foregroundStyle(.secondary)
+    /// Standalone map launcher below the console (not a tab): an episode picker
+    /// + the Start hub, over a horizontal carousel of map preview cards.
+    private var levelBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 // The start map: Quake's in-game hub for difficulty + episode
                 // select. Kept as its own button no matter which episode is up.
