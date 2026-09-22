@@ -11,7 +11,7 @@ import UIKit
 
 /// Which section the persistent control panel shows. Replaces the old Comfort
 /// and Weapon pop-out popovers, which auto-dismissed and hid your values.
-private enum PanelTab: Hashable { case comfort, weapon, debug }
+private enum PanelTab: Hashable { case comfort, weapon, levels, admin, debug }
 
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
@@ -215,6 +215,8 @@ struct ContentView: View {
             Picker("Panel", selection: $activeTab) {
                 Text("Comfort").tag(PanelTab.comfort)
                 Text("Weapon").tag(PanelTab.weapon)
+                Text("Levels").tag(PanelTab.levels)
+                Text("Admin").tag(PanelTab.admin)
                 Text("Debug").tag(PanelTab.debug)
             }
             .pickerStyle(.segmented)
@@ -224,6 +226,8 @@ struct ContentView: View {
                     switch activeTab {
                     case .comfort: comfortContent
                     case .weapon: weaponContent
+                    case .levels: levelsContent
+                    case .admin: adminContent
                     case .debug: debugContent
                     }
                 }
@@ -231,7 +235,7 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .frame(width: 380)
+        .frame(width: 430)
         .background(.regularMaterial, in: .rect(cornerRadius: 14))
     }
 
@@ -356,6 +360,58 @@ struct ContentView: View {
                     get: { wheelSlowmo },
                     set: { wheelSlowmo = $0; engine.send("wheel_timescale \($0 ? "0.2" : "1")") }))
             }
+    }
+
+    /// Levels tab: jump to any Quake map. Sends `map <id>`; maps not in the
+    /// loaded paks fail and the console shows why (attempt-and-report).
+    private var levelsContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Jump to a map. Some need your full game data; watch the console.")
+                .font(.caption).foregroundStyle(.secondary)
+            levelGroup("Warp", ["start"])
+            levelGroup("Episode 1 · Dimension of the Doomed", (1...8).map { "e1m\($0)" })
+            levelGroup("Episode 2 · The Realm of Black Magic", (1...7).map { "e2m\($0)" })
+            levelGroup("Episode 3 · The Netherworld", (1...7).map { "e3m\($0)" })
+            levelGroup("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" })
+            levelGroup("Deathmatch", (1...6).map { "dm\($0)" })
+        }
+    }
+
+    private func levelGroup(_ title: String, _ ids: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4),
+                      alignment: .leading, spacing: 6) {
+                ForEach(ids, id: \.self) { id in
+                    Button(id.uppercased()) { engine.send("map \(id)") }
+                        .buttonStyle(.bordered)
+                        .font(.caption2.monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+        }
+    }
+
+    /// Admin tab: single-player cheats/utilities, sent to the console. Disabled
+    /// until a level is loaded (the engine is running).
+    private var adminContent: some View {
+        let running = engine.status == .running
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Single-player only. Needs a level loaded.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Restart level") { engine.send("restart") }
+            Button("All weapons + ammo") { engine.send("impulse 9") }
+            Button("Full health") { engine.send("give h 100") }
+            Divider()
+            Text("Toggles (each press flips)").font(.caption).foregroundStyle(.secondary)
+            Button("God mode") { engine.send("god") }
+            Button("Noclip") { engine.send("noclip") }
+            Button("Notarget") { engine.send("notarget") }
+            Button("Fly") { engine.send("fly") }
+        }
+        .buttonStyle(.bordered)
+        .disabled(!running)
     }
 
     /// Debug tab: overlay/meter toggles, the input telemetry log, and the
