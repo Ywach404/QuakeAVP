@@ -362,35 +362,68 @@ struct ContentView: View {
             }
     }
 
-    /// Levels tab: jump to any Quake map. Sends `map <id>`; maps not in the
-    /// loaded paks fail and the console shows why (attempt-and-report).
+    /// Levels tab: a Half-Life-2-style horizontal carousel per episode. Each
+    /// card is a map preview + name; tapping sends `map <id>`. Previews load
+    /// from Documents/thumbnails/<id>.png when present, else a placeholder.
     private var levelsContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Jump to a map. Some need your full game data; watch the console.")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Slide through the maps and tap to warp. Some need your full game data; watch the console.")
                 .font(.caption).foregroundStyle(.secondary)
-            levelGroup("Warp", ["start"])
-            levelGroup("Episode 1 · Dimension of the Doomed", (1...8).map { "e1m\($0)" })
-            levelGroup("Episode 2 · The Realm of Black Magic", (1...7).map { "e2m\($0)" })
-            levelGroup("Episode 3 · The Netherworld", (1...7).map { "e3m\($0)" })
-            levelGroup("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" })
-            levelGroup("Deathmatch", (1...6).map { "dm\($0)" })
+            levelRow("Warp", ["start"])
+            levelRow("Episode 1 · Dimension of the Doomed", (1...8).map { "e1m\($0)" })
+            levelRow("Episode 2 · The Realm of Black Magic", (1...7).map { "e2m\($0)" })
+            levelRow("Episode 3 · The Netherworld", (1...7).map { "e3m\($0)" })
+            levelRow("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" })
+            levelRow("Deathmatch", (1...6).map { "dm\($0)" })
         }
     }
 
-    private func levelGroup(_ title: String, _ ids: [String]) -> some View {
+    private func levelRow(_ title: String, _ ids: [String]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4),
-                      alignment: .leading, spacing: 6) {
-                ForEach(ids, id: \.self) { id in
-                    Button(id.uppercased()) { engine.send("map \(id)") }
-                        .buttonStyle(.bordered)
-                        .font(.caption2.monospacedDigit())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(ids, id: \.self) { mapCard($0) }
                 }
+                .padding(.bottom, 2)
             }
         }
+    }
+
+    private func mapCard(_ id: String) -> some View {
+        Button { engine.send("map \(id)") } label: {
+            ZStack(alignment: .bottomLeading) {
+                Group {
+                    if let preview = mapPreview(id) {
+                        preview.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        LinearGradient(colors: [Color(white: 0.28), Color(white: 0.16)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .overlay(Image(systemName: "map")
+                                .font(.title3).foregroundStyle(.white.opacity(0.25)))
+                    }
+                }
+                .frame(width: 150, height: 94)
+                .clipShape(.rect(cornerRadius: 8))
+                Text(id.uppercased())
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(.black.opacity(0.55), in: .rect(cornerRadius: 4))
+                    .padding(6)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// A cached map preview from Documents/thumbnails/<id>.(png|jpg), or nil.
+    private func mapPreview(_ id: String) -> Image? {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("thumbnails")
+        for ext in ["png", "jpg", "jpeg"] {
+            let path = dir.appendingPathComponent(id).appendingPathExtension(ext).path
+            if let img = UIImage(contentsOfFile: path) { return Image(uiImage: img) }
+        }
+        return nil
     }
 
     /// Admin tab: single-player cheats/utilities, sent to the console. Disabled
