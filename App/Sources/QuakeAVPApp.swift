@@ -41,6 +41,12 @@ struct QuakeAVPApp: App {
         }
         .defaultSize(width: 940, height: 720)
         .windowResizability(.contentSize)
+        // The console is a WindowGroup, so a closed window has no in-app way
+        // back without this: a menu command + Cmd-0 reopen it. Losing the
+        // console used to mean relaunching the app.
+        .commands {
+            CommandGroup(after: .windowArrangement) { ConsoleReopenButton() }
+        }
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
             CompositorLayer(configuration: QuakeLayerConfiguration()) { layerRenderer in
@@ -55,6 +61,15 @@ struct QuakeAVPApp: App {
         // Comfort menu: .visible composites the limbs on top (see your hands
         // holding the gun), .hidden drops them (virtual hand / gun only).
         .upperLimbVisibility(immersion.handsVisible ? .visible : .hidden)
+    }
+}
+
+/// Menu item (and Cmd-0) that reopens the console window if it was closed.
+private struct ConsoleReopenButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Show Console") { openWindow(id: QuakeAVPApp.consoleWindowID) }
+            .keyboardShortcut("0", modifiers: .command)
     }
 }
 
