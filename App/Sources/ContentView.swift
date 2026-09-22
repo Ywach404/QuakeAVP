@@ -9,6 +9,10 @@
 import SwiftUI
 import UIKit
 
+/// Which section the persistent control panel shows. Replaces the old Comfort
+/// and Weapon pop-out popovers, which auto-dismissed and hid your values.
+private enum PanelTab: Hashable { case comfort, weapon, debug }
+
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
     @State private var gamepad = GameControllerInput()
@@ -48,6 +52,7 @@ struct ContentView: View {
     @State private var hammerDropUI: Float = 45
     @State private var inputLog = false
     @State private var showWeapon = false
+    @State private var activeTab: PanelTab = .comfort
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
     @State private var weaponSide: Float = 0
@@ -69,6 +74,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             HStack(alignment: .top, spacing: 16) {
+                controlPanel
                 if engine.status == .running {
                     phaseControls
                 }
@@ -186,8 +192,6 @@ struct ContentView: View {
             }
             Spacer()
             if engine.status == .running {
-                comfortMenu
-                weaponMenu
                 Button {
                     showScope.toggle()
                 } label: {
@@ -203,14 +207,35 @@ struct ContentView: View {
     /// Comfort controls in a POPOVER, not a Menu -- a Menu silently drops
     /// Sliders (only buttons/toggles/pickers render), which is why the
     /// height slider never appeared. A popover renders a real slider.
-    private var comfortMenu: some View {
-        Button {
-            showComfort.toggle()
-        } label: {
-            Label("Comfort", systemImage: "slider.horizontal.3")
-        }
-        .popover(isPresented: $showComfort, arrowEdge: .bottom) {
+    /// The persistent tabbed control panel that replaces the old popovers:
+    /// always on screen, so a value stays visible and editable instead of
+    /// vanishing when you look away.
+    private var controlPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Panel", selection: $activeTab) {
+                Text("Comfort").tag(PanelTab.comfort)
+                Text("Weapon").tag(PanelTab.weapon)
+                Text("Debug").tag(PanelTab.debug)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
             ScrollView {
+                Group {
+                    switch activeTab {
+                    case .comfort: comfortContent
+                    case .weapon: weaponContent
+                    case .debug: debugContent
+                    }
+                }
+                .padding(.trailing, 6)
+            }
+        }
+        .padding(16)
+        .frame(width: 380)
+        .background(.regularMaterial, in: .rect(cornerRadius: 14))
+    }
+
+    private var comfortContent: some View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Input profile (auto-follows what's attached)")
@@ -330,65 +355,60 @@ struct ContentView: View {
                 Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
                     get: { wheelSlowmo },
                     set: { wheelSlowmo = $0; engine.send("wheel_timescale \($0 ? "0.2" : "1")") }))
-                Toggle("Finger debug wireframe", isOn: Binding(
-                    get: { fingerDebug },
-                    set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))
-                Toggle("Show real hands / controllers", isOn: Binding(
-                    get: { showLimbs },
-                    set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
-                Toggle("Input telemetry log (console)", isOn: Binding(
-                    get: { inputLog },
-                    set: { inputLog = $0; VRSettings.shared.inputLog = $0 }))
-                Toggle("Enemy AI debug (trails + targets)", isOn: Binding(
-                    get: { pathDebug },
-                    set: { pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
-                Toggle("Aim-ray decomposition (figure)", isOn: Binding(
-                    get: { aimRayDebug },
-                    set: { aimRayDebug = $0; HandDebug.shared.aimRays = $0 }))
-                Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
-                    get: { strobeDebug },
-                    set: { strobeDebug = $0; HandDebug.shared.strobe = $0 }))
-                Toggle("Turn trigger meter (stick/clutch/flick)", isOn: Binding(
-                    get: { turnDebug },
-                    set: { turnDebug = $0; HandDebug.shared.turnDebug = $0 }))
-                Toggle("Fire threshold meter (pinch/curl/bang)", isOn: Binding(
-                    get: { fireDebug },
-                    set: { fireDebug = $0; HandDebug.shared.fireDebug = $0 }))
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Debug HUD placement (on-arm)").font(.caption).foregroundStyle(.secondary)
-                    tuneRow("Forward", $hudFwdUI, -0.2...0.2) {
-                        VRSettings.shared.hudForward = $0; ProfileStore.shared.current.hudForward = $0 }
-                    tuneRow("Up", $hudUpUI, -0.1...0.4) {
-                        VRSettings.shared.hudUp = $0; ProfileStore.shared.current.hudUp = $0 }
-                    tuneRow("Side", $hudSideUI, -0.2...0.2) {
-                        VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
-                    tuneRow("Pitch", $hudPitchUI, -90...90, fmt: "%.0f°") {
-                        VRSettings.shared.hudPitch = $0; ProfileStore.shared.current.hudPitch = $0 }
-                    tuneRow("Roll", $hudRollUI, -90...90, fmt: "%.0f°") {
-                        VRSettings.shared.hudRoll = $0; ProfileStore.shared.current.hudRoll = $0 }
-                    tuneRow("Face me", $hudFaceUI, 0...1) {
-                        VRSettings.shared.hudFaceMe = $0; ProfileStore.shared.current.hudFaceMe = $0 }
-                    tuneRow("Scale", $hudScaleUI, 0.4...2.0) {
-                        VRSettings.shared.hudScale = $0; ProfileStore.shared.current.hudScale = $0 }
-                }
             }
-            .padding(24)
-            .frame(width: 360)
+    }
+
+    /// Debug tab: overlay/meter toggles, the input telemetry log, and the
+    /// on-arm HUD placement rig (moved out of the overloaded Comfort section).
+    private var debugContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("Finger debug wireframe", isOn: Binding(
+                get: { fingerDebug },
+                set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))
+            Toggle("Show real hands / controllers", isOn: Binding(
+                get: { showLimbs },
+                set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
+            Toggle("Input telemetry log (console)", isOn: Binding(
+                get: { inputLog },
+                set: { inputLog = $0; VRSettings.shared.inputLog = $0 }))
+            Toggle("Enemy AI debug (trails + targets)", isOn: Binding(
+                get: { pathDebug },
+                set: { pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
+            Toggle("Aim-ray decomposition (figure)", isOn: Binding(
+                get: { aimRayDebug },
+                set: { aimRayDebug = $0; HandDebug.shared.aimRays = $0 }))
+            Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
+                get: { strobeDebug },
+                set: { strobeDebug = $0; HandDebug.shared.strobe = $0 }))
+            Toggle("Turn trigger meter (stick/clutch/flick)", isOn: Binding(
+                get: { turnDebug },
+                set: { turnDebug = $0; HandDebug.shared.turnDebug = $0 }))
+            Toggle("Fire threshold meter (pinch/curl/bang)", isOn: Binding(
+                get: { fireDebug },
+                set: { fireDebug = $0; HandDebug.shared.fireDebug = $0 }))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Debug HUD placement (on-arm)").font(.caption).foregroundStyle(.secondary)
+                tuneRow("Forward", $hudFwdUI, -0.2...0.2) {
+                    VRSettings.shared.hudForward = $0; ProfileStore.shared.current.hudForward = $0 }
+                tuneRow("Up", $hudUpUI, -0.1...0.4) {
+                    VRSettings.shared.hudUp = $0; ProfileStore.shared.current.hudUp = $0 }
+                tuneRow("Side", $hudSideUI, -0.2...0.2) {
+                    VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
+                tuneRow("Pitch", $hudPitchUI, -90...90, fmt: "%.0f°") {
+                    VRSettings.shared.hudPitch = $0; ProfileStore.shared.current.hudPitch = $0 }
+                tuneRow("Roll", $hudRollUI, -90...90, fmt: "%.0f°") {
+                    VRSettings.shared.hudRoll = $0; ProfileStore.shared.current.hudRoll = $0 }
+                tuneRow("Face me", $hudFaceUI, 0...1) {
+                    VRSettings.shared.hudFaceMe = $0; ProfileStore.shared.current.hudFaceMe = $0 }
+                tuneRow("Scale", $hudScaleUI, 0.4...2.0) {
+                    VRSettings.shared.hudScale = $0; ProfileStore.shared.current.hudScale = $0 }
             }
-            .frame(maxHeight: 620)
         }
     }
 
-    /// Weapon rig: gun placement and the aiming laser, in their own popover so
-    /// the Comfort panel isn't buried. Every slider pushes its cvar live.
-    private var weaponMenu: some View {
-        Button {
-            showWeapon.toggle()
-        } label: {
-            Label("Weapon", systemImage: "scope")
-        }
-        .popover(isPresented: $showWeapon, arrowEdge: .bottom) {
-            ScrollView {
+    /// Weapon rig: gun placement and the aiming laser. Every slider pushes its
+    /// cvar live and persists into the active profile.
+    private var weaponContent: some View {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Gun placement").font(.headline)
@@ -447,17 +467,12 @@ struct ContentView: View {
                         .font(.caption)
                     }
                 }
-                .padding(24)
-                .frame(width: 360)
-            }
-            .frame(maxHeight: 620)
-            // Load the HELD weapon's saved trim when the panel opens, so the
-            // sliders show and edit whatever gun you're holding.
-            .onAppear {
-                weaponClip = WeaponTrim.shared.currentFront
-                weaponClipBack = WeaponTrim.shared.currentRear
-            }
-        }
+                // Load the HELD weapon's saved trim so the sliders show and
+                // edit whatever gun you're holding.
+                .onAppear {
+                    weaponClip = WeaponTrim.shared.currentFront
+                    weaponClipBack = WeaponTrim.shared.currentRear
+                }
     }
 
     /// A Trim slider (0.5...1) routed through WeaponTrim, which persists the
