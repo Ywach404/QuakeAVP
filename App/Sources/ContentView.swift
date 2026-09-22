@@ -53,6 +53,17 @@ struct ContentView: View {
     @State private var inputLog = false
     @State private var showWeapon = false
     @State private var activeTab: PanelTab = .comfort
+    @State private var selectedEpisode = 0
+
+    /// Map episodes, one horizontal strip each. Mission packs / custom packs can
+    /// be appended here later and appear in the same episode picker.
+    private static let episodes: [(name: String, ids: [String])] = [
+        ("Episode 1 · Dimension of the Doomed", (1...8).map { "e1m\($0)" }),
+        ("Episode 2 · The Realm of Black Magic", (1...7).map { "e2m\($0)" }),
+        ("Episode 3 · The Netherworld", (1...7).map { "e3m\($0)" }),
+        ("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" }),
+        ("Deathmatch", (1...6).map { "dm\($0)" }),
+    ]
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
     @State private var weaponSide: Float = 0
@@ -366,26 +377,29 @@ struct ContentView: View {
     /// card is a map preview + name; tapping sends `map <id>`. Previews load
     /// from Documents/thumbnails/<id>.png when present, else a placeholder.
     private var levelsContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Slide through the maps and tap to warp. Some need your full game data; watch the console.")
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pick an episode, slide through its maps, tap to warp. Watch the console.")
                 .font(.caption).foregroundStyle(.secondary)
-            levelRow("Warp", ["start"])
-            levelRow("Episode 1 · Dimension of the Doomed", (1...8).map { "e1m\($0)" })
-            levelRow("Episode 2 · The Realm of Black Magic", (1...7).map { "e2m\($0)" })
-            levelRow("Episode 3 · The Netherworld", (1...7).map { "e3m\($0)" })
-            levelRow("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" })
-            levelRow("Deathmatch", (1...6).map { "dm\($0)" })
-        }
-    }
-
-    private func levelRow(_ title: String, _ ids: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack {
+                // The start map: Quake's in-game hub for difficulty + episode
+                // select. Kept as its own button no matter which episode is up.
+                Button { engine.send("map start") } label: {
+                    Label("Start hub", systemImage: "house")
+                }
+                .buttonStyle(.bordered).font(.caption)
+                Spacer()
+                Picker("Episode", selection: $selectedEpisode) {
+                    ForEach(Array(Self.episodes.enumerated()), id: \.offset) { i, ep in
+                        Text(ep.name).tag(i)
+                    }
+                }
+                .pickerStyle(.menu).font(.caption)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(ids, id: \.self) { mapCard($0) }
+                    ForEach(Self.episodes[selectedEpisode].ids, id: \.self) { mapCard($0) }
                 }
-                .padding(.bottom, 2)
+                .padding(.bottom, 4)
             }
         }
     }
