@@ -78,6 +78,7 @@ struct ContentView: View {
     @State private var laserYaw: Float = 0
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.openWindow) private var openWindow
 
     private var coordinator: RendererCoordinator { .shared }
 
@@ -86,9 +87,6 @@ struct ContentView: View {
             header
             HStack(alignment: .top, spacing: 16) {
                 controlPanel
-                if engine.status == .running {
-                    phaseControls
-                }
                 VStack(alignment: .leading, spacing: 16) {
                     renderSurface
                     if engine.status == .running, showScope {
@@ -103,13 +101,19 @@ struct ContentView: View {
                         .frame(maxHeight: engine.status == .running && !coordinator.isImmersiveActive
                                ? 96 : .infinity)
                     commandBar
-                    levelBar
+                }
+                // The phase fader hugs the panel's far-right edge.
+                if engine.status == .running {
+                    phaseControls
                 }
             }
+            // The level launcher runs the full width of the dash.
+            levelBar
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 560)
         .background(dashMaterial(28))
+        .tint(Self.noctuaBurgundy)
         .onAppear {
             engine.boot()
             gamepad.start()
@@ -131,6 +135,15 @@ struct ContentView: View {
             ProfileStore.shared.refreshActiveFromInput()
             ProfileStore.shared.apply()
             syncFromProfile()
+            // Crown-press recovery: the crown dismisses the immersive space
+            // system-side, and if the console window was closed there is
+            // nothing left to tap. Respawn the console whenever the immersive
+            // space ends so there is always a way back into the game. The
+            // captured OpenWindowAction stays valid after this window closes.
+            let openWindow = self.openWindow
+            RendererCoordinator.shared.onImmersiveEnded = {
+                openWindow(id: QuakeAVPApp.consoleWindowID)
+            }
         }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
@@ -220,14 +233,19 @@ struct ContentView: View {
     /// Comfort controls in a POPOVER, not a Menu -- a Menu silently drops
     /// Sliders (only buttons/toggles/pickers render), which is why the
     /// height slider never appeared. A popover renders a real slider.
-    /// A soft creme-blue tint laid over a thin translucent material -- the dash
-    /// surface for the window and its panels.
-    private static let cremeBlue = Color(red: 0.66, green: 0.79, blue: 0.95)
+    /// Noctua palette over a thin translucent material: the fan-blade beige as
+    /// the dash surface, the retail burgundy as the control accent, the frame
+    /// brown for depth. Tint stays translucent so the room shows through.
+    private static let noctuaBeige = Color(red: 0.86, green: 0.78, blue: 0.62)
+    private static let noctuaBurgundy = Color(red: 0.56, green: 0.26, blue: 0.23)
+    private static let noctuaBrown = Color(red: 0.31, green: 0.24, blue: 0.20)
     private func dashMaterial(_ radius: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill(.thinMaterial)
             .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(Self.cremeBlue.opacity(0.42)))
+                .fill(Self.noctuaBeige.opacity(0.42)))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(Self.noctuaBrown.opacity(0.35), lineWidth: 1))
     }
 
     /// The persistent tabbed control panel that replaces the old popovers:
@@ -421,7 +439,7 @@ struct ContentView: View {
                     if let preview = mapPreview(id) {
                         preview.resizable().aspectRatio(contentMode: .fill)
                     } else {
-                        LinearGradient(colors: [Color(white: 0.28), Color(white: 0.16)],
+                        LinearGradient(colors: [Self.noctuaBrown, Self.noctuaBrown.opacity(0.55)],
                                        startPoint: .top, endPoint: .bottom)
                             .overlay(Image(systemName: "map")
                                 .font(.title3).foregroundStyle(.white.opacity(0.25)))
