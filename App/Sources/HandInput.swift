@@ -69,6 +69,7 @@ final class HandInput: @unchecked Sendable {
     private var stickNeutral: Float?
     private var clutchAnchor: Float?
     private var lastTurnTime = 0.0
+    private var turnDebugOffset: Float = 0     // stick hand offset from neutral (debug meter)
     // Auto-balance: each direction triggers at `flickFraction` of that
     // direction's own recent PEAK whip speed, so a strong and a weak direction
     // need equal EFFORT even though one whips faster -- the weak side earns a
@@ -116,9 +117,20 @@ final class HandInput: @unchecked Sendable {
     /// so you can SEE whether curl/hammer register and whether the aim is
     /// dropping out (the likely cause of the weapon popping in the gun pose).
     private var fireStatusVerts: [Float] = []
+    private var fireDebugVerts: [Float] = []
     private var lastFireTime = 0.0
     private static let fireFlash = 0.15    // s to hold the flash so it's visible
     private var lastLog = 0.0              // throttle for the input telemetry log
+
+    /// Respawns the console window from inside the game: hold the AIM hand
+    /// palm-up (the off hand's palm-up owns the wheel) for `summonDwell`.
+    /// Mixed immersion lets the window coexist with the world, so this works
+    /// without a crown press. Set by the window on appear.
+    nonisolated(unsafe) static var summonConsole: (@MainActor () -> Void)?
+    private static let summonDwell = 1.2
+    private static let summonCooldown = 5.0
+    private var summonSince = 0.0
+    private var summonCooldownUntil = 0.0
 
     init(aggregator: PadAggregator) {
         self.aggregator = aggregator
@@ -181,11 +193,15 @@ final class HandInput: @unchecked Sendable {
             // wireframe + gauge (full debug), and the figure overlays (aim rays,
             // strobe) which draw over the stylised hand too.
             let wire = HandDebug.shared.enabled
+            let turnDbg = HandDebug.shared.turnDebug
             var dbg: [Float] = []
-            if wire { dbg += left.debugVerts + right.debugVerts + turnGaugeVerts }
+            let fireDbg = HandDebug.shared.fireDebug
+            if wire { dbg += left.debugVerts + right.debugVerts }
+            if wire || turnDbg { dbg += turnGaugeVerts }         // flick gauge / turn meter
+            if wire || fireDbg { dbg += fireDebugVerts }         // fire-threshold meter
             if HandDebug.shared.aimRays { dbg += aimRayVerts }
             if HandDebug.shared.strobe { dbg += strobeVerts }
-            if wire || HandDebug.shared.aimRays || HandDebug.shared.strobe {
+            if wire || turnDbg || fireDbg || HandDebug.shared.aimRays || HandDebug.shared.strobe {
                 dbg += fireStatusVerts        // muzzle fire/aim-health indicator
                 HandDebug.shared.publish(dbg)
             }
@@ -210,6 +226,20 @@ final class HandInput: @unchecked Sendable {
         // even while the wheel is open, so the gun keeps tracking the hand.
         feedAim(aim)
         aimRayVerts = buildAimRays(aim)
+
+        // Console summon: aim-hand palm-up dwell. Runs before the wheel gate so
+        // it works regardless of what the off hand is doing.
+        let summonNow = CACurrentMediaTime()
+        if aim.palmUp, summonNow >= summonCooldownUntil {
+            if summonSince == 0 { summonSince = summonNow }
+            if summonNow - summonSince > Self.summonDwell {
+                summonSince = 0
+                summonCooldownUntil = summonNow + Self.summonCooldown
+                if let summon = Self.summonConsole { Task { @MainActor in summon() } }
+            }
+        } else if !aim.palmUp {
+            summonSince = 0
+        }
 
         // While the wheel is open, ALL other gestures are suppressed --
         // you are choosing a weapon, not fighting or moving. This is why
@@ -281,18 +311,7 @@ final class HandInput: @unchecked Sendable {
         // visible. rt is set by the fire switch above.
         if slice.rt == 1 { lastFireTime = now }
         fireStatusVerts = buildFireStatus(aim, fired: now - lastFireTime < Self.fireFlash)
-
-        // Input telemetry: the exact aim-hand signals, so a miss can be read off
-        // numbers (paste back) instead of guessed. Throttled to ~7 Hz.
-        if VRSettings.shared.inputLog, now - lastLog > 0.15 {
-            lastLog = now
-            let mode = ["pinch", "curl", "hammer"][VRSettings.shared.fireMode.rawValue]
-            print("[inputlog] mode=\(mode)"
-                + " straight=\(String(format: "%.2f", aim.indexStraightness))"
-                + " curl=\(aim.indexCurled ? 1 : 0) ext=\(aim.indexExtended ? 1 : 0)"
-                + " thumb=\(Int(aim.thumbBarrelDeg))° ham=\(aim.thumbHammerDown ? 1 : 0)"
-                + " aim=\(aim.aimDir != nil ? 1 : 0) fire=\(slice.rt == 1 ? 1 : 0)")
-        }
+        fireDebugVerts = buildFireDebug(aim, now: now)
 
         // Turn: one of three styles (Comfort menu). Stick and clutch accumulate
         // hand motion into comfort snaps via emitTurnSnap; flick is the whip.
@@ -340,7 +359,7 @@ final class HandInput: @unchecked Sendable {
                 if firing { slice.rx = flickDir }
             }
             let refSpeed = max(posThreshold, negThreshold, 0.5)
-            buildTurnGauge(wrist: aim.wrist, speed: speed,
+            buildTurnGauge(wrist: aim.wrist, forearm: aim.aimBaseDir, speed: speed,
                            posThreshold: posThreshold, negThreshold: negThreshold, refSpeed: refSpeed,
                            armed: flickArmed, firing: firing)
 
@@ -349,11 +368,11 @@ final class HandInput: @unchecked Sendable {
             // neutral sets the snap cadence. Measured in the ROOM frame, so
             // "hand held right" keeps turning right no matter how far you've
             // already turned; resting the hand re-centres.
-            turnGaugeVerts = []
             if let ow = move.wrist {
                 let lat = (TrackingSpace.correction * SIMD4(ow, 1)).x
                 let neutral = stickNeutral ?? lat
                 let offset = lat - neutral
+                turnDebugOffset = offset
                 if abs(offset) < Self.stickDeadzone {
                     stickNeutral = neutral + (lat - neutral) * 0.08   // rest redefines centre
                 } else {
@@ -364,14 +383,17 @@ final class HandInput: @unchecked Sendable {
             } else {
                 stickNeutral = nil
                 turnIntent = 0
+                turnDebugOffset = 0
             }
             emitTurnSnap(now: now, slice: &slice)
+            turnGaugeVerts = buildTurnDebug(wrist: move.wrist, forearm: move.aimBaseDir,
+                                            engaged: abs(turnDebugOffset) >= Self.stickDeadzone,
+                                            offset: turnDebugOffset, deadzone: Self.stickDeadzone, now: now)
 
         case .clutch:
             // MPH stylus: hold the aim-hand MIDDLE pinch to engage, drag
             // laterally to add snap intent, release to re-centre. Fire stays on
             // the index, so shooting and turning never collide.
-            turnGaugeVerts = []
             if aim.middlePinched, let aw = aim.wrist {
                 let lat = (TrackingSpace.correction * SIMD4(aw, 1)).x
                 if let anchor = clutchAnchor { turnIntent += (lat - anchor) * Self.clutchGain }
@@ -380,6 +402,23 @@ final class HandInput: @unchecked Sendable {
                 clutchAnchor = nil
             }
             emitTurnSnap(now: now, slice: &slice)
+            turnGaugeVerts = buildTurnDebug(wrist: aim.wrist, forearm: aim.aimBaseDir,
+                                            engaged: aim.middlePinched, offset: 0, deadzone: 0, now: now)
+        }
+
+        // Input telemetry: the exact aim + turn signals (final slice), so a miss
+        // can be read off numbers (paste back) instead of guessed. ~7 Hz.
+        if VRSettings.shared.inputLog, now - lastLog > 0.15 {
+            lastLog = now
+            let mode = ["pinch", "curl", "hammer"][VRSettings.shared.fireMode.rawValue]
+            let tstyle = ["stick", "clutch", "flick"][VRSettings.shared.turnStyle.rawValue]
+            print("[inputlog] fire=\(mode)"
+                + " straight=\(String(format: "%.2f", aim.indexStraightness))"
+                + " curl=\(aim.indexCurled ? 1 : 0) ext=\(aim.indexExtended ? 1 : 0)"
+                + " thumb=\(Int(aim.thumbBarrelDeg))° ham=\(aim.thumbHammerDown ? 1 : 0)"
+                + " aim=\(aim.aimDir != nil ? 1 : 0) shot=\(slice.rt == 1 ? 1 : 0)"
+                + " | turn=\(tstyle) intent=\(Int(turnIntent))°/\(Int(Self.snapStep))"
+                + " off=\(String(format: "%.2f", turnDebugOffset)) snap=\(slice.rx)")
         }
 
         aggregator.update(.hands, slice)
@@ -402,6 +441,41 @@ final class HandInput: @unchecked Sendable {
         if now < snapPulseUntil { slice.rx = snapDir }
     }
 
+    /// Turn-trigger meter for the stick/clutch styles: a billboarded bar above
+    /// the driving wrist. The centre-out fill shows progress toward the next
+    /// snap (white flash when it fires); the base goes green when engaged/
+    /// accumulating, red when idle. For the stick it also draws the deadzone
+    /// band and a marker for where the hand sits, so you can see the exact
+    /// moment you cross out of the deadzone into a turn.
+    private func buildTurnDebug(wrist: SIMD3<Float>?, forearm: SIMD3<Float>?, engaged: Bool,
+                                offset: Float, deadzone: Float, now: Double) -> [Float] {
+        guard HandDebug.shared.turnDebug || HandDebug.shared.enabled,
+              let dock = hudDock(wrist: wrist, forearm: forearm) else { return [] }
+        let halfW: Float = 0.09
+        let fullScale: Float = 0.15               // metres of offset mapped to the bar edge
+        var v: [Float] = []
+        func quad(_ cx: Float, _ hw: Float, _ hh: Float, _ col: SIMD4<Float>) {
+            dockQuad(&v, dock, cx, 0, hw, hh, col)
+        }
+        let firing = now < snapPulseUntil
+        // Base track: green when engaged/accumulating, red when idle.
+        quad(0, halfW, 0.006, engaged ? SIMD4(0.10, 0.35, 0.16, 0.80) : SIMD4(0.30, 0.10, 0.10, 0.70))
+        if deadzone > 0 {                          // stick: deadzone band + hand marker
+            quad(0, halfW * min(1, deadzone / fullScale), 0.010, SIMD4(0.55, 0.50, 0.20, 0.35))
+            let oFrac = max(-1, min(1, offset / fullScale))
+            quad(oFrac * halfW, 0.006, 0.026, SIMD4(0.90, 0.92, 1.0, 0.95))
+        }
+        let tick = SIMD4<Float>(1.0, 0.55, 0.20, 0.95)
+        quad(-halfW, 0.004, 0.022, tick)           // snap thresholds
+        quad( halfW, 0.004, 0.022, tick)
+        quad(0, 0.003, 0.014, tick)                // centre notch
+        // Progress-to-snap fill: grows from centre toward a tick.
+        let frac = max(-1, min(1, turnIntent / Self.snapStep))
+        quad(frac * halfW * 0.5, abs(frac) * halfW * 0.5, 0.016,
+             firing ? SIMD4(1, 1, 1, 1) : SIMD4(0.25, 1.0, 0.45, 0.95))
+        return v
+    }
+
     /// A world-space gauge floating above the gun-hand wrist that shows the
     /// flick snap-turn signal live: a curved track with a threshold tick each
     /// side and a marker that slides with the body-right wrist speed -- green
@@ -415,66 +489,92 @@ final class HandInput: @unchecked Sendable {
     /// bowed concave toward you (a curved-monitor look) so some segment always
     /// faces the glance. Built in the corrected tracking frame; drawn with the
     /// debug overlay through handViewproj. Triangles, not lines.
-    private func buildTurnGauge(wrist: SIMD3<Float>?, speed: Float,
+    private func buildTurnGauge(wrist: SIMD3<Float>?, forearm: SIMD3<Float>?, speed: Float,
                                 posThreshold: Float, negThreshold: Float, refSpeed: Float,
                                 armed: Bool, firing: Bool) {
-        guard HandDebug.shared.enabled, let w = wrist else { turnGaugeVerts = []; return }
-        let c4 = TrackingSpace.correction * SIMD4(w, 1)
-        let center = SIMD3(c4.x, c4.y + 0.14, c4.z)   // above the wrist
-
-        // Billboard toward the eye, then recline the panel toward the glance:
-        // `face` is the panel normal, `up` its up axis, both pitched back by
-        // `tilt` about `right` so the gauge reads like a tilted dashboard.
-        let toEye = simd_normalize(ViewerPose.shared.eye - center)
-        var right = simd_cross(SIMD3<Float>(0, 1, 0), toEye)
-        right = simd_length(right) > 1e-4 ? simd_normalize(right) : SIMD3(1, 0, 0)
-        let up0 = simd_normalize(simd_cross(toEye, right))
-        let tilt: Float = 0.55                        // ~31 deg recline toward the glance
-        let face = simd_normalize(toEye * cos(tilt) + up0 * sin(tilt))
-        let up = simd_normalize(simd_cross(face, right))
-
-        // Shallow arc, concave toward the viewer, laid in (right, face): lateral
-        // position rides `right` by R*sin(theta); the ends wrap toward you by
-        // R*(1 - cos(theta)). halfW is the chord half-width.
-        let halfW: Float = 0.09
-        let arcHalf: Float = 0.42                      // half the subtended angle (~48 deg)
-        let radius = halfW / sin(arcHalf)
-        func arc(_ theta: Float, _ vy: Float) -> SIMD3<Float> {
-            center + right * (radius * sin(theta))
-                   + face  * (radius * (1 - cos(theta)))
-                   + up * vy
-        }
+        guard HandDebug.shared.enabled || HandDebug.shared.turnDebug,
+              let dock = hudDock(wrist: wrist, forearm: forearm) else { turnGaugeVerts = []; return }
         var v: [Float] = []
-        // A vertical bar of angular half-width `ha` and height `hh`, centred at
-        // angle `theta` on the arc.
-        func bar(_ theta: Float, _ ha: Float, _ hh: Float, _ col: SIMD4<Float>) {
-            let a = arc(theta - ha, -hh), b = arc(theta + ha, -hh)
-            let d = arc(theta + ha,  hh), e = arc(theta - ha,  hh)
-            for q in [a, b, d, a, d, e] { v += [q.x, q.y, q.z, col.x, col.y, col.z, col.w] }
+        func quad(_ cx: Float, _ cy: Float, _ hw: Float, _ hh: Float, _ col: SIMD4<Float>) {
+            dockQuad(&v, dock, cx, cy, hw, hh, col)
         }
-        func theta(_ frac: Float) -> Float { max(-1.2, min(1.2, frac)) * arcHalf }
-
+        let halfW: Float = 0.09
+        func fx(_ frac: Float) -> Float { max(-1.2, min(1.2, frac)) * halfW }
         let track  = SIMD4<Float>(0.10, 0.30, 0.14, 0.70)
         let tick   = SIMD4<Float>(1.0, 0.55, 0.20, 0.95)
         let armedC = SIMD4<Float>(0.25, 1.0, 0.45, 0.98)
         let coolC  = SIMD4<Float>(0.90, 0.80, 0.20, 0.90)
         let fireC  = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
-
-        // Curved track, drawn as a strip of segments so the bow is visible.
-        let segs = 12
-        let segHalf = arcHalf / Float(segs)
-        for i in 0..<segs {
-            let t = -arcHalf + (2 * Float(i) + 1) * segHalf
-            bar(t, segHalf, 0.012, track)
-        }
-        // Auto-balanced ticks: each side sits at its own live threshold, so a
-        // weaker direction's tick pulls in toward centre (an easier bar).
-        bar(theta( posThreshold / refSpeed), 0.010, 0.026, tick)   // body-right trigger
-        bar(theta(-negThreshold / refSpeed), 0.010, 0.026, tick)   // body-left trigger
-        bar(0, 0.008, 0.020, track)                                // centre notch
-        bar(theta(speed / refSpeed), 0.014, 0.030,                 // moving marker
-            firing ? fireC : (armed ? armedC : coolC))
+        quad(0, 0, halfW, 0.008, track)                                 // track
+        quad(fx( posThreshold / refSpeed), 0, 0.004, 0.024, tick)       // body-right trigger
+        quad(fx(-negThreshold / refSpeed), 0, 0.004, 0.024, tick)       // body-left trigger
+        quad(0, 0, 0.003, 0.016, track)                                 // centre notch
+        quad(fx(speed / refSpeed), 0, 0.006, 0.030,                     // moving marker
+             firing ? fireC : (armed ? armedC : coolC))
         turnGaugeVerts = v
+    }
+
+    /// The adjustable on-arm dock every debug meter renders into: anchored at
+    /// the wrist, oriented by the forearm, offset + tilted by the live HUD
+    /// params, then blended toward eye-facing by `hudFaceMe`. Returns the flat
+    /// panel basis (origin, unit right, unit up) and a scale, or nil if the
+    /// wrist isn't tracked.
+    private func hudDock(wrist: SIMD3<Float>?, forearm: SIMD3<Float>?)
+        -> (origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>, scale: Float)? {
+        guard let wrist else { return nil }
+        let s = VRSettings.shared
+        let corr = TrackingSpace.correction
+        let w4 = corr * SIMD4(wrist, 1)
+        var origin = SIMD3(w4.x, w4.y, w4.z)
+        // Forearm frame (fallback: face -Z). fwd along the arm, right across it.
+        var fwd = SIMD3<Float>(0, 0, -1)
+        if let forearm {
+            let f4 = corr * SIMD4(forearm, 0)
+            let f = SIMD3(f4.x, f4.y, f4.z)
+            if simd_length(f) > 1e-4 { fwd = simd_normalize(f) }
+        }
+        var armRight = simd_cross(SIMD3<Float>(0, 1, 0), fwd)
+        armRight = simd_length(armRight) > 1e-4 ? simd_normalize(armRight) : SIMD3(1, 0, 0)
+        let armUp = simd_normalize(simd_cross(fwd, armRight))
+        origin += armRight * s.hudSide + armUp * s.hudUp + fwd * s.hudForward
+        // Facing: blend the bracer normal (armUp) toward the eye direction.
+        let f = max(0, min(1, s.hudFaceMe))
+        let toEye = simd_normalize(ViewerPose.shared.eye - origin)
+        var normal = armUp * (1 - f) + toEye * f
+        normal = simd_length(normal) > 1e-4 ? simd_normalize(normal) : armUp
+        // Panel up reference: along the arm when locked, world-up when facing.
+        let refUp = simd_normalize(fwd * (1 - f) + SIMD3<Float>(0, 1, 0) * f)
+        var right = simd_cross(refUp, normal)
+        right = simd_length(right) > 1e-4 ? simd_normalize(right) : armRight
+        var up = simd_normalize(simd_cross(normal, right))
+        // Transform: pan (yaw) about up, then pitch about right, then roll.
+        let yw = s.hudYaw * .pi / 180
+        let right0 = simd_normalize(right * cos(yw) - normal * sin(yw))
+        normal = simd_normalize(normal * cos(yw) + right * sin(yw))
+        right = right0
+        let p = s.hudPitch * .pi / 180
+        let up1 = simd_normalize(up * cos(p) + normal * sin(p))
+        normal = simd_normalize(normal * cos(p) - up * sin(p))
+        up = up1
+        let r = s.hudRoll * .pi / 180
+        let right1 = simd_normalize(right * cos(r) + up * sin(r))
+        up = simd_normalize(up * cos(r) - right * sin(r))
+        right = right1
+        return (origin, right, up, max(0.2, s.hudScale))
+    }
+
+    /// Emit one quad into the dock's flat panel: centre (cx, cy) and half-size
+    /// (hw, hh) are panel-space metres, scaled by the dock scale.
+    private func dockQuad(_ v: inout [Float],
+                          _ dock: (origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>, scale: Float),
+                          _ cx: Float, _ cy: Float, _ hw: Float, _ hh: Float, _ col: SIMD4<Float>) {
+        let s = dock.scale
+        let c = dock.origin + dock.right * (cx * s) + dock.up * (cy * s)
+        let a = c - dock.right * (hw * s) - dock.up * (hh * s)
+        let b = c + dock.right * (hw * s) - dock.up * (hh * s)
+        let d = c + dock.right * (hw * s) + dock.up * (hh * s)
+        let e = c - dock.right * (hw * s) + dock.up * (hh * s)
+        for q in [a, b, d, a, d, e] { v += [q.x, q.y, q.z, col.x, col.y, col.z, col.w] }
     }
 
     /// A view-facing line-quad from a to b (corrected-tracking space) for the
@@ -544,6 +644,50 @@ final class HandInput: @unchecked Sendable {
         } else {
             octa(&v, p, 0.008, DebugColor.aimOk)
         }
+        return v
+    }
+
+    /// Fire-threshold meter for the active fire mode: a billboarded bar above
+    /// the aim wrist showing the live signal against its trigger threshold, so
+    /// dragging Curl-ease / Hammer-angle is visible. Left = the "fire zone"
+    /// (shaded); the tick is the (live-tunable) threshold and MOVES as you drag
+    /// the slider; the marker is your current signal -- it goes green when the
+    /// gesture registers and flashes white on an actual shot. For hammer the
+    /// base turns red when the gun pose (extended index) isn't held.
+    private func buildFireDebug(_ aim: HandState, now: Double) -> [Float] {
+        guard HandDebug.shared.fireDebug || HandDebug.shared.enabled else { return [] }
+        var value01: Float = 0, thresh01: Float = 0, armed = true
+        switch VRSettings.shared.fireMode {
+        case .pinch:
+            let full: Float = 0.08                         // metres of tip gap at bar edge
+            value01 = min(1, aim.indexPinchDist / full)
+            thresh01 = 0.025 / full                        // pinch "close" distance
+        case .curl:
+            value01 = min(1, max(0, aim.indexStraightness))
+            thresh01 = VRSettings.shared.curlSensitivity
+        case .hammer:
+            value01 = min(1, aim.thumbBarrelDeg / 90)
+            thresh01 = min(1, VRSettings.shared.hammerDropDeg / 90)
+            armed = aim.indexExtended
+        }
+        guard let dock = hudDock(wrist: aim.wrist, forearm: aim.aimBaseDir) else { return [] }
+        let halfW: Float = 0.09
+        let row: Float = 0.07                              // stacked above the turn meter
+        func toX(_ f: Float) -> Float { (min(1, max(0, f)) * 2 - 1) * halfW }
+        var v: [Float] = []
+        func quad(_ cx: Float, _ hw: Float, _ hh: Float, _ col: SIMD4<Float>) {
+            dockQuad(&v, dock, cx, row, hw, hh, col)
+        }
+        // Base: red when the pose gate isn't met (hammer without the gun pose).
+        quad(0, halfW, 0.006, armed ? SIMD4(0.12, 0.12, 0.14, 0.75) : SIMD4(0.30, 0.10, 0.10, 0.75))
+        // Fire zone: the low side below the threshold that triggers.
+        let zoneL = -halfW, zoneR = toX(thresh01)
+        quad((zoneL + zoneR) / 2, max(0, (zoneR - zoneL) / 2), 0.011, SIMD4(0.15, 0.45, 0.20, 0.35))
+        quad(toX(thresh01), 0.004, 0.026, SIMD4(1.0, 0.55, 0.20, 0.95))   // threshold (moves w/ slider)
+        let firing = now - lastFireTime < Self.fireFlash
+        let markCol: SIMD4<Float> = firing ? SIMD4(1, 1, 1, 1)
+            : (aim.fires ? SIMD4(0.25, 1.0, 0.45, 0.98) : SIMD4(0.90, 0.92, 1.0, 0.95))
+        quad(toX(value01), 0.006, 0.030, markCol)                          // live signal
         return v
     }
 
@@ -627,6 +771,7 @@ private struct HandState {
     var thumbHammerDown = false        // thumb dropped toward the barrel: hammer fell
     var indexStraightness: Float = 1   // log: index barrel straightness (1 = straight)
     var thumbBarrelDeg: Float = 180    // log: thumb-to-barrel angle in degrees
+    var indexPinchDist: Float = 0.08   // log/meter: index-to-thumb distance (m)
     var middlePinched = false
     var ringPinched = false
     var pinkyPinched = false
@@ -735,6 +880,7 @@ private struct HandState {
         }
 
         let index = tip(.indexFingerTip)
+        if let thumb, let index { indexPinchDist = simd_distance(thumb, index) } else { indexPinchDist = 0.08 }
         let wasIndex = indexPinched
         indexPinched = pinch(index, indexPinched)
         if indexPinched, !wasIndex { indexStart = index }

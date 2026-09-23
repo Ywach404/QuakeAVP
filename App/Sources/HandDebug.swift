@@ -43,6 +43,20 @@ final class HandDebug: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return _strobe }
         set { lock.lock(); _strobe = newValue; lock.unlock() }
     }
+    /// Turn-trigger meter: shows, for the active turn style, how close a snap is
+    /// (plus the stick deadzone / clutch engage state).
+    private var _turnDebug = false
+    var turnDebug: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _turnDebug }
+        set { lock.lock(); _turnDebug = newValue; lock.unlock() }
+    }
+    /// Fire-threshold meter: the active fire mode's live signal vs its (live-
+    /// tunable) trigger threshold and fire zone, so a slider edit is visible.
+    private var _fireDebug = false
+    var fireDebug: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _fireDebug }
+        set { lock.lock(); _fireDebug = newValue; lock.unlock() }
+    }
 
     func publish(_ v: [Float]) {
         lock.lock(); verts = v; lock.unlock()
