@@ -122,6 +122,16 @@ final class HandInput: @unchecked Sendable {
     private static let fireFlash = 0.15    // s to hold the flash so it's visible
     private var lastLog = 0.0              // throttle for the input telemetry log
 
+    /// Respawns the console window from inside the game: hold the AIM hand
+    /// palm-up (the off hand's palm-up owns the wheel) for `summonDwell`.
+    /// Mixed immersion lets the window coexist with the world, so this works
+    /// without a crown press. Set by the window on appear.
+    nonisolated(unsafe) static var summonConsole: (@MainActor () -> Void)?
+    private static let summonDwell = 1.2
+    private static let summonCooldown = 5.0
+    private var summonSince = 0.0
+    private var summonCooldownUntil = 0.0
+
     init(aggregator: PadAggregator) {
         self.aggregator = aggregator
     }
@@ -216,6 +226,20 @@ final class HandInput: @unchecked Sendable {
         // even while the wheel is open, so the gun keeps tracking the hand.
         feedAim(aim)
         aimRayVerts = buildAimRays(aim)
+
+        // Console summon: aim-hand palm-up dwell. Runs before the wheel gate so
+        // it works regardless of what the off hand is doing.
+        let summonNow = CACurrentMediaTime()
+        if aim.palmUp, summonNow >= summonCooldownUntil {
+            if summonSince == 0 { summonSince = summonNow }
+            if summonNow - summonSince > Self.summonDwell {
+                summonSince = 0
+                summonCooldownUntil = summonNow + Self.summonCooldown
+                if let summon = Self.summonConsole { Task { @MainActor in summon() } }
+            }
+        } else if !aim.palmUp {
+            summonSince = 0
+        }
 
         // While the wheel is open, ALL other gestures are suppressed --
         // you are choosing a weapon, not fighting or moving. This is why

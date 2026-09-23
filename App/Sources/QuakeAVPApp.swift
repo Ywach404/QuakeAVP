@@ -22,6 +22,16 @@ final class ImmersionSettings {
     private init() {}
 }
 
+/// Tracks whether a console window is on screen, so the respawn paths (crown
+/// recovery, palm summon) only open one when none exists instead of stacking
+/// duplicate WindowGroup instances.
+@MainActor
+final class ConsolePresence {
+    static let shared = ConsolePresence()
+    var count = 0
+    private init() {}
+}
+
 @main
 struct QuakeAVPApp: App {
 
@@ -37,9 +47,11 @@ struct QuakeAVPApp: App {
                 // One fixed size that fits every control and the log; the
                 // console is a debug surface, not a resizable document, and
                 // a drifting window makes its buttons hard to hit in space.
-                .frame(width: 940, height: 720)
+                // Sized for the full-width level bar -- an undersized frame
+                // makes content overlap and steal taps.
+                .frame(width: 960, height: 900)
         }
-        .defaultSize(width: 940, height: 720)
+        .defaultSize(width: 960, height: 900)
         .windowResizability(.contentSize)
         // The console is a WindowGroup, so a closed window has no in-app way
         // back without this: a menu command + Cmd-0 reopen it. Losing the

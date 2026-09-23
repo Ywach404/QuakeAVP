@@ -135,16 +135,22 @@ struct ContentView: View {
             ProfileStore.shared.refreshActiveFromInput()
             ProfileStore.shared.apply()
             syncFromProfile()
-            // Crown-press recovery: the crown dismisses the immersive space
-            // system-side, and if the console window was closed there is
-            // nothing left to tap. Respawn the console whenever the immersive
-            // space ends so there is always a way back into the game. The
-            // captured OpenWindowAction stays valid after this window closes.
+            // Console respawn, two triggers, both duplicate-guarded: the
+            // immersive space ending (crown goes home; coming back should find
+            // a window) and the in-game aim-hand palm-up dwell (summon the
+            // window WITHOUT leaving the game -- mixed immersion lets it
+            // coexist with the world). The captured OpenWindowAction stays
+            // valid after this window closes.
+            ConsolePresence.shared.count += 1
             let openWindow = self.openWindow
-            RendererCoordinator.shared.onImmersiveEnded = {
+            let respawn: @MainActor () -> Void = {
+                guard ConsolePresence.shared.count == 0 else { return }
                 openWindow(id: QuakeAVPApp.consoleWindowID)
             }
+            RendererCoordinator.shared.onImmersiveEnded = respawn
+            HandInput.summonConsole = respawn
         }
+        .onDisappear { ConsolePresence.shared.count -= 1 }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
         .onChange(of: coordinator.isImmersiveActive) { _, active in
