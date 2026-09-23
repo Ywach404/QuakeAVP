@@ -368,7 +368,8 @@ final class ImmersiveRenderer {
         // Hand debug wireframe: the published bones are already in
         // corrected-tracking space; drawn with handViewproj they sit on the
         // real hand, untouched by the game-world height trim.
-        let handOverlays = HandDebug.shared.enabled || HandDebug.shared.aimRays || HandDebug.shared.strobe
+        let handOverlays = HandDebug.shared.enabled || HandDebug.shared.aimRays
+            || HandDebug.shared.strobe || HandDebug.shared.turnDebug || HandDebug.shared.fireDebug
         let handDebug: [Float] = handOverlays ? HandDebug.shared.snapshot() : []
 
         // The virtual hand stands in while the world is solid and fades out
