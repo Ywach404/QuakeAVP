@@ -547,7 +547,11 @@ final class HandInput: @unchecked Sendable {
         var right = simd_cross(refUp, normal)
         right = simd_length(right) > 1e-4 ? simd_normalize(right) : armRight
         var up = simd_normalize(simd_cross(normal, right))
-        // Tilt: pitch about right, then roll about normal.
+        // Transform: pan (yaw) about up, then pitch about right, then roll.
+        let yw = s.hudYaw * .pi / 180
+        let right0 = simd_normalize(right * cos(yw) - normal * sin(yw))
+        normal = simd_normalize(normal * cos(yw) + right * sin(yw))
+        right = right0
         let p = s.hudPitch * .pi / 180
         let up1 = simd_normalize(up * cos(p) + normal * sin(p))
         normal = simd_normalize(normal * cos(p) - up * sin(p))

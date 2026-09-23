@@ -140,6 +140,9 @@ final class VRSettings: @unchecked Sendable {
     private var _hudRoll: Float = 0
     var hudRoll: Float { get { lock.lock(); defer { lock.unlock() }; return _hudRoll }
                          set { lock.lock(); _hudRoll = newValue; lock.unlock() } }
+    private var _hudYaw: Float = 0
+    var hudYaw: Float { get { lock.lock(); defer { lock.unlock() }; return _hudYaw }
+                        set { lock.lock(); _hudYaw = newValue; lock.unlock() } }
     private var _hudFaceMe: Float = 0.8
     var hudFaceMe: Float { get { lock.lock(); defer { lock.unlock() }; return _hudFaceMe }
                            set { lock.lock(); _hudFaceMe = newValue; lock.unlock() } }

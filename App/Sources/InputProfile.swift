@@ -37,6 +37,8 @@ struct InputProfile: Codable, Equatable {
     var hudSide: Float = 0
     var hudPitch: Float = 0
     var hudRoll: Float = 0
+    /// Optional so profiles saved before this field existed still decode.
+    var hudYaw: Float? = 0
     var hudFaceMe: Float = 0.8
     var hudScale: Float = 1
 
@@ -133,6 +135,7 @@ final class ProfileStore {
         s.hudSide = p.hudSide
         s.hudPitch = p.hudPitch
         s.hudRoll = p.hudRoll
+        s.hudYaw = p.hudYaw ?? 0
         s.hudFaceMe = p.hudFaceMe
         s.hudScale = p.hudScale
         applyRig()

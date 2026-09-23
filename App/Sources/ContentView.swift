@@ -42,6 +42,7 @@ struct ContentView: View {
     @State private var hudSideUI: Float = 0
     @State private var hudPitchUI: Float = 0
     @State private var hudRollUI: Float = 0
+    @State private var hudYawUI: Float = 0
     @State private var hudFaceUI: Float = 0.8
     @State private var hudScaleUI: Float = 1
     @State private var fireMode: FireMode = .pinch
@@ -523,21 +524,26 @@ struct ContentView: View {
             Toggle("Fire threshold meter (pinch/curl/bang)", isOn: Binding(
                 get: { fireDebug },
                 set: { fireDebug = $0; HandDebug.shared.fireDebug = $0 }))
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Debug HUD placement (on-arm)").font(.caption).foregroundStyle(.secondary)
-                tuneRow("Forward", $hudFwdUI, -0.2...0.2) {
+            // HUD dock placement as typed transform fields (exact numbers beat
+            // fishing with sliders). Position in cm, rotation in degrees.
+            VStack(alignment: .leading, spacing: 8) {
+                Text("HUD Position").font(.caption.weight(.semibold))
+                transformField("Fwd X", $hudFwdUI, unit: "cm", display: 100) {
                     VRSettings.shared.hudForward = $0; ProfileStore.shared.current.hudForward = $0 }
-                tuneRow("Up", $hudUpUI, -0.1...0.4) {
+                transformField("Up Y", $hudUpUI, unit: "cm", display: 100) {
                     VRSettings.shared.hudUp = $0; ProfileStore.shared.current.hudUp = $0 }
-                tuneRow("Side", $hudSideUI, -0.2...0.2) {
+                transformField("Side Z", $hudSideUI, unit: "cm", display: 100) {
                     VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
-                tuneRow("Pitch", $hudPitchUI, -90...90, fmt: "%.0f°") {
+                Text("HUD Transform").font(.caption.weight(.semibold)).padding(.top, 2)
+                transformField("Tilt X", $hudPitchUI, unit: "°") {
                     VRSettings.shared.hudPitch = $0; ProfileStore.shared.current.hudPitch = $0 }
-                tuneRow("Roll", $hudRollUI, -90...90, fmt: "%.0f°") {
+                transformField("Pan Y", $hudYawUI, unit: "°") {
+                    VRSettings.shared.hudYaw = $0; ProfileStore.shared.current.hudYaw = $0 }
+                transformField("Roll Z", $hudRollUI, unit: "°") {
                     VRSettings.shared.hudRoll = $0; ProfileStore.shared.current.hudRoll = $0 }
-                tuneRow("Face me", $hudFaceUI, 0...1) {
+                transformField("Face me", $hudFaceUI, unit: "0–1") {
                     VRSettings.shared.hudFaceMe = $0; ProfileStore.shared.current.hudFaceMe = $0 }
-                tuneRow("Scale", $hudScaleUI, 0.4...2.0) {
+                transformField("Scale", $hudScaleUI, unit: "×") {
                     VRSettings.shared.hudScale = $0; ProfileStore.shared.current.hudScale = $0 }
             }
         }
@@ -628,6 +634,29 @@ struct ContentView: View {
         }
     }
 
+    /// A typed transform field (inspector-style): right-aligned label, numeric
+    /// entry, unit suffix. `display` scales storage to display units (100 shows
+    /// metres as cm). Commits on return/focus-out; applies + persists live.
+    private func transformField(_ label: String, _ value: Binding<Float>,
+                                unit: String, display: Float = 1,
+                                apply: @escaping (Float) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+                .frame(width: 64, alignment: .trailing)
+            TextField(label, value: Binding<Double>(
+                get: { Double(value.wrappedValue * display) },
+                set: { let v = Float($0) / display
+                       value.wrappedValue = v; apply(v) }),
+                format: .number.precision(.fractionLength(1)))
+                .textFieldStyle(.roundedBorder)
+                .font(.caption.monospacedDigit())
+                .multilineTextAlignment(.trailing)
+                .frame(width: 90)
+                .labelsHidden()
+            Text(unit).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     /// One row of the gesture-tuning panel: a labelled slider over a custom
     /// range that pushes the value straight to VRSettings, so the hand-input
     /// feel changes live in the headset without a rebuild.
@@ -657,7 +686,7 @@ struct ContentView: View {
         aimSmoothUI = p.aimSmooth; aimBlendUI = p.aimBlend
         curlSensUI = p.curlSensitivity; hammerDropUI = p.hammerDropDeg
         hudFwdUI = p.hudForward; hudUpUI = p.hudUp; hudSideUI = p.hudSide
-        hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll
+        hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll; hudYawUI = p.hudYaw ?? 0
         hudFaceUI = p.hudFaceMe; hudScaleUI = p.hudScale
         weaponBack = p.weaponBack; weaponUp = p.weaponUp; weaponSide = p.weaponSide
         weaponGrip = p.weaponGrip; aimPitch = p.aimPitch
