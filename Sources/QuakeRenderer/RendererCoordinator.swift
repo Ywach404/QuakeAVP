@@ -29,6 +29,12 @@ final class RendererCoordinator {
     /// The flat window's delegate, shared across SwiftUI view rebuilds.
     private(set) var windowRenderer: WorldRenderer?
 
+    /// Runs on the main actor whenever the immersive space ends -- including a
+    /// crown press, which dismisses it system-side with no window left to tap.
+    /// The app uses it to respawn the console window so there is always a way
+    /// back into the game.
+    var onImmersiveEnded: (() -> Void)?
+
     private init() {
         core = RendererCore()
         if let core {
@@ -67,5 +73,6 @@ final class RendererCoordinator {
         // Hand the stream back; the window's next draw re-reports its
         // drawable size (the C side dedupes), restoring the refdef.
         core?.activate(.window)
+        onImmersiveEnded?()
     }
 }
