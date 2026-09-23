@@ -43,6 +43,8 @@ struct ContentView: View {
     @State private var hudPitchUI: Float = 0
     @State private var hudRollUI: Float = 0
     @State private var hudYawUI: Float = 0
+    @State private var gyroLast: CGPoint?
+    @State private var gyroRollMode = false
     @State private var hudFaceUI: Float = 0.8
     @State private var hudScaleUI: Float = 1
     @State private var fireMode: FireMode = .pinch
@@ -535,12 +537,17 @@ struct ContentView: View {
                 transformField("Side Z", $hudSideUI, unit: "cm", display: 100) {
                     VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
                 Text("HUD Transform").font(.caption.weight(.semibold)).padding(.top, 2)
-                transformField("Tilt X", $hudPitchUI, unit: "°") {
-                    VRSettings.shared.hudPitch = $0; ProfileStore.shared.current.hudPitch = $0 }
-                transformField("Pan Y", $hudYawUI, unit: "°") {
-                    VRSettings.shared.hudYaw = $0; ProfileStore.shared.current.hudYaw = $0 }
-                transformField("Roll Z", $hudRollUI, unit: "°") {
-                    VRSettings.shared.hudRoll = $0; ProfileStore.shared.current.hudRoll = $0 }
+                HStack(alignment: .center, spacing: 14) {
+                    gyroDial
+                    VStack(alignment: .leading, spacing: 8) {
+                        transformField("Tilt X", $hudPitchUI, unit: "°") {
+                            VRSettings.shared.hudPitch = $0; ProfileStore.shared.current.hudPitch = $0 }
+                        transformField("Pan Y", $hudYawUI, unit: "°") {
+                            VRSettings.shared.hudYaw = $0; ProfileStore.shared.current.hudYaw = $0 }
+                        transformField("Roll Z", $hudRollUI, unit: "°") {
+                            VRSettings.shared.hudRoll = $0; ProfileStore.shared.current.hudRoll = $0 }
+                    }
+                }
                 transformField("Face me", $hudFaceUI, unit: "0–1") {
                     VRSettings.shared.hudFaceMe = $0; ProfileStore.shared.current.hudFaceMe = $0 }
                 transformField("Scale", $hudScaleUI, unit: "×") {
@@ -632,6 +639,55 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+    }
+
+    /// The gyro dial (inspector-style): drag INSIDE the rings to tumble the
+    /// HUD dock -- horizontal drag pans (Pan Y), vertical drag tilts (Tilt X)
+    /// -- and drag ON the outer ring band to spin Roll Z by the angle swept
+    /// around the centre. The fields beside it show the exact numbers live.
+    private var gyroDial: some View {
+        let size: CGFloat = 96
+        let ringBand: CGFloat = 16                 // outer band width = roll grab zone
+        let degPerPt: Float = 0.6                  // tumble sensitivity
+        return ZStack {
+            Circle().fill(Self.noctuaBrown.opacity(0.18))
+            Circle().strokeBorder(Self.noctuaBrown.opacity(0.75), lineWidth: 1.5)
+            Circle().inset(by: ringBand).strokeBorder(Self.noctuaBrown.opacity(0.5), lineWidth: 1)
+            // A roll indicator dot on the ring so the spin is readable.
+            Circle().fill(Self.noctuaBurgundy).frame(width: 7, height: 7)
+                .offset(y: -(size / 2 - ringBand / 2 - 1))
+                .rotationEffect(.degrees(Double(hudRollUI)))
+        }
+        .frame(width: size, height: size)
+        .contentShape(Circle())
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                let c = CGPoint(x: size / 2, y: size / 2)
+                if gyroLast == nil {
+                    let r = hypot(g.startLocation.x - c.x, g.startLocation.y - c.y)
+                    gyroRollMode = r > size / 2 - ringBand
+                }
+                guard let last = gyroLast else { gyroLast = g.location; return }
+                let p = g.location
+                gyroLast = p
+                if gyroRollMode {
+                    let a0 = atan2(last.y - c.y, last.x - c.x)
+                    let a1 = atan2(p.y - c.y, p.x - c.x)
+                    var d = Float(a1 - a0) * 180 / .pi
+                    if d > 180 { d -= 360 } else if d < -180 { d += 360 }
+                    hudRollUI = max(-180, min(180, hudRollUI + d))
+                    VRSettings.shared.hudRoll = hudRollUI
+                    ProfileStore.shared.current.hudRoll = hudRollUI
+                } else {
+                    hudYawUI = max(-180, min(180, hudYawUI + Float(p.x - last.x) * degPerPt))
+                    hudPitchUI = max(-90, min(90, hudPitchUI + Float(p.y - last.y) * degPerPt))
+                    VRSettings.shared.hudYaw = hudYawUI
+                    VRSettings.shared.hudPitch = hudPitchUI
+                    ProfileStore.shared.current.hudYaw = hudYawUI
+                    ProfileStore.shared.current.hudPitch = hudPitchUI
+                }
+            }
+            .onEnded { _ in gyroLast = nil })
     }
 
     /// A typed transform field (inspector-style): right-aligned label, numeric
