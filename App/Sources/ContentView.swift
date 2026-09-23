@@ -109,6 +109,7 @@ struct ContentView: View {
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 560)
+        .background(dashMaterial(28))
         .onAppear {
             engine.boot()
             gamepad.start()
@@ -219,6 +220,16 @@ struct ContentView: View {
     /// Comfort controls in a POPOVER, not a Menu -- a Menu silently drops
     /// Sliders (only buttons/toggles/pickers render), which is why the
     /// height slider never appeared. A popover renders a real slider.
+    /// A soft creme-blue tint laid over a thin translucent material -- the dash
+    /// surface for the window and its panels.
+    private static let cremeBlue = Color(red: 0.66, green: 0.79, blue: 0.95)
+    private func dashMaterial(_ radius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(.thinMaterial)
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Self.cremeBlue.opacity(0.42)))
+    }
+
     /// The persistent tabbed control panel that replaces the old popovers:
     /// always on screen, so a value stays visible and editable instead of
     /// vanishing when you look away.
@@ -246,7 +257,7 @@ struct ContentView: View {
         }
         .padding(16)
         .frame(width: 430)
-        .background(.regularMaterial, in: .rect(cornerRadius: 14))
+        .background(dashMaterial(14))
     }
 
     private var comfortContent: some View {
