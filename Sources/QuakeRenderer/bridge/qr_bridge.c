@@ -4902,6 +4902,11 @@ void QR_PublishFrame (void)
 	slot = &qr_slots[qr_building];
 	slot->frame.generation = qr_map_generation;
 	slot->frame.demo_playing = cls.demoplayback ? 1 : 0;
+	/* The export HUD draws conchars text render-side; make sure the atlas
+	   is up as soon as there is a world, not only once the wheel first
+	   emits a label (a demo export never opens the wheel). */
+	if (cl.worldmodel)
+		QR_EnsureConchars ();
 	if (cl.worldmodel && cl.viewentity > 0 && cl.viewentity < cl.num_entities)
 	{
 		entity_t *pl = &cl_entities[cl.viewentity];
