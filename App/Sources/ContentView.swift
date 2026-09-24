@@ -56,6 +56,11 @@ struct ContentView: View {
     @State private var inputLog = false
     @State private var showWeapon = false
     @State private var activeTab: PanelTab = .comfort
+    @State private var roster = EnemyRoster()
+    @State private var killAI = false
+    @State private var infightAttacker: Int32 = 0
+    @State private var infightTarget: Int32 = 0
+    @State private var infightBothWays = true
     @State private var selectedEpisode = 0
 
     /// Map episodes, one horizontal strip each. Mission packs / custom packs can
@@ -478,7 +483,9 @@ struct ContentView: View {
     }
 
     /// Admin tab: single-player cheats/utilities, sent to the console. Disabled
-    /// until a level is loaded (the engine is running).
+    /// until a level is loaded (the engine is running). The monster roster
+    /// behind Kill AI and the infighting pickers is polled only while this
+    /// tab is showing.
     private var adminContent: some View {
         let running = engine.status == .running
         return VStack(alignment: .leading, spacing: 10) {
@@ -488,14 +495,73 @@ struct ContentView: View {
             Button("All weapons + ammo") { engine.send("impulse 9") }
             Button("Full health") { engine.send("give h 100") }
             Divider()
+            // Replaces the old one-shot Notarget press: that only stopped
+            // monsters *acquiring* you, and shooting one still turned it on
+            // you. sv_killai holds the state and re-clears every tick.
+            Toggle("Kill AI (enemies never target you)", isOn: Binding(
+                get: { killAI },
+                set: { killAI = $0; engine.send("sv_killai \($0 ? 1 : 0)") }))
             Text("Toggles (each press flips)").font(.caption).foregroundStyle(.secondary)
             Button("God mode") { engine.send("god") }
             Button("Noclip") { engine.send("noclip") }
-            Button("Notarget") { engine.send("notarget") }
             Button("Fly") { engine.send("fly") }
+            Divider()
+            infightContent
         }
         .buttonStyle(.bordered)
         .disabled(!running)
+        .onAppear { roster.startPolling(); killAI = roster.killAI }
+        .onDisappear { roster.stopPolling() }
+        .onChange(of: roster.killAI) { _, on in killAI = on }
+        .onChange(of: roster.monsters) { _, monsters in
+            // A pick that died or unloaded with the level goes back to none.
+            if infightAttacker != 0, !monsters.contains(where: { $0.id == infightAttacker }) {
+                infightAttacker = 0
+            }
+            if infightTarget != 0, !monsters.contains(where: { $0.id == infightTarget }) {
+                infightTarget = 0
+            }
+        }
+    }
+
+    /// Target selection: pick an attacker and a target from the live roster
+    /// and send `ai_target`. QuakeC's own retaliation refuses same-type
+    /// infighting, so "Both ways" also sends the reverse pair.
+    private var infightContent: some View {
+        let canSend = infightAttacker != 0 && infightTarget != 0
+            && infightAttacker != infightTarget
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Infighting").font(.caption.weight(.semibold))
+            Text("Choose who attacks whom. Nearest first; a row shows what each monster is hunting now.")
+                .font(.caption).foregroundStyle(.secondary)
+            if roster.monsters.isEmpty {
+                Text(roster.levelLoaded ? "No live monsters." : "Load a level to list monsters.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Picker("Attacker", selection: $infightAttacker) {
+                    Text("Choose attacker").tag(Int32(0))
+                    ForEach(roster.monsters) { m in
+                        Text(roster.label(for: m)).tag(m.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                Picker("Target", selection: $infightTarget) {
+                    Text("Choose target").tag(Int32(0))
+                    ForEach(roster.monsters) { m in
+                        Text(roster.label(for: m)).tag(m.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                Toggle("Both ways (target fights back)", isOn: $infightBothWays)
+                Button("Make hostile") {
+                    engine.send("ai_target \(infightAttacker) \(infightTarget)")
+                    if infightBothWays {
+                        engine.send("ai_target \(infightTarget) \(infightAttacker)")
+                    }
+                }
+                .disabled(!canSend)
+            }
+        }
     }
 
     /// Debug tab: overlay/meter toggles, the input telemetry log, and the
