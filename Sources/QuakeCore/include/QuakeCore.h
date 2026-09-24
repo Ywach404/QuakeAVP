@@ -317,6 +317,13 @@ typedef struct qc_frame_s {
 	   Consumer fires a kick whenever this increases. */
 	uint32_t	weapon_fire_seq;
 
+	/* Export support. frame_seq is the bridge's publish counter (+1 per
+	   packet) so a lock-stepped consumer can assert it got exactly one new
+	   packet per engine step. demo_playing mirrors cls.demoplayback so the
+	   consumer learns when a played-back demo has ended. */
+	uint32_t	frame_seq;
+	uint32_t	demo_playing;
+
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
 	uint32_t	num_batches;
@@ -462,6 +469,13 @@ void QC_InputSetHeightTrim (float units);
    any thread. */
 void QC_InputSetHeadOffset (float fwd, float right, float up,
 			    uint32_t recenter_ack);
+
+/* Export only. During demo playback IN_Move still runs and re-derives the
+   body yaw from the demo's viewangles (the aim), so the hand weapon would be
+   placed from the wrong body frame. With `override` set, the engine pins
+   qr_body_yaw to yaw_deg every IN_Move; pass 0 to release. Callable from
+   any thread. */
+void QC_ExportSetBodyYaw (int override, float yaw_deg);
 
 #ifdef __cplusplus
 }
