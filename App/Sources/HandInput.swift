@@ -716,7 +716,7 @@ final class HandInput: @unchecked Sendable {
     /// the wrist isn't tracked, so the shot falls back to the body aim.
     private func feedAim(_ hand: HandState) {
         guard let o = hand.aimOrigin, let d = hand.aimDir else {
-            QC_InputSetAim(0, 0, 0, 0, 0, 0)
+            TrackRecorder.shared.feedAim(valid: false, origin: .zero, yaw: 0, pitch: 0)
             return
         }
         let corr = TrackingSpace.correction
@@ -727,7 +727,8 @@ final class HandInput: @unchecked Sendable {
         let horiz = (dir.x * dir.x + dir.z * dir.z).squareRoot()
         let aimPitch = -atan2(dir.y, horiz) * 180 / .pi + Self.aimPitchTrimDeg
         let s = WheelState.shared.currentWorldScale
-        QC_InputSetAim(1, -op.z / s, op.x / s, op.y / s, aimYaw, aimPitch)
+        TrackRecorder.shared.feedAim(valid: true, origin: SIMD3(-op.z / s, op.x / s, op.y / s),
+                                     yaw: aimYaw, pitch: aimPitch)
     }
 
     /// Weapon wheel, ONE-HANDED. The off-hand palm gesture holds the ring

@@ -125,3 +125,34 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_ALLOWED: YES
         CODE_SIGN_IDENTITY: "Apple Development"
+
+  # --------------------------------------------------------------------
+  # Unit tests for the pure-Swift pieces (sidecar track math, export
+  # presets, capture state). Hosted by the app so @testable import works.
+  # --------------------------------------------------------------------
+  QuakeAVPTests:
+    type: bundle.unit-test
+    platform: visionOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Tests/QuakeAVPTests
+    dependencies:
+      - target: QuakeAVP
+    settings:
+      base:
+        # The app's product is Quake.app, not QuakeAVP.app.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quake.app/Quake"
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  QuakeAVP:
+    build:
+      targets:
+        QuakeAVP: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - QuakeAVPTests
