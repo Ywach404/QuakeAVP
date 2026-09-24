@@ -21,18 +21,42 @@ enum ExportCamera {
     case head(VRTrack)
     case smoothedHead(VRTrack)
     case gun
+    /// Third person: the player model is drawn (chase_active 1). Chase is
+    /// the engine's own chase cam; Orbit and Front park the engine's view
+    /// origin where the exporter asks (QC_ExportSetViewOrigin) and look at
+    /// the player.
+    case chase
+    case orbit
+    case front
 
-    /// Head cams may look anywhere relative to the aim the engine culls
-    /// around, so they need the immersive path's PVS-only culling.
+    /// Cameras that look somewhere other than where the engine culls need
+    /// the immersive path's PVS-only culling.
     var needsOmniCulling: Bool {
-        if case .gun = self { return false }
-        return true
+        switch self {
+        case .gun, .chase: return false
+        default: return true
+        }
+    }
+
+    var isThirdPerson: Bool {
+        switch self {
+        case .chase, .orbit, .front: return true
+        default: return false
+        }
+    }
+
+    /// The exporter feeds a world position for the engine's viewpoint.
+    var drivesViewOrigin: Bool {
+        switch self {
+        case .orbit, .front: return true
+        default: return false
+        }
     }
 
     var track: VRTrack? {
         switch self {
         case .head(let t), .smoothedHead(let t): return t
-        case .gun: return nil
+        default: return nil
         }
     }
 }
@@ -63,7 +87,7 @@ final class ExportRenderer {
             desc.storageMode = .private
             return device.makeTexture(descriptor: desc)
         }
-        guard let color = texture(.bgra8Unorm, [.renderTarget, .shaderRead]),
+        guard let color = texture(.bgra8Unorm, [.renderTarget, .shaderRead, .shaderWrite]),
               let depth = texture(.depth32Float, [.renderTarget]),
               let accumulator = texture(.rgba16Float, [.shaderRead, .shaderWrite]),
               let accumulateFn = core.library.makeFunction(name: "export_accumulate"),
@@ -114,7 +138,33 @@ final class ExportRenderer {
             var pose = simd_float4x4(s.orientation)
             pose.columns.3 = SIMD4(s.position.x, s.position.y, s.position.z, 1)
             return (projection * pose.inverse, s.position)
+        case .chase:
+            return viewProjection(frame: f, camera: .gun)
+        case .orbit, .front:
+            // The engine already traced the requested position to the walls
+            // and published where the camera ended up; look at the player's
+            // chest from there.
+            let eye = SIMD3(f.vieworg.0, f.vieworg.1, f.vieworg.2)
+            let target = SIMD3(f.player_org.0, f.player_org.1, f.player_org.2 + 24)
+            return (projection * Self.lookAt(eye: eye, target: target).inverse, eye)
         }
+    }
+
+    /// Eye -> world pose in the tracking axis convention (x right, y up,
+    /// -z forward), Quake world up is +z.
+    static func lookAt(eye: SIMD3<Float>, target: SIMD3<Float>) -> simd_float4x4 {
+        var forward = target - eye
+        if simd_length(forward) < 1e-3 { forward = SIMD3(1, 0, 0) }
+        forward = simd_normalize(forward)
+        var right = simd_cross(forward, SIMD3(0, 0, 1))
+        if simd_length(right) < 1e-4 { right = simd_cross(forward, SIMD3(1, 0, 0)) }
+        right = simd_normalize(right)
+        let up = simd_cross(right, forward)
+        return simd_float4x4(columns: (
+            SIMD4(right.x, right.y, right.z, 0),
+            SIMD4(up.x, up.y, up.z, 0),
+            SIMD4(-forward.x, -forward.y, -forward.z, 0),
+            SIMD4(eye.x, eye.y, eye.z, 1)))
     }
 
     /// Render `f` with `camera` and add it to the accumulator with `weight`.
@@ -166,14 +216,36 @@ final class ExportRenderer {
         compute.endEncoding()
     }
 
-    /// Write the accumulated frame into `target` (bgra8) and clear.
-    func resolve(into target: MTLTexture, commandBuffer: MTLCommandBuffer) {
+    /// Resolve the accumulated frame, draw the HUD over it (sharp, never
+    /// blurred), and copy into `target` (the encoder's bgra8 buffer).
+    func resolve(into target: MTLTexture, hud: [Float], atlasTexnum: UInt32,
+                 commandBuffer: MTLCommandBuffer) {
         guard let compute = commandBuffer.makeComputeCommandEncoder() else { return }
         compute.setComputePipelineState(resolvePipeline)
         compute.setTexture(accumulator, index: 0)
-        compute.setTexture(target, index: 1)
+        compute.setTexture(color, index: 1)
         compute.dispatchThreads(MTLSize(width: width, height: height, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         compute.endEncoding()
+
+        if !hud.isEmpty, atlasTexnum != 0 {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = color
+            pass.colorAttachments[0].loadAction = .load
+            pass.colorAttachments[0].storeAction = .store
+            pass.depthAttachment.texture = depth
+            pass.depthAttachment.loadAction = .dontCare
+            pass.depthAttachment.storeAction = .dontCare
+            if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) {
+                core.drawScreenText(hud, atlasTexnum: atlasTexnum, width: width, height: height,
+                                    pipelines: pipelines, encoder: encoder)
+                encoder.endEncoding()
+            }
+        }
+
+        if let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.copy(from: color, to: target)
+            blit.endEncoding()
+        }
     }
 }

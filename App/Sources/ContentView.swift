@@ -593,11 +593,12 @@ struct ContentView: View {
             Picker("Camera", selection: $exportPreset.camera) {
                 ForEach(ExportPreset.Camera.allCases) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             if !hasTrack, exportPreset.camera.needsTrack {
-                Text("This demo has no head track; only the Gun camera can render it.")
+                Text("This demo has no head track; pick Gun or a third-person camera.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Toggle("HUD overlay (health, armor, ammo, weapon, kills)", isOn: $exportPreset.hud)
             Picker("Codec", selection: $exportPreset.codec) {
                 ForEach(ExportCodec.allCases) { Text($0.label).tag($0) }
             }
@@ -619,7 +620,7 @@ struct ContentView: View {
                               || (exportPreset.camera.needsTrack && !hasTrack))
             }
             if case .done(let url) = exporter.state {
-                Text("Saved: Files › Quake › Exports › \(url.lastPathComponent)")
+                Text("Saved: Files › Quake › Exports › \(url.lastPathComponent) (+ .csv of per-frame stats)")
                     .font(.caption)
             }
             if case .failed(let why) = exporter.state {

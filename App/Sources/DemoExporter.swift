@@ -59,6 +59,12 @@ final class DemoExporter {
         switch preset.camera {
         case .gun:
             camera = .gun
+        case .chase:
+            camera = .chase
+        case .orbit:
+            camera = .orbit
+        case .front:
+            camera = .front
         case .head, .smoothed:
             let url = gameDirectory.appendingPathComponent("\(demo).vrtrack")
             guard var track = try? VRTrack.load(url: url), !track.samples.isEmpty else {
@@ -121,9 +127,10 @@ final class DemoExporter {
             // Put the engine back the way real-time play expects it. The
             // extra step lets the restores land on the engine thread before
             // the pacer resumes and the window re-asserts its drawable size.
-            host.execute("host_framerate 0\nhost_maxfps 72\n")
+            host.execute("host_framerate 0\nhost_maxfps 72\nchase_active 0\n")
             QC_RendererSetCullingFov(0, 0)
             QC_ExportSetBodyYaw(0, 0)
+            QC_ExportSetViewOrigin(0, 0, 0, 0)
             QC_InputSetHeadOffset(0, 0, 0, 0)
             host.step(dt: 1.0 / 60)
             host.endStepping()
@@ -134,8 +141,11 @@ final class DemoExporter {
         // host_framerate fixes the sim step whatever dt we pass; host_maxfps
         // 1000 keeps Host_FilterTime from refusing sub-steps down to 1 ms
         // (the server is not running during playback, so its 72 fps physics
-        // caveat does not apply).
-        host.execute("disconnect\nphase 0\nvr_pathdebug 0\nhost_maxfps 1000\nhost_framerate \(subDt)\n")
+        // caveat does not apply). chase_active puts the player model into
+        // the entity list for third-person cameras (and drops the hand
+        // weapon, as upstream does).
+        host.execute("disconnect\nphase 0\nvr_pathdebug 0\nhost_maxfps 1000\nhost_framerate \(subDt)\n"
+                     + "chase_active \(camera.isThirdPerson ? 1 : 0)\n")
         QC_RendererSetDrawableSize(Int32(preset.width), Int32(preset.height))
         if camera.needsOmniCulling {
             QC_RendererSetCullingFov(360, 360)
@@ -180,6 +190,13 @@ final class DemoExporter {
         var frames = 0
         var lastTime: Float = 0
         var ended = false
+        var thirdPersonCam = ThirdPersonCamera()
+        var lastStats = HudStats()
+        var lastConchars: UInt32 = 0
+        var lastPlayer = SIMD3<Float>(0, 0, 0)
+        var lastCam = SIMD3<Float>(0, 0, 0)
+        var csv = "frame,video_time,demo_time,health,armor,weapon,ammo,shells,nails,rockets,cells,"
+            + "kills,total_monsters,secrets,total_secrets,player_x,player_y,player_z,player_yaw,cam_x,cam_y,cam_z\n"
 
         frameLoop: while !cancelled.isSet && !ended {
             let pixelBuffer: CVPixelBuffer
@@ -192,6 +209,10 @@ final class DemoExporter {
             var accumulated = 0
 
             for _ in 0..<preset.subSteps {
+                if camera.drivesViewOrigin {
+                    let want = thirdPersonCam.position(for: camera, demoTime: lastTime, dt: Float(subDt))
+                    QC_ExportSetViewOrigin(1, want.x, want.y, want.z)
+                }
                 guard host.step(dt: subDt) else { break frameLoop }
                 let got: Bool = core.withConsumer(.export) {
                     guard let f = QC_RendererAcquireFrame() else { return false }
@@ -204,6 +225,13 @@ final class DemoExporter {
                     guard p.frame_seq != lastSeq else { return false }
                     lastSeq = p.frame_seq
                     lastTime = p.time
+                    lastPlayer = SIMD3(p.player_org.0, p.player_org.1, p.player_org.2)
+                    lastCam = SIMD3(p.vieworg.0, p.vieworg.1, p.vieworg.2)
+                    thirdPersonCam.observe(player: lastPlayer, yaw: p.player_angles.1, demoTime: p.time)
+                    lastStats = HudStats(stats: withUnsafeBytes(of: p.stats) {
+                        Array($0.bindMemory(to: Int32.self))
+                    })
+                    lastConchars = p.conchars_texnum
                     if let track = camera.track {
                         Self.feedInputs(track.sample(at: p.time), recenterAck: recenterCount)
                     }
@@ -224,13 +252,23 @@ final class DemoExporter {
                 commandBuffer.commit()
                 continue
             }
-            renderer.resolve(into: target, commandBuffer: commandBuffer)
+            let hud = preset.hud
+                ? HudOverlay.build(stats: lastStats, width: preset.width, height: preset.height)
+                : []
+            renderer.resolve(into: target, hud: hud, atlasTexnum: lastConchars, commandBuffer: commandBuffer)
             commandBuffer.commit()
             commandBuffer.waitUntilCompleted()
             do { try encoder.append(pixelBuffer, frameIndex: frames) } catch {
                 encoder.cancel()
                 return .failure(error)
             }
+            let st = lastStats
+            csv += "\(frames),\(String(format: "%.4f", Double(frames) / Double(preset.fps))),\(lastTime),"
+                + "\(st.health),\(st.armor),\(HudOverlay.weaponName(st.activeWeapon)),\(st.ammo),"
+                + "\(st.shells),\(st.nails),\(st.rockets),\(st.cells),"
+                + "\(st.kills),\(st.totalMonsters),\(st.secrets),\(st.totalSecrets),"
+                + "\(lastPlayer.x),\(lastPlayer.y),\(lastPlayer.z),\(thirdPersonCam.lastYaw),"
+                + "\(lastCam.x),\(lastCam.y),\(lastCam.z)\n"
             frames += 1
             if frames % 10 == 0 { progress(frames, lastTime) }
         }
@@ -245,6 +283,9 @@ final class DemoExporter {
         guard frames > 0 else {
             return .failure(VideoEncoderError(description: "no frames were rendered"))
         }
+        // Per-frame stats next to the movie, for overlays built in the editor.
+        try? csv.write(to: out.deletingPathExtension().appendingPathExtension("csv"),
+                       atomically: true, encoding: .utf8)
         return .success(out)
     }
 
@@ -255,6 +296,52 @@ final class DemoExporter {
         QC_InputSetAim(s.aimValid ? 1 : 0, s.aimOrigin.x, s.aimOrigin.y, s.aimOrigin.z, s.aimYaw, s.aimPitch)
         QC_InputSetHeadOffset(s.headOffset.x, s.headOffset.y, s.headOffset.z, recenterAck)
         QC_InputSetHeightTrim(s.heightTrim)
+    }
+}
+
+/// Where Orbit and Front put the engine's viewpoint each sub-step. The
+/// engine traces the request to the walls; the packet reports where the
+/// camera ended up, and the renderer looks at the player from there.
+struct ThirdPersonCamera {
+    static let orbitRadius: Float = 150
+    static let orbitHeight: Float = 40
+    static let orbitPeriod: Float = 12      // seconds of demo time per turn
+    static let frontDistance: Float = 120
+    static let frontHeight: Float = 32
+    static let frontYawTau: Float = 0.4     // the aim jitters; the hero shot must not
+
+    private(set) var player = SIMD3<Float>(0, 0, 0)
+    private(set) var lastYaw: Float = 0
+    private var smoothYaw: Float?
+    private var orbitStart: Float?
+    private var orbitStartYaw: Float = 0
+
+    mutating func observe(player: SIMD3<Float>, yaw: Float, demoTime: Float) {
+        self.player = player
+        lastYaw = yaw
+        if orbitStart == nil { orbitStart = demoTime; orbitStartYaw = yaw }
+    }
+
+    mutating func position(for camera: ExportCamera, demoTime: Float, dt: Float) -> SIMD3<Float> {
+        switch camera {
+        case .orbit:
+            // Start in front of the player and circle counter-clockwise.
+            let t = demoTime - (orbitStart ?? demoTime)
+            let theta = (orbitStartYaw + 180) * .pi / 180 + 2 * .pi * t / Self.orbitPeriod
+            return player + SIMD3(cos(theta), sin(theta), 0) * Self.orbitRadius
+                + SIMD3(0, 0, Self.orbitHeight)
+        case .front:
+            let target = lastYaw
+            var yaw = smoothYaw ?? target
+            let k = 1 - exp(-dt / Self.frontYawTau)
+            yaw += VRTrack.wrapDegrees(target - yaw) * k
+            smoothYaw = yaw
+            let r = yaw * .pi / 180
+            return player + SIMD3(cos(r), sin(r), 0) * Self.frontDistance
+                + SIMD3(0, 0, Self.frontHeight)
+        default:
+            return player
+        }
     }
 }
 
