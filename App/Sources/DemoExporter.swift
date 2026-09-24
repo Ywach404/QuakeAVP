@@ -180,7 +180,6 @@ final class DemoExporter {
         var frames = 0
         var lastTime: Float = 0
         var ended = false
-        var firstSubStep = true
 
         frameLoop: while !cancelled.isSet && !ended {
             let pixelBuffer: CVPixelBuffer
@@ -193,13 +192,7 @@ final class DemoExporter {
             var accumulated = 0
 
             for _ in 0..<preset.subSteps {
-                // The first packet was produced by the warm-up step; every
-                // later sub-step needs its own engine step.
-                if !firstSubStep {
-                    guard host.step(dt: subDt) else { break frameLoop }
-                }
-                firstSubStep = false
-
+                guard host.step(dt: subDt) else { break frameLoop }
                 let got: Bool = core.withConsumer(.export) {
                     guard let f = QC_RendererAcquireFrame() else { return false }
                     defer { QC_RendererReleaseFrame() }
