@@ -57,6 +57,19 @@ void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
+static int			qc_bodyyaw_override_shared;
+static float			qc_bodyyaw_shared;
+static int			qr_bodyyaw_override;	/* engine-thread mirrors */
+static float			qr_bodyyaw_pinned;
+
+void QC_ExportSetBodyYaw (int override, float yaw_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_bodyyaw_override_shared = override;
+	qc_bodyyaw_shared = yaw_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
 void QC_InputSetHeadOffset (float fwd, float right, float up,
 			    uint32_t recenter_ack)
 {
@@ -269,6 +282,8 @@ static void IN_SnapshotInputs (void)
 	qr_wheel_anchor[2] = qc_wheel_pos_shared[2];
 	qr_wheel_highlight = qc_wheel_highlight_shared;
 	qr_height_trim = qc_height_trim_shared;
+	qr_bodyyaw_override = qc_bodyyaw_override_shared;
+	qr_bodyyaw_pinned = qc_bodyyaw_shared;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -575,6 +590,13 @@ void IN_Move (usercmd_t *cmd)
 	   the first tick, when qr_expected_yaw is still zero. */
 	if (fabsf (cl.viewangles[YAW] - qr_expected_yaw) > 0.01f)
 		qr_body_yaw = cl.viewangles[YAW];
+
+	/* Export pin: demo playback rewrites cl.viewangles every frame (the
+	   recorded AIM), which the adopt above would take for a teleport and
+	   make the body face the gun. The sidecar's body yaw wins instead, so
+	   the hand weapon is rebuilt in the frame it was recorded in. */
+	if (qr_bodyyaw_override)
+		qr_body_yaw = qr_bodyyaw_pinned;
 
 	/* One source of truth for "the gun is in the hand this tick": the aim
 	   feeds a ray AND vr_handaim allows it. The shot, the move compensation,

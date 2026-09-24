@@ -4860,6 +4860,7 @@ void QR_PublishFrame (void)
 
 	slot = &qr_slots[qr_building];
 	slot->frame.generation = qr_map_generation;
+	slot->frame.demo_playing = cls.demoplayback ? 1 : 0;
 	slot->frame.indices = slot->indices;
 	slot->frame.batches = slot->batches;
 	slot->frame.entities = slot->entities;
@@ -4890,6 +4891,7 @@ void QR_PublishFrame (void)
 		if (qr_slots[i].state == QR_SLOT_READY)
 			qr_slots[i].state = QR_SLOT_FREE;
 	slot->seq = ++qr_frame_seq;
+	slot->frame.frame_seq = slot->seq;
 	slot->state = QR_SLOT_READY;
 	pthread_mutex_unlock (&qr_frame_lock);
 
