@@ -11,7 +11,7 @@ import UIKit
 
 /// Which section the persistent control panel shows. Replaces the old Comfort
 /// and Weapon pop-out popovers, which auto-dismissed and hid your values.
-private enum PanelTab: Hashable { case comfort, weapon, admin, debug }
+private enum PanelTab: Hashable { case comfort, weapon, admin, capture, debug }
 
 struct ContentView: View {
     @State private var engine = QuakeEngineViewModel()
@@ -56,6 +56,11 @@ struct ContentView: View {
     @State private var inputLog = false
     @State private var showWeapon = false
     @State private var activeTab: PanelTab = .comfort
+    @State private var exporter = DemoExporter()
+    @State private var capture = CaptureState()
+    @State private var captureName = ""
+    @State private var exportDemo = ""
+    @State private var exportPreset = ExportPreset()
     @State private var selectedEpisode = 0
 
     /// Map episodes, one horizontal strip each. Mission packs / custom packs can
@@ -170,6 +175,10 @@ struct ContentView: View {
             ProfileStore.shared.apply()
             syncFromProfile()
         }
+        .onChange(of: exporter.state) { _, state in
+            // Mirrored into the console so a simulator log capture shows it.
+            print("export: \(state)")
+        }
         .onChange(of: engine.status) { _, status in
             // Force the phase melt OFF when the engine comes up. It's a
             // head-centred sphere that dissolves nearby surfaces to
@@ -181,6 +190,23 @@ struct ContentView: View {
                 phaseLevel = 0
                 // Engine's up: push the active profile's weapon/laser rig cvars.
                 ProfileStore.shared.applyRig()
+                // Boot-time export for the simulator acceptance test:
+                // QAVP_EXPORT_DEMO=demo1 [QAVP_EXPORT_PRESET=1080p60,gun]
+                // [QAVP_EXPORT_CANCEL_AFTER=seconds]. Run with
+                // QAVP_AUTO_IMMERSIVE=off; the exporter refuses otherwise.
+                if let demo = ProcessInfo.processInfo.environment["QAVP_EXPORT_DEMO"] {
+                    let env = ProcessInfo.processInfo.environment
+                    let preset = ExportPreset.parse(env["QAVP_EXPORT_PRESET"] ?? "1080p60,gun")
+                    let cancelAfter = env["QAVP_EXPORT_CANCEL_AFTER"].flatMap(Double.init)
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))   // let the pak and console settle
+                        startExport(demo: demo, preset: preset)
+                        if let cancelAfter {
+                            try? await Task.sleep(for: .seconds(cancelAfter))
+                            exporter.cancel()
+                        }
+                    }
+                }
             }
             // Open the immersive space as soon as the engine is up -- the flat
             // window is only a mono debug view, so play should begin in the
@@ -266,6 +292,7 @@ struct ContentView: View {
                 Text("Comfort").tag(PanelTab.comfort)
                 Text("Weapon").tag(PanelTab.weapon)
                 Text("Admin").tag(PanelTab.admin)
+                Text("Capture").tag(PanelTab.capture)
                 Text("Debug").tag(PanelTab.debug)
             }
             .pickerStyle(.segmented)
@@ -276,6 +303,7 @@ struct ContentView: View {
                     case .comfort: comfortContent
                     case .weapon: weaponContent
                     case .admin: adminContent
+                    case .capture: captureContent
                     case .debug: debugContent
                     }
                 }
@@ -496,6 +524,115 @@ struct ContentView: View {
         }
         .buttonStyle(.bordered)
         .disabled(!running)
+    }
+
+    /// Capture tab: record a demo + head track, then export it offline as a
+    /// video (see DemoExporter). Exporting plays the demo back, which ends
+    /// the current game, and needs the immersive space closed because the
+    /// compositor thread owns the packet stream while it is open.
+    private var captureContent: some View {
+        let running = engine.status == .running
+        let gameDir = engine.paths?.baseDirectory.appendingPathComponent("id1", isDirectory: true)
+        let selected = capture.demos.first { $0.name == exportDemo }
+        let hasTrack = selected?.hasTrack ?? false
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Record a demo and head track in the headset, then export it here at any size and frame rate. Exporting ends the current game.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                TextField("Clip name", text: $captureName)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(capture.isRecording)
+                if capture.isRecording {
+                    Button("Stop") {
+                        if let gameDir { capture.stopRecording(engine: engine, gameDirectory: gameDir) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Record") {
+                        if let gameDir {
+                            capture.startRecording(name: captureName, gameDirectory: gameDir, engine: engine)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!running)
+                }
+            }
+            if capture.isRecording {
+                Label("Recording \(capture.currentName)", systemImage: "record.circle")
+                    .font(.caption).foregroundStyle(.red)
+            }
+            Divider()
+            Text("Export").font(.caption.weight(.semibold))
+            if capture.demos.isEmpty {
+                Text("No demos yet. Record one, or drop a .dem into Files › Quake › id1.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Demo", selection: $exportDemo) {
+                Text("Choose a demo").tag("")
+                ForEach(capture.demos) { d in
+                    Text(d.hasTrack ? "\(d.name)  ·  head track" : d.name).tag(d.name)
+                }
+            }
+            .pickerStyle(.menu)
+            Picker("Size", selection: $exportPreset.resolution) {
+                ForEach(ExportPreset.Resolution.allCases) { Text("\($0.rawValue)p").tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Frame rate", selection: $exportPreset.fps) {
+                ForEach([30, 60, 120], id: \.self) { Text("\($0) fps").tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Speed", selection: $exportPreset.slowMo) {
+                Text("1×").tag(Float(1)); Text("½×").tag(Float(0.5)); Text("¼×").tag(Float(0.25))
+            }
+            .pickerStyle(.segmented)
+            Picker("Motion blur", selection: $exportPreset.motionBlurSamples) {
+                Text("Blur off").tag(1); Text("Blur 4").tag(4); Text("Blur 8").tag(8)
+            }
+            .pickerStyle(.segmented)
+            Picker("Camera", selection: $exportPreset.camera) {
+                ForEach(ExportPreset.Camera.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if !hasTrack, exportPreset.camera.needsTrack {
+                Text("This demo has no head track; only the Gun camera can render it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Codec", selection: $exportPreset.codec) {
+                ForEach(ExportCodec.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if exporter.isRunning {
+                if case .running(let frames, let t) = exporter.state {
+                    HStack {
+                        ProgressView()
+                        Text("\(frames) frames · \(String(format: "%.1f", t)) s of demo")
+                            .font(.caption)
+                        Spacer()
+                        Button("Cancel") { exporter.cancel() }
+                    }
+                }
+            } else {
+                Button("Export video") { startExport(demo: exportDemo, preset: exportPreset) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!running || exportDemo.isEmpty || coordinator.isImmersiveActive
+                              || (exportPreset.camera.needsTrack && !hasTrack))
+            }
+            if case .done(let url) = exporter.state {
+                Text("Saved: Files › Quake › Exports › \(url.lastPathComponent)")
+                    .font(.caption)
+            }
+            if case .failed(let why) = exporter.state {
+                Text(why).font(.caption).foregroundStyle(.red)
+            }
+            if coordinator.isImmersiveActive {
+                Text("Exit the immersive space to export.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .onAppear {
+            if let gameDir { capture.refresh(gameDirectory: gameDir) }
+            if captureName.isEmpty { captureName = CaptureState.defaultName() }
+        }
     }
 
     /// Debug tab: overlay/meter toggles, the input telemetry log, and the
@@ -996,6 +1133,16 @@ struct ContentView: View {
             return ("Hands — pinch left to move, right to fire", "hand.pinch")
         }
         return ("No controller — console input only", "gamecontroller")
+    }
+
+    /// One place that knows where demos and exports live.
+    private func startExport(demo: String, preset: ExportPreset) {
+        guard let paths = engine.paths else { return }
+        exporter.start(demo: demo, preset: preset,
+                       host: engine.engineHost, core: coordinator.core,
+                       gameDirectory: paths.baseDirectory.appendingPathComponent("id1", isDirectory: true),
+                       exportsDirectory: paths.baseDirectory.appendingPathComponent("Exports", isDirectory: true),
+                       immersiveActive: coordinator.isImmersiveActive)
     }
 
     private func submit() {
