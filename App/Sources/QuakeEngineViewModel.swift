@@ -66,6 +66,9 @@ final class QuakeEngineViewModel {
         host?.execute(command.hasSuffix("\n") ? command : command + "\n")
     }
 
+    /// The running engine host, for the exporter's lock-step driving.
+    var engineHost: QuakeEngineHost? { host }
+
     // MARK: - Private
 
     /// Sys_Printf emits arbitrary fragments, not lines. Reassemble.
