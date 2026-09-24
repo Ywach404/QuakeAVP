@@ -60,6 +60,9 @@ final class RendererCore {
     enum Output {
         case window
         case immersive
+        /// The offline exporter's thread (DemoExporter), lock-stepping the
+        /// engine through a demo while the immersive space is closed.
+        case export
     }
 
     /// Per-frame dissolve state. The radius comes from the packet (the
