@@ -21,6 +21,7 @@
 
 #include "quakedef.h"
 #include "QuakeCore.h"
+#include "admin_avp.h"
 
 #include <pthread.h>
 
@@ -734,6 +735,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_lean_limit);
 	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);
+	Admin_Init ();
 	Cmd_AddCommand ("+wheel", IN_WheelDown_f);
 	Cmd_AddCommand ("-wheel", IN_WheelUp_f);
 

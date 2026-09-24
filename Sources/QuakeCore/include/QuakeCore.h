@@ -463,6 +463,41 @@ void QC_InputSetHeightTrim (float units);
 void QC_InputSetHeadOffset (float fwd, float right, float up,
 			    uint32_t recenter_ack);
 
+/*
+ * ---------------------------------------------------------------------------
+ * Admin panel (produced by Sources/QuakeCore/platform/admin_avp.c).
+ *
+ * A latest-state snapshot of the server's monster roster for the window's
+ * Admin tab, refreshed on the engine thread a few times a second and copied
+ * out under a lock -- the consumer-side mirror of the QC_Input* producers.
+ * The commands the tab issues in return (`sv_killai`, `ai_target`) go through
+ * QC_ExecuteCommand like everything else; this is read-only.
+ * ---------------------------------------------------------------------------
+ */
+
+#define QC_ADMIN_MAX_MONSTERS	128
+#define QC_ADMIN_CLASSNAME_LEN	24
+
+typedef struct {
+	int32_t		edict;		/* server edict number; the ai_target handle */
+	int32_t		enemy;		/* edict it is hunting, 0 = none; compare
+					   against player_edict to say "you" */
+	float		health;
+	float		distance;	/* to the player, Quake units */
+	char		classname[QC_ADMIN_CLASSNAME_LEN];	/* "monster_army" */
+} qc_monster_t;
+
+typedef struct {
+	int32_t		active;		/* a level is loaded (sv.active) */
+	int32_t		killai;		/* sv_killai as the engine sees it */
+	int32_t		player_edict;
+	int32_t		count;		/* live monsters, capped at the array */
+	qc_monster_t	monsters[QC_ADMIN_MAX_MONSTERS];
+} qc_admin_state_t;
+
+/* Copy the latest roster snapshot. Callable from any thread. */
+void QC_AdminCopyState (qc_admin_state_t *out);
+
 #ifdef __cplusplus
 }
 #endif
