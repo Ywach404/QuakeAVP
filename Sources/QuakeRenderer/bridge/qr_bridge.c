@@ -255,6 +255,22 @@ void QC_RendererSetDrawableSize (int width, int height)
 	pthread_mutex_unlock (&qr_drawable_lock);
 }
 
+/* Export view-origin override (third-person cameras). Written by the export
+   thread, read once per engine frame in QR_RenderView. */
+static int		qr_exportcam_enabled_shared;
+static vec3_t		qr_exportcam_org_shared;
+static pthread_mutex_t	qr_exportcam_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void QC_ExportSetViewOrigin (int enabled, float x, float y, float z)
+{
+	pthread_mutex_lock (&qr_exportcam_lock);
+	qr_exportcam_enabled_shared = enabled;
+	qr_exportcam_org_shared[0] = x;
+	qr_exportcam_org_shared[1] = y;
+	qr_exportcam_org_shared[2] = z;
+	pthread_mutex_unlock (&qr_exportcam_lock);
+}
+
 void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg)
 {
 	pthread_mutex_lock (&qr_cullfov_lock);
@@ -4643,6 +4659,31 @@ void QR_RenderView (void)
 
 	r_framecount++;
 
+	/* Export third-person cameras: the exporter asks for a world position;
+	   trace from the player's eye so the camera stops at walls (chase.c
+	   does the same), then pull back 8 units so it never sits in one. */
+	{
+		int	enabled;
+		vec3_t	want;
+		pthread_mutex_lock (&qr_exportcam_lock);
+		enabled = qr_exportcam_enabled_shared;
+		VectorCopy (qr_exportcam_org_shared, want);
+		pthread_mutex_unlock (&qr_exportcam_lock);
+		if (enabled && cl.worldmodel)
+		{
+			vec3_t	eye, impact, back;
+			VectorCopy (cl_entities[cl.viewentity].origin, eye);
+			eye[2] += 16.f;
+			TraceLine (eye, want, impact);
+			if (VectorLength (impact) != 0)
+			{
+				VectorSubtract (eye, impact, back);
+				VectorNormalize (back);
+				VectorMA (impact, 8.f, back, want);
+			}
+			VectorCopy (want, r_refdef.vieworg);
+		}
+	}
 	/* view setup -- port of R_SetupView */
 	VectorCopy (r_refdef.vieworg, r_origin);
 	AngleVectors (r_refdef.viewangles, vpn, vright, vup);
@@ -4861,6 +4902,19 @@ void QR_PublishFrame (void)
 	slot = &qr_slots[qr_building];
 	slot->frame.generation = qr_map_generation;
 	slot->frame.demo_playing = cls.demoplayback ? 1 : 0;
+	if (cl.worldmodel && cl.viewentity > 0 && cl.viewentity < cl.num_entities)
+	{
+		entity_t *pl = &cl_entities[cl.viewentity];
+		VectorCopy (pl->origin, slot->frame.player_org);
+		VectorCopy (pl->angles, slot->frame.player_angles);
+	}
+	else
+	{
+		memset (slot->frame.player_org, 0, sizeof slot->frame.player_org);
+		memset (slot->frame.player_angles, 0, sizeof slot->frame.player_angles);
+	}
+	for (i = 0; i < 16; i++)
+		slot->frame.stats[i] = cl.stats[i];
 	slot->frame.indices = slot->indices;
 	slot->frame.batches = slot->batches;
 	slot->frame.entities = slot->entities;
