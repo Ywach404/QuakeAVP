@@ -323,6 +323,14 @@ typedef struct qc_frame_s {
 	   consumer learns when a played-back demo has ended. */
 	uint32_t	frame_seq;
 	uint32_t	demo_playing;
+	/* The player entity (cl_entities[cl.viewentity]) and the status-bar
+	   stats (cl.stats[0..15]: health, frags, weapon, ammo, armor, ...,
+	   shells, nails, rockets, cells, active weapon, total secrets, total
+	   monsters, secrets, monsters) for third-person export cameras and the
+	   export HUD. player_org is the entity origin, not the eye. */
+	float		player_org[3];
+	float		player_angles[3];
+	int32_t		stats[16];
 
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
@@ -476,6 +484,13 @@ void QC_InputSetHeadOffset (float fwd, float right, float up,
    qr_body_yaw to yaw_deg every IN_Move; pass 0 to release. Callable from
    any thread. */
 void QC_ExportSetBodyYaw (int override, float yaw_deg);
+
+/* Export only: park the engine's view origin (the PVS/culling viewpoint)
+   at a world position for third-person cameras. The bridge traces from the
+   player to it so it stops at walls, then publishes the resulting position
+   as the packet's vieworg. `enabled` 0 releases it. Callable from any
+   thread. */
+void QC_ExportSetViewOrigin (int enabled, float x, float y, float z);
 
 #ifdef __cplusplus
 }
