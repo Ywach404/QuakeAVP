@@ -3,7 +3,7 @@
 //
 //  What an export looks like: size, rate, time dilation, motion blur,
 //  camera, codec. Also the file name those choices produce and a parser for
-//  the boot-time test hook (QAVP_EXPORT_PRESET="1080p60,slow0.5,mb4,gun").
+//  the boot-time test hook (QAVP_EXPORT_PRESET="1080p60,slow0.5,mb4,gun,nohud").
 //
 
 import Foundation
@@ -16,16 +16,19 @@ struct ExportPreset: Equatable {
     }
 
     enum Camera: String, CaseIterable, Identifiable {
-        case head, smoothed, gun
+        case head, smoothed, gun, chase, orbit, front
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .head: return "Head"
-            case .smoothed: return "Smoothed"
-            case .gun: return "Gun"
+            case .head: return "Head (recorded)"
+            case .smoothed: return "Head, smoothed"
+            case .gun: return "Gun (first person)"
+            case .chase: return "Chase (third person)"
+            case .orbit: return "Orbit (third person)"
+            case .front: return "Front (third person)"
             }
         }
-        var needsTrack: Bool { self != .gun }
+        var needsTrack: Bool { self == .head || self == .smoothed }
     }
 
     var resolution: Resolution = .p1080
@@ -36,6 +39,8 @@ struct ExportPreset: Equatable {
     var camera: Camera = .head
     var codec: ExportCodec = .hevc
     var fovXDegrees: Float = 100
+    /// Burn the status bar (health, armor, ammo, weapon, kills) into the frame.
+    var hud = true
 
     var width: Int { resolution.rawValue * 16 / 9 }
     var height: Int { resolution.rawValue }
@@ -70,6 +75,10 @@ struct ExportPreset: Equatable {
                 p.motionBlurSamples = v
             } else if let c = Camera(rawValue: tok) {
                 p.camera = c
+            } else if tok == "hud" {
+                p.hud = true
+            } else if tok == "nohud" {
+                p.hud = false
             } else if let c = ExportCodec(rawValue: tok) {
                 p.codec = c
             }

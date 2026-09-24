@@ -654,6 +654,33 @@ final class RendererCore {
         }
     }
 
+    /// Screen-space text for the export HUD: `verts` are the same 9-float
+    /// glyph quads the bridge emits (xyz, uv, rgba) but in PIXEL coordinates,
+    /// origin top-left, z ignored. Drawn over the pass with depth off.
+    func drawScreenText(_ verts: [Float], atlasTexnum: UInt32, width: Int, height: Int,
+                        pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard let pipeline = pipelines.text, verts.count >= 27,
+              let atlas = textures[atlasTexnum],
+              let buffer = device.makeBuffer(bytes: verts,
+                                             length: verts.count * MemoryLayout<Float>.size,
+                                             options: .storageModeShared)
+        else { return }
+        var ortho = matrix_identity_float4x4
+        ortho.columns.0 = SIMD4(2 / Float(width), 0, 0, 0)
+        ortho.columns.1 = SIMD4(0, -2 / Float(height), 0, 0)
+        ortho.columns.2 = SIMD4(0, 0, 1, 0)
+        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
+        var uniforms = GuideUniforms(viewproj0: ortho, viewproj1: ortho)
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+        withUnsafeBytes(of: &uniforms) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        encoder.setFragmentTexture(atlas, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / 9)
+    }
+
     /// Draw the finger debug wireframe. `verts` are 7-float TRIANGLE
     /// vertices (xyz + rgba) in corrected-TRACKING space -- thin quads, not
     /// lines, because line primitives are illegal under the device's
