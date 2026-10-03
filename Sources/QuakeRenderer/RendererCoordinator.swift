@@ -35,6 +35,11 @@ final class RendererCoordinator {
     /// back into the game.
     var onImmersiveEnded: (() -> Void)?
 
+    /// Runs on the main actor on BOTH immersive transitions (true = started).
+    /// Input activation hangs off this rather than off a view's onChange,
+    /// because the view is gone whenever the console window is closed.
+    var onImmersiveChanged: ((Bool) -> Void)?
+
     private init() {
         core = RendererCore()
         if let core {
@@ -50,6 +55,7 @@ final class RendererCoordinator {
 
         isImmersiveActive = true
         core.activate(.immersive)
+        onImmersiveChanged?(true)
 
         var renderer: ImmersiveRenderer!
         renderer = ImmersiveRenderer(layerRenderer: layerRenderer, core: core) {
@@ -73,6 +79,7 @@ final class RendererCoordinator {
         // Hand the stream back; the window's next draw re-reports its
         // drawable size (the C side dedupes), restoring the refdef.
         core?.activate(.window)
+        onImmersiveChanged?(false)
         onImmersiveEnded?()
     }
 }

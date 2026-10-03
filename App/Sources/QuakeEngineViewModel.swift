@@ -1,6 +1,18 @@
 //
 //  QuakeEngineViewModel.swift
 //
+//  Owns the engine for the life of the APP, not the life of a window.
+//
+//  This used to be @State on ContentView. Closing the console window destroyed
+//  the view model while its engine thread kept running (nothing calls
+//  shutdown), and reopening built a fresh one at status .idle, which booted a
+//  SECOND QuakeEngineHost over the same Quake globals -- which have no locking,
+//  and whose Sys_Error calls exit(). The per-instance `thread == nil` guard in
+//  QuakeEngineHost cannot catch that, because the new host is a new instance.
+//
+//  Latent until the prayer-sign summon made reopening the window routine. Same
+//  shape as the input-ownership bug; see InputHost.
+//
 
 import Foundation
 import Observation
@@ -8,6 +20,11 @@ import Observation
 @Observable
 @MainActor
 final class QuakeEngineViewModel {
+
+    /// The one engine. `boot()` is idempotent against this instance's status,
+    /// so a reopened window re-attaches instead of starting a second engine --
+    /// and the console log survives the window closing.
+    static let shared = QuakeEngineViewModel()
 
     enum Status: Equatable {
         case idle
@@ -68,6 +85,16 @@ final class QuakeEngineViewModel {
 
     /// The running engine host, for the exporter's lock-step driving.
     var engineHost: QuakeEngineHost? { host }
+
+    /// Append a line to the console log WITHOUT sending it to the engine, so
+    /// diagnostics are readable in the headset instead of only on a Mac that
+    /// is in another room while you are wearing the thing being measured.
+    func note(_ line: String) {
+        consoleLines.append(line)
+        if consoleLines.count > maxConsoleLines {
+            consoleLines.removeFirst(consoleLines.count - maxConsoleLines)
+        }
+    }
 
     // MARK: - Private
 
