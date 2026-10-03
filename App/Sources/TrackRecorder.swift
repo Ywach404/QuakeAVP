@@ -52,6 +52,10 @@ final class TrackRecorder: @unchecked Sendable {
     /// fwd/right/up in Quake units, angles in Quake degrees.
     func feedAim(valid: Bool, origin: SIMD3<Float>, yaw: Float, pitch: Float) {
         QC_InputSetAim(valid ? 1 : 0, origin.x, origin.y, origin.z, yaw, pitch)
+        // These are the RAW angles, before the engine adds the aim trims, which
+        // is what "sight in" needs to measure. Tapped here because this is the
+        // one road every aim source takes.
+        AimCalibration.shared.noteAim(valid: valid, yaw: yaw, pitch: pitch)
         lock.lock()
         aimValid = valid; aimOrigin = origin; aimYaw = yaw; aimPitch = pitch
         lock.unlock()

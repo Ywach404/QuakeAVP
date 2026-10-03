@@ -288,6 +288,12 @@ typedef struct qc_frame_s {
 	   up, matching where QR_EmitWheel places the models. */
 	float		wheel_center[3];
 	float		wheel_radius;
+	/* The ring plane's axes (unit, world frame). The body basis tilted by
+	   vr_wheelpitch/yaw/roll; the consumer draws the guide circle in this
+	   plane rather than re-deriving it from body_yaw, which would ignore
+	   the tilt. */
+	float		wheel_right[3];
+	float		wheel_up[3];
 	float		wheel_frac;
 	int32_t		wheel_count;
 	int32_t		wheel_highlight;
@@ -438,6 +444,13 @@ void QC_InputSetSlowmo (int pressed);
    Look-relative locomotion (vr_moverelative) rotates the movement stick by
    this so "forward" tracks where the head looks; body-relative locomotion
    ignores it. Callable from any thread. */
+/* Freeze/unfreeze the simulation (sv.paused). An explicit SET rather than
+   Quake's "pause" toggle, so the caller's intent cannot be inverted by anything
+   else. Applied on the engine thread; single-player only. The render thread and
+   head tracking keep running, so a paused world is still look-around-able.
+   Callable from any thread. */
+void QC_SetPaused (int paused);
+
 void QC_InputSetHeadYaw (float yaw_deg);
 
 /* The head's pitch, degrees, Quake sense (positive looks DOWN), fed by the
