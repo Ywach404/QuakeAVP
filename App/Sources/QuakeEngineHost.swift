@@ -99,6 +99,23 @@ final class QuakeEngineHost: @unchecked Sendable {
         shouldStop.set()
     }
 
+    /// Park the 90 Hz pacer; frames now run only on `step(dt:)`. The
+    /// exporter uses this to lock-step the engine through a demo.
+    func beginStepping() { stepGate.begin() }
+    func endStepping() { stepGate.end() }
+
+    /// Block until the engine thread has drained queued commands and run one
+    /// frame of `dt`. False if the engine is not running. Never call from
+    /// the engine thread itself (it would wait on itself).
+    @discardableResult
+    func step(dt: Double) -> Bool {
+        guard thread != nil, !shouldStop.isSet, stepGate.isStepping else { return false }
+        stepGate.request(dt: dt)
+        return true
+    }
+
+    private let stepGate = StepGate()
+
     func execute(_ command: String) {
         // Cbuf_AddText is not thread-safe; queue for the engine thread, which
         // drains before each frame. NOT perform(onThread:) -- that delivers
@@ -162,6 +179,22 @@ final class QuakeEngineHost: @unchecked Sendable {
         var previous = CFAbsoluteTimeGetCurrent()
 
         while !shouldStop.isSet {
+            if stepGate.isStepping {
+                // Lock-step mode: one frame per request, no pacer. A nil
+                // take means the mode ended; fall through to real time with
+                // a fresh clock so the first paced frame is not a giant dt.
+                guard let dt = stepGate.take() else {
+                    previous = CFAbsoluteTimeGetCurrent()
+                    continue
+                }
+                for command in pendingCommands.drain() {
+                    command.withCString { QC_ExecuteCommand($0) }
+                }
+                QC_Frame(dt)
+                stepGate.done()
+                continue
+            }
+
             let now = CFAbsoluteTimeGetCurrent()
             let delta = now - previous
             previous = now
@@ -202,6 +235,43 @@ private final class CommandQueue: @unchecked Sendable {
         commands.removeAll(keepingCapacity: true)
         return drained
     }
+}
+
+/// One-at-a-time lock-step requests from the exporter to the engine thread.
+/// `request` blocks the caller until the engine thread has run the frame.
+private final class StepGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pendingDt: Double?
+    private var stepping = false
+    private let requested = DispatchSemaphore(value: 0)
+    private let completed = DispatchSemaphore(value: 0)
+
+    var isStepping: Bool { lock.lock(); defer { lock.unlock() }; return stepping }
+
+    func begin() { lock.lock(); stepping = true; lock.unlock() }
+
+    func end() {
+        lock.lock(); stepping = false; lock.unlock()
+        requested.signal()      // wake the engine thread so it sees the mode change
+    }
+
+    /// Caller side. Returns once the engine ran the frame.
+    func request(dt: Double) {
+        lock.lock(); pendingDt = dt; lock.unlock()
+        requested.signal()
+        completed.wait()
+    }
+
+    /// Engine-thread side: wait for a request; nil means "mode ended".
+    func take() -> Double? {
+        requested.wait()
+        lock.lock(); defer { lock.unlock() }
+        guard stepping, let dt = pendingDt else { return nil }
+        pendingDt = nil
+        return dt
+    }
+
+    func done() { completed.signal() }
 }
 
 /// Minimal one-way flag. One writer (main), one reader (engine thread); a lock

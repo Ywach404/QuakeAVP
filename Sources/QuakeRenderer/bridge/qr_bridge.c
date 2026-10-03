@@ -255,6 +255,22 @@ void QC_RendererSetDrawableSize (int width, int height)
 	pthread_mutex_unlock (&qr_drawable_lock);
 }
 
+/* Export view-origin override (third-person cameras). Written by the export
+   thread, read once per engine frame in QR_RenderView. */
+static int		qr_exportcam_enabled_shared;
+static vec3_t		qr_exportcam_org_shared;
+static pthread_mutex_t	qr_exportcam_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void QC_ExportSetViewOrigin (int enabled, float x, float y, float z)
+{
+	pthread_mutex_lock (&qr_exportcam_lock);
+	qr_exportcam_enabled_shared = enabled;
+	qr_exportcam_org_shared[0] = x;
+	qr_exportcam_org_shared[1] = y;
+	qr_exportcam_org_shared[2] = z;
+	pthread_mutex_unlock (&qr_exportcam_lock);
+}
+
 void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg)
 {
 	pthread_mutex_lock (&qr_cullfov_lock);
@@ -3007,6 +3023,7 @@ per weapon in the Weapon menu -- you can see the model, the math can't.
 =================
 */
 extern cvar_t vr_weaponclip, vr_weaponclipback;
+extern cvar_t vr_wheelpitch, vr_wheelyaw, vr_wheelroll, vr_wheelradius;
 
 static void QR_WeaponClip (aliashdr_t *h, float out[4])
 {
@@ -4042,6 +4059,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	static int	menu_held = -1, menu_open_prev;
 	float		frac, radius, step, theta, spin;
 	vec3_t		fwdv, rightv, upv, angles, center;
+	vec3_t		bfwd, bright, bup, bangles;	/* untilted placement basis */
 	int		i, owned, k;
 
 	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
@@ -4094,22 +4112,41 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	   selection gesture, not a cramped finger flick. Grow the radius with the
 	   owned count so 8 weapons don't overlap on a fixed ring (selection is
 	   angle-based, so a wider ring doesn't change how far the wrist travels). */
-	radius = (9.f + 2.1f * owned) * frac;
+	radius = (9.f + 2.1f * owned) * frac * CLAMP (0.4f, vr_wheelradius.value, 2.5f);
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
-	angles[0] = 0;
-	angles[1] = qr_body_yaw;	/* body frame, not the aim: the ring hangs
-					   off the wrist and must not swing with the gun */
-	angles[2] = 0;
+	/* Ring plane = the body basis, tilted by the vr_wheel* trims. WheelState
+	   .swift applies the same three angles to its own axes when it turns a
+	   pointer ray into a highlighted sector; they are a shared contract and
+	   must move together or the highlight and the models disagree. */
+	/* TWO bases, and keeping them apart is the point.
+
+	   PLACEMENT (bfwd/bright): the plain body basis. Where the ring sits
+	   relative to the wrist must NOT depend on the tilt trims -- they share
+	   one basis and panning the wheel swings it bodily around you instead of
+	   turning it on the spot, which at a large pan parks it behind your head.
+
+	   GUIDE RING (rightv/upv): the body basis tilted by the vr_wheel* trims,
+	   published in the packet and used for NOTHING else. The weapons, their
+	   labels and the selection maths all stay on the untilted basis, so the
+	   trims aim the drawn circle without moving anything you point at. */
+	bangles[0] = 0;
+	bangles[1] = qr_body_yaw;	/* body frame, not the aim: the ring hangs
+					   off the wrist and must not swing with
+					   the gun */
+	bangles[2] = 0;
+	AngleVectors (bangles, bfwd, bright, bup);
+
+	angles[0] = vr_wheelpitch.value;
+	angles[1] = qr_body_yaw + vr_wheelyaw.value;
+	angles[2] = vr_wheelroll.value;
 	AngleVectors (angles, fwdv, rightv, upv);
-	/* AngleVectors' right points right; keep the ring plane spanned by
-	   (rightv, world up), facing the player */
 	if (vr_fullmenu.value)
 	{
 		/* Full menu: a fixed panel a comfortable stride ahead of the view,
 		   selected by looking at a weapon (below) -- no wrist, no pointer,
 		   so it works no matter where in the level you've walked. */
-		VectorMA (r_refdef.vieworg, 40.f, fwdv, center);
+		VectorMA (r_refdef.vieworg, 40.f, bfwd, center);
 		center[2] += qr_height_trim - 2.f;
 	}
 	else if (qr_wheel_has_anchor)
@@ -4123,8 +4160,8 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		float ax = qr_wheel_anchor[0] - qr_head[0];
 		float ay = qr_wheel_anchor[1] - qr_head[1];
 		float az = qr_wheel_anchor[2] - qr_head[2];
-		VectorMA (r_refdef.vieworg, ax, fwdv, center);
-		VectorMA (center, ay, rightv, center);
+		VectorMA (r_refdef.vieworg, ax, bfwd, center);
+		VectorMA (center, ay, bright, center);
 		/* rise with the height-trimmed camera so the ring does not sink
 		   out of view as the eye-height slider raises the viewpoint */
 		center[2] += az + qr_height_trim;
@@ -4132,7 +4169,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	else
 	{
 		/* no wrist (flat window): fixed offset ahead of the view */
-		VectorMA (r_refdef.vieworg, 36.f, fwdv, center);
+		VectorMA (r_refdef.vieworg, 36.f, bfwd, center);
 		center[2] -= 2.f;
 	}
 
@@ -4224,6 +4261,14 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	/* Full menu draws no ring (it's a list): negative radius tells the
 	   consumer to skip the wireframe circle. */
 	slot->frame.wheel_radius = vr_fullmenu.value ? -1.f : radius;
+	/* The plane the ring is laid out in, so the guide wireframe and the
+	   models cannot disagree once the vr_wheel* trims tilt it. */
+	slot->frame.wheel_right[0] = rightv[0];
+	slot->frame.wheel_right[1] = rightv[1];
+	slot->frame.wheel_right[2] = rightv[2];
+	slot->frame.wheel_up[0] = upv[0];
+	slot->frame.wheel_up[1] = upv[1];
+	slot->frame.wheel_up[2] = upv[2];
 	slot->frame.wheel_frac = frac;
 	slot->frame.wheel_count = owned;
 	slot->frame.wheel_highlight = qr_wheel_highlight;
@@ -4254,9 +4299,15 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		}
 		else
 		{
-			VectorMA (center, radius * cosf (theta), rightv, slotpos);
+			/* Untilted basis: the slots -- and so the guns and labels on
+			   them -- stay exactly where they have always been. Only the
+			   guide ring drawn around them answers to the trims. */
+			VectorMA (center, radius * cosf (theta), bright, slotpos);
 			slotpos[2] += radius * sinf (theta);
 		}
+		/* Untouched by the vr_wheel* trims on purpose: those aim the GUIDE
+		   RING only. The weapons and their labels keep the placement and
+		   spin they always had. */
 		e.angles[0] = 0;
 		e.angles[1] = spin + k * 45.f;
 		e.angles[2] = 0;
@@ -4643,6 +4694,31 @@ void QR_RenderView (void)
 
 	r_framecount++;
 
+	/* Export third-person cameras: the exporter asks for a world position;
+	   trace from the player's eye so the camera stops at walls (chase.c
+	   does the same), then pull back 8 units so it never sits in one. */
+	{
+		int	enabled;
+		vec3_t	want;
+		pthread_mutex_lock (&qr_exportcam_lock);
+		enabled = qr_exportcam_enabled_shared;
+		VectorCopy (qr_exportcam_org_shared, want);
+		pthread_mutex_unlock (&qr_exportcam_lock);
+		if (enabled && cl.worldmodel)
+		{
+			vec3_t	eye, impact, back;
+			VectorCopy (cl_entities[cl.viewentity].origin, eye);
+			eye[2] += 16.f;
+			TraceLine (eye, want, impact);
+			if (VectorLength (impact) != 0)
+			{
+				VectorSubtract (eye, impact, back);
+				VectorNormalize (back);
+				VectorMA (impact, 8.f, back, want);
+			}
+			VectorCopy (want, r_refdef.vieworg);
+		}
+	}
 	/* view setup -- port of R_SetupView */
 	VectorCopy (r_refdef.vieworg, r_origin);
 	AngleVectors (r_refdef.viewangles, vpn, vright, vup);
@@ -4860,6 +4936,25 @@ void QR_PublishFrame (void)
 
 	slot = &qr_slots[qr_building];
 	slot->frame.generation = qr_map_generation;
+	slot->frame.demo_playing = cls.demoplayback ? 1 : 0;
+	/* The export HUD draws conchars text render-side; make sure the atlas
+	   is up as soon as there is a world, not only once the wheel first
+	   emits a label (a demo export never opens the wheel). */
+	if (cl.worldmodel)
+		QR_EnsureConchars ();
+	if (cl.worldmodel && cl.viewentity > 0 && cl.viewentity < cl.num_entities)
+	{
+		entity_t *pl = &cl_entities[cl.viewentity];
+		VectorCopy (pl->origin, slot->frame.player_org);
+		VectorCopy (pl->angles, slot->frame.player_angles);
+	}
+	else
+	{
+		memset (slot->frame.player_org, 0, sizeof slot->frame.player_org);
+		memset (slot->frame.player_angles, 0, sizeof slot->frame.player_angles);
+	}
+	for (i = 0; i < 16; i++)
+		slot->frame.stats[i] = cl.stats[i];
 	slot->frame.indices = slot->indices;
 	slot->frame.batches = slot->batches;
 	slot->frame.entities = slot->entities;
@@ -4890,6 +4985,7 @@ void QR_PublishFrame (void)
 		if (qr_slots[i].state == QR_SLOT_READY)
 			qr_slots[i].state = QR_SLOT_FREE;
 	slot->seq = ++qr_frame_seq;
+	slot->frame.frame_seq = slot->seq;
 	slot->state = QR_SLOT_READY;
 	pthread_mutex_unlock (&qr_frame_lock);
 

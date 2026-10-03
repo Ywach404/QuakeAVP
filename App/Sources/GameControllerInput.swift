@@ -36,6 +36,11 @@ final class GameControllerInput {
 
     /// Shared with HandInput so hands and hardware merge through one gate.
     let aggregator = PadAggregator()
+
+    /// Fired after hasPhysicalController is recomputed. InputHost uses it to
+    /// re-decide whether hands drive the game -- a controller connecting has to
+    /// take over even with no window open to notice it.
+    var onControllerChange: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
 
     func start() {
@@ -130,6 +135,7 @@ final class GameControllerInput {
         }
         hasPhysicalController = !GCController.controllers().isEmpty
         SpatialControllerTracker.shared.setControllers(spatialControllers)
+        onControllerChange?()
     }
 
     /// Runs on GameController's handler queue.
@@ -186,7 +192,30 @@ final class PadAggregator: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Drop every source on the floor without disturbing any of them. Set while
+    /// the console has the game stopped: each input source keeps updating its
+    /// own slice, so releasing this resumes from the live pose rather than a
+    /// stale one, and no source needs to know the console exists. The weapon
+    /// wheel zeroes its own slice the same way, one layer down.
+    private var _suppressed = false
+    var suppressed: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _suppressed }
+        set {
+            lock.lock()
+            let changed = _suppressed != newValue
+            _suppressed = newValue
+            if changed { push() }      // land the zeroed (or restored) pad now
+            lock.unlock()
+        }
+    }
+
     private func push() {
+        if _suppressed {
+            var zero = qc_gamepad_state_t()
+            zero.connected = slices.isEmpty ? 0 : 1
+            QC_InputSetGamepad(&zero)
+            return
+        }
         var merged = Slice()
         for slice in slices.values {
             merged.lx = clamp(merged.lx + slice.lx)

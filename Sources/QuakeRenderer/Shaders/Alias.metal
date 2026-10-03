@@ -89,9 +89,17 @@ vertex AliasVaryings alias_vertex(uint vid [[vertex_id]],
     float blend = uniforms.shadeblend.w;
     float3 shade = uniforms.shadeblend.xyz;
 
-    float3 p1 = alias_clip(float3(pose1[vid].xyz.x, pose1[vid].xyz.y, pose1[vid].xyz.z), uniforms.clip);
-    float3 p2 = alias_clip(float3(pose2[vid].xyz.x, pose2[vid].xyz.y, pose2[vid].xyz.z), uniforms.clip);
-    float4 world = uniforms.model * float4(mix(p1, p2, blend), 1.0);
+    // Lerp FIRST, then clip once. Clipping each pose separately and lerping the
+    // results mixes a vertex's collapse point against its real position
+    // whenever it is past the plane in one pose and not the other -- dragging
+    // that vertex across the model for the whole blend. On a weapon with much
+    // forward/back travel between frames (the rocket launcher's recoil) that
+    // smears the geometry every shot. One decision on the blended vertex means
+    // a triangle collapses coherently or not at all.
+    float3 p1 = float3(pose1[vid].xyz.x, pose1[vid].xyz.y, pose1[vid].xyz.z);
+    float3 p2 = float3(pose2[vid].xyz.x, pose2[vid].xyz.y, pose2[vid].xyz.z);
+    float3 p = alias_clip(mix(p1, p2, blend), uniforms.clip);
+    float4 world = uniforms.model * float4(p, 1.0);
 
     float dot1 = avertexnormal_dot(float3(pose1[vid].normal.x, pose1[vid].normal.y, pose1[vid].normal.z) * (1.0 / 127.0), shade);
     float dot2 = avertexnormal_dot(float3(pose2[vid].normal.x, pose2[vid].normal.y, pose2[vid].normal.z) * (1.0 / 127.0), shade);

@@ -205,8 +205,32 @@ void R_NewMap (void)
 	QR_NewMap ();
 }
 
+/* Defined in view.c with external linkage but never prototyped in a header
+   (upstream only ever calls it from within view.c). Declared here rather than
+   added to view.h, which would make a fourth patched hunk in the vendored tree
+   for the sake of one line. */
+void V_CalcRefdef (void);
+
 void R_RenderView (void)
 {
+	/* Upstream V_RenderView skips V_CalcRefdef entirely while cl.paused --
+	   correct for a flat screen, where the frozen image is the point, and
+	   wrong here. In VR the camera must keep being computed even with the
+	   simulation stopped: without this r_refdef.vieworg holds whatever it had
+	   when the pause landed, which on a freshly loaded map means the view sits
+	   at the player entity's origin and you start the level buried in the
+	   floor until you resume.
+
+	   Done here rather than by patching view.c: the vendored tree has exactly
+	   three patched hunks and this does not need to be a fourth. V_RenderView
+	   has already decided to skip the calc by the time it calls us, so doing it
+	   now lands in the same frame, before the bridge reads the refdef.
+
+	   Intermission keeps upstream's behaviour -- it has its own refdef calc and
+	   a fixed camera, so recomputing would fight it. */
+	if (cl.paused && !cl.intermission)
+		V_CalcRefdef ();
+
 	QR_RenderView ();
 }
 
