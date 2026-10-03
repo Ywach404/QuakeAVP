@@ -11,12 +11,18 @@ import UIKit
 
 /// Which section the persistent control panel shows. Replaces the old Comfort
 /// and Weapon pop-out popovers, which auto-dismissed and hid your values.
-private enum PanelTab: Hashable { case comfort, weapon, admin, debug }
+private enum PanelTab: Hashable { case comfort, weapon, admin, capture, debug }
 
 struct ContentView: View {
-    @State private var engine = QuakeEngineViewModel()
-    @State private var gamepad = GameControllerInput()
-    @State private var hands: HandInput?
+    /// Not owned here either — see QuakeEngineViewModel. A window close must
+    /// not take the engine with it, and a window open must not start a second.
+    private var engine: QuakeEngineViewModel { .shared }
+    /// Input is NOT owned here. Closing this window used to release HandInput
+    /// and GameControllerInput and kill all input; InputHost owns them for the
+    /// life of the app. See InputHost.
+    private var input: InputHost { .shared }
+    private var gamepad: GameControllerInput { InputHost.shared.gamepad }
+    private var hands: HandInput { InputHost.shared.hands }
     @State private var commandText = ""
     @State private var autoOpened = false
     @State private var showScope = false
@@ -24,19 +30,12 @@ struct ContentView: View {
     @State private var heightOffset: Float = 0.4
     @State private var rightHanded = true
     @State private var lookRelative = true
-    @State private var fingerDebug = false
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
     @State private var swapSenseHands = false
     @State private var fullMenu = false
     @State private var laser = false
     @State private var turnFlick: Float = 0.85
-    @State private var showLimbs = true
-    @State private var pathDebug = false
-    @State private var aimRayDebug = false
-    @State private var strobeDebug = false
-    @State private var turnDebug = false
-    @State private var fireDebug = false
     @State private var hudFwdUI: Float = 0
     @State private var hudUpUI: Float = 0.14
     @State private var hudSideUI: Float = 0
@@ -48,14 +47,21 @@ struct ContentView: View {
     @State private var hudFaceUI: Float = 0.8
     @State private var hudScaleUI: Float = 1
     @State private var fireMode: FireMode = .pinch
+    @State private var summonGesture: SummonGesture = .prayer
     @State private var turnStyle: TurnStyle = .stick
     @State private var aimSmoothUI: Float = 0.4
-    @State private var aimBlendUI: Float = 0.35
+    @State private var pinchCloseUI: Float = 1.5   // cm
     @State private var curlSensUI: Float = 0.72
     @State private var hammerDropUI: Float = 45
-    @State private var inputLog = false
     @State private var showWeapon = false
     @State private var activeTab: PanelTab = .comfort
+    private var debug: DebugStore { .shared }
+    private var pause: GamePause { .shared }
+    @State private var exporter = DemoExporter()
+    @State private var capture = CaptureState()
+    @State private var captureName = ""
+    @State private var exportDemo = ""
+    @State private var exportPreset = ExportPreset()
     @State private var selectedEpisode = 0
 
     /// Map episodes, one horizontal strip each. Mission packs / custom packs can
@@ -71,7 +77,14 @@ struct ContentView: View {
     @State private var weaponUp: Float = 0
     @State private var weaponSide: Float = 0
     @State private var weaponGrip: Float = 0.15
-    @State private var aimPitch: Float = 0
+    @State private var aimPitch: Float = 8      // matches InputProfile.aimPitch
+    @State private var aimYaw: Float = 0
+    @State private var wheelPitchUI: Float = 0
+    @State private var wheelYawUI: Float = 0
+    @State private var wheelRollUI: Float = 0
+    @State private var wheelRadiusUI: Float = 1
+    @State private var sightingIn = false
+    @State private var sightStatus = "Needs the immersive space"
     @State private var weaponClip: Float = 1
     @State private var weaponClipBack: Float = 0.79
     @State private var laserForward: Float = 0
@@ -119,8 +132,7 @@ struct ContentView: View {
         .tint(Self.noctuaBurgundy)
         .onAppear {
             engine.boot()
-            gamepad.start()
-            hands = HandInput(aggregator: gamepad.aggregator)
+            _ = input          // ensure the app-lifetime input host exists
             // The wheel commits through the one console route.
             let engine = self.engine
             WheelState.shared.sendCommand = { command in
@@ -138,37 +150,59 @@ struct ContentView: View {
             ProfileStore.shared.refreshActiveFromInput()
             ProfileStore.shared.apply()
             syncFromProfile()
+            // Restore the persisted debug overlays; the store's didSets only
+            // fire on user edits, not on its initial load from defaults.
+            DebugStore.shared.apply()
+            GamePause.shared.isExporting = { exporter.state != .idle }
+            // The window being up IS the reason to pause, and at launch it is
+            // up before anything else. Pending until a map exists, so the first
+            // level starts stopped rather than running under a console you are
+            // still reading. Harmless on a summon reopen, which pauses anyway.
+            GamePause.shared.set(true)
             // Console respawn, two triggers, both duplicate-guarded: the
             // immersive space ending (crown goes home; coming back should find
-            // a window) and the in-game aim-hand palm-up dwell (summon the
-            // window WITHOUT leaving the game -- mixed immersion lets it
-            // coexist with the world). The captured OpenWindowAction stays
-            // valid after this window closes.
-            ConsolePresence.shared.count += 1
+            // a window) and the in-game summon sign (summon the window WITHOUT
+            // leaving the game -- mixed immersion lets it coexist with the
+            // world). The captured OpenWindowAction stays valid after this
+            // window closes.
             let openWindow = self.openWindow
             let respawn: @MainActor () -> Void = {
-                guard ConsolePresence.shared.count == 0 else { return }
+                // No presence guard: the console is a unique Window scene, so
+                // this either reopens it or brings it forward. Logged once per
+                // summon because this is the last link that cannot be unit
+                // tested -- whether an OpenWindowAction captured here still
+                // works after this view is gone.
+                print("[summon] opening the console window")
                 openWindow(id: QuakeAVPApp.consoleWindowID)
+                // You summoned the console mid-game: stop the world so a
+                // shambler isn't eating you while you read a slider. Resume is
+                // the button in the window header -- see GamePause for why it
+                // cannot be automatic.
+                GamePause.shared.set(true)
             }
             RendererCoordinator.shared.onImmersiveEnded = respawn
             HandInput.summonConsole = respawn
         }
-        .onDisappear { ConsolePresence.shared.count -= 1 }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
         .onChange(of: coordinator.isImmersiveActive) { _, active in
-            updateHands()
+            sightStatus = active ? "Ready" : "Needs the immersive space"
             // The scope earns its room while immersed (no preview pane);
             // windowed, it stays behind its toggle.
             if active { showScope = true }
         }
         .onChange(of: gamepad.hasPhysicalController) { _, _ in
-            updateHands()
+            // Activation itself is InputHost's job (it must happen with no
+            // window open too); the window only mirrors it into the sliders.
             // Auto-switch the active profile when a controller connects/leaves
             // (unless the user pinned one), then reflect it in the sliders.
             ProfileStore.shared.refreshActiveFromInput()
             ProfileStore.shared.apply()
             syncFromProfile()
+        }
+        .onChange(of: exporter.state) { _, state in
+            // Mirrored into the console so a simulator log capture shows it.
+            print("export: \(state)")
         }
         .onChange(of: engine.status) { _, status in
             // Force the phase melt OFF when the engine comes up. It's a
@@ -179,8 +213,28 @@ struct ContentView: View {
             if status == .running {
                 engine.send("phase 0")
                 phaseLevel = 0
-                // Engine's up: push the active profile's weapon/laser rig cvars.
+                // Engine's up: push the active profile's weapon/laser rig cvars
+                // and the persisted debug cvars, which the console refuses
+                // before this point.
                 ProfileStore.shared.applyRig()
+                DebugStore.shared.applyEngine { engine.send($0) }
+                // Boot-time export for the simulator acceptance test:
+                // QAVP_EXPORT_DEMO=demo1 [QAVP_EXPORT_PRESET=1080p60,gun]
+                // [QAVP_EXPORT_CANCEL_AFTER=seconds]. Run with
+                // QAVP_AUTO_IMMERSIVE=off; the exporter refuses otherwise.
+                if let demo = ProcessInfo.processInfo.environment["QAVP_EXPORT_DEMO"] {
+                    let env = ProcessInfo.processInfo.environment
+                    let preset = ExportPreset.parse(env["QAVP_EXPORT_PRESET"] ?? "1080p60,gun")
+                    let cancelAfter = env["QAVP_EXPORT_CANCEL_AFTER"].flatMap(Double.init)
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))   // let the pak and console settle
+                        startExport(demo: demo, preset: preset)
+                        if let cancelAfter {
+                            try? await Task.sleep(for: .seconds(cancelAfter))
+                            exporter.cancel()
+                        }
+                    }
+                }
             }
             // Open the immersive space as soon as the engine is up -- the flat
             // window is only a mono debug view, so play should begin in the
@@ -226,6 +280,21 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            // A toggle, not just a way out. Resume is the ONLY way back from a
+            // pause -- visionOS never tells us the window closed, so nothing
+            // auto-resumes -- but having resumed with the window still open
+            // (the debugging case) you need a way to stop the world again
+            // without closing and re-summoning.
+            if engine.status == .running {
+                Button {
+                    pause.set(!pause.isPaused)
+                } label: {
+                    Label(pause.isPaused ? "Resume" : "Pause",
+                          systemImage: pause.isPaused ? "play.fill" : "pause.fill")
+                        .font(.headline)
+                }
+                .buttonStyle(.borderedProminent)
+            }
             if engine.status == .running {
                 Button {
                     showScope.toggle()
@@ -266,6 +335,7 @@ struct ContentView: View {
                 Text("Comfort").tag(PanelTab.comfort)
                 Text("Weapon").tag(PanelTab.weapon)
                 Text("Admin").tag(PanelTab.admin)
+                Text("Capture").tag(PanelTab.capture)
                 Text("Debug").tag(PanelTab.debug)
             }
             .pickerStyle(.segmented)
@@ -276,6 +346,7 @@ struct ContentView: View {
                     case .comfort: comfortContent
                     case .weapon: weaponContent
                     case .admin: adminContent
+                    case .capture: captureContent
                     case .debug: debugContent
                     }
                 }
@@ -393,12 +464,32 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Console summon").font(.caption).foregroundStyle(.secondary)
+                    Picker("Console summon", selection: Binding(
+                        get: { summonGesture },
+                        set: { summonGesture = $0; VRSettings.shared.summonGesture = $0
+                               ProfileStore.shared.current.summonGesture = $0.rawValue })) {
+                        Text("Prayer").tag(SummonGesture.prayer)
+                        Text("Palm up").tag(SummonGesture.palmUp)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Text(summonGesture == .prayer
+                         ? "Palms together, fingers up, hold 0.6s."
+                         : "Aim hand palm-up, hold 1.2s. Competes with visionOS: "
+                           + "the palm also raises Home View / Control Center.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Gesture tuning").font(.caption).foregroundStyle(.secondary)
                     tuneRow("Aim smoothing", $aimSmoothUI, 0.1...1.0) {
                         VRSettings.shared.aimSmooth = $0; ProfileStore.shared.current.aimSmooth = $0 }
-                    tuneRow("Aim finger-mix", $aimBlendUI, 0.0...1.0) {
-                        VRSettings.shared.aimBlend = $0; ProfileStore.shared.current.aimBlend = $0 }
+                    // Shown in cm; stored in metres. Lower = fingers must get
+                    // closer before it fires.
+                    tuneRow("Pinch cm", $pinchCloseUI, 0.8...3.5, fmt: "%.1f") {
+                        VRSettings.shared.pinchClose = $0 / 100
+                        ProfileStore.shared.current.pinchClose = $0 / 100 }
                     tuneRow("Curl ease", $curlSensUI, 0.6...0.85) {
                         VRSettings.shared.curlSensitivity = $0; ProfileStore.shared.current.curlSensitivity = $0 }
                     tuneRow("Hammer angle", $hammerDropUI, 30...60, fmt: "%.0f°") {
@@ -498,34 +589,138 @@ struct ContentView: View {
         .disabled(!running)
     }
 
+    /// Capture tab: record a demo + head track, then export it offline as a
+    /// video (see DemoExporter). Exporting plays the demo back, which ends
+    /// the current game, and needs the immersive space closed because the
+    /// compositor thread owns the packet stream while it is open.
+    private var captureContent: some View {
+        let running = engine.status == .running
+        let gameDir = engine.paths?.baseDirectory.appendingPathComponent("id1", isDirectory: true)
+        let selected = capture.demos.first { $0.name == exportDemo }
+        let hasTrack = selected?.hasTrack ?? false
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Record a demo and head track in the headset, then export it here at any size and frame rate. Exporting ends the current game.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                TextField("Clip name", text: $captureName)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(capture.isRecording)
+                if capture.isRecording {
+                    Button("Stop") {
+                        if let gameDir { capture.stopRecording(engine: engine, gameDirectory: gameDir) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Record") {
+                        if let gameDir {
+                            capture.startRecording(name: captureName, gameDirectory: gameDir, engine: engine)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!running)
+                }
+            }
+            if capture.isRecording {
+                Label("Recording \(capture.currentName)", systemImage: "record.circle")
+                    .font(.caption).foregroundStyle(.red)
+            }
+            Divider()
+            Text("Export").font(.caption.weight(.semibold))
+            if capture.demos.isEmpty {
+                Text("No demos yet. Record one, or drop a .dem into Files › Quake › id1.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Demo", selection: $exportDemo) {
+                Text("Choose a demo").tag("")
+                ForEach(capture.demos) { d in
+                    Text(d.hasTrack ? "\(d.name)  ·  head track" : d.name).tag(d.name)
+                }
+            }
+            .pickerStyle(.menu)
+            Picker("Size", selection: $exportPreset.resolution) {
+                ForEach(ExportPreset.Resolution.allCases) { Text("\($0.rawValue)p").tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Frame rate", selection: $exportPreset.fps) {
+                ForEach([30, 60, 120], id: \.self) { Text("\($0) fps").tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Speed", selection: $exportPreset.slowMo) {
+                Text("1×").tag(Float(1)); Text("½×").tag(Float(0.5)); Text("¼×").tag(Float(0.25))
+            }
+            .pickerStyle(.segmented)
+            Picker("Motion blur", selection: $exportPreset.motionBlurSamples) {
+                Text("Blur off").tag(1); Text("Blur 4").tag(4); Text("Blur 8").tag(8)
+            }
+            .pickerStyle(.segmented)
+            Picker("Camera", selection: $exportPreset.camera) {
+                ForEach(ExportPreset.Camera.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.menu)
+            if !hasTrack, exportPreset.camera.needsTrack {
+                Text("This demo has no head track; pick Gun or a third-person camera.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Toggle("HUD overlay (health, armor, ammo, weapon, kills)", isOn: $exportPreset.hud)
+            Picker("Codec", selection: $exportPreset.codec) {
+                ForEach(ExportCodec.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if exporter.isRunning {
+                if case .running(let frames, let t) = exporter.state {
+                    HStack {
+                        ProgressView()
+                        Text("\(frames) frames · \(String(format: "%.1f", t)) s of demo")
+                            .font(.caption)
+                        Spacer()
+                        Button("Cancel") { exporter.cancel() }
+                    }
+                }
+            } else {
+                Button("Export video") { startExport(demo: exportDemo, preset: exportPreset) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!running || exportDemo.isEmpty || coordinator.isImmersiveActive
+                              || (exportPreset.camera.needsTrack && !hasTrack))
+            }
+            if case .done(let url) = exporter.state {
+                Text("Saved: Files › Quake › Exports › \(url.lastPathComponent) (+ .csv of per-frame stats)")
+                    .font(.caption)
+            }
+            if case .failed(let why) = exporter.state {
+                Text(why).font(.caption).foregroundStyle(.red)
+            }
+            if coordinator.isImmersiveActive {
+                Text("Exit the immersive space to export.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .onAppear {
+            if let gameDir { capture.refresh(gameDirectory: gameDir) }
+            if captureName.isEmpty { captureName = CaptureState.defaultName() }
+        }
+    }
+
     /// Debug tab: overlay/meter toggles, the input telemetry log, and the
     /// on-arm HUD placement rig (moved out of the overloaded Comfort section).
     private var debugContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Toggle("Finger debug wireframe", isOn: Binding(
-                get: { fingerDebug },
-                set: { fingerDebug = $0; HandDebug.shared.enabled = $0 }))
+                get: { debug.fingerDebug }, set: { debug.fingerDebug = $0 }))
             Toggle("Show real hands / controllers", isOn: Binding(
-                get: { showLimbs },
-                set: { showLimbs = $0; ImmersionSettings.shared.handsVisible = $0 }))
+                get: { debug.showLimbs }, set: { debug.showLimbs = $0 }))
+            // Not persisted on purpose -- see DebugStore.inputLog.
             Toggle("Input telemetry log (console)", isOn: Binding(
-                get: { inputLog },
-                set: { inputLog = $0; VRSettings.shared.inputLog = $0 }))
+                get: { debug.inputLog }, set: { debug.inputLog = $0 }))
             Toggle("Enemy AI debug (trails + targets)", isOn: Binding(
-                get: { pathDebug },
-                set: { pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
+                get: { debug.pathDebug },
+                set: { debug.pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
-                get: { aimRayDebug },
-                set: { aimRayDebug = $0; HandDebug.shared.aimRays = $0 }))
+                get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
             Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
-                get: { strobeDebug },
-                set: { strobeDebug = $0; HandDebug.shared.strobe = $0 }))
+                get: { debug.strobeDebug }, set: { debug.strobeDebug = $0 }))
             Toggle("Turn trigger meter (stick/clutch/flick)", isOn: Binding(
-                get: { turnDebug },
-                set: { turnDebug = $0; HandDebug.shared.turnDebug = $0 }))
+                get: { debug.turnDebug }, set: { debug.turnDebug = $0 }))
             Toggle("Fire threshold meter (pinch/curl/bang)", isOn: Binding(
-                get: { fireDebug },
-                set: { fireDebug = $0; HandDebug.shared.fireDebug = $0 }))
+                get: { debug.fireDebug }, set: { debug.fireDebug = $0 }))
             // HUD dock placement as typed transform fields (exact numbers beat
             // fishing with sliders). Position in cm, rotation in degrees.
             VStack(alignment: .leading, spacing: 8) {
@@ -538,7 +733,13 @@ struct ContentView: View {
                     VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
                 Text("HUD Transform").font(.caption.weight(.semibold)).padding(.top, 2)
                 HStack(alignment: .center, spacing: 14) {
-                    gyroDial
+                    gyroDial(pitch: $hudPitchUI, yaw: $hudYawUI, roll: $hudRollUI) { p, y, r in
+                        VRSettings.shared.hudPitch = p; VRSettings.shared.hudYaw = y
+                        VRSettings.shared.hudRoll = r
+                        ProfileStore.shared.current.hudPitch = p
+                        ProfileStore.shared.current.hudYaw = y
+                        ProfileStore.shared.current.hudRoll = r
+                    }
                     VStack(alignment: .leading, spacing: 8) {
                         transformField("Tilt X", $hudPitchUI, unit: "°") {
                             VRSettings.shared.hudPitch = $0; ProfileStore.shared.current.hudPitch = $0 }
@@ -568,19 +769,67 @@ struct ContentView: View {
                         placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup", persist: \.weaponUp)
                         placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside", persist: \.weaponSide)
                         placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f", persist: \.weaponGrip)
-                        placementSlider("Aim°", $aimPitch, in: -20...20, cvar: "vr_aimpitch", persist: \.aimPitch)
+                        // The two aim trims. Pitch carries the WHOLE vertical
+                        // correction (not a delta on a hidden 8), hence the
+                        // offset range; yaw is per-person and centred on 0.
+                        placementSlider("Aim pitch°", $aimPitch, in: -12...28, cvar: "vr_aimpitch", persist: \.aimPitch)
+                        placementSlider("Aim yaw°", $aimYaw, in: -20...20, cvar: "vr_aimyaw", persist: \.aimYaw)
+                        HStack(spacing: 10) {
+                            Button(sightingIn ? "Hold…" : "Sight in") { sightIn() }
+                                .disabled(sightingIn || !coordinator.isImmersiveActive)
+                            Text(sightStatus)
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text("Point your arm where your head is facing and tap — both trims are measured for you. The sliders are the manual fallback; pitch = up/down, yaw = left/right.")
+                            .font(.caption2).foregroundStyle(.secondary)
                         trimSlider("Trim front", $weaponClip) { WeaponTrim.shared.setFront($0) }
                         trimSlider("Trim rear", $weaponClipBack) { WeaponTrim.shared.setRear($0) }
                         Text("Per-weapon: front = barrel end, rear = arm end. Trimming the rear also re-seats the gun on your hand.")
                             .font(.caption2).foregroundStyle(.secondary)
+                        Divider().padding(.vertical, 4)
+                        Text("Weapon wheel").font(.caption.weight(.semibold))
+                        HStack(alignment: .top, spacing: 14) {
+                            gyroDial(pitch: $wheelPitchUI, yaw: $wheelYawUI,
+                                     roll: $wheelRollUI) { p, y, r in
+                                VRSettings.shared.wheelPitch = p
+                                VRSettings.shared.wheelYaw = y
+                                VRSettings.shared.wheelRoll = r
+                                ProfileStore.shared.current.wheelPitch = p
+                                ProfileStore.shared.current.wheelYaw = y
+                                ProfileStore.shared.current.wheelRoll = r
+                                engine.send("vr_wheelpitch \(p)")
+                                engine.send("vr_wheelyaw \(y)")
+                                engine.send("vr_wheelroll \(r)")
+                            }
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Drag inside to tilt the ring, on the rim to spin it.")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                placementSlider("Size", $wheelRadiusUI, in: 0.4...2.5,
+                                                cvar: "vr_wheelradius", fmt: "%.2f",
+                                                persist: \.wheelRadius)
+                            }
+                        }
+                        Button("Reset wheel") {
+                            wheelPitchUI = 0; wheelYawUI = 0; wheelRollUI = 0; wheelRadiusUI = 1
+                            VRSettings.shared.wheelPitch = 0
+                            VRSettings.shared.wheelYaw = 0
+                            VRSettings.shared.wheelRoll = 0
+                            for c in ["vr_wheelpitch 0", "vr_wheelyaw 0",
+                                      "vr_wheelroll 0", "vr_wheelradius 1"] { engine.send(c) }
+                            var p = ProfileStore.shared.current
+                            p.wheelPitch = 0; p.wheelYaw = 0; p.wheelRoll = 0; p.wheelRadius = 1
+                            ProfileStore.shared.current = p
+                        }
+                        .font(.caption)
+                        Divider().padding(.vertical, 4)
                         Button("Reset gun") {
                             weaponBack = 0; weaponUp = 0; weaponSide = 0
-                            weaponGrip = 0.15; aimPitch = 0
+                            weaponGrip = 0.15; aimPitch = 8; aimYaw = 0
                             for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
-                                      "vr_weapongrip 0.15", "vr_aimpitch 0"] { engine.send(c) }
+                                      "vr_weapongrip 0.15", "vr_aimpitch 8", "vr_aimyaw 0"] { engine.send(c) }
                             var p = ProfileStore.shared.current
                             p.weaponBack = 0; p.weaponUp = 0; p.weaponSide = 0
-                            p.weaponGrip = 0.15; p.aimPitch = 0
+                            p.weaponGrip = 0.15; p.aimPitch = 8; p.aimYaw = 0
                             ProfileStore.shared.current = p
                             WeaponTrim.shared.resetCurrent()
                             weaponClip = WeaponTrim.shared.currentFront
@@ -645,19 +894,33 @@ struct ContentView: View {
     /// HUD dock -- horizontal drag pans (Pan Y), vertical drag tilts (Tilt X)
     /// -- and drag ON the outer ring band to spin Roll Z by the angle swept
     /// around the centre. The fields beside it show the exact numbers live.
-    private var gyroDial: some View {
+    private func gyroDial(pitch: Binding<Float>, yaw: Binding<Float>,
+                          roll: Binding<Float>,
+                          apply: @escaping (Float, Float, Float) -> Void) -> some View {
         let size: CGFloat = 96
         let ringBand: CGFloat = 16                 // outer band width = roll grab zone
         let degPerPt: Float = 0.6                  // tumble sensitivity
-        return ZStack {
-            Circle().fill(Self.noctuaBrown.opacity(0.18))
-            Circle().strokeBorder(Self.noctuaBrown.opacity(0.75), lineWidth: 1.5)
-            Circle().inset(by: ringBand).strokeBorder(Self.noctuaBrown.opacity(0.5), lineWidth: 1)
-            // A roll indicator dot on the ring so the spin is readable.
-            Circle().fill(Self.noctuaBurgundy).frame(width: 7, height: 7)
-                .offset(y: -(size / 2 - ringBand / 2 - 1))
-                .rotationEffect(.degrees(Double(hudRollUI)))
+        // A wireframe globe, the way every inspector draws this: the SPHERE is
+        // the silhouette, the vertical meridian narrows as you pan, the
+        // horizontal equator flattens as you tilt, and both turn with roll.
+        // Each ellipse reads one axis on its own, which is why it is legible at
+        // a glance where ticks and a horizon line were not.
+        //
+        // An ellipse seen `a` degrees off face-on is cos(a) as wide, so the
+        // minor axis IS the cosine -- at Tilt X 85 the equator is edge-on and
+        // draws as a line, which is exactly what you want it to look like.
+        func minor(_ deg: Float) -> CGFloat {
+            max(1, CGFloat(abs(cos(deg * .pi / 180))) * (size - 2))
         }
+        return ZStack {
+            Circle().fill(Self.noctuaBrown.opacity(0.14))
+            Circle().strokeBorder(Self.noctuaBrown.opacity(0.85), lineWidth: 1.2)
+            Ellipse().stroke(Self.noctuaBrown.opacity(0.6), lineWidth: 1.2)
+                .frame(width: minor(yaw.wrappedValue), height: size - 2)
+            Ellipse().stroke(Self.noctuaBrown.opacity(0.6), lineWidth: 1.2)
+                .frame(width: size - 2, height: minor(pitch.wrappedValue))
+        }
+        .rotationEffect(.degrees(Double(roll.wrappedValue)))
         .frame(width: size, height: size)
         .contentShape(Circle())
         .gesture(DragGesture(minimumDistance: 0)
@@ -675,17 +938,14 @@ struct ContentView: View {
                     let a1 = atan2(p.y - c.y, p.x - c.x)
                     var d = Float(a1 - a0) * 180 / .pi
                     if d > 180 { d -= 360 } else if d < -180 { d += 360 }
-                    hudRollUI = max(-180, min(180, hudRollUI + d))
-                    VRSettings.shared.hudRoll = hudRollUI
-                    ProfileStore.shared.current.hudRoll = hudRollUI
+                    roll.wrappedValue = max(-180, min(180, roll.wrappedValue + d))
                 } else {
-                    hudYawUI = max(-180, min(180, hudYawUI + Float(p.x - last.x) * degPerPt))
-                    hudPitchUI = max(-90, min(90, hudPitchUI + Float(p.y - last.y) * degPerPt))
-                    VRSettings.shared.hudYaw = hudYawUI
-                    VRSettings.shared.hudPitch = hudPitchUI
-                    ProfileStore.shared.current.hudYaw = hudYawUI
-                    ProfileStore.shared.current.hudPitch = hudPitchUI
+                    yaw.wrappedValue = max(-180, min(180,
+                        yaw.wrappedValue + Float(p.x - last.x) * degPerPt))
+                    pitch.wrappedValue = max(-90, min(90,
+                        pitch.wrappedValue + Float(p.y - last.y) * degPerPt))
                 }
+                apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
             }
             .onEnded { _ in gyroLast = nil })
     }
@@ -738,14 +998,17 @@ struct ContentView: View {
         heightOffset = p.heightOffset
         turnFlick = p.turnFlickSpeed
         fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
+        summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         turnStyle = TurnStyle(rawValue: p.turnStyle) ?? .stick
-        aimSmoothUI = p.aimSmooth; aimBlendUI = p.aimBlend
+        aimSmoothUI = p.aimSmooth; pinchCloseUI = p.pinchClose * 100
+        wheelPitchUI = p.wheelPitch; wheelYawUI = p.wheelYaw
+        wheelRollUI = p.wheelRoll; wheelRadiusUI = p.wheelRadius
         curlSensUI = p.curlSensitivity; hammerDropUI = p.hammerDropDeg
         hudFwdUI = p.hudForward; hudUpUI = p.hudUp; hudSideUI = p.hudSide
         hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll; hudYawUI = p.hudYaw ?? 0
         hudFaceUI = p.hudFaceMe; hudScaleUI = p.hudScale
         weaponBack = p.weaponBack; weaponUp = p.weaponUp; weaponSide = p.weaponSide
-        weaponGrip = p.weaponGrip; aimPitch = p.aimPitch
+        weaponGrip = p.weaponGrip; aimPitch = p.aimPitch; aimYaw = p.aimYaw
         laser = p.laser
         laserForward = p.laserForward; laserUp = p.laserUp; laserSide = p.laserSide
         laserPitch = p.laserPitch; laserYaw = p.laserYaw
@@ -977,10 +1240,6 @@ struct ContentView: View {
         }
     }
 
-    private func updateHands() {
-        hands?.setActive(coordinator.isImmersiveActive && !gamepad.hasPhysicalController)
-    }
-
     private var inputStatus: (text: String, icon: String) {
         if let name = gamepad.sourceDescription {
             var text = name
@@ -992,10 +1251,51 @@ struct ContentView: View {
             }
             return (text, "gamecontroller")
         }
-        if hands?.isRunning == true {
+        if hands.isRunning {
             return ("Hands — pinch left to move, right to fire", "hand.pinch")
         }
         return ("No controller — console input only", "gamecontroller")
+    }
+
+    /// "Sight in": hold a short sample so hand tremor averages out, then write
+    /// both aim trims. Refuses rather than writing an implausible result — a
+    /// bad trim leaves you unable to aim at the button that would undo it.
+    private func sightIn() {
+        sightingIn = true
+        sightStatus = "Hold still, pointing where you look…"
+        AimCalibration.shared.begin()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(800))
+            sightingIn = false
+            switch AimCalibration.shared.finish() {
+            case let .ok(yaw, pitch, samples):
+                aimYaw = yaw; aimPitch = pitch
+                engine.send("vr_aimyaw \(yaw)")
+                engine.send("vr_aimpitch \(pitch)")
+                var p = ProfileStore.shared.current
+                p.aimYaw = yaw; p.aimPitch = pitch
+                ProfileStore.shared.current = p
+                sightStatus = String(format: "Sighted: pitch %.1f°, yaw %.1f°", pitch, yaw)
+                print("[sightin] pitch=\(pitch) yaw=\(yaw) over \(samples) samples")
+            case let .notEnoughData(samples):
+                sightStatus = "No aim seen — is your hand tracked?"
+                print("[sightin] refused: only \(samples) paired samples")
+            case let .implausible(yaw, pitch):
+                sightStatus = "Measured nonsense; trims unchanged"
+                print("[sightin] refused: implausible pitch=\(pitch) yaw=\(yaw)"
+                    + " -- head and aim are probably not in the same frame")
+            }
+        }
+    }
+
+    /// One place that knows where demos and exports live.
+    private func startExport(demo: String, preset: ExportPreset) {
+        guard let paths = engine.paths else { return }
+        exporter.start(demo: demo, preset: preset,
+                       host: engine.engineHost, core: coordinator.core,
+                       gameDirectory: paths.baseDirectory.appendingPathComponent("id1", isDirectory: true),
+                       exportsDirectory: paths.baseDirectory.appendingPathComponent("Exports", isDirectory: true),
+                       immersiveActive: coordinator.isImmersiveActive)
     }
 
     private func submit() {

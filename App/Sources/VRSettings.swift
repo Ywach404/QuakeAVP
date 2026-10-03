@@ -22,6 +22,17 @@ enum FireMode: Int, CaseIterable, Sendable { case pinch, curl, hammer }
 /// flick = whip the gun hand. All accumulate into comfort snaps.
 enum TurnStyle: Int, CaseIterable, Sendable { case stick, clutch, flick }
 
+/// How the console window is summoned from inside the game. prayer = the
+/// two-handed sign (default); palmUp = the original aim-hand palm-up dwell.
+///
+/// These are not equal choices. visionOS reserves the palm: palm toward your
+/// face raises the Home View dot, palm away raises the status bar into Control
+/// Center, and `persistentSystemOverlays(.hidden)` is only a preference the
+/// system still overrides when the user looks and pinches. So palmUp competes
+/// with the OS for the same pose and is kept only as a fallback. Prayer holds
+/// both palms edge-on to the face, which the system makes no claim on.
+enum SummonGesture: Int, CaseIterable, Sendable { case prayer, palmUp }
+
 final class VRSettings: @unchecked Sendable {
 
     static let shared = VRSettings()
@@ -91,13 +102,21 @@ final class VRSettings: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return _aimSmooth }
         set { lock.lock(); _aimSmooth = newValue; lock.unlock() }
     }
-    /// Aim blend: 0 = pure forearm bone (steady), 1 = pure knuckle-centroid
-    /// (follows wrist flex but couples finger motion into the aim).
-    private var _aimBlend: Float = 0.35
-    var aimBlend: Float {
-        get { lock.lock(); defer { lock.unlock() }; return _aimBlend }
-        set { lock.lock(); _aimBlend = newValue; lock.unlock() }
+
+    /// Fingertip-to-thumb distance (METRES) at which a pinch closes. Release
+    /// is this + 1.5 cm of hysteresis, so one knob sets both.
+    ///
+    /// This was hardcoded at 2.5 cm, which is "close but not touching" -- it
+    /// fired before the fingers met. It was loosened to that on purpose once,
+    /// because the middle-finger movement pinch kept dropping out, so tightening
+    /// it trades false triggers for missed ones. That trade is the player's to
+    /// make on device, which is why it is a slider now and not a constant.
+    private var _pinchClose: Float = 0.015
+    var pinchClose: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _pinchClose }
+        set { lock.lock(); _pinchClose = newValue; lock.unlock() }
     }
+
     /// Curl-fire sensitivity: index straightness at/below which the trigger
     /// pulls. Higher = fires on a lighter curl. (Open/release is +0.10.)
     private var _curlSensitivity: Float = 0.72
@@ -111,6 +130,34 @@ final class VRSettings: @unchecked Sendable {
     var hammerDropDeg: Float {
         get { lock.lock(); defer { lock.unlock() }; return _hammerDropDeg }
         set { lock.lock(); _hammerDropDeg = newValue; lock.unlock() }
+    }
+
+    /// Weapon-wheel ring plane trims (degrees off the body basis) and a scale
+    /// on its radius. WheelState mirrors the three angles into its selection
+    /// math; the engine reads the matching vr_wheel* cvars. Radius is safe to
+    /// move alone -- selection is angle-only.
+    private var _wheelPitch: Float = 0
+    var wheelPitch: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _wheelPitch }
+        set { lock.lock(); _wheelPitch = newValue; lock.unlock() }
+    }
+    private var _wheelYaw: Float = 0
+    var wheelYaw: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _wheelYaw }
+        set { lock.lock(); _wheelYaw = newValue; lock.unlock() }
+    }
+    private var _wheelRoll: Float = 0
+    var wheelRoll: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _wheelRoll }
+        set { lock.lock(); _wheelRoll = newValue; lock.unlock() }
+    }
+
+    /// Console summon gesture; default the prayer sign. See SummonGesture for
+    /// why palm-up is the compromised option rather than an equal one.
+    private var _summonGesture: SummonGesture = .prayer
+    var summonGesture: SummonGesture {
+        get { lock.lock(); defer { lock.unlock() }; return _summonGesture }
+        set { lock.lock(); _summonGesture = newValue; lock.unlock() }
     }
 
     /// Print the aim-hand gesture signals to the console (~7 Hz) for tuning:

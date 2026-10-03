@@ -22,16 +22,6 @@ final class ImmersionSettings {
     private init() {}
 }
 
-/// Tracks whether a console window is on screen, so the respawn paths (crown
-/// recovery, palm summon) only open one when none exists instead of stacking
-/// duplicate WindowGroup instances.
-@MainActor
-final class ConsolePresence {
-    static let shared = ConsolePresence()
-    var count = 0
-    private init() {}
-}
-
 @main
 struct QuakeAVPApp: App {
 
@@ -42,7 +32,16 @@ struct QuakeAVPApp: App {
     @State private var immersion = ImmersionSettings.shared
 
     var body: some Scene {
-        WindowGroup(id: Self.consoleWindowID) {
+        // A unique Window, not a WindowGroup. The console is one debug surface,
+        // not a document you open several of -- and WindowGroup made the summon
+        // impossible: it can spawn duplicates, so the respawn paths counted
+        // windows by hand via onAppear/onDisappear, and on visionOS
+        // onDisappear does not fire when the user closes the window. The count
+        // only ever went up, so after the first open the guard suppressed every
+        // summon forever ("suppressed: 1 console window(s) already open" while
+        // no window existed). Window is unique by construction: openWindow
+        // either reopens it or brings it forward, and no counting is needed.
+        Window("Quake", id: Self.consoleWindowID) {
             ContentView()
                 // One fixed size that fits every control and the log; the
                 // console is a debug surface, not a resizable document, and
@@ -53,9 +52,8 @@ struct QuakeAVPApp: App {
         }
         .defaultSize(width: 960, height: 900)
         .windowResizability(.contentSize)
-        // The console is a WindowGroup, so a closed window has no in-app way
-        // back without this: a menu command + Cmd-0 reopen it. Losing the
-        // console used to mean relaunching the app.
+        // A closed window has no in-app way back without this: a menu command
+        // + Cmd-0 reopen it. Losing the console used to mean relaunching.
         .commands {
             CommandGroup(after: .windowArrangement) { ConsoleReopenButton() }
         }
