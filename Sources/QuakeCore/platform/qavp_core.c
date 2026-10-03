@@ -9,6 +9,7 @@
 
 #include "quakedef.h"
 #include "QuakeCore.h"
+#include "admin_avp.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -109,6 +110,9 @@ void QC_Frame (double dt)
 		dt = 0.1;
 
 	Host_Frame ((float) dt);
+	/* After the tick, outside Host_Frame's error frame: it only touches
+	   server state and never calls into progs. */
+	Admin_Frame ();
 }
 
 void QC_Shutdown (void)
