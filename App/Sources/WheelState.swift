@@ -174,6 +174,9 @@ final class WheelState: @unchecked Sendable {
             considerDwellLocked(now: CACurrentMediaTime())
         }
 
+        // Plain body plane, deliberately NOT tilted by the wheel trims: those
+        // aim the drawn guide ring only. The weapons stay where they always
+        // were, so what you point at must too.
         guard dir.x > 0.05 else { return }
         let t = (a.x - origin.x) / dir.x
         guard t > 0 else { return }

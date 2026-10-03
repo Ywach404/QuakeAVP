@@ -106,7 +106,8 @@ final class ImmersiveRenderer {
         // packet stream back to the window and drop the layer.
         QC_RendererSetCullingFov(0, 0)
         QC_InputSetHeadPitch(0)   // level the aim for a later flat-window session
-        QC_InputSetAim(0, 0, 0, 0, 0, 0)   // release the hand aim; body-anchored on the flat window
+        // release the hand aim; body-anchored on the flat window
+        TrackRecorder.shared.feedAim(valid: false, origin: .zero, yaw: 0, pitch: 0)
         print("[immersive] layer invalidated, render thread exiting")
         onStop()
     }
@@ -261,6 +262,9 @@ final class ImmersiveRenderer {
             let horiz = (hf.x * hf.x + hf.z * hf.z).squareRoot()
             let headPitch = -atan2(hf.y, horiz) * 180 / .pi
             QC_InputSetHeadPitch(headPitch)
+            // Same frame and sense as the aim angles, so "sight in" can take
+            // the difference directly. See AimCalibration.
+            AimCalibration.shared.noteHead(yaw: headYaw, pitch: headPitch)
 
             // M6 aim: the dominant Sense controller's 6DOF pose becomes the
             // shot ray. Corrected into the recenter-neutral frame (the same
@@ -278,7 +282,8 @@ final class ImmersiveRenderer {
                 let aimYaw = atan2(-fwd0.x, -fwd0.z) * 180 / .pi
                 let aimHoriz = (fwd0.x * fwd0.x + fwd0.z * fwd0.z).squareRoot()
                 let aimPitch = -atan2(fwd0.y, aimHoriz) * 180 / .pi
-                QC_InputSetAim(1, -o.z / s, o.x / s, o.y / s, aimYaw, aimPitch)
+                TrackRecorder.shared.feedAim(valid: true, origin: SIMD3(-o.z / s, o.x / s, o.y / s),
+                                             yaw: aimYaw, pitch: aimPitch)
             }
 
             let yaw = packet.body_yaw * .pi / 180
@@ -308,6 +313,13 @@ final class ImmersiveRenderer {
             let scale = simd_float4x4(diagonal: SIMD4(s, s, s, 1))
             originFromQuake = scale * quakeView
             quakeFromOrigin = originFromQuake.inverse
+            // Sidecar: the head in Quake space from the same late-latched
+            // pose the eyes use, keyed on the packet's clock (see VRTrack).
+            TrackRecorder.shared.noteFrame(
+                clTime: packet.time,
+                quakeFromHead: quakeFromOrigin * originFromDevice,
+                worldScale: s, bodyYaw: packet.body_yaw,
+                headOffset: SIMD3(fwd, right, up), heightTrim: heightTrim)
         }
 
         // Dissolve origin: the head itself (the device anchor), mapped into

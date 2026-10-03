@@ -288,6 +288,12 @@ typedef struct qc_frame_s {
 	   up, matching where QR_EmitWheel places the models. */
 	float		wheel_center[3];
 	float		wheel_radius;
+	/* The ring plane's axes (unit, world frame). The body basis tilted by
+	   vr_wheelpitch/yaw/roll; the consumer draws the guide circle in this
+	   plane rather than re-deriving it from body_yaw, which would ignore
+	   the tilt. */
+	float		wheel_right[3];
+	float		wheel_up[3];
 	float		wheel_frac;
 	int32_t		wheel_count;
 	int32_t		wheel_highlight;
@@ -316,6 +322,21 @@ typedef struct qc_frame_s {
 	   -- instead of on every trigger pull, which buzzed through the cooldown.
 	   Consumer fires a kick whenever this increases. */
 	uint32_t	weapon_fire_seq;
+
+	/* Export support. frame_seq is the bridge's publish counter (+1 per
+	   packet) so a lock-stepped consumer can assert it got exactly one new
+	   packet per engine step. demo_playing mirrors cls.demoplayback so the
+	   consumer learns when a played-back demo has ended. */
+	uint32_t	frame_seq;
+	uint32_t	demo_playing;
+	/* The player entity (cl_entities[cl.viewentity]) and the status-bar
+	   stats (cl.stats[0..15]: health, frags, weapon, ammo, armor, ...,
+	   shells, nails, rockets, cells, active weapon, total secrets, total
+	   monsters, secrets, monsters) for third-person export cameras and the
+	   export HUD. player_org is the entity origin, not the eye. */
+	float		player_org[3];
+	float		player_angles[3];
+	int32_t		stats[16];
 
 	uint32_t	num_indices;
 	const uint32_t	*indices;	/* into the geometry vertex array */
@@ -423,6 +444,13 @@ void QC_InputSetSlowmo (int pressed);
    Look-relative locomotion (vr_moverelative) rotates the movement stick by
    this so "forward" tracks where the head looks; body-relative locomotion
    ignores it. Callable from any thread. */
+/* Freeze/unfreeze the simulation (sv.paused). An explicit SET rather than
+   Quake's "pause" toggle, so the caller's intent cannot be inverted by anything
+   else. Applied on the engine thread; single-player only. The render thread and
+   head tracking keep running, so a paused world is still look-around-able.
+   Callable from any thread. */
+void QC_SetPaused (int paused);
+
 void QC_InputSetHeadYaw (float yaw_deg);
 
 /* The head's pitch, degrees, Quake sense (positive looks DOWN), fed by the
@@ -497,6 +525,19 @@ typedef struct {
 
 /* Copy the latest roster snapshot. Callable from any thread. */
 void QC_AdminCopyState (qc_admin_state_t *out);
+/* Export only. During demo playback IN_Move still runs and re-derives the
+   body yaw from the demo's viewangles (the aim), so the hand weapon would be
+   placed from the wrong body frame. With `override` set, the engine pins
+   qr_body_yaw to yaw_deg every IN_Move; pass 0 to release. Callable from
+   any thread. */
+void QC_ExportSetBodyYaw (int override, float yaw_deg);
+
+/* Export only: park the engine's view origin (the PVS/culling viewpoint)
+   at a world position for third-person cameras. The bridge traces from the
+   player to it so it stops at walls, then publishes the resulting position
+   as the packet's vieworg. `enabled` 0 releases it. Callable from any
+   thread. */
+void QC_ExportSetViewOrigin (int enabled, float x, float y, float z);
 
 #ifdef __cplusplus
 }

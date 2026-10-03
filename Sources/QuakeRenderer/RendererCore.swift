@@ -60,6 +60,9 @@ final class RendererCore {
     enum Output {
         case window
         case immersive
+        /// The offline exporter's thread (DemoExporter), lock-stepping the
+        /// engine through a demo while the immersive space is closed.
+        case export
     }
 
     /// Per-frame dissolve state. The radius comes from the packet (the
@@ -651,6 +654,33 @@ final class RendererCore {
         }
     }
 
+    /// Screen-space text for the export HUD: `verts` are the same 9-float
+    /// glyph quads the bridge emits (xyz, uv, rgba) but in PIXEL coordinates,
+    /// origin top-left, z ignored. Drawn over the pass with depth off.
+    func drawScreenText(_ verts: [Float], atlasTexnum: UInt32, width: Int, height: Int,
+                        pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard let pipeline = pipelines.text, verts.count >= 27,
+              let atlas = textures[atlasTexnum],
+              let buffer = device.makeBuffer(bytes: verts,
+                                             length: verts.count * MemoryLayout<Float>.size,
+                                             options: .storageModeShared)
+        else { return }
+        var ortho = matrix_identity_float4x4
+        ortho.columns.0 = SIMD4(2 / Float(width), 0, 0, 0)
+        ortho.columns.1 = SIMD4(0, -2 / Float(height), 0, 0)
+        ortho.columns.2 = SIMD4(0, 0, 1, 0)
+        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
+        var uniforms = GuideUniforms(viewproj0: ortho, viewproj1: ortho)
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+        withUnsafeBytes(of: &uniforms) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        encoder.setFragmentTexture(atlas, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / 9)
+    }
+
     /// Draw the finger debug wireframe. `verts` are 7-float TRIANGLE
     /// vertices (xyz + rgba) in corrected-TRACKING space -- thin quads, not
     /// lines, because line primitives are illegal under the device's
@@ -726,11 +756,20 @@ final class RendererCore {
         let c = SIMD3(frame.wheel_center.0, frame.wheel_center.1, frame.wheel_center.2)
         let r = frame.wheel_radius
         let count = Int(frame.wheel_count)
-        // Body frame (M6): QR_EmitWheel lays the ring out in body_yaw, not the
-        // aim, so the guide's plane must match or it rotates off the models.
-        let yaw = frame.body_yaw * .pi / 180
-        let right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
-        let up = SIMD3<Float>(0, 0, 1)
+        // The ring plane comes from the PACKET now, not re-derived from
+        // body_yaw. The engine tilts it by the vr_wheel* trims, and this is the
+        // only thing those trims move -- the weapons and labels stay on the
+        // untilted basis, as does selection. Re-deriving here would ignore the
+        // tilt and draw a flat circle around a ring the player had aimed.
+        var right = SIMD3<Float>(frame.wheel_right.0, frame.wheel_right.1, frame.wheel_right.2)
+        var up = SIMD3<Float>(frame.wheel_up.0, frame.wheel_up.1, frame.wheel_up.2)
+        if simd_length(right) < 0.5 || simd_length(up) < 0.5 {
+            // Older packet or no ring this frame: fall back to the flat body
+            // plane rather than drawing a degenerate circle.
+            let yaw = frame.body_yaw * .pi / 180
+            right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
+            up = SIMD3<Float>(0, 0, 1)
+        }
         func pt(_ angle: Float, _ rad: Float) -> SIMD3<Float> {
             c + rad * cos(angle) * right + rad * sin(angle) * up
         }

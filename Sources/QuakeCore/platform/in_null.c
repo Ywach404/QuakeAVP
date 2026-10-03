@@ -44,6 +44,7 @@ static float			qc_wheel_pos_shared[3];
 static int			qc_wheel_highlight_shared;
 static float			qc_head_yaw_shared;
 static float			qc_head_pitch_shared;
+static int			qc_paused_shared;	/* console pause request */
 static int			qc_slowmo_shared;	/* raw L3 button */
 static float			qc_height_trim_shared;
 static int			qc_aim_valid_shared;	/* dominant-hand aim live? */
@@ -58,6 +59,19 @@ void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
+static int			qc_bodyyaw_override_shared;
+static float			qc_bodyyaw_shared;
+static int			qr_bodyyaw_override;	/* engine-thread mirrors */
+static float			qr_bodyyaw_pinned;
+
+void QC_ExportSetBodyYaw (int override, float yaw_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_bodyyaw_override_shared = override;
+	qc_bodyyaw_shared = yaw_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
 void QC_InputSetHeadOffset (float fwd, float right, float up,
 			    uint32_t recenter_ack)
 {
@@ -66,6 +80,16 @@ void QC_InputSetHeadOffset (float fwd, float right, float up,
 	qc_head_shared[1] = right;
 	qc_head_shared[2] = up;
 	qc_head_ack = recenter_ack;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+/* Freeze/unfreeze the simulation. An explicit SET, not Quake's "pause" toggle,
+   so the caller's intent survives anything else touching it. Applied on the
+   engine thread by IN_ApplyPause. Callable from any thread. */
+void QC_SetPaused (int paused)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_paused_shared = paused ? 1 : 0;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -171,6 +195,7 @@ static float			qr_aim_yaw;		/* room-relative, Quake deg */
 static float			qr_aim_pitch;
 static float			qr_expected_yaw;
 
+static int			qr_paused;		/* drained console pause */
 static int			qr_slowmo_raw;		/* drained L3 button */
 static int			qr_slowmo_active;	/* toggled bullet-time */
 static uint32_t			qr_head_ack_seen;
@@ -183,12 +208,29 @@ static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
    hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
    head-pitch elevation) -- the A/B for judging feel, one cvar to flip. */
 static cvar_t	vr_handaim = {"vr_handaim", "1", CVAR_ARCHIVE};
-/* M6: pitch trim for the hand aim, degrees, positive = aim LOWER. Corrects a
-   systematic high/low bias from how the forearm rests when pointing; applies
-   to the shot and the gun model together. Tune live against the laser. */
-static cvar_t	vr_aimpitch = {"vr_aimpitch", "0", CVAR_ARCHIVE};
+/* M6: THE pitch trim for the hand aim, degrees, positive = aim LOWER. Corrects
+   a systematic high/low bias from how the forearm rests when pointing; applies
+   to the shot and the gun model together. Tune live against the laser.
+   The default carries the 8 degrees that used to be a second, hidden constant
+   in HandInput.feedAim -- one visible number rather than two stacked knobs. */
+static cvar_t	vr_aimpitch = {"vr_aimpitch", "8", CVAR_ARCHIVE};
+/* The lateral half of the same trim, degrees, positive = aim further RIGHT.
+   Pitch alone could correct "shoots high" but not "shoots left", which a
+   forearm-only aim needs: the elbow->wrist line points slightly across the
+   body. Default 0 -- the bias is per-person, unlike the vertical one. */
+static cvar_t	vr_aimyaw = {"vr_aimyaw", "0", CVAR_ARCHIVE};
 /* M6: a laser line from the muzzle down the aim, an aiming aid. Read by
    qr_bridge; non-static so it externs cleanly like the other vr_ cvars. */
+/* Weapon-wheel ring plane, degrees off the body basis, and a scale on its
+   radius. Pitch/yaw/roll tilt the plane the weapons ring in; the selection
+   math in WheelState.swift applies the IDENTICAL rotation to its own axes, so
+   these three numbers are a shared contract -- change the meaning here and the
+   highlight points at a different weapon than the one under your hand. The
+   radius scale is safe to change alone: selection is angle-only. */
+cvar_t		vr_wheelpitch  = {"vr_wheelpitch",  "0", CVAR_ARCHIVE};
+cvar_t		vr_wheelyaw    = {"vr_wheelyaw",    "0", CVAR_ARCHIVE};
+cvar_t		vr_wheelroll   = {"vr_wheelroll",   "0", CVAR_ARCHIVE};
+cvar_t		vr_wheelradius = {"vr_wheelradius", "1", CVAR_ARCHIVE};
 cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
 /* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
    (muzzle). Low values push the barrel forward off the hand -- megaman
@@ -246,9 +288,66 @@ static float IN_DeadZone (float value)
 	return (value < 0.f) ? -mag : mag;
 }
 
+/*
+================
+IN_ApplyPause -- mirror QC_SetPaused onto sv.paused, on the engine thread.
+
+Quake only exposes pausing as a TOGGLE ("pause"), which desyncs the moment
+anything else touches it, so the console-pause drives an explicit SET instead.
+This does what Host_Pause_f does minus the chat broadcast: flip sv.paused and
+tell the clients, so the local client's cl.paused matches and prediction stops.
+
+Single-player only, like every other server-state feature here. Pausing
+freezes the SIM only -- the render thread and head tracking keep running, so
+you can still look around a stopped world.
+================
+*/
+static void IN_ApplyPause (void)
+{
+	static int	applied = 0;
+
+	/* No server yet: leave the request PENDING rather than consuming it. The
+	   app asks to pause at launch, before any map exists, and that intent has
+	   to survive until one does -- otherwise the first level starts running
+	   under a console the player is still reading. */
+	if (!sv.active)
+		return;
+
+	if (qr_paused != applied)
+	{
+		applied = qr_paused;
+		sv.paused = qr_paused ? 1 : 0;
+		MSG_WriteByte (&sv.reliable_datagram, svc_setpause);
+		MSG_WriteByte (&sv.reliable_datagram, sv.paused);
+		return;
+	}
+
+	/* Intent unchanged, but SV_SpawnServer memsets sv, so loading a map clears
+	   sv.paused underneath us and the world would run while the app still
+	   believes it is stopped. Re-assert. Only in this direction: if the player
+	   types "pause" in the console while we are NOT pausing, that is theirs to
+	   keep. */
+	if (applied && !sv.paused)
+	{
+		/* ...but NOT before the client has spawned. Pausing during the signon
+		   stops the server before it sends the first clientdata, which is what
+		   sets cl.viewheight -- it stays 0, the camera sits at the player
+		   entity's ORIGIN instead of eye level, and the level starts with your
+		   head in the floor. It un-sinks the moment the sim runs, which is
+		   exactly the tell. Let the spawn complete, then freeze. */
+		if (cls.signon != SIGNONS || cl.viewheight == 0)
+			return;
+
+		sv.paused = 1;
+		MSG_WriteByte (&sv.reliable_datagram, svc_setpause);
+		MSG_WriteByte (&sv.reliable_datagram, sv.paused);
+	}
+}
+
 static void IN_SnapshotInputs (void)
 {
 	pthread_mutex_lock (&qc_input_lock);
+	qr_paused = qc_paused_shared;
 	qr_pad = qc_pad_shared;
 	qr_head[0] = qc_head_shared[0];
 	qr_head[1] = qc_head_shared[1];
@@ -270,6 +369,8 @@ static void IN_SnapshotInputs (void)
 	qr_wheel_anchor[2] = qc_wheel_pos_shared[2];
 	qr_wheel_highlight = qc_wheel_highlight_shared;
 	qr_height_trim = qc_height_trim_shared;
+	qr_bodyyaw_override = qc_bodyyaw_override_shared;
+	qr_bodyyaw_pinned = qc_bodyyaw_shared;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -386,6 +487,7 @@ void IN_Commands (void)
 	uint32_t changed;
 
 	IN_SnapshotInputs ();
+	IN_ApplyPause ();
 	IN_WheelRamp ();
 
 	/* While the wheel is open the trigger picks weapons, not fights:
@@ -577,6 +679,13 @@ void IN_Move (usercmd_t *cmd)
 	if (fabsf (cl.viewangles[YAW] - qr_expected_yaw) > 0.01f)
 		qr_body_yaw = cl.viewangles[YAW];
 
+	/* Export pin: demo playback rewrites cl.viewangles every frame (the
+	   recorded AIM), which the adopt above would take for a teleport and
+	   make the body face the gun. The sidecar's body yaw wins instead, so
+	   the hand weapon is rebuilt in the frame it was recorded in. */
+	if (qr_bodyyaw_override)
+		qr_body_yaw = qr_bodyyaw_pinned;
+
 	/* One source of truth for "the gun is in the hand this tick": the aim
 	   feeds a ray AND vr_handaim allows it. The shot, the move compensation,
 	   and the weapon anchor (qr_bridge) all read it, so they can't disagree.
@@ -584,7 +693,13 @@ void IN_Move (usercmd_t *cmd)
 	   and subtracted from the move pre-rotation so the stick still walks the
 	   body while the gun points elsewhere. */
 	qr_aim_active = (vr_handaim.value && qr_aim_valid);
-	aim_yaw_rel = qr_aim_active ? qr_aim_yaw : 0.f;
+	/* vr_aimyaw is the lateral half of the resting-forearm trim, symmetric
+	   with vr_aimpitch: the elbow->wrist line sits a little across the body
+	   as well as above the sightline. Applied HERE, on the room-relative
+	   yaw, so the shot and the move compensation and the weapon anchor all
+	   see the same corrected ray -- the single source of truth this block
+	   exists to maintain. Positive = aim further right. */
+	aim_yaw_rel = qr_aim_active ? (qr_aim_yaw + vr_aimyaw.value) : 0.f;
 
 	/* Choosing a weapon, not moving: sticks go quiet while the wheel is
 	   open (stick locomotion through a time-scaled world is a comfort
@@ -716,6 +831,11 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
 	Cvar_RegisterVariable (&vr_aimpitch);
+	Cvar_RegisterVariable (&vr_aimyaw);
+	Cvar_RegisterVariable (&vr_wheelpitch);
+	Cvar_RegisterVariable (&vr_wheelyaw);
+	Cvar_RegisterVariable (&vr_wheelroll);
+	Cvar_RegisterVariable (&vr_wheelradius);
 	Cvar_RegisterVariable (&vr_laser);
 	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_weaponback);
