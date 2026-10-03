@@ -262,6 +262,9 @@ final class ImmersiveRenderer {
             let horiz = (hf.x * hf.x + hf.z * hf.z).squareRoot()
             let headPitch = -atan2(hf.y, horiz) * 180 / .pi
             QC_InputSetHeadPitch(headPitch)
+            // Same frame and sense as the aim angles, so "sight in" can take
+            // the difference directly. See AimCalibration.
+            AimCalibration.shared.noteHead(yaw: headYaw, pitch: headPitch)
 
             // M6 aim: the dominant Sense controller's 6DOF pose becomes the
             // shot ray. Corrected into the recenter-neutral frame (the same
