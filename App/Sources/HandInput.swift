@@ -85,11 +85,6 @@ final class HandInput: @unchecked Sendable {
     private var flickPeakTime = 0.0
     private var flickArmed = true
 
-    /// Extra downward pitch (degrees) added to the hand aim. The arm/hand line
-    /// still sits a little above the sightline, so this drops the shot to where
-    /// you think you're pointing. Positive = aim lower. Tune on device.
-    private static let aimPitchTrimDeg: Float = 8
-
     // Finger-gun "bang": one shot per hammer drop. `hammerCocked` latches while
     // the gun pose holds with the thumb up; the drop emits a short fire pulse
     // (so the engine tick samples one shot), then you must re-cock.
@@ -121,16 +116,18 @@ final class HandInput: @unchecked Sendable {
     private var lastFireTime = 0.0
     private static let fireFlash = 0.15    // s to hold the flash so it's visible
     private var lastLog = 0.0              // throttle for the input telemetry log
+    private var lastPrayerLog = 0.0        // throttle for the summon-sign log
 
-    /// Respawns the console window from inside the game: hold the AIM hand
-    /// palm-up (the off hand's palm-up owns the wheel) for `summonDwell`.
-    /// Mixed immersion lets the window coexist with the world, so this works
-    /// without a crown press. Set by the window on appear.
+    /// Respawns the console window from inside the game. Mixed immersion lets
+    /// the window coexist with the world, so this works without a crown press.
+    /// Set by the window on appear.
     nonisolated(unsafe) static var summonConsole: (@MainActor () -> Void)?
-    private static let summonDwell = 1.2
-    private static let summonCooldown = 5.0
-    private var summonSince = 0.0
-    private var summonCooldownUntil = 0.0
+    /// The prayer sign: deliberate, and crucially in a pose visionOS does not
+    /// reserve, so a shorter dwell is safe. See SummonGesture.
+    private var prayerDwell = GestureDwell(dwell: 0.6, cooldown: 3.0)
+    /// The original aim-hand palm-up hold, kept as a fallback with its timings
+    /// unchanged (the off hand's palm-up owns the wheel, so this is aim-only).
+    private var palmUpDwell = GestureDwell(dwell: 1.2, cooldown: 5.0)
 
     init(aggregator: PadAggregator) {
         self.aggregator = aggregator
@@ -227,18 +224,36 @@ final class HandInput: @unchecked Sendable {
         feedAim(aim)
         aimRayVerts = buildAimRays(aim)
 
-        // Console summon: aim-hand palm-up dwell. Runs before the wheel gate so
-        // it works regardless of what the off hand is doing.
+        // Console summon. Runs before the wheel gate so it works regardless of
+        // what the off hand is doing.
         let summonNow = CACurrentMediaTime()
-        if aim.palmUp, summonNow >= summonCooldownUntil {
-            if summonSince == 0 { summonSince = summonNow }
-            if summonNow - summonSince > Self.summonDwell {
-                summonSince = 0
-                summonCooldownUntil = summonNow + Self.summonCooldown
-                if let summon = Self.summonConsole { Task { @MainActor in summon() } }
-            }
-        } else if !aim.palmUp {
-            summonSince = 0
+        let summonMode = VRSettings.shared.summonGesture
+        let prayerHeld = PrayerPose.matches(left: left.palmPose, right: right.palmPose)
+        logPrayer(left: left, right: right, held: prayerHeld, now: summonNow)
+        let summonFired: Bool
+        switch summonMode {
+        case .prayer:
+            summonFired = prayerDwell.update(active: prayerHeld, now: summonNow)
+            _ = palmUpDwell.update(active: false, now: summonNow)
+        case .palmUp:
+            summonFired = palmUpDwell.update(active: aim.palmUp, now: summonNow)
+            _ = prayerDwell.update(active: false, now: summonNow)
+        }
+        if summonFired {
+            print("[summon] \(summonMode == .prayer ? "prayer sign" : "palm-up hold") recognised")
+            if let summon = Self.summonConsole { Task { @MainActor in summon() } }
+        }
+
+        // Holding the sign puts each thumb alongside its own index finger,
+        // which the pinch state machine reads as pinched -- so without this you
+        // would fire and walk backward while summoning. Suppress everything
+        // while it's held, the way the wheel does. Palm-up keeps its original
+        // behaviour (no suppression): changing that fallback isn't this
+        // gesture's business.
+        if summonMode == .prayer, prayerHeld {
+            aggregator.update(.hands, slice)   // zeroed
+            turnGaugeVerts = []
+            return
         }
 
         // While the wheel is open, ALL other gestures are suppressed --
@@ -606,7 +621,6 @@ final class HandInput: @unchecked Sendable {
         }
         var v: [Float] = []
         if let d = dir(aim.aimBaseDir) { lineQuad(&v, origin, origin + d * 0.55, 0.004, DebugColor.forearm) }
-        if let d = dir(aim.aimHandDir) { lineQuad(&v, origin, origin + d * 0.55, 0.004, DebugColor.centroid) }
         if let d = dir(aim.aimDir)     { lineQuad(&v, origin, origin + d * 1.20, 0.006, DebugColor.blend) }
         return v
     }
@@ -725,10 +739,52 @@ final class HandInput: @unchecked Sendable {
         let dir = simd_normalize(SIMD3(dp.x, dp.y, dp.z))
         let aimYaw = atan2(-dir.x, -dir.z) * 180 / .pi
         let horiz = (dir.x * dir.x + dir.z * dir.z).squareRoot()
-        let aimPitch = -atan2(dir.y, horiz) * 180 / .pi + Self.aimPitchTrimDeg
+        // No trim here. The resting-forearm bias is corrected ONCE, engine-side,
+        // by vr_aimpitch. A hidden constant here plus a visible slider there
+        // meant two knobs for one quantity, and a number you could not see.
+        let aimPitch = -atan2(dir.y, horiz) * 180 / .pi
         let s = WheelState.shared.currentWorldScale
         TrackRecorder.shared.feedAim(valid: true, origin: SIMD3(-op.z / s, op.x / s, op.y / s),
                                      yaw: aimYaw, pitch: aimPitch)
+    }
+
+    /// Every threshold the prayer sign tests, against its limit, so the sign can
+    /// be calibrated on device from the log instead of by argument -- which is
+    /// how palmSign and the curl thresholds got settled. Logged BEFORE the
+    /// suppression return, because the frames where the sign is held are the
+    /// only interesting ones.
+    private func logPrayer(left: HandState, right: HandState, held: Bool, now: Double) {
+        // Behind the Comfort > Debug "Input telemetry log" toggle, which
+        // survives the console window closing, so the sign can still be
+        // calibrated with no window on screen. Armed off the WRISTS rather than
+        // the palms: palms together occlude each other, so a missing palm plane
+        // is itself a finding and gating on it would hide the interesting case.
+        guard VRSettings.shared.inputLog, now - lastPrayerLog > 0.25 else { return }
+        var wristGap = Float.infinity
+        if let lw = left.wrist, let rw = right.wrist { wristGap = simd_distance(lw, rw) }
+        guard wristGap < 0.35 else { return }
+        lastPrayerLog = now
+        func f(_ v: Float) -> String { String(format: "%.2f", v) }
+
+        guard let l = left.palmPose, let r = right.palmPose else {
+            print("[summon] hands close (wrists \(f(wristGap))m) but no palm plane:"
+                + " L=\(left.palmPose != nil ? "ok" : "MISSING") [\(left.jointDebug)]"
+                + " R=\(right.palmPose != nil ? "ok" : "MISSING") [\(right.jointDebug)]")
+            return
+        }
+        let d = r.center - l.center
+        let gap = simd_length(d)
+        let toward = gap > 0 ? simd_dot(l.normal, d / gap) : 0
+        let face = simd_dot(l.normal, r.normal)
+        // Each condition with a pass/fail mark, so the blocking one is obvious
+        // without doing the comparison by eye.
+        func mark(_ ok: Bool) -> String { ok ? "ok" : "NO" }
+        print("[summon] prayer=\(held ? 1 : 0)"
+            + " gap=\(f(gap))<=\(PrayerPose.gapMax) \(mark(gap <= PrayerPose.gapMax))"
+            + " | face=\(f(face))<=\(PrayerPose.facingDotMax) \(mark(face <= PrayerPose.facingDotMax))"
+            + " | toward=\(f(toward))>0 \(mark(toward > 0))"
+            + " | up=\(f(l.forward.y))/\(f(r.forward.y))>=\(PrayerPose.fingersUpMin) "
+            + mark(l.forward.y >= PrayerPose.fingersUpMin && r.forward.y >= PrayerPose.fingersUpMin))
     }
 
     /// Weapon wheel, ONE-HANDED. The off-hand palm gesture holds the ring
@@ -785,10 +841,18 @@ private struct HandState {
     /// Wrist velocity, room frame, metres/sec -- drives the flick snap turn.
     var wristVel: SIMD3<Float>?
     var palmUp = false
+    /// Which probed ARKit joints are untracked, filled only while the palm
+    /// plane is missing. Diagnostic, printed by logPrayer.
+    var jointDebug = ""
+
+    /// The palm PLANE (centroid, outward normal, finger direction), room frame.
+    /// palmUp only answers "does the palm face the sky"; the prayer sign needs
+    /// to compare the two palms to each other. nil when the knuckles that
+    /// define the plane aren't tracked.
+    var palmPose: PalmPose?
     var aimOrigin: SIMD3<Float>?      // wrist, room frame
     var aimDir: SIMD3<Float>?         // blended aim, room frame
-    var aimBaseDir: SIMD3<Float>?     // forearm-bone component (debug figure)
-    var aimHandDir: SIMD3<Float>?     // knuckle-centroid component (debug figure)
+    var aimBaseDir: SIMD3<Float>?     // raw forearm bone, unsmoothed (debug figure)
 
     /// Coloured finger bones for the debug overlay, corrected-tracking
     /// space, 7 floats/vertex (xyz + rgba), line list. Built in ingest.
@@ -872,12 +936,16 @@ private struct HandState {
         // virtual hand and the other gestures all survive without it.
         let thumb = tip(.thumbTip)
 
-        // Hysteresis, loosened so pinches catch reliably (the middle-finger
-        // pinch for movement was dropping out): 2.5 cm closes, 4.0 cm opens.
+        // One knob (Comfort > Pinch distance) sets the close threshold; release
+        // is +1.5 cm so the pair can't be set to chatter. Sampled once per
+        // ingest rather than per finger -- five lock takes a frame for a value
+        // that cannot change mid-hand is waste.
+        let pinchClose = VRSettings.shared.pinchClose
+        let pinchOpen = pinchClose + 0.015
         func pinch(_ tipPos: SIMD3<Float>?, _ pinched: Bool) -> Bool {
             guard let thumb, let tipPos else { return false }
             let d = simd_distance(thumb, tipPos)
-            return pinched ? d < 0.040 : d < 0.025
+            return d < (pinched ? pinchOpen : pinchClose)
         }
 
         let index = tip(.indexFingerTip)
@@ -977,6 +1045,42 @@ private struct HandState {
         } else {
             palmUp = false
         }
+        // The prayer sign's plane is built from the METACARPALS instead, and
+        // deliberately kept separate from palmUp above. They answer different
+        // questions with different reliability needs: palm-up is held with the
+        // fingers open and its knuckles in plain view, while the sign presses
+        // the fingers together and hides every knuckle from the cameras. The
+        // duplication is the point -- palmUp works today and stays untouched.
+        // (Self.palmSign is palmUp's legacy calibration knob; PalmPose pins its
+        // own convention in PalmPoseBuildTests.)
+        if let w = wrist,
+           let indexMeta = tip(.indexFingerMetacarpal),
+           let littleMeta = tip(.littleFingerMetacarpal) {
+            palmPose = PalmPose(wrist: w, indexMetacarpal: indexMeta,
+                                littleMetacarpal: littleMeta, isLeft: isLeft)
+        } else {
+            palmPose = nil
+        }
+        // Diagnostic: when the palm plane can't be built, record which joints
+        // ARKit is actually reporting. palmUp reads the same two knuckles, so
+        // whatever is missing here has been disabling the palm-up wheel too --
+        // worth knowing exactly, rather than picking a replacement joint by
+        // guesswork. Only built when the plane is missing.
+        if palmPose == nil, VRSettings.shared.inputLog {
+            let probes: [(HandSkeleton.JointName, String)] = [
+                (.wrist, "wrist"), (.forearmWrist, "fWrist"),
+                (.indexFingerMetacarpal, "idxMeta"), (.indexFingerKnuckle, "idxKnuck"),
+                (.middleFingerMetacarpal, "midMeta"), (.middleFingerKnuckle, "midKnuck"),
+                (.littleFingerMetacarpal, "litMeta"), (.littleFingerKnuckle, "litKnuck"),
+                (.indexFingerTip, "idxTip"), (.middleFingerTip, "midTip"),
+            ]
+            let missing = probes.filter { !skeleton.joint($0.0).isTracked }.map(\.1)
+            jointDebug = missing.isEmpty
+                ? "all probed joints tracked"
+                : "untracked: \(missing.joined(separator: ","))"
+        } else {
+            jointDebug = ""
+        }
         // Aim along the FOREARM axis -- a "megaman cannon" that points where
         // the arm points. Crucially this does NOT depend on finger tracking,
         // so the gun holds steady through a fist, an open hand, a turned wrist
@@ -987,18 +1091,20 @@ private struct HandState {
         // only if the forearm joint is missing.
         if let w = wrist {
             aimOrigin = w
-            // Aim ray = a STABLE base bent by a hand-forward line, so it reads
-            // "where the palm points" the same underhand or overhand without
-            // winking out when the fingers aren't tracked.
+            // Aim ray = the forearm BONE alone (elbow joint -> wrist joint). It
+            // tracks in any pose (fist, fire pinch, turned wrist), is
+            // roll-invariant so both grips aim alike, and the forearm joints
+            // were never once missing across a full session's joint log.
             //
-            // Base: the forearm BONE (elbow joint -> wrist joint) tracks in any
-            // pose (fist, fire pinch, turned wrist) and is roll-invariant, so
-            // both grips aim alike. It alone aims a touch high (trimmed in
-            // feedAim). Bend: wrist -> middle knuckle picks up wrist FLEX (point
-            // the hand down to aim down), but the knuckle drops out in a
-            // fist/fire pinch -- the old sole-source wrist->knuckle ray winked
-            // out that way -- so it only BLENDS in when tracked and the ray
-            // falls back to the steady forearm when it's gone.
+            // There used to be a second component blended in: wrist -> knuckle
+            // centroid, which picked up wrist FLEX so you could point the hand
+            // down to aim down. It is gone deliberately. It was built from the
+            // knuckle joints, and ARKit abandons those under exactly the
+            // occlusion a shooting pose creates -- so the component did not
+            // degrade, it VANISHED mid-gesture and took the aim with it in a
+            // jump. A blend whose input intermittently disappears is worse than
+            // the steady input alone. Tested on device: forearm-only is
+            // materially more consistent. See docs/decisions.md.
             var base: SIMD3<Float>?
             if let armJ = tip(.forearmArm), let wristJ = tip(.forearmWrist),
                simd_length(wristJ - armJ) > 0.05 {
@@ -1006,31 +1112,8 @@ private struct HandState {
             } else if let arm = tip(.forearmArm), simd_length(w - arm) > 0.05 {
                 base = simd_normalize(w - arm)
             }
-            // Hand-forward = wrist -> the CENTROID of the knuckles, not a single
-            // knuckle. The centroid rides the hand's midline, ~on the forearm's
-            // roll axis, so it barely moves as you pronate/supinate -- while a
-            // lone off-axis knuckle orbits that axis and swung the aim between
-            // palm-down and palm-up. It still tips up/down when you actually
-            // point the hand up/down, so wrist-flex aiming survives.
-            var handFwd: SIMD3<Float>?
-            var kc = SIMD3<Float>(0, 0, 0)
-            var kn: Float = 0
-            for j in [HandSkeleton.JointName.indexFingerKnuckle, .middleFingerKnuckle,
-                      .ringFingerKnuckle, .littleFingerKnuckle] {
-                if let k = tip(j) { kc += k; kn += 1 }
-            }
-            if kn > 0 {
-                let centroid = kc / kn
-                if simd_length(centroid - w) > 0.03 { handFwd = simd_normalize(centroid - w) }
-            }
-            if let base, let handFwd {
-                let b = VRSettings.shared.aimBlend              // live-tunable
-                aimDir = simd_normalize(base * (1 - b) + handFwd * b)
-            } else {
-                aimDir = base ?? handFwd
-            }
+            aimDir = base
             aimBaseDir = base
-            aimHandDir = handFwd
             // Low-pass the aim so pinching/curling to fire and per-frame noise
             // don't jiggle the gun. Raw components stay unsmoothed for the debug
             // figure; only the fed/drawn aim is filtered.
@@ -1045,7 +1128,6 @@ private struct HandState {
             aimOrigin = nil
             aimDir = nil
             aimBaseDir = nil
-            aimHandDir = nil
             aimSmoothed = nil
         }
 
@@ -1240,7 +1322,6 @@ final class ViewerPose: @unchecked Sendable {
 /// hues: blue forearm, orange centroid, green blend.
 enum DebugColor {
     static let forearm  = SIMD4<Float>(0x39 / 255.0, 0x87 / 255.0, 0xE5 / 255.0, 0.95)
-    static let centroid = SIMD4<Float>(0xD9 / 255.0, 0x59 / 255.0, 0x26 / 255.0, 0.95)
     static let blend    = SIMD4<Float>(0x19 / 255.0, 0x9E / 255.0, 0x70 / 255.0, 1.0)
     // Muzzle status bead: fired / aim-lost / armed-ok.
     static let fire     = SIMD4<Float>(1.0, 0.16, 0.58, 1.0)   // hot pink: a shot fired

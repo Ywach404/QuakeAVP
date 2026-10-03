@@ -756,11 +756,20 @@ final class RendererCore {
         let c = SIMD3(frame.wheel_center.0, frame.wheel_center.1, frame.wheel_center.2)
         let r = frame.wheel_radius
         let count = Int(frame.wheel_count)
-        // Body frame (M6): QR_EmitWheel lays the ring out in body_yaw, not the
-        // aim, so the guide's plane must match or it rotates off the models.
-        let yaw = frame.body_yaw * .pi / 180
-        let right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
-        let up = SIMD3<Float>(0, 0, 1)
+        // The ring plane comes from the PACKET now, not re-derived from
+        // body_yaw. The engine tilts it by the vr_wheel* trims, and this is the
+        // only thing those trims move -- the weapons and labels stay on the
+        // untilted basis, as does selection. Re-deriving here would ignore the
+        // tilt and draw a flat circle around a ring the player had aimed.
+        var right = SIMD3<Float>(frame.wheel_right.0, frame.wheel_right.1, frame.wheel_right.2)
+        var up = SIMD3<Float>(frame.wheel_up.0, frame.wheel_up.1, frame.wheel_up.2)
+        if simd_length(right) < 0.5 || simd_length(up) < 0.5 {
+            // Older packet or no ring this frame: fall back to the flat body
+            // plane rather than drawing a degenerate circle.
+            let yaw = frame.body_yaw * .pi / 180
+            right = SIMD3<Float>(sin(yaw), -cos(yaw), 0)
+            up = SIMD3<Float>(0, 0, 1)
+        }
         func pt(_ angle: Float, _ rad: Float) -> SIMD3<Float> {
             c + rad * cos(angle) * right + rad * sin(angle) * up
         }
