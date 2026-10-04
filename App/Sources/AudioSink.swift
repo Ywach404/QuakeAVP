@@ -121,7 +121,14 @@ final class AudioSink: @unchecked Sendable {
         config = cfg
         sampleRate = speed
 
-        DispatchQueue.main.async { [weak self] in self?.startDevice(attempt: 1) }
+        // On a BACKGROUND thread that is allowed to never come back. start()
+        // does not fail on this device -- it WEDGES the calling thread (proven
+        // on the engine thread, then proven again on main, which hung the UI).
+        // A global-queue thread that wedges is a leaked thread and a log line;
+        // main and the engine thread stay untouchable by construction.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.startDevice(attempt: 1)
+        }
         return (buf, monoSamples)
     }
 
@@ -139,14 +146,35 @@ final class AudioSink: @unchecked Sendable {
     /// Retries: the session machinery that fails at boot may simply need the
     /// app to finish coming up, so a refusal here is retried a few times
     /// rather than treated as final. Every attempt logs its outcome.
+    /// Tracks whether an attempt ever completed, for the watchdog. Guarded by
+    /// `lock`.
+    private var startOutcome = "pending"
+
     private func startDevice(attempt: Int) {
         lock.lock()
         guard engine == nil, let cfg = config else { lock.unlock(); return }
         let rate = Double(sampleRate)
+        startOutcome = "pending"
         lock.unlock()
+
+        // Printed BEFORE anything that can wedge, so a silent log after this
+        // line is itself the diagnosis. The watchdog says so out loud: if the
+        // attempt has not completed in 10s, the thread is gone and no retry is
+        // scheduled -- each retry would leak another thread into the same wall.
+        print("[audio] starting device, attempt \(attempt)...")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self else { return }
+            self.lock.lock(); let outcome = self.startOutcome; self.lock.unlock()
+            if outcome == "pending" {
+                print("[audio] attempt \(attempt) WEDGED inside AVAudioEngine after 10s; "
+                    + "audio stays off, the game plays on. This is a platform/session "
+                    + "problem, not a mixer one.")
+            }
+        }
 
         guard let fmt = AVAudioFormat(standardFormatWithSampleRate: rate,
                                       channels: AVAudioChannelCount(cfg.channels)) else {
+            lock.lock(); startOutcome = "failed"; lock.unlock()
             print("[audio] no standard format at \(rate) Hz; giving up")
             return
         }
@@ -184,10 +212,11 @@ final class AudioSink: @unchecked Sendable {
         do {
             try newEngine.start()
         } catch {
+            lock.lock(); startOutcome = "failed"; lock.unlock()
             newEngine.detach(node)
-            if attempt < 5 {
-                print("[audio] start attempt \(attempt) failed (\(error)); retrying in 5s")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            if attempt < 3 {
+                print("[audio] start attempt \(attempt) failed cleanly (\(error)); retrying in 5s")
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in
                     self?.startDevice(attempt: attempt + 1)
                 }
             } else {
@@ -199,6 +228,7 @@ final class AudioSink: @unchecked Sendable {
         lock.lock()
         self.engine = newEngine
         self.node = node
+        startOutcome = "started"
         observeInterruptionsLocked()
         lock.unlock()
 
