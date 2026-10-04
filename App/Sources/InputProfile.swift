@@ -259,10 +259,12 @@ final class ProfileStore {
     func applyRig() {
         guard let send = sendCommand else { return }
         let p = current
-        send("vr_weaponback \(p.weaponBack)")
-        send("vr_weaponup \(p.weaponUp)")
-        send("vr_weaponside \(p.weaponSide)")
-        send("vr_weapongrip \(p.weaponGrip)")
+        // Placement is per weapon now; hand the profile's globals to WeaponTrim
+        // as the fallback for weapons never tuned, and let it push the cvars
+        // for whichever gun is actually held.
+        WeaponTrim.shared.setProfileBase(mode: active.rawValue, back: p.weaponBack,
+                                         up: p.weaponUp, side: p.weaponSide,
+                                         grip: p.weaponGrip)
         send("vr_aimpitch \(p.aimPitch)")
         send("vr_aimyaw \(p.aimYaw)")
         send("vr_wheelpitch \(p.wheelPitch)")
