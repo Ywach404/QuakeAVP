@@ -559,6 +559,45 @@ static void IN_HeadOffsetWorld (float out[2])
 
 /*
 ================
+QR_HandOrigin -- where the held gun actually is, in world space.
+
+The same reconstruction qr_bridge.c uses to anchor the view weapon at the
+hand: the eye, plus the hand's body-frame offset from the head, rotated into
+the world by the body yaw. Kept here rather than in the bridge because every
+term is an in_null.c global; the bridge and this must stay in step, or the
+bolt and the gun that fires it part company.
+
+Returns 0 and leaves out alone when the hand aim is not live -- gamepad or
+keyboard play, or tracking lost -- so callers fall back to upstream's body
+origin. qr_aim_active is the same gate the shot, the move compensation and
+the hand-anchored weapon read.
+
+Engine thread. Callers that run before V_CalcRefdef (CL_UpdateTEnts does)
+see last frame's r_refdef.vieworg: one frame of head motion, a unit or two,
+against the ~24 units the body origin is wrong by.
+================
+*/
+int QR_HandOrigin (vec3_t out)
+{
+	vec3_t	fwd, right;
+	float	ax, ay, az;
+
+	if (!qr_aim_active)
+		return 0;
+
+	IN_YawVectors (qr_body_yaw, fwd, right);
+	ax = qr_aim_org[0] - qr_head[0];
+	ay = qr_aim_org[1] - qr_head[1];
+	az = qr_aim_org[2] - qr_head[2];
+
+	out[0] = r_refdef.vieworg[0] + ax * fwd[0] + ay * right[0];
+	out[1] = r_refdef.vieworg[1] + ax * fwd[1] + ay * right[1];
+	out[2] = r_refdef.vieworg[2] + az + qr_height_trim;
+	return 1;
+}
+
+/*
+================
 IN_AbsorbHeadOffset -- room-scale walking becomes player movement.
 
 The render thread feeds where the head is; the engine walks the player box

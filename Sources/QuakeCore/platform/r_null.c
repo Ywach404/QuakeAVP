@@ -221,10 +221,11 @@ void R_RenderView (void)
 	   at the player entity's origin and you start the level buried in the
 	   floor until you resume.
 
-	   Done here rather than by patching view.c: the vendored tree has exactly
-	   three patched hunks and this does not need to be a fourth. V_RenderView
-	   has already decided to skip the calc by the time it calls us, so doing it
-	   now lands in the same frame, before the bridge reads the refdef.
+	   Done here rather than by patching view.c: the vendored tree's patched
+	   hunks are counted in UPSTREAM.md and this does not need to join them.
+	   V_RenderView has already decided to skip the calc by the time it calls
+	   us, so doing it now lands in the same frame, before the bridge reads
+	   the refdef.
 
 	   Intermission keeps upstream's behaviour -- it has its own refdef calc and
 	   a fixed camera, so recomputing would fight it. */

@@ -72,7 +72,7 @@ parsing — the server needs it for collision hulls) and **`gl_refrag.c`**
 
 ## Patches applied to vendored files
 
-Kept to an absolute minimum so upstream merges stay cheap. Two files, three
+Kept to an absolute minimum so upstream merges stay cheap. Three files, four
 hunks, all guarded by `#ifdef QAVP_PLATFORM`:
 
 **`quakedef.h`** — the `#include <SDL.h>` / `<SDL_opengl.h>` block is swapped
@@ -81,6 +81,15 @@ for `gl_shim.h` + `sdl_rw_shim.h`. The original block is preserved in the
 
 **`miniz.h`** — same treatment for its SDL include, plus `MINIZ_LITTLE_ENDIAN`
 is derived from `__BYTE_ORDER__` instead of `SDL_BYTEORDER`.
+
+**`cl_tent.c`** — `CL_UpdateTEnts` forces the player's own lightning beam to
+start at `cl_entities[cl.viewentity].origin`, i.e. the middle of the player
+model. On a headset the gun is in your hand, so the bolt has to start there;
+the hunk calls `QR_HandOrigin` (in `platform/in_null.c`) and falls back to
+upstream's origin whenever the hand aim isn't live. This one could not be
+absorbed by a shim: the override runs unconditionally inside the beam loop,
+and the beam segments it feeds are ordinary `bolt.mdl` entities with nothing
+to distinguish them downstream.
 
 Everything else that would have needed a patch is instead absorbed by shims in
 `Sources/QuakeCore/platform/`:
@@ -97,7 +106,8 @@ Everything else that would have needed a patch is instead absorbed by shims in
 
 1. Diff the new upstream against `.upstream-rev` for the 45 vendored `.c` files
    and 72 headers; copy over.
-2. Re-apply the `quakedef.h` and `miniz.h` hunks (search for `QAVP_PLATFORM`).
+2. Re-apply the `quakedef.h`, `miniz.h` and `cl_tent.c` hunks (search for
+   `QAVP_PLATFORM`).
 3. `make check` — a clean link means no new symbols escaped into the renderer
    boundary. New undefined symbols are new renderer entry points that need
    stubbing in `r_null.c`.
