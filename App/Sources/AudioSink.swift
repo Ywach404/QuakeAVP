@@ -19,6 +19,17 @@
 //  is exactly what the realtime rule forbids -- and the failure is an audible
 //  glitch rather than a crash, so it would be hard to find.
 //
+//  NOTE: this deliberately does NOT configure AVAudioSession. Both attempts
+//  made things worse. From the engine thread it failed with OSStatus -50
+//  "Session lookup failed"; moved to the main thread it failed the same way
+//  AND blocked the UI -- setActive is a synchronous XPC call, and with the
+//  session machinery erroring it never returned, so the app reported running
+//  while nothing ever appeared on the device. AVAudioEngine creates a session
+//  implicitly in any case (AURemoteIO reaches one either way). If a category
+//  is genuinely needed, it must go through the ASYNCHRONOUS activate API, off
+//  the launch path, and only after proving AVAudioEngine can make a sound in
+//  this app at all.
+//
 //  The ring is allocated once and NEVER freed. close() is reachable only from
 //  S_Shutdown at app teardown, so the lifetime question buys nothing; freeing
 //  it would mean proving the render block has returned, which AVAudioEngine
@@ -55,24 +66,46 @@ final class AudioSink: @unchecked Sendable {
 
     private init() {}
 
-    /// Returns the ring and its size, or nil if the device would not start.
+    /// Escape hatch, proven useful once: with this true the sink never runs
+    /// and SNDDMA_Init fails cleanly (the old snd_null.c behaviour). The
+    /// 2026-10-04 experiment: the app stalled at boot with the device starting
+    /// inside SNDDMA_Init, and launched perfectly with this true ("[audio]
+    /// sink disabled by kill switch" in the log, 120fps session after it).
+    /// That is why open() below no longer starts the device at all.
+    static let disabled = false
+
+    /// Called on the ENGINE THREAD inside SNDDMA_Init, in the middle of
+    /// Host_Init. Therefore it does nothing that can block: it allocates the
+    /// ring and the cursor (pure memory) and hands them to Quake, then
+    /// schedules the DEVICE to start later, asynchronously, on the main queue.
+    ///
+    /// Starting AVAudioEngine here hung the whole boot on device: the audio
+    /// session machinery is not up that early (-50 "Session lookup failed"
+    /// over XPC), and whatever start() blocks on, it blocks the engine thread
+    /// and the game never finishes initialising. Until the device comes up the
+    /// cursor simply never advances -- the mixer paints a little ahead and
+    /// waits, which is silence, not a fault. If the device never comes up, the
+    /// game plays on silently, which beats not playing.
     func open(speed: Int, channels: Int, bits: Int)
         -> (buffer: UnsafeMutablePointer<UInt8>, monoSamples: Int)? {
 
+        if Self.disabled {
+            print("[audio] sink disabled by kill switch; booting silent")
+            return nil
+        }
+
         lock.lock()
         defer { lock.unlock() }
-        // Not idempotent by design, but refuse rather than leak: a second open
-        // would strand the first ring and leave two nodes racing one cursor.
-        guard engine == nil else { return nil }
+        guard config == nil else { return nil }   // refuse a second ring
 
         // A fifth of a second, rounded DOWN to a power of two because
         // snd_mix.c masks with this.
         let target = speed * channels / 5
         var monoSamples = 1
         while monoSamples * 2 <= target { monoSamples *= 2 }
-        guard let probe = AudioRing(monoSamples: monoSamples, channels: channels) else {
+        guard AudioRing(monoSamples: monoSamples, channels: channels) != nil else {
             print("[audio] refusing a \(monoSamples)-sample ring (floor is "
-                + "\(AudioRing.minimumMonoSamples)); check sndspeed")
+                + "\(AudioRing.minimumMonoSamples)); check snd_mixspeed")
             return nil
         }
 
@@ -82,68 +115,96 @@ final class AudioSink: @unchecked Sendable {
         let cursor = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
         cursor.pointee = 0
 
-        guard let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16,
-                                      sampleRate: Double(speed),
-                                      channels: AVAudioChannelCount(channels),
-                                      interleaved: true) else {
-            buf.deallocate(); cursor.deallocate()
-            return nil
+        let cfg = RenderConfig(buffer: buf, monoSamples: monoSamples,
+                               channels: channels, bytesPerSample: bps,
+                               cursor: cursor)
+        config = cfg
+        sampleRate = speed
+
+        DispatchQueue.main.async { [weak self] in self?.startDevice(attempt: 1) }
+        return (buf, monoSamples)
+    }
+
+    /// Device-side sample rate requested by the engine; set once in open().
+    private var sampleRate = 44100
+
+    /// MAIN QUEUE, after launch. Builds and starts the device against the ring
+    /// open() already handed to Quake. Uses the STANDARD format (deinterleaved
+    /// float32) because that is the one format every AVAudioEngine graph
+    /// accepts -- connect() raises an uncatchable ObjC exception on a format
+    /// it dislikes, and int16-interleaved is exactly the kind it might. The
+    /// render block converts from the int16 ring per sample; arithmetic only,
+    /// still realtime-safe.
+    ///
+    /// Retries: the session machinery that fails at boot may simply need the
+    /// app to finish coming up, so a refusal here is retried a few times
+    /// rather than treated as final. Every attempt logs its outcome.
+    private func startDevice(attempt: Int) {
+        lock.lock()
+        guard engine == nil, let cfg = config else { lock.unlock(); return }
+        let rate = Double(sampleRate)
+        lock.unlock()
+
+        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: rate,
+                                      channels: AVAudioChannelCount(cfg.channels)) else {
+            print("[audio] no standard format at \(rate) Hz; giving up")
+            return
         }
 
-        let cfg = RenderConfig(buffer: buf, monoSamples: probe.monoSamples,
-                               channels: channels, bytesPerSample: bps, cursor: cursor)
-
-        let engine = AVAudioEngine()
-        // Captures cfg BY VALUE. No self, no ARC, no locks on this path.
+        let newEngine = AVAudioEngine()
+        // Captures cfg BY VALUE. No self, no ARC, no locks on the render path.
         let node = AVAudioSourceNode(format: fmt) { _, _, frameCount, abl in
-            guard let out = UnsafeMutableAudioBufferListPointer(abl).first,
-                  let dst = out.mData else { return noErr }
-
+            let buffers = UnsafeMutableAudioBufferListPointer(abl)
             let frames = Int(frameCount)
-            // Clamp to what the output buffer actually holds as well as to what
-            // we were asked for: if the negotiated layout is ever not the
-            // int16-interleaved one we requested, writing our idea of the size
-            // into it is loud garbage with no diagnostic.
-            var wantBytes = frames * cfg.channels * cfg.bytesPerSample
-            wantBytes = min(wantBytes, Int(out.mDataByteSize))
-            let bps = cfg.bytesPerSample
-            let wantSamples = wantBytes / bps
-
             let pos = Int(cfg.cursor.pointee)
             let mask = cfg.monoSamples - 1
-            let firstCount = min(wantSamples, cfg.monoSamples - pos)
-            memcpy(dst, cfg.buffer + pos * bps, firstCount * bps)
-            let rest = wantSamples - firstCount
-            if rest > 0 {
-                memcpy(dst + firstCount * bps, cfg.buffer, rest * bps)
+            let scale = Float(1.0 / 32768.0)
+            cfg.buffer.withMemoryRebound(to: Int16.self,
+                                         capacity: cfg.monoSamples) { ring in
+                for (ch, out) in buffers.enumerated() {
+                    guard let raw = out.mData else { continue }
+                    let dst = raw.assumingMemoryBound(to: Float.self)
+                    let maxFrames = min(frames, Int(out.mDataByteSize) / 4)
+                    if ch < cfg.channels {
+                        for i in 0..<maxFrames {
+                            let idx = (pos + i * cfg.channels + ch) & mask
+                            dst[i] = Float(ring[idx]) * scale
+                        }
+                    } else {
+                        for i in 0..<maxFrames { dst[i] = 0 }
+                    }
+                }
             }
-            cfg.cursor.pointee = Int32((pos + wantSamples) & mask)
+            cfg.cursor.pointee = Int32((pos + frames * cfg.channels) & mask)
             return noErr
         }
 
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: fmt)
+        newEngine.attach(node)
+        newEngine.connect(node, to: newEngine.mainMixerNode, format: fmt)
         do {
-            try engine.start()
+            try newEngine.start()
         } catch {
-            print("[audio] engine failed to start: \(error)")
-            engine.detach(node)
-            buf.deallocate(); cursor.deallocate()
-            return nil
+            newEngine.detach(node)
+            if attempt < 5 {
+                print("[audio] start attempt \(attempt) failed (\(error)); retrying in 5s")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                    self?.startDevice(attempt: attempt + 1)
+                }
+            } else {
+                print("[audio] giving up after \(attempt) attempts (\(error)); the game plays on silent")
+            }
+            return
         }
 
-        self.engine = engine
+        lock.lock()
+        self.engine = newEngine
         self.node = node
-        self.config = cfg
         observeInterruptionsLocked()
+        lock.unlock()
 
-        // The device's real rate beside the one we asked for. The mixer node
-        // converts between them, so a difference is expected rather than a
-        // fault -- but a silent one would be indistinguishable from a bug.
-        let real = engine.outputNode.outputFormat(forBus: 0).sampleRate
-        print("[audio] \(bits) bit, \(channels == 2 ? "stereo" : "mono"), "
-            + "\(speed) Hz requested, device \(Int(real)) Hz, \(monoSamples) samples")
-        return (buf, monoSamples)
+        let real = newEngine.outputNode.outputFormat(forBus: 0).sampleRate
+        print("[audio] device up on attempt \(attempt): float32 deinterleaved, "
+            + "\(Int(rate)) Hz requested, device \(Int(real)) Hz, \(cfg.monoSamples) samples")
     }
 
     var samplePosition: Int {
