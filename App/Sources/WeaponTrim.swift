@@ -9,6 +9,16 @@
 //  QR_WeaponClip also feeds those planes back into the grip so trimming
 //  re-seats the gun on the hand. The Weapon menu edits the current weapon.
 //
+//  The same store now carries PLACEMENT (back/up/side/grip) per weapon, for
+//  the same reason: the models' origins sit at different points on each gun,
+//  so one global offset makes some of them clip through the hand. Placement is
+//  keyed by input mode as well as weapon -- unlike clip, where the gun is held
+//  differs between bare hands and a Sense controller.
+//
+//  A weapon with no stored placement falls back to the active profile's global
+//  values, which ProfileStore pushes in on apply. So tuning one gun does not
+//  orphan the rest, and an untuned gun still follows the profile.
+//
 
 import Foundation
 
@@ -26,9 +36,16 @@ final class WeaponTrim: @unchecked Sendable {
     private static let defaultFront = [Float](repeating: 1, count: 8)
     private static let defaultRear:  [Float] = [1, 0.79, 0.79, 0.79, 0.79, 0.79, 0.79, 1]
 
+    /// Per (input mode, weapon) placement. nil = never tuned, use the
+    /// profile's global. Index: mode.rawValue * 8 + weapon.
+    struct Placement: Equatable { var back, up, side, grip: Float }
+
     private let lock = NSLock()
     private var front = defaultFront
     private var rear  = defaultRear
+    private var place = [Placement?](repeating: nil, count: 16)
+    private var mode = 0                    // InputMode.rawValue
+    private var global = Placement(back: 0, up: 0, side: 0, grip: 0.15)
     private var current = 1                 // held-weapon index (shotgun default)
     private var lastWeapon: UInt32 = 0
 
@@ -39,6 +56,49 @@ final class WeaponTrim: @unchecked Sendable {
 
     private static func index(for bit: UInt32) -> Int { bits.firstIndex(of: bit) ?? 1 }
 
+    private var slot: Int { mode * 8 + current }
+
+    /// Pushed by ProfileStore on apply: which input profile is live and what
+    /// its global placement is. Untuned weapons follow these.
+    func setProfileBase(mode: Int, back: Float, up: Float, side: Float, grip: Float) {
+        lock.lock()
+        self.mode = mode
+        global = Placement(back: back, up: up, side: side, grip: grip)
+        let p = place[slot] ?? global
+        lock.unlock()
+        pushPlacement(p)
+    }
+
+    /// The held weapon's effective placement -- its own if tuned, else global.
+    var currentPlacement: Placement {
+        lock.lock(); defer { lock.unlock() }
+        return place[slot] ?? global
+    }
+
+    /// True when the held weapon has its own placement rather than the global.
+    var currentPlacementIsCustom: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return place[slot] != nil
+    }
+
+    func setPlacement(_ p: Placement) {
+        lock.lock(); place[slot] = p; lock.unlock()
+        pushPlacement(p); save()
+    }
+
+    /// Drop this weapon's own placement and fall back to the profile global.
+    func resetCurrentPlacement() {
+        lock.lock(); place[slot] = nil; let p = global; lock.unlock()
+        pushPlacement(p); save()
+    }
+
+    private func pushPlacement(_ p: Placement) {
+        sendCommand?("vr_weaponback \(p.back)\n")
+        sendCommand?("vr_weaponup \(p.up)\n")
+        sendCommand?("vr_weaponside \(p.side)\n")
+        sendCommand?("vr_weapongrip \(p.grip)\n")
+    }
+
     /// Render thread, once per frame: when the held weapon changes, push its
     /// stored trim so each gun keeps its own values.
     func frame(activeWeapon: UInt32) {
@@ -47,8 +107,10 @@ final class WeaponTrim: @unchecked Sendable {
         lastWeapon = activeWeapon
         current = Self.index(for: activeWeapon)
         let f = front[current], r = rear[current]
+        let p = place[slot] ?? global
         lock.unlock()
         push(f, r)
+        pushPlacement(p)
     }
 
     var currentFront: Float { lock.lock(); defer { lock.unlock() }; return front[current] }
@@ -83,6 +145,15 @@ final class WeaponTrim: @unchecked Sendable {
         lock.lock(); let f = front, r = rear; lock.unlock()
         UserDefaults.standard.set(f.map(Double.init), forKey: "weaponTrimFront")
         UserDefaults.standard.set(r.map(Double.init), forKey: "weaponTrimRear")
+        lock.lock(); let pl = place; lock.unlock()
+        // Flat [back,up,side,grip] per slot, NaN marking "not tuned", so the
+        // array shape stays fixed and a missing weapon cannot shift the rest.
+        var flat = [Double]()
+        for p in pl {
+            if let p { flat += [Double(p.back), Double(p.up), Double(p.side), Double(p.grip)] }
+            else { flat += [Double.nan, .nan, .nan, .nan] }
+        }
+        UserDefaults.standard.set(flat, forKey: "weaponPlacement.v1")
     }
 
     private func load() {
@@ -91,6 +162,15 @@ final class WeaponTrim: @unchecked Sendable {
         }
         if let r = UserDefaults.standard.array(forKey: "weaponTrimRear") as? [Double], r.count == 8 {
             rear = r.map { Float($0) }
+        }
+        if let f = UserDefaults.standard.array(forKey: "weaponPlacement.v1") as? [Double],
+           f.count == 64 {
+            for i in 0..<16 {
+                let b = f[i * 4]
+                if b.isNaN { place[i] = nil; continue }
+                place[i] = Placement(back: Float(b), up: Float(f[i * 4 + 1]),
+                                     side: Float(f[i * 4 + 2]), grip: Float(f[i * 4 + 3]))
+            }
         }
     }
 }
