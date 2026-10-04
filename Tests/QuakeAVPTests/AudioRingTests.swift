@@ -21,14 +21,39 @@ final class AudioRingTests: XCTestCase {
         XCTAssertEqual(r.samplePosition, 200)   // stereo: 2 mono per frame
     }
 
-    /// The cursor must wrap inside the ring and never run backwards, or the
-    /// mixer paints nothing (or everything) on the frame it wraps.
-    func testCursorWrapsWithoutGoingBackwards() throws {
+    /// The cursor is monotonic MODULO the ring. It decreases across a lap, and
+    /// must: GetSoundtime detects the wrap by that decrease.
+    func testCursorWrapsModuloTheRing() throws {
         var r = try XCTUnwrap(AudioRing(monoSamples: 4096, channels: 2))
         r.advance(frames: 2048)                 // exactly one lap
         XCTAssertEqual(r.samplePosition, 0)
         r.advance(frames: 1)
         XCTAssertEqual(r.samplePosition, 2)
+
+        var s = try XCTUnwrap(AudioRing(monoSamples: 4096, channels: 2))
+        s.advance(frames: 2000)
+        let before = s.samplePosition
+        s.advance(frames: 2000)
+        XCTAssertLessThan(s.samplePosition, before)   // the lap, as the mixer reads it
+    }
+
+    /// A read bigger than the ring must describe LESS audio, never more
+    /// memory: the render block memcpys these ranges out of an allocation of
+    /// exactly monoSamples. Unclamped this overread the heap by 8000 bytes.
+    func testOversizedReadIsClampedToTheRing() throws {
+        var r = try XCTUnwrap(AudioRing(monoSamples: 4096, channels: 2))
+        r.advance(frames: 2000)
+        let (a, b) = r.readOffsets(frames: 4096)
+        XCTAssertLessThanOrEqual(a.count + b.count, 4096)
+        XCTAssertLessThanOrEqual(b.upperBound, 4096)
+    }
+
+    /// sndspeed 4 drives the size to 1, a power of two, which then makes
+    /// S_TransferStereo16 compute (samples >> 1) - 1 == -1.
+    func testRejectsARingTooSmallForTheMixer() {
+        XCTAssertNil(AudioRing(monoSamples: 1, channels: 2))
+        XCTAssertNil(AudioRing(monoSamples: 512, channels: 2))
+        XCTAssertNotNil(AudioRing(monoSamples: 1024, channels: 2))
     }
 
     /// A read that straddles the end comes back as two ranges; one memcpy per

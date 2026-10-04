@@ -22,11 +22,15 @@ qboolean SNDDMA_Init (dma_t *dma)
 	int		mono_samples = 0;
 	int		speed, channels, bits;
 
-	/* Honour the existing cvar; snd_mix.c has a documented 11025->44100
-	   upsample path, so the device may legitimately run faster. */
-	speed = (int) sndspeed.value;
+	/* snd_mixspeed is the DEVICE rate (default 44100); sndspeed describes the
+	   source material (default 11025). Driving the device from sndspeed made
+	   the two always equal, which makes snd_mix.c:415's 11025->44100 lowpass
+	   unreachable by construction and silently ignores snd_mixspeed -- and
+	   snd_mem.c resamples every loaded sound to shm->speed, so the whole game
+	   would have mixed at 11025 with no upsample and no filter. */
+	speed = (int) snd_mixspeed.value;
 	if (speed <= 0)
-		speed = 11025;
+		speed = 44100;
 	channels = 2;
 	bits = 16;
 
