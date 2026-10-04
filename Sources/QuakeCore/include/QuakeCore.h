@@ -539,6 +539,32 @@ void QC_ExportSetBodyYaw (int override, float yaw_deg);
    thread. */
 void QC_ExportSetViewOrigin (int enabled, float x, float y, float z);
 
+/*
+ * ---------------------------------------------------------------------------
+ * Audio sink (implemented in Swift, App/Sources/AudioSink.swift).
+ *
+ * Quake's mixer is unchanged and still owns the ring; this is only the device
+ * that plays it, the mirror of the QC_Input* producers. snd_avp.c calls these
+ * from the engine thread; the audio render thread touches nothing but the ring
+ * and the cursor.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Allocate the ring and start the device. Returns 1 on success and fills
+   *buffer / *mono_samples; 0 means no audio, and S_Init disables sound
+   cleanly. mono_samples is a POWER OF TWO -- snd_mix.c masks with it. */
+int  QC_AudioOpen (int speed, int channels, int bits,
+		   unsigned char **buffer, int *mono_samples);
+
+/* Play cursor in mono samples. Drives how far ahead snd_mix paints. */
+int  QC_AudioSamplePos (void);
+
+/* Stop the device and release the ring. Stops the node before freeing. */
+void QC_AudioClose (void);
+
+/* Pause/resume the device without releasing the ring (SNDDMA_BlockSound). */
+void QC_AudioSetRunning (int running);
+
 #ifdef __cplusplus
 }
 #endif
