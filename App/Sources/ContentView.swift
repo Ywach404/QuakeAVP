@@ -90,6 +90,7 @@ struct ContentView: View {
     @State private var wheelRadiusUI: Float = 1
     @State private var sightingIn = false
     @State private var sightStatus = "Needs the immersive space"
+    @State private var weaponPlacementCustom = false
     @State private var weaponClip: Float = 1
     @State private var weaponClipBack: Float = 0.79
     @State private var laserForward: Float = 0
@@ -831,10 +832,17 @@ struct ContentView: View {
                         Text("Gun placement").font(.headline)
                         Text("Slide the gun onto your hand — updates live in the headset.")
                             .font(.caption).foregroundStyle(.secondary)
-                        placementSlider("Back", $weaponBack, in: -20...30, cvar: "vr_weaponback", persist: \.weaponBack)
-                        placementSlider("Up", $weaponUp, in: -15...15, cvar: "vr_weaponup", persist: \.weaponUp)
-                        placementSlider("Side", $weaponSide, in: -15...15, cvar: "vr_weaponside", persist: \.weaponSide)
-                        placementSlider("Grip", $weaponGrip, in: 0...1, cvar: "vr_weapongrip", fmt: "%.2f", persist: \.weaponGrip)
+                        // Per HELD weapon, not global: the models' origins sit at
+                        // different points on each gun, so one offset makes some
+                        // clip through the hand. Untuned guns follow the profile.
+                        Text(weaponPlacementCustom
+                             ? "Placement: this weapon"
+                             : "Placement: profile default — moving a slider makes it this weapon's")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        placeSlider("Back", $weaponBack, in: -20...30)
+                        placeSlider("Up", $weaponUp, in: -15...15)
+                        placeSlider("Side", $weaponSide, in: -15...15)
+                        placeSlider("Grip", $weaponGrip, in: 0...1, fmt: "%.2f")
                         // The two aim trims. Pitch carries the WHOLE vertical
                         // correction (not a delta on a hidden 8), hence the
                         // offset range; yaw is per-person and centred on 0.
@@ -889,13 +897,14 @@ struct ContentView: View {
                         .font(.caption)
                         Divider().padding(.vertical, 4)
                         Button("Reset gun") {
-                            weaponBack = 0; weaponUp = 0; weaponSide = 0
-                            weaponGrip = 0.15; aimPitch = 8; aimYaw = 0
-                            for c in ["vr_weaponback 0", "vr_weaponup 0", "vr_weaponside 0",
-                                      "vr_weapongrip 0.15", "vr_aimpitch 8", "vr_aimyaw 0"] { engine.send(c) }
+                            // Drops THIS weapon's placement back to the profile
+                            // default; other guns keep what you tuned.
+                            WeaponTrim.shared.resetCurrentPlacement()
+                            syncPlacementFromWeapon()
+                            aimPitch = 8; aimYaw = 0
+                            for c in ["vr_aimpitch 8", "vr_aimyaw 0"] { engine.send(c) }
                             var p = ProfileStore.shared.current
-                            p.weaponBack = 0; p.weaponUp = 0; p.weaponSide = 0
-                            p.weaponGrip = 0.15; p.aimPitch = 8; p.aimYaw = 0
+                            p.aimPitch = 8; p.aimYaw = 0
                             ProfileStore.shared.current = p
                             WeaponTrim.shared.resetCurrent()
                             weaponClip = WeaponTrim.shared.currentFront
@@ -937,7 +946,36 @@ struct ContentView: View {
                 .onAppear {
                     weaponClip = WeaponTrim.shared.currentFront
                     weaponClipBack = WeaponTrim.shared.currentRear
+                    syncPlacementFromWeapon()
                 }
+    }
+
+    /// Mirror the held weapon's effective placement into the sliders.
+    private func syncPlacementFromWeapon() {
+        let p = WeaponTrim.shared.currentPlacement
+        weaponBack = p.back; weaponUp = p.up; weaponSide = p.side; weaponGrip = p.grip
+        weaponPlacementCustom = WeaponTrim.shared.currentPlacementIsCustom
+    }
+
+    /// A placement slider routed through WeaponTrim: edits the HELD weapon,
+    /// persists per (input mode, weapon), and pushes the cvar.
+    private func placeSlider(_ label: String, _ value: Binding<Float>,
+                             in range: ClosedRange<Double>,
+                             fmt: String = "%.0f") -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 40, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { nv in
+                    value.wrappedValue = Float(nv)
+                    WeaponTrim.shared.setPlacement(.init(back: weaponBack, up: weaponUp,
+                                                         side: weaponSide, grip: weaponGrip))
+                    weaponPlacementCustom = true
+                }), in: range)
+            Text(String(format: fmt, value.wrappedValue))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
     }
 
     /// A Trim slider (0.5...1) routed through WeaponTrim, which persists the
