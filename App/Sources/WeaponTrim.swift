@@ -111,6 +111,10 @@ final class WeaponTrim: @unchecked Sendable {
         lock.unlock()
         push(f, r)
         pushPlacement(p)
+        // Tell the UI the held weapon changed, so the Weapon tab re-reads its
+        // sliders live instead of only on the tab's onAppear. Hop to the main
+        // actor; this runs on a render thread.
+        Task { @MainActor in WeaponFocus.shared.set(activeWeapon) }
     }
 
     var currentFront: Float { lock.lock(); defer { lock.unlock() }; return front[current] }
