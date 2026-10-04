@@ -72,7 +72,20 @@ final class AudioSink: @unchecked Sendable {
     /// inside SNDDMA_Init, and launched perfectly with this true ("[audio]
     /// sink disabled by kill switch" in the log, 120fps session after it).
     /// That is why open() below no longer starts the device at all.
-    static let disabled = false
+    /// TRUE: the sink is OFF and SNDDMA_Init fails cleanly, the old snd_null.c
+    /// behaviour that launches and plays. Left on deliberately.
+    ///
+    /// The device path is NOT safe to enable as written. On this hardware
+    /// 2026-10-04: starting it on the engine thread or on main WEDGES that
+    /// thread (session -50 over XPC), and starting it on a background thread
+    /// with the float32 render block CRASHED -- EXC_BAD_ACCESS at 0x10, a null
+    /// deref, almost certainly the ring conversion in the render block running
+    /// before config/buffer are safely published to that thread. Both the
+    /// wedge and the crash are unsolved. Do not set this false again without
+    /// first proving, in isolation, that a bare AVAudioEngine can start and
+    /// play a tone in this app at all -- every attempt so far has assumed it
+    /// can, and it has not.
+    static let disabled = true
 
     /// Called on the ENGINE THREAD inside SNDDMA_Init, in the middle of
     /// Host_Init. Therefore it does nothing that can block: it allocates the
