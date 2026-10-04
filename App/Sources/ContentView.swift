@@ -62,6 +62,7 @@ struct ContentView: View {
     @State private var infightBothWays = true
     private var debug: DebugStore { .shared }
     private var pause: GamePause { .shared }
+    @State private var weaponFocus = WeaponFocus.shared
     @State private var exporter = DemoExporter()
     @State private var capture = CaptureState()
     @State private var captureName = ""
@@ -944,6 +945,13 @@ struct ContentView: View {
                 // Load the HELD weapon's saved trim so the sliders show and
                 // edit whatever gun you're holding.
                 .onAppear {
+                    weaponClip = WeaponTrim.shared.currentFront
+                    weaponClipBack = WeaponTrim.shared.currentRear
+                    syncPlacementFromWeapon()
+                }
+                // And re-read them the instant the held weapon changes while
+                // the tab is open -- the whole point of WeaponFocus.
+                .onChange(of: weaponFocus.weapon) { _, _ in
                     weaponClip = WeaponTrim.shared.currentFront
                     weaponClipBack = WeaponTrim.shared.currentRear
                     syncPlacementFromWeapon()
