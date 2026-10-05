@@ -54,6 +54,10 @@ final class WeaponTrim: @unchecked Sendable {
 
     private init() { load() }
 
+    /// Publish the restored table. Called once the engine is up; `init` runs
+    /// far too early for the C side to be listening.
+    func applyEngine() { publish() }
+
     private static func index(for bit: UInt32) -> Int { bits.firstIndex(of: bit) ?? 1 }
 
     private var slot: Int { mode * 8 + current }
@@ -64,9 +68,10 @@ final class WeaponTrim: @unchecked Sendable {
         lock.lock()
         self.mode = mode
         global = Placement(back: back, up: up, side: side, grip: grip)
-        let p = place[slot] ?? global
+        let g = global
         lock.unlock()
-        pushPlacement(p)
+        pushGlobal(g)
+        publish()
     }
 
     /// The held weapon's effective placement -- its own if tuned, else global.
@@ -83,16 +88,42 @@ final class WeaponTrim: @unchecked Sendable {
 
     func setPlacement(_ p: Placement) {
         lock.lock(); place[slot] = p; lock.unlock()
-        pushPlacement(p); save()
+        publish(); save()
     }
 
     /// Drop this weapon's own placement and fall back to the profile global.
     func resetCurrentPlacement() {
-        lock.lock(); place[slot] = nil; let p = global; lock.unlock()
-        pushPlacement(p); save()
+        lock.lock(); place[slot] = nil; lock.unlock()
+        publish(); save()
     }
 
-    private func pushPlacement(_ p: Placement) {
+    /// Hand the engine the whole table for the active input mode. The renderer
+    /// reads the entry for whichever gun it is drawing, so this is correct on
+    /// the first frame of a weapon switch and there is no switch event to miss.
+    ///
+    /// Placement used to be four cvars rewritten on each switch through the
+    /// console queue. That arrived a frame or two after the gun it described,
+    /// and `engine.send` drops anything sent before the engine is running --
+    /// with no retry, because `frame` only pushes when the weapon CHANGES. One
+    /// dropped command left that weapon wearing another gun's placement until
+    /// you cycled away and back, which is indistinguishable from placement
+    /// being global.
+    private func publish() {
+        lock.lock()
+        let base = mode * 8
+        var table = [qc_weapon_placement_t](repeating: .init(), count: 8)
+        for i in 0..<8 {
+            guard let p = place[base + i] else { continue }   // custom == 0
+            table[i] = qc_weapon_placement_t(back: p.back, up: p.up,
+                                             side: p.side, grip: p.grip, custom: 1)
+        }
+        lock.unlock()
+        QC_SetWeaponPlacement(table)
+    }
+
+    /// The profile's globals, which every untuned weapon falls back to. These
+    /// stay cvars: one value, set rarely, and the console's way in.
+    private func pushGlobal(_ p: Placement) {
         sendCommand?("vr_weaponback \(p.back)\n")
         sendCommand?("vr_weaponup \(p.up)\n")
         sendCommand?("vr_weaponside \(p.side)\n")
@@ -107,10 +138,11 @@ final class WeaponTrim: @unchecked Sendable {
         lastWeapon = activeWeapon
         current = Self.index(for: activeWeapon)
         let f = front[current], r = rear[current]
-        let p = place[slot] ?? global
         lock.unlock()
         push(f, r)
-        pushPlacement(p)
+        // Placement is NOT pushed here: the renderer pulls the held gun's
+        // entry from the published table while it places the model, so it is
+        // right on this very frame rather than a console round trip later.
         // Tell the UI the held weapon changed, so the Weapon tab re-reads its
         // sliders live instead of only on the tab's onAppear. Hop to the main
         // actor; this runs on a render thread.
