@@ -4103,9 +4103,12 @@ Engine thread, single player: ownership comes from the in-process server.
    the bore line is atan(miss / converge), about 7 degrees at 96 units for a
    12-unit miss. A cvar because that is a feel number and this one is only
    honestly judged in the headset. */
-#define QR_PROJ_MAXAGE		0.5f	/* backstop: a grenade can come to rest
-					   short of the converge distance and would
-					   otherwise hold its shift forever */
+#define QR_PROJ_MAXAGE		0.25f	/* the shift exists to cover a LAUNCH, which
+					   is over in a few frames. A grenade can come
+					   to rest short of the converge distance, and
+					   nothing may sit visibly misplaced. */
+#define QR_PROJ_BIRTHDIST	64.f	/* how far from the player a missile may be
+					   and still count as caught at birth */
 
 typedef struct {
 	int	ednum;			/* 0 = free */
@@ -4117,13 +4120,14 @@ typedef struct {
 
 static qr_projoff_t	qr_projoffs[QR_PROJ_SLOTS];
 static qmodel_t		*qr_projoff_worldkey;
+static float		qr_projoff_frame = -1.f;	/* cl.time of the last sweep */
 
 void QR_ProjectileViewOffset (int ednum, vec3_t origin)
 {
 	qr_projoff_t	*po = NULL;
 	int		i, slot = -1;
 	vec3_t		hand, fwd, right, up, d, travel;
-	float		along, dist, w, converge;
+	float		along, dist, w, wd, wt, converge;
 
 	if (!vr_projhand.value || !sv.active)
 		return;
@@ -4140,6 +4144,25 @@ void QR_ProjectileViewOffset (int ednum, vec3_t origin)
 	{
 		qr_projoff_worldkey = cl.worldmodel;
 		memset (qr_projoffs, 0, sizeof qr_projoffs);
+		qr_projoff_frame = -1.f;
+	}
+
+	/* Once per frame, release slots whose missile is gone. A missile that
+	   dies before it converges -- a nail into a near wall, any grenade that
+	   explodes -- is never visited here again, so without this sweep its
+	   slot leaks, and the next missile handed that edict number inherits the
+	   dead one's shift, spawn point and accumulated travel. That is what
+	   made the nailguns and the grenade launcher fling their models around
+	   while the rocket launcher, fast enough to converge before it dies,
+	   looked correct. ED_Alloc will not reuse an edict for 0.5 s, so a sweep
+	   per frame always wins the race. */
+	if (cl.time != qr_projoff_frame)
+	{
+		qr_projoff_frame = cl.time;
+		for (i = 0; i < QR_PROJ_SLOTS; i++)
+			if (qr_projoffs[i].ednum
+			    && !QR_MyMissile (qr_projoffs[i].ednum))
+				qr_projoffs[i].ednum = 0;
 	}
 
 	for (i = 0; i < QR_PROJ_SLOTS; i++)
@@ -4153,7 +4176,16 @@ void QR_ProjectileViewOffset (int ednum, vec3_t origin)
 
 	if (!po)
 	{
+		vec3_t	bd;
+
 		if (!QR_MyMissile (ednum))
+			return;
+		/* Only shift a missile caught at birth. One already clear of the
+		   player means we missed its spawn frame, and the offset we would
+		   compute is mostly its own flight rather than the launch error --
+		   that is a model teleport, not a correction. */
+		VectorSubtract (origin, svs.clients[0].edict->v.origin, bd);
+		if (VectorLength (bd) > QR_PROJ_BIRTHDIST)
 			return;
 		/* No tracked hand (gamepad, keyboard, tracking lost): the body
 		   origin is the honest answer and upstream already draws it. */
@@ -4192,13 +4224,19 @@ void QR_ProjectileViewOffset (int ednum, vec3_t origin)
 	if (dist > po->reach)
 		po->reach = dist;
 
-	if (po->reach >= converge || cl.time - po->birth > QR_PROJ_MAXAGE)
+	/* Fold on travel OR on age, whichever is further along. Travel alone
+	   froze the shift the moment a grenade came to rest -- it sat a hand's
+	   width from its real position until the age cap fired and then snapped
+	   into place. Taking the minimum converges it smoothly instead. */
+	wd = 1.f - po->reach / converge;
+	wt = 1.f - (cl.time - po->birth) / QR_PROJ_MAXAGE;
+	w = (wd < wt) ? wd : wt;
+	if (w <= 0.f)
 	{
 		po->ednum = 0;		/* converged: nothing left to shift */
 		return;
 	}
 
-	w = 1.f - po->reach / converge;
 	w = w * w * (3.f - 2.f * w);	/* smoothstep: flat at both ends, no kink */
 	VectorMA (origin, w, po->off, origin);
 }
