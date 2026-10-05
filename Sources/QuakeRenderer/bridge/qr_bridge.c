@@ -55,6 +55,7 @@ extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
+extern int QR_HandOrigin (vec3_t out);	/* M6 hand position, world (in_null.c) */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
@@ -62,6 +63,7 @@ extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offse
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 extern cvar_t vr_weapontint;					/* debug: green hand weapon */
 extern cvar_t vr_pathdebug;					/* debug: enemy AI trails */
+extern cvar_t vr_projdebug;					/* debug: projectile spawn offsets */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -3925,6 +3927,137 @@ static void QR_EmitParticles (qr_frame_slot_t *slot)
 
 /*
 ================
+QR_ProjDebug -- where do my own projectiles actually appear? (vr_projdebug)
+
+The lightning beam was visibly rooted in the player's chest because the
+CLIENT positions it, so it could simply be moved. Projectiles are server
+entities: the client draws where it is told, and vanilla spawns each
+weapon's missile at its own offset from the player origin -- the rocket a
+little forward and up, the grenade (going by vanilla QuakeC, which this
+tree cannot read: progs.dat is compiled) at the origin itself. Which of
+them actually reads wrong in a headset is a measurement, not an argument.
+
+One line per projectile, the first frame it exists -- which is the first
+frame it can be drawn, so this measures what you see rather than the
+setorigin position, which is never visible. The offset from the hand is
+split along the aim, where it is legitimate travel (a rocket covers ~11
+units in one 90 Hz frame), and perpendicular to it, which is the part that
+reads as the shot not leaving the barrel. perp is the number that matters.
+
+Server-side, single player, and silent without a tracked hand -- there is
+nothing to measure the offset against. The axe, both shotguns and the
+lightning gun spawn no entity and so say nothing here, which is the
+expected result and not a failure to detect them.
+================
+*/
+#define QR_PROJ_SLOTS	48
+
+static int	qr_proj_seen[QR_PROJ_SLOTS];	/* edict numbers already reported */
+static qmodel_t	*qr_proj_worldkey;
+
+static const char *QR_WeaponName (int bit)
+{
+	switch (bit)
+	{
+	case IT_AXE:			return "axe";
+	case IT_SHOTGUN:		return "shotgun";
+	case IT_SUPER_SHOTGUN:		return "super shotgun";
+	case IT_NAILGUN:		return "nailgun";
+	case IT_SUPER_NAILGUN:		return "super nailgun";
+	case IT_GRENADE_LAUNCHER:	return "grenade launcher";
+	case IT_ROCKET_LAUNCHER:	return "rocket launcher";
+	case IT_LIGHTNING:		return "lightning gun";
+	default:			return "(none)";
+	}
+}
+
+static void QR_ProjDebug (void)
+{
+	int	e, i, slot;
+	edict_t	*player;
+	vec3_t	hand, fwd, right, up;
+
+	if (!vr_projdebug.value || !sv.active)
+		return;
+	if (!svs.clients || !svs.clients[0].active)
+		return;
+
+	player = svs.clients[0].edict;
+
+	/* Clear across map loads: SV_SpawnServer memsets sv and may reallocate
+	   the edict array smaller, so a number held from the last map is not
+	   merely stale but potentially out of bounds. */
+	if (qr_proj_worldkey != cl.worldmodel)
+	{
+		qr_proj_worldkey = cl.worldmodel;
+		memset (qr_proj_seen, 0, sizeof qr_proj_seen);
+	}
+
+	/* Release slots whose projectile is gone. Edict numbers are reused, so
+	   without this the next missile to land in a retired number would be
+	   taken for one already reported and silently skipped. */
+	for (i = 0; i < QR_PROJ_SLOTS; i++)
+	{
+		edict_t *p;
+
+		if (!qr_proj_seen[i])
+			continue;
+		if (qr_proj_seen[i] >= sv.num_edicts)
+		{
+			qr_proj_seen[i] = 0;
+			continue;
+		}
+		p = EDICT_NUM (qr_proj_seen[i]);
+		if (p->free || PROG_TO_EDICT (p->v.owner) != player)
+			qr_proj_seen[i] = 0;
+	}
+
+	if (!QR_HandOrigin (hand))
+		return;
+
+	/* cl.viewangles IS the aim since M6, so this is the ray the shot used. */
+	AngleVectors (cl.viewangles, fwd, right, up);
+
+	for (e = 1; e < sv.num_edicts; e++)
+	{
+		edict_t	*ent = EDICT_NUM (e);
+		int	mt = (int) ent->v.movetype;
+		vec3_t	d, perp;
+		float	along;
+
+		if (ent->free || PROG_TO_EDICT (ent->v.owner) != player)
+			continue;
+		/* FLYMISSILE: rockets, nails, spikes. BOUNCE: grenades. */
+		if (mt != MOVETYPE_FLYMISSILE && mt != MOVETYPE_BOUNCE)
+			continue;
+
+		slot = -1;
+		for (i = 0; i < QR_PROJ_SLOTS; i++)
+		{
+			if (qr_proj_seen[i] == e)
+				break;
+			if (slot < 0 && !qr_proj_seen[i])
+				slot = i;
+		}
+		if (i < QR_PROJ_SLOTS)
+			continue;		/* already reported */
+		if (slot < 0)
+			continue;		/* table full: a burst outran it */
+		qr_proj_seen[slot] = e;
+
+		VectorSubtract (ent->v.origin, hand, d);
+		along = DotProduct (d, fwd);
+		VectorMA (d, -along, fwd, perp);
+
+		Con_Printf ("[proj] %-16s perp %5.1f along %5.1f (right %5.1f up %5.1f)\n",
+			    QR_WeaponName ((int) cl.stats[STAT_ACTIVEWEAPON]),
+			    VectorLength (perp), along,
+			    DotProduct (d, right), DotProduct (d, up));
+	}
+}
+
+/*
+================
 QR_EmitWheel -- the weapon wheel: the player's OWNED view-weapon models as
 a ring of synthetic alias entities around the off-hand wrist.
 
@@ -4599,6 +4732,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 
 	QR_EmitParticles (slot);
 	QR_EmitPathDebug (slot);
+	QR_ProjDebug ();
 	QR_EmitWheel (slot);
 }
 

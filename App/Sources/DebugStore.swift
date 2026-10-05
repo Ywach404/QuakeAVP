@@ -38,6 +38,11 @@ final class DebugStore {
     /// preference.
     var inputLog = false { didSet { VRSettings.shared.inputLog = inputLog } }
 
+    /// Engine cvar, and not persisted for the same reason as `inputLog`: it
+    /// prints a line per shot fired, which is what makes it useful and what
+    /// makes leaving it on intolerable. A measurement, not a preference.
+    var projDebug = false
+
     private static let key = "debugToggles.v1"
 
     private init() {
@@ -75,5 +80,6 @@ final class DebugStore {
     /// commands before then and the setting would be silently dropped.
     func applyEngine(_ send: (String) -> Void) {
         send("vr_pathdebug \(pathDebug ? 1 : 0)")
+        send("vr_projdebug \(projDebug ? 1 : 0)")
     }
 }

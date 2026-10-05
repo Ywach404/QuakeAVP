@@ -258,6 +258,7 @@ cvar_t		vr_weapontint = {"vr_weapontint", "0", 0};
    planned path), so this shows where each monster HAS walked and what it is
    chasing, coloured per monster. */
 cvar_t		vr_pathdebug = {"vr_pathdebug", "0", 0};
+cvar_t		vr_projdebug = {"vr_projdebug", "0", 0};
 /* M6: where the aiming laser STARTS, Quake units along the aim axes from the
    wrist -- forward reaches the muzzle so the beam emits from the barrel tip
    instead of behind the gun, up/side fine-tune to the barrel line. */
@@ -884,6 +885,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_weaponclipback);
 	Cvar_RegisterVariable (&vr_weapontint);
 	Cvar_RegisterVariable (&vr_pathdebug);
+	Cvar_RegisterVariable (&vr_projdebug);
 	Cvar_RegisterVariable (&vr_laserforward);
 	Cvar_RegisterVariable (&vr_laserup);
 	Cvar_RegisterVariable (&vr_laserside);
