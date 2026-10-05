@@ -138,7 +138,7 @@ for a weapon the UI never tuned, and the caller uses the vr_weapon* cvars --
 still the global setting, and still what the console sets.
 ================
 */
-int QR_WeaponPlacement (int slot, float *back, float *up, float *side, float *grip)
+int QR_WeaponPlacement (int slot, float *back, float *up, float *side)
 {
 	qc_weapon_placement_t	p;
 
@@ -155,7 +155,6 @@ int QR_WeaponPlacement (int slot, float *back, float *up, float *side, float *gr
 	*back = p.back;
 	*up   = p.up;
 	*side = p.side;
-	*grip = p.grip;
 	return 1;
 }
 

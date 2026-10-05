@@ -61,7 +61,7 @@ extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 /* The held gun's own placement, pulled from the table the UI publishes; 0
    means untuned and the cvars above are the answer (in_null.c). */
-extern int QR_WeaponPlacement (int slot, float *back, float *up, float *side, float *grip);
+extern int QR_WeaponPlacement (int slot, float *back, float *up, float *side);
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 extern cvar_t vr_weapontint;					/* debug: green hand weapon */
@@ -4622,7 +4622,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		{
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
-			float	pback, pup, pside, pgrip;
+			float	pback, pup, pside;
 			float	bmin[3], bmax[3];
 			aliashdr_t *ah;
 			int	k;
@@ -4704,15 +4704,20 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			pback = vr_weaponback.value;
 			pup   = vr_weaponup.value;
 			pside = vr_weaponside.value;
-			pgrip = vr_weapongrip.value;
 			{
 				int	wslot = QR_WheelSlot (QR_ActiveWeaponBit ());
 
 				if (wslot >= 0)
-					QR_WeaponPlacement (wslot, &pback, &pup, &pside, &pgrip);
+					QR_WeaponPlacement (wslot, &pback, &pup, &pside);
 			}
 
-			cx = bmin[0] + CLAMP (0.f, pgrip, 1.f) * mx;   /* grip along barrel */
+			/* Grip stays GLOBAL. It is a fraction of the trimmed length, so it
+			   already adapts to each model's size and re-seats when the trim
+			   moves -- which is why one value fits every gun. It also slides the
+			   model along the same axis as vr_weaponback, so per-weapon grip was
+			   a second knob over one degree of freedom: tuning all eight left it
+			   at the default on every one while back ranged over 3 to 18 units. */
+			cx = bmin[0] + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;
 			cy = 0.5f * (bmin[1] + bmax[1]);
 			cz = 0.5f * (bmin[2] + bmax[2]);
 			/* Place in the SHOT frame -- NOT AngleVectors(viewent.angles).

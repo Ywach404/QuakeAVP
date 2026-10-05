@@ -82,7 +82,6 @@ struct ContentView: View {
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
     @State private var weaponSide: Float = 0
-    @State private var weaponGrip: Float = 0.15
     @State private var aimPitch: Float = 8      // matches InputProfile.aimPitch
     @State private var aimYaw: Float = 0
     @State private var wheelPitchUI: Float = 0
@@ -853,7 +852,6 @@ struct ContentView: View {
                         placeSlider("Back", $weaponBack, in: -20...30)
                         placeSlider("Up", $weaponUp, in: -15...15)
                         placeSlider("Side", $weaponSide, in: -15...15)
-                        placeSlider("Grip", $weaponGrip, in: 0...1, fmt: "%.2f")
                         // The two aim trims. Pitch carries the WHOLE vertical
                         // correction (not a delta on a hidden 8), hence the
                         // offset range; yaw is per-person and centred on 0.
@@ -981,7 +979,7 @@ struct ContentView: View {
     /// Mirror the held weapon's effective placement into the sliders.
     private func syncPlacementFromWeapon() {
         let p = WeaponTrim.shared.currentPlacement
-        weaponBack = p.back; weaponUp = p.up; weaponSide = p.side; weaponGrip = p.grip
+        weaponBack = p.back; weaponUp = p.up; weaponSide = p.side
         weaponPlacementCustom = WeaponTrim.shared.currentPlacementIsCustom
     }
 
@@ -997,7 +995,7 @@ struct ContentView: View {
                 set: { nv in
                     value.wrappedValue = Float(nv)
                     WeaponTrim.shared.setPlacement(.init(back: weaponBack, up: weaponUp,
-                                                         side: weaponSide, grip: weaponGrip))
+                                                         side: weaponSide))
                     weaponPlacementCustom = true
                 }), in: range)
             Text(String(format: fmt, value.wrappedValue))
@@ -1140,7 +1138,7 @@ struct ContentView: View {
         hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll; hudYawUI = p.hudYaw ?? 0
         hudFaceUI = p.hudFaceMe; hudScaleUI = p.hudScale
         weaponBack = p.weaponBack; weaponUp = p.weaponUp; weaponSide = p.weaponSide
-        weaponGrip = p.weaponGrip; aimPitch = p.aimPitch; aimYaw = p.aimYaw
+        aimPitch = p.aimPitch; aimYaw = p.aimYaw
         laser = p.laser
         laserForward = p.laserForward; laserUp = p.laserUp; laserSide = p.laserSide
         laserPitch = p.laserPitch; laserYaw = p.laserYaw
