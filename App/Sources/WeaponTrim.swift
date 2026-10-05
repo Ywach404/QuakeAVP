@@ -58,6 +58,31 @@ final class WeaponTrim: @unchecked Sendable {
     /// far too early for the C side to be listening.
     func applyEngine() { publish() }
 
+    /// Every weapon's tuned values, for the console. Device UserDefaults is
+    /// the only copy of a tuning session, and a reinstall takes it with it --
+    /// this is how the numbers get read out and promoted to code defaults.
+    func summary() -> [String] {
+        let names = ["axe", "shotgun", "super shotgun", "nailgun",
+                     "super nailgun", "grenade launcher", "rocket launcher",
+                     "lightning gun"]
+        lock.lock()
+        let base = mode * 8
+        let g = global, f = front, r = rear
+        let pl = (0..<8).map { place[base + $0] }
+        let m = mode
+        lock.unlock()
+        var out = ["[weapons] input mode \(m) -- global back \(g.back) up \(g.up) "
+                   + "side \(g.side) grip \(g.grip)"]
+        for i in 0..<8 {
+            let p = pl[i]
+            let place = p.map {
+                "back \($0.back) up \($0.up) side \($0.side) grip \($0.grip)"
+            } ?? "(untuned, follows global)"
+            out.append("[weapons] \(names[i]): trim \(f[i])/\(r[i])  \(place)")
+        }
+        return out
+    }
+
     private static func index(for bit: UInt32) -> Int { bits.firstIndex(of: bit) ?? 1 }
 
     private var slot: Int { mode * 8 + current }
