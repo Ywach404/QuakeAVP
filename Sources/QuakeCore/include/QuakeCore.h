@@ -477,11 +477,16 @@ void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 /* Per-weapon gun placement, one entry per weapon slot in wheel order:
    axe, shotgun, super shotgun, nailgun, super nailgun, grenade launcher,
    rocket launcher, lightning gun. Quake units, in the gun's own drawn frame:
-   `back` toward the player along the barrel, `up` raises, `side` moves right,
-   `grip` is the 0..1 point along the trimmed barrel that sits in the hand.
+   `back` toward the player along the barrel, `up` raises, `side` moves right.
+
+   NOT grip. Grip is the 0..1 point along the trimmed barrel that sits in the
+   hand, and it moves the gun along the SAME axis as `back` -- two knobs over
+   one degree of freedom. Tuning all eight weapons left grip at its default on
+   every one of them while `back` ranged over 3 to 18 units, so grip is now a
+   single global (vr_weapongrip) rather than per-weapon.
 
    `custom` == 0 means that weapon was never tuned, and the renderer falls
-   back to the vr_weapon{back,up,side,grip} cvars -- which remain the global
+   back to the vr_weapon{back,up,side} cvars -- which remain the global
    setting and the console's way in.
 
    PULLED, not pushed: the renderer reads the entry for whichever gun it is
@@ -494,7 +499,7 @@ void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 
    Callable from any thread. */
 typedef struct {
-	float	back, up, side, grip;
+	float	back, up, side;
 	int	custom;			/* 0 = never tuned, use the cvars */
 } qc_weapon_placement_t;
 
