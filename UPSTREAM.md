@@ -91,16 +91,24 @@ absorbed by a shim: the override runs unconditionally inside the beam loop,
 and the beam segments it feeds are ordinary `bolt.mdl` entities with nothing
 to distinguish them downstream.
 
-**`cl_main.c`** — `CL_RelinkEntities` calls `QR_ProjectileViewOffset` on each
-entity's final origin. My own missiles are spawned by the server at a per-weapon
-offset from the player *origin* — the middle of the chest — while the gun is in
-my hand, so they visibly do not leave the barrel. Only the component
-perpendicular to the aim is shifted, and it folds away over the first
-`vr_projconverge` units of travel. This is the one place it can be done: the
-muzzle flash, the trail (`R_RocketTrail`) and the model all read that same
-`ent->origin` within the next thirty lines, so correcting it once here is what
-keeps them in agreement — in our own code it would have to be done three times,
-twice from a frame-stale table.
+**`pr_cmds.c`** — `PF_setorigin` calls `QR_MuzzleSpawn` (in
+`platform/in_null.c`) before writing the origin. Vanilla spawns each weapon's
+missile at a per-weapon offset from the player *origin* — the middle of the
+chest — while the gun is in my hand. This builtin is where that position is
+decided, before `SV_LinkEdict` and before any physics, so correcting it here is
+what makes the shot genuinely leave the barrel: the trail starts there, the
+model is drawn there, and the missile flies a true path from there, with
+nothing to fold away afterwards. `QR_MuzzleSpawn` declines for anything that is
+not a launch (not a player-owned missile, not the first placement after
+`ED_ClearEdict`, not near the player, no tracked hand, muzzle implausibly far,
+or the short trace out to it blocked), so the fallback *is* the normal case. It
+does move where a shot comes from for collision, not only for the eye —
+intended, for a port where you aim with your arm.
+
+This replaced a client-side version in `cl_main.c` that could only shift what
+was drawn, and so had to fold the shift away again over the first ~96 units;
+the fold was visible as the projectile sliding back to the body line. Doing it
+at the source removed that hunk, two cvars and about 170 lines.
 
 Everything else that would have needed a patch is instead absorbed by shims in
 `Sources/QuakeCore/platform/`:
@@ -117,7 +125,7 @@ Everything else that would have needed a patch is instead absorbed by shims in
 
 1. Diff the new upstream against `.upstream-rev` for the 45 vendored `.c` files
    and 72 headers; copy over.
-2. Re-apply the `quakedef.h`, `miniz.h`, `cl_tent.c` and `cl_main.c` hunks
+2. Re-apply the `quakedef.h`, `miniz.h`, `cl_tent.c` and `pr_cmds.c` hunks
    (search for `QAVP_PLATFORM`).
 3. `make check` — a clean link means no new symbols escaped into the renderer
    boundary. New undefined symbols are new renderer entry points that need
