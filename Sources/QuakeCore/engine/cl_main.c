@@ -504,6 +504,22 @@ void CL_RelinkEntities (void)
 			}
 		}
 
+#ifdef QAVP_PLATFORM
+		/* visionOS: my own missiles are spawned by the server at an offset
+		   from the player ORIGIN -- the middle of the chest -- while the gun
+		   is in my hand, so they visibly do not leave the barrel. Shift what
+		   we draw, here and only here: the muzzle flash, the trail and the
+		   model below all read this one origin, so correcting it once is the
+		   only way they stay in agreement. Shifts nothing for anyone else's
+		   missiles, and nothing at all without a tracked hand.
+		   Declared here rather than in a header: this is the only caller,
+		   and a header edit would widen the patch. */
+		{
+			extern void QR_ProjectileViewOffset (int ednum, vec3_t origin);
+			QR_ProjectileViewOffset (i, ent->origin);
+		}
+#endif
+
 // rotate binary objects locally
 		if (ent->model->flags & EF_ROTATE)
 			ent->angles[1] = bobjrotate;

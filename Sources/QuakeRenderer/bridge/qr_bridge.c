@@ -64,6 +64,8 @@ extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 extern cvar_t vr_weapontint;					/* debug: green hand weapon */
 extern cvar_t vr_pathdebug;					/* debug: enemy AI trails */
 extern cvar_t vr_projdebug;					/* debug: projectile spawn offsets */
+extern cvar_t vr_projhand;					/* draw my missiles from the hand */
+extern cvar_t vr_projconverge;				/* units to fold the shift away */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -3955,6 +3957,25 @@ expected result and not a failure to detect them.
 static int	qr_proj_seen[QR_PROJ_SLOTS];	/* edict numbers already reported */
 static qmodel_t	*qr_proj_worldkey;
 
+/* One of MY missiles? Exact, not guessed: the local server is in-process, so
+   v.owner settles it with no model-name or proximity heuristic. FLYMISSILE is
+   rockets, nails and spikes; BOUNCE is grenades. */
+static qboolean QR_MyMissile (int ednum)
+{
+	edict_t	*ent;
+	int	mt;
+
+	if (ednum < 1 || ednum >= sv.num_edicts)
+		return false;
+	ent = EDICT_NUM (ednum);
+	if (ent->free)
+		return false;
+	if (PROG_TO_EDICT (ent->v.owner) != svs.clients[0].edict)
+		return false;
+	mt = (int) ent->v.movetype;
+	return mt == MOVETYPE_FLYMISSILE || mt == MOVETYPE_BOUNCE;
+}
+
 static const char *QR_WeaponName (int bit)
 {
 	switch (bit)
@@ -4002,13 +4023,7 @@ static void QR_ProjDebug (void)
 
 		if (!qr_proj_seen[i])
 			continue;
-		if (qr_proj_seen[i] >= sv.num_edicts)
-		{
-			qr_proj_seen[i] = 0;
-			continue;
-		}
-		p = EDICT_NUM (qr_proj_seen[i]);
-		if (p->free || PROG_TO_EDICT (p->v.owner) != player)
+		if (!QR_MyMissile (qr_proj_seen[i]))
 			qr_proj_seen[i] = 0;
 	}
 
@@ -4021,14 +4036,10 @@ static void QR_ProjDebug (void)
 	for (e = 1; e < sv.num_edicts; e++)
 	{
 		edict_t	*ent = EDICT_NUM (e);
-		int	mt = (int) ent->v.movetype;
 		vec3_t	d, perp;
 		float	along;
 
-		if (ent->free || PROG_TO_EDICT (ent->v.owner) != player)
-			continue;
-		/* FLYMISSILE: rockets, nails, spikes. BOUNCE: grenades. */
-		if (mt != MOVETYPE_FLYMISSILE && mt != MOVETYPE_BOUNCE)
+		if (!QR_MyMissile (e))
 			continue;
 
 		slot = -1;
@@ -4054,6 +4065,142 @@ static void QR_ProjDebug (void)
 			    VectorLength (perp), along,
 			    DotProduct (d, right), DotProduct (d, up));
 	}
+}
+
+/*
+================
+QR_ProjectileViewOffset -- draw my own missiles leaving the barrel.
+
+Projectiles are server entities, spawned at a per-weapon offset from the
+player's ORIGIN -- which in a headset is the middle of your chest, while the
+gun is in your hand. The server's offset is not ours to change (progs.dat is
+compiled), so the client shifts what it DRAWS.
+
+Only the component PERPENDICULAR to the aim is corrected. The along-aim part
+is not an error: a rocket covers ~11 units in the frame it is born, so it is
+genuinely downrange by the time anything can draw it, and cancelling that
+would make the first frames of flight look slow. Perpendicular-only fixes
+exactly what reads wrong -- the shot not coming out of the barrel -- and
+invents no new artifact.
+
+The shift folds away over the first QR_PROJ_CONVERGE units of travel, so the
+drawn path rejoins the real one long before the missile reaches anything.
+Without that the thing would fly a parallel line and explode a hand's width
+from where it looked like it was going. The weight follows the FURTHEST the
+missile has been from its spawn, not its current distance, so a grenade that
+bounces back toward you cannot make the shift grow again.
+
+Called from CL_RelinkEntities against the one origin all three consumers
+read -- the model, the trail and the dlight -- so they cannot disagree. That
+is the whole reason it is worth a vendored hunk: done in our own code it
+would have to be done three times, twice from stale data.
+
+Engine thread, single player: ownership comes from the in-process server.
+================
+*/
+/* Travel over which the shift folds away (vr_projconverge). Shorter snaps
+   onto the true path sooner but curves harder getting there -- the drift off
+   the bore line is atan(miss / converge), about 7 degrees at 96 units for a
+   12-unit miss. A cvar because that is a feel number and this one is only
+   honestly judged in the headset. */
+#define QR_PROJ_MAXAGE		0.5f	/* backstop: a grenade can come to rest
+					   short of the converge distance and would
+					   otherwise hold its shift forever */
+
+typedef struct {
+	int	ednum;			/* 0 = free */
+	vec3_t	off;			/* perpendicular shift captured at birth */
+	vec3_t	spawn;
+	float	reach;			/* furthest it has been from spawn */
+	float	birth;			/* cl.time at capture */
+} qr_projoff_t;
+
+static qr_projoff_t	qr_projoffs[QR_PROJ_SLOTS];
+static qmodel_t		*qr_projoff_worldkey;
+
+void QR_ProjectileViewOffset (int ednum, vec3_t origin)
+{
+	qr_projoff_t	*po = NULL;
+	int		i, slot = -1;
+	vec3_t		hand, fwd, right, up, d, travel;
+	float		along, dist, w, converge;
+
+	if (!vr_projhand.value || !sv.active)
+		return;
+	converge = vr_projconverge.value;
+	if (converge < 1.f)
+		return;			/* 0 disables the fold, which would leave a
+					   permanent shift: treat it as off */
+	if (!svs.clients || !svs.clients[0].active)
+		return;
+
+	/* SV_SpawnServer memsets sv and can reallocate the edict array, so a
+	   number held across a map load is not merely stale. */
+	if (qr_projoff_worldkey != cl.worldmodel)
+	{
+		qr_projoff_worldkey = cl.worldmodel;
+		memset (qr_projoffs, 0, sizeof qr_projoffs);
+	}
+
+	for (i = 0; i < QR_PROJ_SLOTS; i++)
+	{
+		if (qr_projoffs[i].ednum == ednum)
+		{
+			po = &qr_projoffs[i];
+			break;
+		}
+	}
+
+	if (!po)
+	{
+		if (!QR_MyMissile (ednum))
+			return;
+		/* No tracked hand (gamepad, keyboard, tracking lost): the body
+		   origin is the honest answer and upstream already draws it. */
+		if (!QR_HandOrigin (hand))
+			return;
+
+		for (i = 0; i < QR_PROJ_SLOTS; i++)
+		{
+			/* free, or holding a missile that has since died */
+			if (!qr_projoffs[i].ednum
+			    || !QR_MyMissile (qr_projoffs[i].ednum))
+			{
+				slot = i;
+				break;
+			}
+		}
+		if (slot < 0)
+			return;		/* table full: this one flies unshifted */
+
+		/* cl.viewangles IS the aim since M6, so this is the ray the
+		   shot was actually fired down. */
+		AngleVectors (cl.viewangles, fwd, right, up);
+		VectorSubtract (hand, origin, d);
+		along = DotProduct (d, fwd);
+
+		po = &qr_projoffs[slot];
+		po->ednum = ednum;
+		VectorMA (d, -along, fwd, po->off);
+		VectorCopy (origin, po->spawn);
+		po->reach = 0.f;
+		po->birth = cl.time;
+	}
+
+	VectorSubtract (origin, po->spawn, travel);
+	dist = VectorLength (travel);
+	if (dist > po->reach)
+		po->reach = dist;
+
+	if (po->reach >= converge || cl.time - po->birth > QR_PROJ_MAXAGE)
+	{
+		po->ednum = 0;		/* converged: nothing left to shift */
+		return;
+	}
+
+	w = 1.f - po->reach / converge;
+	w = w * w * (3.f - 2.f * w);	/* smoothstep: flat at both ends, no kink */
+	VectorMA (origin, w, po->off, origin);
 }
 
 /*

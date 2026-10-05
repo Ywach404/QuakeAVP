@@ -72,7 +72,7 @@ parsing — the server needs it for collision hulls) and **`gl_refrag.c`**
 
 ## Patches applied to vendored files
 
-Kept to an absolute minimum so upstream merges stay cheap. Three files, four
+Kept to an absolute minimum so upstream merges stay cheap. Four files, five
 hunks, all guarded by `#ifdef QAVP_PLATFORM`:
 
 **`quakedef.h`** — the `#include <SDL.h>` / `<SDL_opengl.h>` block is swapped
@@ -91,6 +91,17 @@ absorbed by a shim: the override runs unconditionally inside the beam loop,
 and the beam segments it feeds are ordinary `bolt.mdl` entities with nothing
 to distinguish them downstream.
 
+**`cl_main.c`** — `CL_RelinkEntities` calls `QR_ProjectileViewOffset` on each
+entity's final origin. My own missiles are spawned by the server at a per-weapon
+offset from the player *origin* — the middle of the chest — while the gun is in
+my hand, so they visibly do not leave the barrel. Only the component
+perpendicular to the aim is shifted, and it folds away over the first
+`vr_projconverge` units of travel. This is the one place it can be done: the
+muzzle flash, the trail (`R_RocketTrail`) and the model all read that same
+`ent->origin` within the next thirty lines, so correcting it once here is what
+keeps them in agreement — in our own code it would have to be done three times,
+twice from a frame-stale table.
+
 Everything else that would have needed a patch is instead absorbed by shims in
 `Sources/QuakeCore/platform/`:
 
@@ -106,8 +117,8 @@ Everything else that would have needed a patch is instead absorbed by shims in
 
 1. Diff the new upstream against `.upstream-rev` for the 45 vendored `.c` files
    and 72 headers; copy over.
-2. Re-apply the `quakedef.h`, `miniz.h` and `cl_tent.c` hunks (search for
-   `QAVP_PLATFORM`).
+2. Re-apply the `quakedef.h`, `miniz.h`, `cl_tent.c` and `cl_main.c` hunks
+   (search for `QAVP_PLATFORM`).
 3. `make check` — a clean link means no new symbols escaped into the renderer
    boundary. New undefined symbols are new renderer entry points that need
    stubbing in `r_null.c`.
