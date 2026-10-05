@@ -907,6 +907,15 @@ struct ContentView: View {
                         }
                         .font(.caption)
                         Divider().padding(.vertical, 4)
+                        // Reads the whole table into the console so the
+                        // numbers can leave the device. Device UserDefaults is
+                        // the only copy, and a reinstall takes it with it.
+                        Button("Dump all weapon values") {
+                            for line in WeaponTrim.shared.summary() {
+                                engine.note(line)
+                            }
+                        }
+                        .font(.caption)
                         Button("Reset gun") {
                             // Drops THIS weapon's placement back to the profile
                             // default; other guns keep what you tuned.

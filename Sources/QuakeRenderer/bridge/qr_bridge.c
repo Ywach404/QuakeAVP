@@ -4124,6 +4124,35 @@ static const char *qr_wheel_labels[8] = {
 
 /*
 ================
+QR_ActiveWeaponBit -- the held weapon as an IT_ bit, which the protocol
+cannot be trusted to deliver.
+
+sv_main.c writes ent->v.weapon with MSG_WriteByte, and IT_AXE is 4096, so it
+arrives as 0: cl.stats[STAT_ACTIVEWEAPON] reads zero for the entire time you
+are holding the axe. Upstream only uses that stat to light a statusbar icon,
+and the axe's icon is driven from cl.items instead, so the truncation never
+mattered there.
+
+It matters for anything keyed to the held weapon. Resolve it from the VIEW
+MODEL actually being drawn -- which is the thing whose placement and trim we
+are deciding, so it is the more direct answer anyway -- and fall back to the
+stat for a weapon outside the wheel table (a mod's extra weapon).
+================
+*/
+static uint32_t QR_ActiveWeaponBit (void)
+{
+	int	i;
+
+	if (cl.viewent.model && cl.viewent.model->name[0])
+		for (i = 0; i < 8; i++)
+			if (!strcmp (cl.viewent.model->name, qr_wheel_modelnames[i]))
+				return qr_wheel_bits[i];
+
+	return (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+}
+
+/*
+================
 2D text as billboarded glyph quads from Quake's conchars atlas -- the
 foundation for wheel labels, the item selector and the HUD. conchars is a
 128x128 8bpp lump living in the already-resident gfx.wad; index 0 and 255
@@ -4677,7 +4706,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			pside = vr_weaponside.value;
 			pgrip = vr_weapongrip.value;
 			{
-				int	wslot = QR_WheelSlot ((uint32_t) cl.stats[STAT_ACTIVEWEAPON]);
+				int	wslot = QR_WheelSlot (QR_ActiveWeaponBit ());
 
 				if (wslot >= 0)
 					QR_WeaponPlacement (wslot, &pback, &pup, &pside, &pgrip);
@@ -5049,7 +5078,9 @@ void QR_RenderView (void)
 	   V_UpdateBlend decays it) and the held weapon's IT_ bit, for haptic
 	   pulses and per-weapon trigger feel on the consumer side */
 	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
-	slot->frame.active_weapon = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+	/* NOT cl.stats[STAT_ACTIVEWEAPON] -- the protocol truncates it to a byte
+	   and the axe (IT_AXE, 4096) arrives as 0. See QR_ActiveWeaponBit. */
+	slot->frame.active_weapon = QR_ActiveWeaponBit ();
 	slot->frame.items = cl.items;
 
 	/* A shot fired iff the held weapon's ammo dropped while the weapon stayed
