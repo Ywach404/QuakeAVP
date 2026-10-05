@@ -185,6 +185,25 @@ static void PF_setorigin (void)
 
 	e = G_EDICT(OFS_PARM0);
 	org = G_VECTOR(OFS_PARM1);
+#ifdef QAVP_PLATFORM
+	/* visionOS: my own missiles are spawned at an offset from the player
+	   ORIGIN -- the middle of the chest -- while the gun is in my hand. This
+	   is where that position is decided, so correcting it here is what makes
+	   the shot actually leave the barrel: trail, model and flight path all
+	   follow, with nothing to fold away afterwards. QR_MuzzleSpawn declines
+	   for anything that is not a launch, and writes e->v.origin itself when
+	   it does fire. Declared here rather than in a header: this is the only
+	   caller, and a header edit would widen the patch. */
+	{
+		extern int QR_MuzzleSpawn (edict_t *e, const float *org);
+
+		if (QR_MuzzleSpawn (e, org))
+		{
+			SV_LinkEdict (e, false);
+			return;
+		}
+	}
+#endif
 	VectorCopy (org, e->v.origin);
 	SV_LinkEdict (e, false);
 }

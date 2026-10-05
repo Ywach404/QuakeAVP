@@ -260,7 +260,6 @@ cvar_t		vr_weapontint = {"vr_weapontint", "0", 0};
 cvar_t		vr_pathdebug = {"vr_pathdebug", "0", 0};
 cvar_t		vr_projdebug = {"vr_projdebug", "0", 0};
 cvar_t		vr_projhand = {"vr_projhand", "1", 0};
-cvar_t		vr_projconverge = {"vr_projconverge", "96", 0};
 /* M6: where the aiming laser STARTS, Quake units along the aim axes from the
    wrist -- forward reaches the muzzle so the beam emits from the barrel tip
    instead of behind the gun, up/side fine-tune to the barrel line. */
@@ -601,6 +600,117 @@ int QR_HandOrigin (vec3_t out)
 
 /*
 ================
+QR_MuzzleSpawn -- start my own missiles at the gun, not at my navel.
+
+Vanilla spawns each weapon's missile at a per-weapon offset from the player
+ORIGIN, which on a flat screen is right under the camera and in a headset is
+the middle of your chest while the gun is in your hand. Correcting it where
+the position is DECIDED -- before SV_LinkEdict, before any physics -- is what
+makes the shot genuinely leave the barrel: the trail starts there, the model
+is drawn there, and the thing flies a true path from there. The client-side
+version of this could only shift what was drawn, so it had to fold the shift
+away again and the fold was visible.
+
+Returns 1 having written e->v.origin itself; 0 means PF_setorigin should do
+what upstream does. It declines unless all of these hold, so the fallback is
+the normal case and not an error path:
+
+  - the edict is a missile owned by the player (movetype FLYMISSILE for
+    rockets, nails and spikes; BOUNCE for grenades)
+  - its origin is still zero, i.e. this is the first placement after
+    ED_ClearEdict and not a later setorigin -- a teleporter moving a live
+    grenade must be left alone
+  - the requested position is near the player, so a first placement that is
+    really a teleport destination cannot be captured either
+  - a hand is actually tracked; on a gamepad the body origin is the honest
+    answer and upstream's is already correct
+
+Those gates are also why getting vanilla's QuakeC wrong is safe: if owner or
+movetype are not yet set when setorigin runs, this declines and nothing
+changes.
+
+This DOES move where the shot comes from for collision, not just for the
+eye -- a rocket can clear a ledge your body cannot, and a gun poked through
+a wall fires on the far side. That is the intended behaviour for a port
+where you aim with your arm, and the trace below is what keeps it honest: a
+missile may never be placed inside geometry.
+
+Engine thread, inside the server's own think. Single player.
+================
+*/
+#define QR_MUZZLE_MAXDIST	64.f	/* how far from the player a placement
+					   may be and still be a launch */
+#define QR_MUZZLE_REACH		72.f	/* furthest a hand can credibly be from the
+					   body: beyond this the pose is stale or
+					   garbage, not a reach */
+
+int QR_MuzzleSpawn (edict_t *e, const float *org)
+{
+	edict_t		*player;
+	vec3_t		start, muzzle, back;
+	trace_t		tr;
+	int		mt;
+
+	if (!vr_projhand.value || !sv.active)
+		return 0;
+	if (!svs.clients || !svs.clients[0].active)
+		return 0;
+
+	player = svs.clients[0].edict;
+	if (e == player || PROG_TO_EDICT (e->v.owner) != player)
+		return 0;
+
+	mt = (int) e->v.movetype;
+	if (mt != MOVETYPE_FLYMISSILE && mt != MOVETYPE_BOUNCE)
+		return 0;
+
+	/* first placement only -- ED_ClearEdict zeroed this */
+	if (e->v.origin[0] || e->v.origin[1] || e->v.origin[2])
+		return 0;
+
+	start[0] = org[0]; start[1] = org[1]; start[2] = org[2];
+	VectorSubtract (start, player->v.origin, back);
+	if (VectorLength (back) > QR_MUZZLE_MAXDIST)
+		return 0;
+
+	if (!QR_HandOrigin (muzzle))
+		return 0;
+
+	/* QR_HandOrigin is built on r_refdef.vieworg, which holds nothing
+	   meaningful until the first frame of a map has been rendered. The trace
+	   below stops a bad muzzle from landing inside geometry but not from
+	   landing a hundred units away in open air, so bound it: a hand cannot
+	   be further from the body than an arm plus a head. */
+	VectorSubtract (muzzle, player->v.origin, back);
+	if (VectorLength (back) > QR_MUZZLE_REACH)
+		return 0;
+
+	/* The short hop from the body spawn point out to the gun, so a missile
+	   is never placed inside a wall. The missile's owner is the player, so
+	   SV_Move skips the player's own box (world.c's "don't clip against
+	   owner"); nothing else here is ours to pass through. */
+	tr = SV_Move (start, vec3_origin, vec3_origin, muzzle, MOVE_NORMAL, e);
+	if (tr.allsolid || tr.startsolid)
+		return 0;		/* body spawn point is already in solid:
+					   leave upstream's answer alone */
+
+	if (tr.fraction < 1.f)
+	{
+		/* Stop short of the plane rather than on it, or the missile
+		   detonates against a surface it was only passing. */
+		VectorSubtract (start, tr.endpos, back);
+		if (VectorNormalize (back) == 0.f)
+			return 0;
+		VectorMA (tr.endpos, 2.f, back, e->v.origin);
+	}
+	else
+		VectorCopy (muzzle, e->v.origin);
+
+	return 1;
+}
+
+/*
+================
 IN_AbsorbHeadOffset -- room-scale walking becomes player movement.
 
 The render thread feeds where the head is; the engine walks the player box
@@ -889,7 +999,6 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_pathdebug);
 	Cvar_RegisterVariable (&vr_projdebug);
 	Cvar_RegisterVariable (&vr_projhand);
-	Cvar_RegisterVariable (&vr_projconverge);
 	Cvar_RegisterVariable (&vr_laserforward);
 	Cvar_RegisterVariable (&vr_laserup);
 	Cvar_RegisterVariable (&vr_laserside);
