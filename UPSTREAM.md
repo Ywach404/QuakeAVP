@@ -105,6 +105,14 @@ or the short trace out to it blocked), so the fallback *is* the normal case. It
 does move where a shot comes from for collision, not only for the eye —
 intended, for a port where you aim with your arm.
 
+It replaces only the part of vanilla's spawn offset that centres the missile on
+the body. The component along the aim's *horizontal right* vector is carried
+over untouched, because that is the weapon's own firing pattern: the nailgun
+alternates `v_right*±4` between its two attack frames, which is what makes it
+fire two streams rather than one. `'0 0 16'` is vertical and `v_forward*8` lies
+in the vertical plane through the aim, so neither contributes to that term —
+the split is exact.
+
 This replaced a client-side version in `cl_main.c` that could only shift what
 was drawn, and so had to fold the shift away again over the first ~96 units;
 the fold was visible as the projectile sliding back to the body line. Doing it

@@ -647,7 +647,7 @@ Engine thread, inside the server's own think. Single player.
 int QR_MuzzleSpawn (edict_t *e, const float *org)
 {
 	edict_t		*player;
-	vec3_t		start, muzzle, back;
+	vec3_t		start, muzzle, want, back, rel, fwd, right;
 	trace_t		tr;
 	int		mt;
 
@@ -685,11 +685,29 @@ int QR_MuzzleSpawn (edict_t *e, const float *org)
 	if (VectorLength (back) > QR_MUZZLE_REACH)
 		return 0;
 
+	/* Vanilla's spawn offset carries two different things, and only one of
+	   them is ours to replace. Part of it merely lifts the missile to chest
+	   height and stands it off in front of the body ('0 0 16', v_forward*8),
+	   which is exactly what the muzzle already accounts for. The rest is the
+	   weapon's own firing PATTERN: the nailgun alternates v_right*+-4
+	   between its two attack frames, and that is the whole reason it fires
+	   two streams instead of one. Replacing the position outright threw it
+	   away and turned the nailgun into a single stream.
+
+	   The aim's HORIZONTAL right vector separates them exactly. '0 0 16' is
+	   vertical and v_forward lies in the vertical plane through the aim, so
+	   neither has any component along it; whatever does is the pattern. Use
+	   the yaw alone rather than AngleVectors on the full v_angle, so pitch
+	   and any roll cannot leak the chest lift into the lateral term. */
+	IN_YawVectors (player->v.v_angle[YAW], fwd, right);
+	VectorSubtract (start, player->v.origin, rel);
+	VectorMA (muzzle, DotProduct (rel, right), right, want);
+
 	/* The short hop from the body spawn point out to the gun, so a missile
 	   is never placed inside a wall. The missile's owner is the player, so
 	   SV_Move skips the player's own box (world.c's "don't clip against
 	   owner"); nothing else here is ours to pass through. */
-	tr = SV_Move (start, vec3_origin, vec3_origin, muzzle, MOVE_NORMAL, e);
+	tr = SV_Move (start, vec3_origin, vec3_origin, want, MOVE_NORMAL, e);
 	if (tr.allsolid || tr.startsolid)
 		return 0;		/* body spawn point is already in solid:
 					   leave upstream's answer alone */
@@ -704,7 +722,7 @@ int QR_MuzzleSpawn (edict_t *e, const float *org)
 		VectorMA (tr.endpos, 2.f, back, e->v.origin);
 	}
 	else
-		VectorCopy (muzzle, e->v.origin);
+		VectorCopy (want, e->v.origin);
 
 	return 1;
 }
