@@ -71,14 +71,20 @@ final class WeaponTrim: @unchecked Sendable {
         let pl = (0..<8).map { place[base + $0] }
         let m = mode
         lock.unlock()
-        var out = ["[weapons] input mode \(m) -- global back \(g.back) up \(g.up) "
-                   + "side \(g.side) grip \(g.grip)"]
+        // Three decimals, not Float's full seventeen. The sliders are coarser
+        // than that, and every extra digit is one more to misread -- the first
+        // dump came back through OCR with most of its zeroes turned into
+        // eights, which made twenty values ambiguous instead of none.
+        func n(_ v: Float) -> String { String(format: "%.3f", v) }
+        var out = ["[weapons] mode=\(m) global "
+                   + "back=\(n(g.back)) up=\(n(g.up)) side=\(n(g.side)) grip=\(n(g.grip))"]
         for i in 0..<8 {
             let p = pl[i]
             let place = p.map {
-                "back \($0.back) up \($0.up) side \($0.side) grip \($0.grip)"
-            } ?? "(untuned, follows global)"
-            out.append("[weapons] \(names[i]): trim \(f[i])/\(r[i])  \(place)")
+                "back=\(n($0.back)) up=\(n($0.up)) side=\(n($0.side)) grip=\(n($0.grip))"
+            } ?? "untuned"
+            out.append("[weapons] \(names[i]): "
+                       + "front=\(n(f[i])) rear=\(n(r[i])) \(place)")
         }
         return out
     }

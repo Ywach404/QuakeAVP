@@ -912,7 +912,8 @@ struct ContentView: View {
                         // the only copy, and a reinstall takes it with it.
                         Button("Dump all weapon values") {
                             for line in WeaponTrim.shared.summary() {
-                                engine.note(line)
+                                engine.note(line)   // readable in the headset
+                                print(line)         // and COPYABLE from Xcode
                             }
                         }
                         .font(.caption)
