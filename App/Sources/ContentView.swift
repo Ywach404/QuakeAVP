@@ -781,6 +781,10 @@ struct ContentView: View {
             Toggle("Enemy AI debug (trails + targets)", isOn: Binding(
                 get: { debug.pathDebug },
                 set: { debug.pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
+            // Not persisted on purpose -- see DebugStore.projDebug.
+            Toggle("Projectile spawn offset (console)", isOn: Binding(
+                get: { debug.projDebug },
+                set: { debug.projDebug = $0; engine.send("vr_projdebug \($0 ? 1 : 0)") }))
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
             Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
