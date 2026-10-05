@@ -474,6 +474,34 @@ void QC_InputSetHeadPitch (float pitch_deg);
 void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 		     float yaw_deg, float pitch_deg);
 
+/* Per-weapon gun placement, one entry per weapon slot in wheel order:
+   axe, shotgun, super shotgun, nailgun, super nailgun, grenade launcher,
+   rocket launcher, lightning gun. Quake units, in the gun's own drawn frame:
+   `back` toward the player along the barrel, `up` raises, `side` moves right,
+   `grip` is the 0..1 point along the trimmed barrel that sits in the hand.
+
+   `custom` == 0 means that weapon was never tuned, and the renderer falls
+   back to the vr_weapon{back,up,side,grip} cvars -- which remain the global
+   setting and the console's way in.
+
+   PULLED, not pushed: the renderer reads the entry for whichever gun it is
+   drawing, every frame. Placement used to be four global cvars rewritten on
+   each weapon switch, which meant the new gun wore the old gun's placement
+   until the console command landed a few frames later, and meant a command
+   dropped before the engine was running left that weapon permanently wrong.
+   Handing over the whole table removes both: there is no switch event to
+   miss and nothing to go stale.
+
+   Callable from any thread. */
+typedef struct {
+	float	back, up, side, grip;
+	int	custom;			/* 0 = never tuned, use the cvars */
+} qc_weapon_placement_t;
+
+#define QC_WEAPON_SLOTS	8
+
+void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots);
+
 /* The eye-height trim (vr comfort slider) in QUAKE UNITS, fed by the render
    thread which applies the same trim to the camera. Head/wrist-locked
    overlays -- the weapon wheel -- add it so they rise with the raised

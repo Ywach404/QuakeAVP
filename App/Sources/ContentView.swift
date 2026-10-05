@@ -224,6 +224,12 @@ struct ContentView: View {
                 // and the persisted debug cvars, which the console refuses
                 // before this point.
                 ProfileStore.shared.applyRig()
+                // The per-weapon placement table goes over its own any-thread
+                // setter rather than the console, so it does not depend on
+                // applyRig's sendCommand having been wired. Published here
+                // regardless, so a table restored from defaults is live even
+                // if nothing touches a slider this session.
+                WeaponTrim.shared.applyEngine()
                 DebugStore.shared.applyEngine { engine.send($0) }
                 // Boot-time export for the simulator acceptance test:
                 // QAVP_EXPORT_DEMO=demo1 [QAVP_EXPORT_PRESET=1080p60,gun]

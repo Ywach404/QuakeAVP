@@ -37,6 +37,12 @@ extern cvar_t host_timescale;
 static pthread_mutex_t		qc_input_lock = PTHREAD_MUTEX_INITIALIZER;
 static qc_gamepad_state_t	qc_pad_shared;
 static float			qc_head_shared[3];	/* fwd, right, up */
+/* Per-weapon gun placement. Written by the UI from any thread, read on the
+   engine thread by QR_WeaponPlacement while the renderer builds the frame --
+   so a weapon switch needs no console round trip and cannot be left stale by
+   a dropped command. See QC_SetWeaponPlacement in QuakeCore.h. */
+static pthread_mutex_t		qc_place_lock = PTHREAD_MUTEX_INITIALIZER;
+static qc_weapon_placement_t	qc_place_shared[QC_WEAPON_SLOTS];
 static uint32_t			qc_head_ack;		/* recenter echo */
 static int			qc_wheel_open_shared;
 static int			qc_wheel_anchor_shared;
@@ -112,6 +118,45 @@ void QC_InputSetSlowmo (int pressed)
 	pthread_mutex_lock (&qc_input_lock);
 	qc_slowmo_shared = pressed ? 1 : 0;
 	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots)
+{
+	if (!slots)
+		return;
+	pthread_mutex_lock (&qc_place_lock);
+	memcpy (qc_place_shared, slots, sizeof qc_place_shared);
+	pthread_mutex_unlock (&qc_place_lock);
+}
+
+/*
+================
+QR_WeaponPlacement -- the held gun's own placement, or 0 if it has none.
+
+Engine thread, called while the renderer places the view weapon. Returns 0
+for a weapon the UI never tuned, and the caller uses the vr_weapon* cvars --
+still the global setting, and still what the console sets.
+================
+*/
+int QR_WeaponPlacement (int slot, float *back, float *up, float *side, float *grip)
+{
+	qc_weapon_placement_t	p;
+
+	if (slot < 0 || slot >= QC_WEAPON_SLOTS)
+		return 0;
+
+	pthread_mutex_lock (&qc_place_lock);
+	p = qc_place_shared[slot];
+	pthread_mutex_unlock (&qc_place_lock);
+
+	if (!p.custom)
+		return 0;
+
+	*back = p.back;
+	*up   = p.up;
+	*side = p.side;
+	*grip = p.grip;
+	return 1;
 }
 
 void QC_InputSetHeightTrim (float units)

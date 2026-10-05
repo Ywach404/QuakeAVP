@@ -59,6 +59,9 @@ extern int QR_HandOrigin (vec3_t out);	/* M6 hand position, world (in_null.c) */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
+/* The held gun's own placement, pulled from the table the UI publishes; 0
+   means untuned and the cvars above are the answer (in_null.c). */
+extern int QR_WeaponPlacement (int slot, float *back, float *up, float *side, float *grip);
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 extern cvar_t vr_weapontint;					/* debug: green hand weapon */
@@ -4087,6 +4090,18 @@ static const uint32_t qr_wheel_bits[8] = {
 	IT_SUPER_NAILGUN, IT_GRENADE_LAUNCHER, IT_ROCKET_LAUNCHER,
 	IT_LIGHTNING,
 };
+/* IT_* bit to wheel slot, or -1. Shared by the wheel and by the view
+   weapon's placement lookup, so the two cannot disagree about ordering. */
+static int QR_WheelSlot (uint32_t bit)
+{
+	int	i;
+
+	for (i = 0; i < 8; i++)
+		if (qr_wheel_bits[i] == bit)
+			return i;
+	return -1;
+}
+
 static const char *qr_wheel_modelnames[8] = {
 	"progs/v_axe.mdl", "progs/v_shot.mdl", "progs/v_shot2.mdl",
 	"progs/v_nail.mdl", "progs/v_nail2.mdl", "progs/v_rock.mdl",
@@ -4578,6 +4593,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		{
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
+			float	pback, pup, pside, pgrip;
 			float	bmin[3], bmax[3];
 			aliashdr_t *ah;
 			int	k;
@@ -4649,7 +4665,25 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
 			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
 
-			cx = bmin[0] + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
+			/* Each gun's origin sits at a different point in its own model,
+			   so one placement cannot fit all of them. Take the held gun's
+			   own values if the UI has tuned it, and the cvars otherwise --
+			   read here, at draw time, from the weapon actually being drawn.
+			   The cvars alone used to carry this, rewritten on every weapon
+			   switch, so the new gun wore the old gun's placement until the
+			   console command landed and kept it forever if one was dropped. */
+			pback = vr_weaponback.value;
+			pup   = vr_weaponup.value;
+			pside = vr_weaponside.value;
+			pgrip = vr_weapongrip.value;
+			{
+				int	wslot = QR_WheelSlot ((uint32_t) cl.stats[STAT_ACTIVEWEAPON]);
+
+				if (wslot >= 0)
+					QR_WeaponPlacement (wslot, &pback, &pup, &pside, &pgrip);
+			}
+
+			cx = bmin[0] + CLAMP (0.f, pgrip, 1.f) * mx;   /* grip along barrel */
 			cy = 0.5f * (bmin[1] + bmax[1]);
 			cz = 0.5f * (bmin[2] + bmax[2]);
 			/* Place in the SHOT frame -- NOT AngleVectors(viewent.angles).
@@ -4666,9 +4700,9 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			for (k = 0; k < 3; k++)
 				cl.viewent.origin[k] = handpos[k]
 					- sf * (cf[k]*cx - cr[k]*cy + cu[k]*cz)
-					- vr_weaponback.value * cf[k]
-					+ vr_weaponup.value   * cu[k]
-					+ vr_weaponside.value * cr[k];
+					- pback * cf[k]
+					+ pup   * cu[k]
+					+ pside * cr[k];
 
 			/* Aiming laser, WELDED to the gun at the MUZZLE: it starts at the
 			   model's forward-face centre (maxs[0] along the barrel, laterally
