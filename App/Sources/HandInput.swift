@@ -1295,8 +1295,24 @@ final class VirtualHand: @unchecked Sendable {
     private let lock = NSLock()
     private var verts: [Float] = []
 
+    /// Whether to draw the stand-in at all. Off means the real hands show
+    /// through passthrough the whole time instead of only once the world melts.
+    /// Gated here rather than at the draw call so `publish` drops the geometry
+    /// too -- the flag is read on the render thread every frame, and there is
+    /// no reason to keep handing it a buffer it will throw away.
+    private var _visible = true
+    var visible: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _visible }
+        set {
+            lock.lock()
+            _visible = newValue
+            if !newValue { verts = [] }
+            lock.unlock()
+        }
+    }
+
     func publish(_ v: [Float]) {
-        lock.lock(); verts = v; lock.unlock()
+        lock.lock(); if _visible { verts = v }; lock.unlock()
     }
 
     func snapshot() -> [Float] {

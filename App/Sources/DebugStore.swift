@@ -29,6 +29,10 @@ final class DebugStore {
     var turnDebug: Bool    { didSet { save(); HandDebug.shared.turnDebug = turnDebug } }
     var fireDebug: Bool    { didSet { save(); HandDebug.shared.fireDebug = fireDebug } }
     var showLimbs: Bool    { didSet { save(); ImmersionSettings.shared.handsVisible = showLimbs } }
+    /// The low-poly stand-in hand drawn over your real one while the world is
+    /// solid. Hands-only by nature: HandInput is the only thing that publishes
+    /// it, so with a controller attached there is nothing to show either way.
+    var virtualHands: Bool { didSet { save(); VirtualHand.shared.visible = virtualHands } }
     /// Engine cvar, so this one only takes effect through applyEngine.
     var pathDebug: Bool    { didSet { save() } }
 
@@ -37,6 +41,11 @@ final class DebugStore {
     /// whatever you relaunched to look at. It is a debugging instrument, not a
     /// preference.
     var inputLog = false { didSet { VRSettings.shared.inputLog = inputLog } }
+
+    /// Engine cvar, and not persisted for the same reason as `inputLog`: it
+    /// prints a line per shot fired, which is what makes it useful and what
+    /// makes leaving it on intolerable. A measurement, not a preference.
+    var projDebug = false
 
     private static let key = "debugToggles.v1"
 
@@ -49,6 +58,7 @@ final class DebugStore {
         fireDebug   = d["fireDebug"] ?? false
         pathDebug   = d["pathDebug"] ?? false
         showLimbs   = d["showLimbs"] ?? true      // passthrough limbs on by default
+        virtualHands = d["virtualHands"] ?? true  // stand-in hand on by default
     }
 
     private func save() {
@@ -56,6 +66,7 @@ final class DebugStore {
             "fingerDebug": fingerDebug, "aimRayDebug": aimRayDebug,
             "strobeDebug": strobeDebug, "turnDebug": turnDebug,
             "fireDebug": fireDebug, "pathDebug": pathDebug, "showLimbs": showLimbs,
+            "virtualHands": virtualHands,
         ], forKey: Self.key)
     }
 
@@ -68,6 +79,7 @@ final class DebugStore {
         HandDebug.shared.turnDebug = turnDebug
         HandDebug.shared.fireDebug = fireDebug
         ImmersionSettings.shared.handsVisible = showLimbs
+        VirtualHand.shared.visible = virtualHands
         VRSettings.shared.inputLog = inputLog
     }
 
@@ -75,5 +87,6 @@ final class DebugStore {
     /// commands before then and the setting would be silently dropped.
     func applyEngine(_ send: (String) -> Void) {
         send("vr_pathdebug \(pathDebug ? 1 : 0)")
+        send("vr_projdebug \(projDebug ? 1 : 0)")
     }
 }

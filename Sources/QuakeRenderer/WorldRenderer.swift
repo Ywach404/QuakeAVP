@@ -76,6 +76,11 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
                 green: Double(frame.pointee.clear_color.1),
                 blue: Double(frame.pointee.clear_color.2),
                 alpha: 1)
+            // Track the held weapon in the WINDOW too. This was only done on
+            // the immersive path, so in the flat console WeaponTrim stayed on
+            // the default weapon and the Weapon tab's placement sliders never
+            // reflected the gun you were holding.
+            WeaponTrim.shared.frame(activeWeapon: frame.pointee.active_weapon)
         }
 
         guard

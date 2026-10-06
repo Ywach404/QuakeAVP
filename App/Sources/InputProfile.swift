@@ -52,7 +52,9 @@ struct InputProfile: Codable, Equatable {
     var hudFaceMe: Float = 0.8
     var hudScale: Float = 1
 
-    // Weapon rig (engine cvars).
+    // Weapon rig (engine cvars). These are the fallback for weapons with no
+    // per-weapon placement in WeaponTrim; see `handsDefault` below for why the
+    // tuned hands value does not live on this declaration.
     var weaponBack: Float = 0
     var weaponUp: Float = 0
     var weaponSide: Float = 0
@@ -84,6 +86,28 @@ struct InputProfile: Codable, Equatable {
     var laserYaw: Float = 0
 
     init() {}
+
+    /// A fresh hands profile, carrying the weapon global measured in the
+    /// 2026-10-06 tuning pass.
+    ///
+    /// This is a factory rather than a change to `weaponBack`'s declared
+    /// default because `ProfileStore` builds BOTH profiles with `InputProfile()`
+    /// — moving the tuned number onto the declaration would hand the PSVR2
+    /// profile a hands measurement. Where the gun is held differs between bare
+    /// hands and a controller, so that would be a wrong value, not a shared one.
+    ///
+    /// With every hands weapon now carrying its own placement in `WeaponTrim`,
+    /// this global is only read when a weapon is explicitly reset to follow the
+    /// profile. It matters precisely then: without it that reset would drop the
+    /// gun to `back = 0`, inside the hand.
+    static var handsDefault: InputProfile {
+        var p = InputProfile()
+        p.weaponBack = 10.351
+        p.weaponUp = 0
+        p.weaponSide = 0
+        p.weaponGrip = 0.15
+        return p
+    }
 
     /// Decode field by field, falling back to each property's default when the
     /// key is absent.
@@ -160,7 +184,15 @@ final class ProfileStore {
 
     var hands: InputProfile { didSet { save() } }
     var psvr2: InputProfile { didSet { save() } }
-    var active: InputMode { didSet { UserDefaults.standard.set(active.rawValue, forKey: Self.activeKey) } }
+    var active: InputMode {
+        didSet {
+            UserDefaults.standard.set(active.rawValue, forKey: Self.activeKey)
+            // Not left to applyRig: that returns early before the console has
+            // been opened, and a mode that lags the profile means placement
+            // edits land in the other input's slots.
+            WeaponTrim.shared.setMode(active.rawValue)
+        }
+    }
 
     private static let key = "inputProfiles.v1"
     private static let activeKey = "inputProfiles.active"
@@ -169,10 +201,10 @@ final class ProfileStore {
         let d = UserDefaults.standard
         if let data = d.data(forKey: Self.key),
            let pair = try? JSONDecoder().decode([String: InputProfile].self, from: data) {
-            hands = Self.migrate(pair["hands"] ?? InputProfile())
+            hands = Self.migrate(pair["hands"] ?? .handsDefault)
             psvr2 = Self.migrate(pair["psvr2"] ?? InputProfile())
         } else {
-            hands = InputProfile()
+            hands = .handsDefault
             psvr2 = InputProfile()
         }
         active = InputMode(rawValue: d.integer(forKey: Self.activeKey)) ?? .hands

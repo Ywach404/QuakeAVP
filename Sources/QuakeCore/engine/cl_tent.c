@@ -312,7 +312,22 @@ void CL_UpdateTEnts (void)
 	// if coming from the player, update the start position
 		if (b->entity == cl.viewentity)
 		{
+#ifdef QAVP_PLATFORM
+			/* visionOS: the gun is in your hand, not at your navel, so a
+			   beam started at the entity origin visibly erupts from the
+			   middle of the player model. Start it where the weapon is
+			   drawn instead -- QR_HandOrigin is the bridge's own anchor
+			   math -- and keep upstream's origin for every input mode
+			   without a tracked hand. Declared here rather than in a
+			   header: this is the only caller, and a header edit would
+			   widen the patch. */
+			extern int QR_HandOrigin (vec3_t out);
+
+			if (!QR_HandOrigin (b->start))
+				VectorCopy (cl_entities[cl.viewentity].origin, b->start);
+#else
 			VectorCopy (cl_entities[cl.viewentity].origin, b->start);
+#endif
 		}
 
 	// calculate pitch and yaw
