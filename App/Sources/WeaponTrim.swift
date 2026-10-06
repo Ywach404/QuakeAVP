@@ -12,8 +12,11 @@
 //  The same store now carries PLACEMENT (back/up/side) per weapon, for the
 //  same reason: the models' origins sit at different points on each gun, so
 //  one global offset makes some of them clip through the hand. Placement is
-//  keyed by input mode as well as weapon -- unlike clip, where the gun is held
-//  differs between bare hands and a Sense controller.
+//  keyed by input mode as well as weapon, and so is the clip: the trim planes
+//  feed QR_WeaponClip, which re-seats the GRIP, so the right trim depends on
+//  how the gun is held and not only on where the model's round sits. Tuning
+//  both modes by hand settled it -- the same lightning gun wanted 0.851 in
+//  bare hands and 0.608 on a controller.
 //
 //  Grip is deliberately NOT per weapon. It is a fraction of the trimmed
 //  length, so it already adapts to each model and re-seats when the trim
@@ -38,7 +41,7 @@ final class WeaponTrim: @unchecked Sendable {
     /// Order: axe, shotgun, super shotgun, nailgun, super nailgun, GL, RL,
     /// lightning. The axe (melee) loads no round, so its model has no
     /// projectile to trim -- it stays at 1 (untouched).
-    private static let defaultFront = [Float](repeating: 1, count: 8)
+    private static let defaultFront = [Float](repeating: 1, count: 16)
     /// Promoted from a completed hands tuning pass (2026-10-06). The flat 0.79
     /// these replace was one guess applied to every projectile weapon; each
     /// gun's round actually sits at its own depth, which is why the measured
@@ -46,6 +49,7 @@ final class WeaponTrim: @unchecked Sendable {
     /// a shave too -- it fires a hitscan beam and loads no round, but its
     /// model's rear end still reaches back into the hand.
     private static let defaultRear: [Float] = [
+        // mode 0 -- hands (tuned 2026-10-06)
         1,      // axe -- melee, nothing to trim
         0.657,  // shotgun
         0.500,  // super shotgun
@@ -53,7 +57,16 @@ final class WeaponTrim: @unchecked Sendable {
         0.500,  // super nailgun
         0.500,  // grenade launcher
         0.522,  // rocket launcher
-        0.851   // lightning gun
+        0.851,  // lightning gun
+        // mode 1 -- psvr2 (tuned 2026-10-06, same day)
+        1,      // axe
+        0.632,  // shotgun
+        0.511,  // super shotgun
+        0.721,  // nailgun
+        0.543,  // super nailgun
+        0.500,  // grenade launcher
+        0.500,  // rocket launcher
+        0.608   // lightning gun
     ]
 
     /// Per-weapon placement defaults, same index as `place`: mode * 8 + weapon.
@@ -78,8 +91,18 @@ final class WeaponTrim: @unchecked Sendable {
         Placement(back:  9.796, up: -1.401, side:  0.000),  // grenade launcher
         Placement(back:  8.276, up: -4.937, side:  3.161),  // rocket launcher
         Placement(back: 15.841, up: -1.900, side:  0.000),  // lightning gun
-        // mode 1 -- psvr2, untuned
-        nil, nil, nil, nil, nil, nil, nil, nil
+        // mode 1 -- psvr2 (tuned 2026-10-06). The hold is visibly different:
+        // `up` is ~0 across the board where hands wanted -1.4 to -1.9, because
+        // the controller puts the model's anchor at about the right height on
+        // its own. The rocket launcher is the outlier in both modes.
+        Placement(back:  8.639, up:  0.000, side:  0.000),  // axe
+        Placement(back: 10.793, up:  0.000, side:  0.000),  // shotgun
+        Placement(back:  3.109, up:  0.000, side:  0.000),  // super shotgun
+        Placement(back:  9.088, up:  0.000, side:  0.000),  // nailgun
+        Placement(back:  8.891, up: -0.066, side:  0.000),  // super nailgun
+        Placement(back: 12.713, up: -0.125, side:  0.000),  // grenade launcher
+        Placement(back:  8.534, up: -4.576, side:  3.887),  // rocket launcher
+        Placement(back: 12.743, up:  0.000, side:  0.000)   // lightning gun
     ]
 
     /// Per-weapon placement. NOT grip: it slides the model along the same axis
@@ -120,8 +143,9 @@ final class WeaponTrim: @unchecked Sendable {
                      "lightning gun"]
         lock.lock()
         let base = mode * 8
-        let g = global, gg = globalGrip, f = front, r = rear
+        let g = global, gg = globalGrip
         let pl = (0..<8).map { place[base + $0] }
+        let fr = (0..<8).map { (front[base + $0], rear[base + $0]) }
         let m = mode
         lock.unlock()
         // Three decimals, not Float's full seventeen. The sliders are coarser
@@ -138,7 +162,7 @@ final class WeaponTrim: @unchecked Sendable {
                 "back=\(n($0.back)) up=\(n($0.up)) side=\(n($0.side))"
             } ?? "untuned"
             out.append("[weapons] \(names[i]): "
-                       + "front=\(n(f[i])) rear=\(n(r[i])) \(place)")
+                       + "front=\(n(fr[i].0)) rear=\(n(fr[i].1)) \(place)")
         }
         return out
     }
@@ -240,7 +264,7 @@ final class WeaponTrim: @unchecked Sendable {
         guard activeWeapon != lastWeapon, activeWeapon != 0 else { lock.unlock(); return }
         lastWeapon = activeWeapon
         current = Self.index(for: activeWeapon)
-        let f = front[current], r = rear[current]
+        let f = front[slot], r = rear[slot]
         lock.unlock()
         push(f, r)
         // Placement is NOT pushed here: the renderer pulls the held gun's
@@ -252,23 +276,23 @@ final class WeaponTrim: @unchecked Sendable {
         Task { @MainActor in WeaponFocus.shared.set(activeWeapon) }
     }
 
-    var currentFront: Float { lock.lock(); defer { lock.unlock() }; return front[current] }
-    var currentRear: Float { lock.lock(); defer { lock.unlock() }; return rear[current] }
+    var currentFront: Float { lock.lock(); defer { lock.unlock() }; return front[slot] }
+    var currentRear: Float { lock.lock(); defer { lock.unlock() }; return rear[slot] }
 
     func setFront(_ v: Float) {
-        lock.lock(); front[current] = v; lock.unlock()
+        lock.lock(); front[slot] = v; lock.unlock()
         sendCommand?("vr_weaponclip \(v)\n"); save()
     }
 
     func setRear(_ v: Float) {
-        lock.lock(); rear[current] = v; lock.unlock()
+        lock.lock(); rear[slot] = v; lock.unlock()
         sendCommand?("vr_weaponclipback \(v)\n"); save()
     }
 
     /// Reset only the held weapon to its default.
     func resetCurrent() {
         lock.lock()
-        let i = current
+        let i = slot
         let f = Self.defaultFront[i], r = Self.defaultRear[i]
         front[i] = f; rear[i] = r
         lock.unlock()
@@ -282,8 +306,8 @@ final class WeaponTrim: @unchecked Sendable {
 
     private func save() {
         lock.lock(); let f = front, r = rear; lock.unlock()
-        UserDefaults.standard.set(f.map(Double.init), forKey: "weaponTrimFront")
-        UserDefaults.standard.set(r.map(Double.init), forKey: "weaponTrimRear")
+        UserDefaults.standard.set(f.map(Double.init), forKey: "weaponTrimFront.v2")
+        UserDefaults.standard.set(r.map(Double.init), forKey: "weaponTrimRear.v2")
         lock.lock(); let pl = place; lock.unlock()
         // Flat [back,up,side] per slot, NaN marking "not tuned", so the array
         // shape stays fixed and a missing weapon cannot shift the rest.
@@ -296,10 +320,18 @@ final class WeaponTrim: @unchecked Sendable {
     }
 
     private func load() {
-        if let f = UserDefaults.standard.array(forKey: "weaponTrimFront") as? [Double], f.count == 8 {
+        // The legacy "weaponTrimFront"/"weaponTrimRear" keys held eight values
+        // with no input mode, which is the bug this replaces -- tuning trim
+        // with a controller overwrote the hands values in place. They are
+        // deliberately NOT migrated: whichever mode they were last written
+        // from, both modes' measured values are now in defaultFront/Rear, so
+        // reading them back would restore one mode's numbers over the other's.
+        if let f = UserDefaults.standard.array(forKey: "weaponTrimFront.v2") as? [Double],
+           f.count == 16 {
             front = f.map { Float($0) }
         }
-        if let r = UserDefaults.standard.array(forKey: "weaponTrimRear") as? [Double], r.count == 8 {
+        if let r = UserDefaults.standard.array(forKey: "weaponTrimRear.v2") as? [Double],
+           r.count == 16 {
             rear = r.map { Float($0) }
         }
         if let f = UserDefaults.standard.array(forKey: "weaponPlacement.v2") as? [Double],
