@@ -44,7 +44,16 @@ final class InputHost {
         // that outlive any window. Hooked up BEFORE start(), which attaches
         // already-connected controllers and would otherwise report into a nil
         // callback.
-        gamepad.onControllerChange = { [weak self] in self?.refreshActive() }
+        gamepad.onControllerChange = { [weak self] in
+            self?.refreshActive()
+            // The PROFILE has to follow the hardware here too, not only in the
+            // console window's .onChange: a controller connected while the
+            // window is closed used to leave the hands profile active, so
+            // tuning the gun rig with a controller in hand wrote into the
+            // hands slots and overwrote them.
+            ProfileStore.shared.refreshActiveFromInput()
+            ProfileStore.shared.apply()
+        }
         RendererCoordinator.shared.onImmersiveChanged = { [weak self] _ in
             self?.refreshActive()
         }
