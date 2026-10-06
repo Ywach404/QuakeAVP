@@ -8,6 +8,7 @@
 
 import SwiftUI
 import UIKit
+import os
 
 /// Which section the persistent control panel shows. Replaces the old Comfort
 /// and Weapon pop-out popovers, which auto-dismissed and hid your values.
@@ -62,6 +63,7 @@ struct ContentView: View {
     @State private var infightBothWays = true
     private var debug: DebugStore { .shared }
     private var pause: GamePause { .shared }
+    @State private var weaponFocus = WeaponFocus.shared
     @State private var exporter = DemoExporter()
     @State private var capture = CaptureState()
     @State private var captureName = ""
@@ -78,10 +80,11 @@ struct ContentView: View {
         ("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" }),
         ("Deathmatch", (1...6).map { "dm\($0)" }),
     ]
+    @State private var confirmResetGun = false
+    @State private var confirmResetProfile = false
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
     @State private var weaponSide: Float = 0
-    @State private var weaponGrip: Float = 0.15
     @State private var aimPitch: Float = 8      // matches InputProfile.aimPitch
     @State private var aimYaw: Float = 0
     @State private var wheelPitchUI: Float = 0
@@ -223,6 +226,12 @@ struct ContentView: View {
                 // and the persisted debug cvars, which the console refuses
                 // before this point.
                 ProfileStore.shared.applyRig()
+                // The per-weapon placement table goes over its own any-thread
+                // setter rather than the console, so it does not depend on
+                // applyRig's sendCommand having been wired. Published here
+                // regardless, so a table restored from defaults is live even
+                // if nothing touches a slider this session.
+                WeaponTrim.shared.applyEngine()
                 DebugStore.shared.applyEngine { engine.send($0) }
                 // Boot-time export for the simulator acceptance test:
                 // QAVP_EXPORT_DEMO=demo1 [QAVP_EXPORT_PRESET=1080p60,gun]
@@ -378,10 +387,28 @@ struct ContentView: View {
                         Text("PSVR2").tag(InputMode.psvr2)
                     }
                     .pickerStyle(.segmented)
-                    Button("Reset this profile") {
-                        ProfileStore.shared.resetCurrent(); syncFromProfile()
+                    Button("Reset this profile", role: .destructive) {
+                        confirmResetProfile = true
                     }
                     .font(.caption)
+                    // Strictly worse to mis-tap than "Reset gun": it drops the
+                    // whole input profile, aim trim and Sight in included.
+                    .confirmationDialog(
+                        "Reset the \(ProfileStore.shared.active == .hands ? "Hands" : "PSVR2") profile?",
+                        isPresented: $confirmResetProfile,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Reset", role: .destructive) {
+                            ProfileStore.shared.resetCurrent()
+                            syncFromProfile()
+                        }
+                        Button("Cancel", role: .cancel) { }
+                    } message: {
+                        Text("Returns every feel and rig value for this input "
+                             + "profile to its default, including the aim trim "
+                             + "from Sight in. Per-weapon placement and trim "
+                             + "are kept.")
+                    }
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
@@ -774,12 +801,18 @@ struct ContentView: View {
                 get: { debug.fingerDebug }, set: { debug.fingerDebug = $0 }))
             Toggle("Show real hands / controllers", isOn: Binding(
                 get: { debug.showLimbs }, set: { debug.showLimbs = $0 }))
+            Toggle("Virtual hand model (bare hands)", isOn: Binding(
+                get: { debug.virtualHands }, set: { debug.virtualHands = $0 }))
             // Not persisted on purpose -- see DebugStore.inputLog.
             Toggle("Input telemetry log (console)", isOn: Binding(
                 get: { debug.inputLog }, set: { debug.inputLog = $0 }))
             Toggle("Enemy AI debug (trails + targets)", isOn: Binding(
                 get: { debug.pathDebug },
                 set: { debug.pathDebug = $0; engine.send("vr_pathdebug \($0 ? 1 : 0)") }))
+            // Not persisted on purpose -- see DebugStore.projDebug.
+            Toggle("Projectile spawn offset (console)", isOn: Binding(
+                get: { debug.projDebug },
+                set: { debug.projDebug = $0; engine.send("vr_projdebug \($0 ? 1 : 0)") }))
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
             Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
@@ -842,7 +875,6 @@ struct ContentView: View {
                         placeSlider("Back", $weaponBack, in: -20...30)
                         placeSlider("Up", $weaponUp, in: -15...15)
                         placeSlider("Side", $weaponSide, in: -15...15)
-                        placeSlider("Grip", $weaponGrip, in: 0...1, fmt: "%.2f")
                         // The two aim trims. Pitch carries the WHOLE vertical
                         // correction (not a delta on a hidden 8), hence the
                         // offset range; yaw is per-person and centred on 0.
@@ -896,21 +928,56 @@ struct ContentView: View {
                         }
                         .font(.caption)
                         Divider().padding(.vertical, 4)
-                        Button("Reset gun") {
-                            // Drops THIS weapon's placement back to the profile
-                            // default; other guns keep what you tuned.
-                            WeaponTrim.shared.resetCurrentPlacement()
-                            syncPlacementFromWeapon()
-                            aimPitch = 8; aimYaw = 0
-                            for c in ["vr_aimpitch 8", "vr_aimyaw 0"] { engine.send(c) }
-                            var p = ProfileStore.shared.current
-                            p.aimPitch = 8; p.aimYaw = 0
-                            ProfileStore.shared.current = p
-                            WeaponTrim.shared.resetCurrent()
-                            weaponClip = WeaponTrim.shared.currentFront
-                            weaponClipBack = WeaponTrim.shared.currentRear
+                        // Reads the whole table into the console so the
+                        // numbers can leave the device. Device UserDefaults is
+                        // the only copy, and a reinstall takes it with it.
+                        // Three channels, because the useful one depends on
+                        // how the app was launched. os_log reaches both Xcode
+                        // and Console.app with no debugger attached (print
+                        // needs Xcode to have started the process, which a tap
+                        // on the Home View is not), and the clipboard reaches
+                        // the Mac through Universal Clipboard.
+                        Button("Dump all weapon values") {
+                            let lines = WeaponTrim.shared.summary()
+                            let log = Logger(subsystem: "com.acervantez.quakeavp",
+                                             category: "weapons")
+                            for line in lines {
+                                engine.note(line)       // readable in the headset
+                                // os_log only. stdout is ALSO captured by the
+                                // unified log, so a print here showed up in
+                                // Console.app a second time and the first dump
+                                // came back with every line doubled. Logger
+                                // reaches Xcode's console as well, so print
+                                // bought nothing.
+                                log.notice("\(line, privacy: .public)")
+                            }
+                            UIPasteboard.general.string = lines.joined(separator: "\n")
+                            engine.note("[weapons] copied to clipboard ("
+                                        + "\(lines.count) lines)")
                         }
                         .font(.caption)
+                        // Confirmed, because it is one tap next to the dump
+                        // button and it throws away a tuning pass. It also
+                        // clears the aim trim, which is a Sight in result and
+                        // not per-weapon at all -- so the prompt says so rather
+                        // than letting that go unnoticed.
+                        Button("Reset gun", role: .destructive) {
+                            confirmResetGun = true
+                        }
+                        .font(.caption)
+                        .confirmationDialog("Reset this weapon's rig?",
+                                            isPresented: $confirmResetGun,
+                                            titleVisibility: .visible) {
+                            Button("Reset", role: .destructive) { resetHeldWeapon() }
+                            Button("Cancel", role: .cancel) { }
+                        } message: {
+                            Text("Puts this weapon's placement and trim back to "
+                                 + "their shipped values for the current input "
+                                 + "mode. Also clears the aim trim to 8\u{00B0} "
+                                 + "pitch / 0\u{00B0} yaw, which is your Sight in "
+                                 + "calibration and applies to every weapon. "
+                                 + "Your other weapons keep what you tuned.")
+                        }
                     }
                     Divider()
                     VStack(alignment: .leading, spacing: 6) {
@@ -948,12 +1015,35 @@ struct ContentView: View {
                     weaponClipBack = WeaponTrim.shared.currentRear
                     syncPlacementFromWeapon()
                 }
+                // And re-read them the instant the held weapon changes while
+                // the tab is open -- the whole point of WeaponFocus.
+                .onChange(of: weaponFocus.weapon) { _, _ in
+                    weaponClip = WeaponTrim.shared.currentFront
+                    weaponClipBack = WeaponTrim.shared.currentRear
+                    syncPlacementFromWeapon()
+                }
+    }
+
+    /// What "Reset gun" does once confirmed. Placement and trim return to the
+    /// shipped defaults for the held weapon in the current input mode; the aim
+    /// trim returns to the 8/0 default, which is global rather than per weapon.
+    private func resetHeldWeapon() {
+        WeaponTrim.shared.resetCurrentPlacement()
+        syncPlacementFromWeapon()
+        aimPitch = 8; aimYaw = 0
+        for c in ["vr_aimpitch 8", "vr_aimyaw 0"] { engine.send(c) }
+        var p = ProfileStore.shared.current
+        p.aimPitch = 8; p.aimYaw = 0
+        ProfileStore.shared.current = p
+        WeaponTrim.shared.resetCurrent()
+        weaponClip = WeaponTrim.shared.currentFront
+        weaponClipBack = WeaponTrim.shared.currentRear
     }
 
     /// Mirror the held weapon's effective placement into the sliders.
     private func syncPlacementFromWeapon() {
         let p = WeaponTrim.shared.currentPlacement
-        weaponBack = p.back; weaponUp = p.up; weaponSide = p.side; weaponGrip = p.grip
+        weaponBack = p.back; weaponUp = p.up; weaponSide = p.side
         weaponPlacementCustom = WeaponTrim.shared.currentPlacementIsCustom
     }
 
@@ -969,7 +1059,7 @@ struct ContentView: View {
                 set: { nv in
                     value.wrappedValue = Float(nv)
                     WeaponTrim.shared.setPlacement(.init(back: weaponBack, up: weaponUp,
-                                                         side: weaponSide, grip: weaponGrip))
+                                                         side: weaponSide))
                     weaponPlacementCustom = true
                 }), in: range)
             Text(String(format: fmt, value.wrappedValue))
@@ -1112,7 +1202,7 @@ struct ContentView: View {
         hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll; hudYawUI = p.hudYaw ?? 0
         hudFaceUI = p.hudFaceMe; hudScaleUI = p.hudScale
         weaponBack = p.weaponBack; weaponUp = p.weaponUp; weaponSide = p.weaponSide
-        weaponGrip = p.weaponGrip; aimPitch = p.aimPitch; aimYaw = p.aimYaw
+        aimPitch = p.aimPitch; aimYaw = p.aimYaw
         laser = p.laser
         laserForward = p.laserForward; laserUp = p.laserUp; laserSide = p.laserSide
         laserPitch = p.laserPitch; laserYaw = p.laserYaw
