@@ -55,13 +55,19 @@ extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
+extern int QR_HandOrigin (vec3_t out);	/* M6 hand position, world (in_null.c) */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
+/* The held gun's own placement, pulled from the table the UI publishes; 0
+   means untuned and the cvars above are the answer (in_null.c). */
+extern int QR_WeaponPlacement (int slot, float *back, float *up, float *side);
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 extern cvar_t vr_weapontint;					/* debug: green hand weapon */
 extern cvar_t vr_pathdebug;					/* debug: enemy AI trails */
+extern cvar_t vr_projdebug;					/* debug: projectile spawn offsets */
+extern cvar_t vr_projhand;					/* draw my missiles from the hand */
 
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
@@ -3925,6 +3931,147 @@ static void QR_EmitParticles (qr_frame_slot_t *slot)
 
 /*
 ================
+QR_ProjDebug -- where do my own projectiles actually appear? (vr_projdebug)
+
+The lightning beam was visibly rooted in the player's chest because the
+CLIENT positions it, so it could simply be moved. Projectiles are server
+entities: the client draws where it is told, and vanilla spawns each
+weapon's missile at its own offset from the player origin -- the rocket a
+little forward and up, the grenade (going by vanilla QuakeC, which this
+tree cannot read: progs.dat is compiled) at the origin itself. Which of
+them actually reads wrong in a headset is a measurement, not an argument.
+
+One line per projectile, the first frame it exists -- which is the first
+frame it can be drawn, so this measures what you see rather than the
+setorigin position, which is never visible. The offset from the hand is
+split along the aim, where it is legitimate travel (a rocket covers ~11
+units in one 90 Hz frame), and perpendicular to it, which is the part that
+reads as the shot not leaving the barrel. perp is the number that matters.
+
+Server-side, single player, and silent without a tracked hand -- there is
+nothing to measure the offset against. The axe, both shotguns and the
+lightning gun spawn no entity and so say nothing here, which is the
+expected result and not a failure to detect them.
+================
+*/
+#define QR_PROJ_SLOTS	48
+
+static int	qr_proj_seen[QR_PROJ_SLOTS];	/* edict numbers already reported */
+static qmodel_t	*qr_proj_worldkey;
+
+/* One of MY missiles? Exact, not guessed: the local server is in-process, so
+   v.owner settles it with no model-name or proximity heuristic. FLYMISSILE is
+   rockets, nails and spikes; BOUNCE is grenades. */
+static qboolean QR_MyMissile (int ednum)
+{
+	edict_t	*ent;
+	int	mt;
+
+	if (ednum < 1 || ednum >= sv.num_edicts)
+		return false;
+	ent = EDICT_NUM (ednum);
+	if (ent->free)
+		return false;
+	if (PROG_TO_EDICT (ent->v.owner) != svs.clients[0].edict)
+		return false;
+	mt = (int) ent->v.movetype;
+	return mt == MOVETYPE_FLYMISSILE || mt == MOVETYPE_BOUNCE;
+}
+
+static const char *QR_WeaponName (int bit)
+{
+	switch (bit)
+	{
+	case IT_AXE:			return "axe";
+	case IT_SHOTGUN:		return "shotgun";
+	case IT_SUPER_SHOTGUN:		return "super shotgun";
+	case IT_NAILGUN:		return "nailgun";
+	case IT_SUPER_NAILGUN:		return "super nailgun";
+	case IT_GRENADE_LAUNCHER:	return "grenade launcher";
+	case IT_ROCKET_LAUNCHER:	return "rocket launcher";
+	case IT_LIGHTNING:		return "lightning gun";
+	default:			return "(none)";
+	}
+}
+
+static void QR_ProjDebug (void)
+{
+	int	e, i, slot;
+	edict_t	*player;
+	vec3_t	hand, fwd, right, up;
+
+	if (!vr_projdebug.value || !sv.active)
+		return;
+	if (!svs.clients || !svs.clients[0].active)
+		return;
+
+	player = svs.clients[0].edict;
+
+	/* Clear across map loads: SV_SpawnServer memsets sv and may reallocate
+	   the edict array smaller, so a number held from the last map is not
+	   merely stale but potentially out of bounds. */
+	if (qr_proj_worldkey != cl.worldmodel)
+	{
+		qr_proj_worldkey = cl.worldmodel;
+		memset (qr_proj_seen, 0, sizeof qr_proj_seen);
+	}
+
+	/* Release slots whose projectile is gone. Edict numbers are reused, so
+	   without this the next missile to land in a retired number would be
+	   taken for one already reported and silently skipped. */
+	for (i = 0; i < QR_PROJ_SLOTS; i++)
+	{
+		edict_t *p;
+
+		if (!qr_proj_seen[i])
+			continue;
+		if (!QR_MyMissile (qr_proj_seen[i]))
+			qr_proj_seen[i] = 0;
+	}
+
+	if (!QR_HandOrigin (hand))
+		return;
+
+	/* cl.viewangles IS the aim since M6, so this is the ray the shot used. */
+	AngleVectors (cl.viewangles, fwd, right, up);
+
+	for (e = 1; e < sv.num_edicts; e++)
+	{
+		edict_t	*ent = EDICT_NUM (e);
+		vec3_t	d, perp;
+		float	along;
+
+		if (!QR_MyMissile (e))
+			continue;
+
+		slot = -1;
+		for (i = 0; i < QR_PROJ_SLOTS; i++)
+		{
+			if (qr_proj_seen[i] == e)
+				break;
+			if (slot < 0 && !qr_proj_seen[i])
+				slot = i;
+		}
+		if (i < QR_PROJ_SLOTS)
+			continue;		/* already reported */
+		if (slot < 0)
+			continue;		/* table full: a burst outran it */
+		qr_proj_seen[slot] = e;
+
+		VectorSubtract (ent->v.origin, hand, d);
+		along = DotProduct (d, fwd);
+		VectorMA (d, -along, fwd, perp);
+
+		Con_Printf ("[proj] %-16s perp %5.1f along %5.1f (right %5.1f up %5.1f)\n",
+			    QR_WeaponName ((int) cl.stats[STAT_ACTIVEWEAPON]),
+			    VectorLength (perp), along,
+			    DotProduct (d, right), DotProduct (d, up));
+	}
+}
+
+
+/*
+================
 QR_EmitWheel -- the weapon wheel: the player's OWNED view-weapon models as
 a ring of synthetic alias entities around the off-hand wrist.
 
@@ -3943,6 +4090,18 @@ static const uint32_t qr_wheel_bits[8] = {
 	IT_SUPER_NAILGUN, IT_GRENADE_LAUNCHER, IT_ROCKET_LAUNCHER,
 	IT_LIGHTNING,
 };
+/* IT_* bit to wheel slot, or -1. Shared by the wheel and by the view
+   weapon's placement lookup, so the two cannot disagree about ordering. */
+static int QR_WheelSlot (uint32_t bit)
+{
+	int	i;
+
+	for (i = 0; i < 8; i++)
+		if (qr_wheel_bits[i] == bit)
+			return i;
+	return -1;
+}
+
 static const char *qr_wheel_modelnames[8] = {
 	"progs/v_axe.mdl", "progs/v_shot.mdl", "progs/v_shot2.mdl",
 	"progs/v_nail.mdl", "progs/v_nail2.mdl", "progs/v_rock.mdl",
@@ -3962,6 +4121,35 @@ static const char *qr_wheel_labels[8] = {
 	"AXE", "SHOTGUN", "SUPER SHOTGUN", "NAILGUN",
 	"SUPER NAILGUN", "GRENADE LAUNCHER", "ROCKET LAUNCHER", "THUNDERBOLT",
 };
+
+/*
+================
+QR_ActiveWeaponBit -- the held weapon as an IT_ bit, which the protocol
+cannot be trusted to deliver.
+
+sv_main.c writes ent->v.weapon with MSG_WriteByte, and IT_AXE is 4096, so it
+arrives as 0: cl.stats[STAT_ACTIVEWEAPON] reads zero for the entire time you
+are holding the axe. Upstream only uses that stat to light a statusbar icon,
+and the axe's icon is driven from cl.items instead, so the truncation never
+mattered there.
+
+It matters for anything keyed to the held weapon. Resolve it from the VIEW
+MODEL actually being drawn -- which is the thing whose placement and trim we
+are deciding, so it is the more direct answer anyway -- and fall back to the
+stat for a weapon outside the wheel table (a mod's extra weapon).
+================
+*/
+static uint32_t QR_ActiveWeaponBit (void)
+{
+	int	i;
+
+	if (cl.viewent.model && cl.viewent.model->name[0])
+		for (i = 0; i < 8; i++)
+			if (!strcmp (cl.viewent.model->name, qr_wheel_modelnames[i]))
+				return qr_wheel_bits[i];
+
+	return (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+}
 
 /*
 ================
@@ -4434,6 +4622,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 		{
 			vec3_t	fwdv, rightv, upv, ba, handpos, cf, cr, cu;
 			float	ax, ay, az, cx, cy, cz, mx, my, mz, maxdim, sf;
+			float	pback, pup, pside;
 			float	bmin[3], bmax[3];
 			aliashdr_t *ah;
 			int	k;
@@ -4505,7 +4694,30 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			sf = (maxdim > QR_WEAPON_MAXLEN) ? QR_WEAPON_MAXLEN / maxdim : 1.f;
 			cl.viewent.scale = (unsigned char) ENTSCALE_ENCODE (sf);
 
-			cx = bmin[0] + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;   /* grip along barrel */
+			/* Each gun's origin sits at a different point in its own model,
+			   so one placement cannot fit all of them. Take the held gun's
+			   own values if the UI has tuned it, and the cvars otherwise --
+			   read here, at draw time, from the weapon actually being drawn.
+			   The cvars alone used to carry this, rewritten on every weapon
+			   switch, so the new gun wore the old gun's placement until the
+			   console command landed and kept it forever if one was dropped. */
+			pback = vr_weaponback.value;
+			pup   = vr_weaponup.value;
+			pside = vr_weaponside.value;
+			{
+				int	wslot = QR_WheelSlot (QR_ActiveWeaponBit ());
+
+				if (wslot >= 0)
+					QR_WeaponPlacement (wslot, &pback, &pup, &pside);
+			}
+
+			/* Grip stays GLOBAL. It is a fraction of the trimmed length, so it
+			   already adapts to each model's size and re-seats when the trim
+			   moves -- which is why one value fits every gun. It also slides the
+			   model along the same axis as vr_weaponback, so per-weapon grip was
+			   a second knob over one degree of freedom: tuning all eight left it
+			   at the default on every one while back ranged over 3 to 18 units. */
+			cx = bmin[0] + CLAMP (0.f, vr_weapongrip.value, 1.f) * mx;
 			cy = 0.5f * (bmin[1] + bmax[1]);
 			cz = 0.5f * (bmin[2] + bmax[2]);
 			/* Place in the SHOT frame -- NOT AngleVectors(viewent.angles).
@@ -4522,9 +4734,9 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			for (k = 0; k < 3; k++)
 				cl.viewent.origin[k] = handpos[k]
 					- sf * (cf[k]*cx - cr[k]*cy + cu[k]*cz)
-					- vr_weaponback.value * cf[k]
-					+ vr_weaponup.value   * cu[k]
-					+ vr_weaponside.value * cr[k];
+					- pback * cf[k]
+					+ pup   * cu[k]
+					+ pside * cr[k];
 
 			/* Aiming laser, WELDED to the gun at the MUZZLE: it starts at the
 			   model's forward-face centre (maxs[0] along the barrel, laterally
@@ -4599,6 +4811,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 
 	QR_EmitParticles (slot);
 	QR_EmitPathDebug (slot);
+	QR_ProjDebug ();
 	QR_EmitWheel (slot);
 }
 
@@ -4870,7 +5083,9 @@ void QR_RenderView (void)
 	   V_UpdateBlend decays it) and the held weapon's IT_ bit, for haptic
 	   pulses and per-weapon trigger feel on the consumer side */
 	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
-	slot->frame.active_weapon = (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+	/* NOT cl.stats[STAT_ACTIVEWEAPON] -- the protocol truncates it to a byte
+	   and the axe (IT_AXE, 4096) arrives as 0. See QR_ActiveWeaponBit. */
+	slot->frame.active_weapon = QR_ActiveWeaponBit ();
 	slot->frame.items = cl.items;
 
 	/* A shot fired iff the held weapon's ammo dropped while the weapon stayed

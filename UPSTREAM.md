@@ -72,7 +72,7 @@ parsing — the server needs it for collision hulls) and **`gl_refrag.c`**
 
 ## Patches applied to vendored files
 
-Kept to an absolute minimum so upstream merges stay cheap. Two files, three
+Kept to an absolute minimum so upstream merges stay cheap. Four files, five
 hunks, all guarded by `#ifdef QAVP_PLATFORM`:
 
 **`quakedef.h`** — the `#include <SDL.h>` / `<SDL_opengl.h>` block is swapped
@@ -81,6 +81,42 @@ for `gl_shim.h` + `sdl_rw_shim.h`. The original block is preserved in the
 
 **`miniz.h`** — same treatment for its SDL include, plus `MINIZ_LITTLE_ENDIAN`
 is derived from `__BYTE_ORDER__` instead of `SDL_BYTEORDER`.
+
+**`cl_tent.c`** — `CL_UpdateTEnts` forces the player's own lightning beam to
+start at `cl_entities[cl.viewentity].origin`, i.e. the middle of the player
+model. On a headset the gun is in your hand, so the bolt has to start there;
+the hunk calls `QR_HandOrigin` (in `platform/in_null.c`) and falls back to
+upstream's origin whenever the hand aim isn't live. This one could not be
+absorbed by a shim: the override runs unconditionally inside the beam loop,
+and the beam segments it feeds are ordinary `bolt.mdl` entities with nothing
+to distinguish them downstream.
+
+**`pr_cmds.c`** — `PF_setorigin` calls `QR_MuzzleSpawn` (in
+`platform/in_null.c`) before writing the origin. Vanilla spawns each weapon's
+missile at a per-weapon offset from the player *origin* — the middle of the
+chest — while the gun is in my hand. This builtin is where that position is
+decided, before `SV_LinkEdict` and before any physics, so correcting it here is
+what makes the shot genuinely leave the barrel: the trail starts there, the
+model is drawn there, and the missile flies a true path from there, with
+nothing to fold away afterwards. `QR_MuzzleSpawn` declines for anything that is
+not a launch (not a player-owned missile, not the first placement after
+`ED_ClearEdict`, not near the player, no tracked hand, muzzle implausibly far,
+or the short trace out to it blocked), so the fallback *is* the normal case. It
+does move where a shot comes from for collision, not only for the eye —
+intended, for a port where you aim with your arm.
+
+It replaces only the part of vanilla's spawn offset that centres the missile on
+the body. The component along the aim's *horizontal right* vector is carried
+over untouched, because that is the weapon's own firing pattern: the nailgun
+alternates `v_right*±4` between its two attack frames, which is what makes it
+fire two streams rather than one. `'0 0 16'` is vertical and `v_forward*8` lies
+in the vertical plane through the aim, so neither contributes to that term —
+the split is exact.
+
+This replaced a client-side version in `cl_main.c` that could only shift what
+was drawn, and so had to fold the shift away again over the first ~96 units;
+the fold was visible as the projectile sliding back to the body line. Doing it
+at the source removed that hunk, two cvars and about 170 lines.
 
 Everything else that would have needed a patch is instead absorbed by shims in
 `Sources/QuakeCore/platform/`:
@@ -97,7 +133,8 @@ Everything else that would have needed a patch is instead absorbed by shims in
 
 1. Diff the new upstream against `.upstream-rev` for the 45 vendored `.c` files
    and 72 headers; copy over.
-2. Re-apply the `quakedef.h` and `miniz.h` hunks (search for `QAVP_PLATFORM`).
+2. Re-apply the `quakedef.h`, `miniz.h`, `cl_tent.c` and `pr_cmds.c` hunks
+   (search for `QAVP_PLATFORM`).
 3. `make check` — a clean link means no new symbols escaped into the renderer
    boundary. New undefined symbols are new renderer entry points that need
    stubbing in `r_null.c`.
