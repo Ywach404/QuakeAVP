@@ -54,10 +54,16 @@
 //
 
 import AVFoundation
+import os
 
 final class AudioSink: @unchecked Sendable {
 
     static let shared = AudioSink()
+
+    /// os_log so the audio trace is visible in Console.app on the Mac from the
+    /// device with NO debugger attached -- which matters, because the next test
+    /// is a Home View launch with Xcode detached (print() is invisible then).
+    private static let log = Logger(subsystem: "com.acervantez.quakeavp", category: "audio")
 
     enum Mode: String {
         /// off     no ring; SNDDMA_Init fails; game boots silent. Default.
@@ -128,8 +134,13 @@ final class AudioSink: @unchecked Sendable {
     private init() {}
 
     /// Step trace. Printed BEFORE the call it names, so a silent log after a
-    /// step line is that step hanging -- the whole point of the probe.
-    private func step(_ s: String) { print("[audio] \(s)") }
+    /// step line is that step hanging -- the whole point of the probe. Goes to
+    /// os_log too, so a debugger-detached Home View launch is still observable
+    /// in Console.app.
+    private func step(_ s: String) {
+        print("[audio] \(s)")
+        Self.log.notice("[audio] \(s, privacy: .public)")
+    }
 
     // MARK: - Engine thread (SNDDMA_Init)
 
