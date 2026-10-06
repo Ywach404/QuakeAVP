@@ -150,6 +150,11 @@ struct ContentView: View {
             WeaponTrim.shared.sendCommand = { command in
                 Task { @MainActor in engine.send(command) }
             }
+            // Audio's step trace into the in-headset console, so the device
+            // audio test is readable in the headset with no Mac attached.
+            AudioSink.shared.onLog = { line in
+                Task { @MainActor in engine.note(line) }
+            }
             // Persisted per-input profiles: pick Hands/PSVR2 by what's attached,
             // push its feel to VRSettings now (the rig cvars land once the engine
             // is running, below), and load its values into the sliders.
