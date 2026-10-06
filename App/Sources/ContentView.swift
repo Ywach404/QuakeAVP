@@ -80,6 +80,8 @@ struct ContentView: View {
         ("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" }),
         ("Deathmatch", (1...6).map { "dm\($0)" }),
     ]
+    @State private var confirmResetGun = false
+    @State private var confirmResetProfile = false
     @State private var weaponBack: Float = 0
     @State private var weaponUp: Float = 0
     @State private var weaponSide: Float = 0
@@ -385,10 +387,28 @@ struct ContentView: View {
                         Text("PSVR2").tag(InputMode.psvr2)
                     }
                     .pickerStyle(.segmented)
-                    Button("Reset this profile") {
-                        ProfileStore.shared.resetCurrent(); syncFromProfile()
+                    Button("Reset this profile", role: .destructive) {
+                        confirmResetProfile = true
                     }
                     .font(.caption)
+                    // Strictly worse to mis-tap than "Reset gun": it drops the
+                    // whole input profile, aim trim and Sight in included.
+                    .confirmationDialog(
+                        "Reset the \(ProfileStore.shared.active == .hands ? "Hands" : "PSVR2") profile?",
+                        isPresented: $confirmResetProfile,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Reset", role: .destructive) {
+                            ProfileStore.shared.resetCurrent()
+                            syncFromProfile()
+                        }
+                        Button("Cancel", role: .cancel) { }
+                    } message: {
+                        Text("Returns every feel and rig value for this input "
+                             + "profile to its default, including the aim trim "
+                             + "from Sight in. Per-weapon placement and trim "
+                             + "are kept.")
+                    }
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
@@ -781,6 +801,8 @@ struct ContentView: View {
                 get: { debug.fingerDebug }, set: { debug.fingerDebug = $0 }))
             Toggle("Show real hands / controllers", isOn: Binding(
                 get: { debug.showLimbs }, set: { debug.showLimbs = $0 }))
+            Toggle("Virtual hand model (bare hands)", isOn: Binding(
+                get: { debug.virtualHands }, set: { debug.virtualHands = $0 }))
             // Not persisted on purpose -- see DebugStore.inputLog.
             Toggle("Input telemetry log (console)", isOn: Binding(
                 get: { debug.inputLog }, set: { debug.inputLog = $0 }))
@@ -934,21 +956,28 @@ struct ContentView: View {
                                         + "\(lines.count) lines)")
                         }
                         .font(.caption)
-                        Button("Reset gun") {
-                            // Drops THIS weapon's placement back to the profile
-                            // default; other guns keep what you tuned.
-                            WeaponTrim.shared.resetCurrentPlacement()
-                            syncPlacementFromWeapon()
-                            aimPitch = 8; aimYaw = 0
-                            for c in ["vr_aimpitch 8", "vr_aimyaw 0"] { engine.send(c) }
-                            var p = ProfileStore.shared.current
-                            p.aimPitch = 8; p.aimYaw = 0
-                            ProfileStore.shared.current = p
-                            WeaponTrim.shared.resetCurrent()
-                            weaponClip = WeaponTrim.shared.currentFront
-                            weaponClipBack = WeaponTrim.shared.currentRear
+                        // Confirmed, because it is one tap next to the dump
+                        // button and it throws away a tuning pass. It also
+                        // clears the aim trim, which is a Sight in result and
+                        // not per-weapon at all -- so the prompt says so rather
+                        // than letting that go unnoticed.
+                        Button("Reset gun", role: .destructive) {
+                            confirmResetGun = true
                         }
                         .font(.caption)
+                        .confirmationDialog("Reset this weapon's rig?",
+                                            isPresented: $confirmResetGun,
+                                            titleVisibility: .visible) {
+                            Button("Reset", role: .destructive) { resetHeldWeapon() }
+                            Button("Cancel", role: .cancel) { }
+                        } message: {
+                            Text("Puts this weapon's placement and trim back to "
+                                 + "their shipped values for the current input "
+                                 + "mode. Also clears the aim trim to 8\u{00B0} "
+                                 + "pitch / 0\u{00B0} yaw, which is your Sight in "
+                                 + "calibration and applies to every weapon. "
+                                 + "Your other weapons keep what you tuned.")
+                        }
                     }
                     Divider()
                     VStack(alignment: .leading, spacing: 6) {
@@ -993,6 +1022,22 @@ struct ContentView: View {
                     weaponClipBack = WeaponTrim.shared.currentRear
                     syncPlacementFromWeapon()
                 }
+    }
+
+    /// What "Reset gun" does once confirmed. Placement and trim return to the
+    /// shipped defaults for the held weapon in the current input mode; the aim
+    /// trim returns to the 8/0 default, which is global rather than per weapon.
+    private func resetHeldWeapon() {
+        WeaponTrim.shared.resetCurrentPlacement()
+        syncPlacementFromWeapon()
+        aimPitch = 8; aimYaw = 0
+        for c in ["vr_aimpitch 8", "vr_aimyaw 0"] { engine.send(c) }
+        var p = ProfileStore.shared.current
+        p.aimPitch = 8; p.aimYaw = 0
+        ProfileStore.shared.current = p
+        WeaponTrim.shared.resetCurrent()
+        weaponClip = WeaponTrim.shared.currentFront
+        weaponClipBack = WeaponTrim.shared.currentRear
     }
 
     /// Mirror the held weapon's effective placement into the sliders.
