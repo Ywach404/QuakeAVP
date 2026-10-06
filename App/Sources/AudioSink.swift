@@ -60,18 +60,37 @@ final class AudioSink: @unchecked Sendable {
     static let shared = AudioSink()
 
     enum Mode: String {
-        case off, session, tone, on
+        /// off     no ring; SNDDMA_Init fails; game boots silent. Default.
+        /// ring    ring allocated so Quake's mixer runs, but NO device/session
+        ///         is ever brought up. Isolates bug 1 (does Quake's sound path
+        ///         itself hang on device?) from bug 2 (the -50 session failure).
+        ///         If the app LOADS in ring mode, the mixer is fine and the hang
+        ///         is the AVAudioEngine bring-up; if it HANGS, the hang is in
+        ///         S_Init/precache/S_Update, nothing to do with AVAudioSession.
+        /// session setActive only, in isolation.
+        /// tone    AVAudioEngine + 440 Hz, session established first. Bug 2 test.
+        /// on      the real sink: ring + device. Only once ring and tone both pass.
+        case off, ring, session, tone, on
     }
 
-    /// QAVP_AUDIO selects the mode; default `on`. The device log proved the
-    /// audio failure (-50) fails FAST and does not hang the app -- the immersive
-    /// space kept rendering at 120fps right through it -- so `on` is safe as the
-    /// default: worst case is no sound and a clear log, never a stall. Set
-    /// QAVP_AUDIO=off to force the old silent boot, `tone`/`session` to isolate.
+    /// QAVP_AUDIO selects the mode; default `off`.
+    ///
+    /// `off` is the default on purpose, and the hard lesson behind it: enabling
+    /// the real sink (`on`) makes Quake's S_Init actually initialise and run its
+    /// mixer on device for the FIRST time ever -- precache, codec init, and the
+    /// per-frame S_Update -- and something in that path hangs the engine thread
+    /// before it reaches the frame loop, so the immersive space never gets a
+    /// frame and the app "loads forever." That is a SEPARATE bug from the -50
+    /// AudioSession failure, and it must not hold the whole app hostage. So the
+    /// default boots silent and loads, and audio is proven in stages:
+    ///   tone     -> does AVAudioEngine make sound at all (session + engine)?
+    ///   session  -> does setActive succeed, in isolation?
+    ///   on       -> the real sink (only once tone works AND S_Init is fixed).
+    /// The Debug-tab tone button runs `tone` on demand from this default launch.
     static let mode: Mode = {
         let raw = ProcessInfo.processInfo.environment["QAVP_AUDIO"]?
-            .lowercased() ?? "on"
-        return Mode(rawValue: raw) ?? .on
+            .lowercased() ?? "off"
+        return Mode(rawValue: raw) ?? .off
     }()
 
     /// Everything the render block needs, by value. Immutable, so it can be
@@ -121,7 +140,9 @@ final class AudioSink: @unchecked Sendable {
     func open(speed: Int, channels: Int, bits: Int)
         -> (buffer: UnsafeMutablePointer<UInt8>, monoSamples: Int)? {
 
-        guard Self.mode == .on else {
+        // Only `on` and `ring` allocate the ring (so Quake's mixer runs). `ring`
+        // then never brings up a device, which is the whole point of the probe.
+        guard Self.mode == .on || Self.mode == .ring else {
             step("mode=\(Self.mode.rawValue); SNDDMA_Init declines (no ring)")
             return nil
         }
@@ -152,12 +173,14 @@ final class AudioSink: @unchecked Sendable {
                               cursor: cursor)
         sampleRate = speed
 
-        // If the scene already went active before the ring existed, start (with
-        // the same settle delay); otherwise sceneDidActivate drives it.
-        if sceneActive {
+        // Only `on` auto-starts a device; `ring` allocates the buffer and stops
+        // there. If the scene already went active before the ring existed, start
+        // now (same settle delay); otherwise sceneDidActivate drives it.
+        if Self.mode == .on && sceneActive {
             scheduleRealStart(afterSeconds: 2)
         } else {
-            step("ring ready (\(monoSamples) mono samples); waiting for scene-active")
+            step("ring ready (\(monoSamples) mono samples)"
+                + (Self.mode == .on ? "; waiting for scene-active" : "; ring mode, no device"))
         }
         return (buf, monoSamples)
     }
@@ -169,6 +192,12 @@ final class AudioSink: @unchecked Sendable {
     func sceneDidActivate() {
         switch Self.mode {
         case .off:
+            return
+        case .ring:
+            // Ring is live and the mixer runs; deliberately bring up NO device.
+            step("ring mode: mixer active, no device -- if the app loaded, the "
+                + "Quake sound path is fine and the hang is the AVAudioEngine "
+                + "bring-up")
             return
         case .session:
             kick { self.runSessionProbe() }
