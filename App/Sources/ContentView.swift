@@ -813,6 +813,15 @@ struct ContentView: View {
             Toggle("Projectile spawn offset (console)", isOn: Binding(
                 get: { debug.projDebug },
                 set: { debug.projDebug = $0; engine.send("vr_projdebug \($0 ? 1 : 0)") }))
+            // Proves the audio device independently of Quake's mixer: a bare
+            // 440 Hz tone out of AVAudioEngine. If you hear it, the engine,
+            // session and lifecycle are all good and any game silence is the
+            // mixer; if not, the console line after "[audio] tone: starting"
+            // is the diagnosis.
+            Button("Audio self-test (440 Hz tone)") {
+                AudioSink.shared.requestToneTest()
+            }
+            .font(.caption)
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
             Toggle("Motion strobe: aim ray (figure)", isOn: Binding(

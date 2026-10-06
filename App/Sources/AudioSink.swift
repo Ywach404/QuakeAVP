@@ -9,7 +9,7 @@
 //  THREE threads meet here and the split is deliberate:
 //
 //  - The ENGINE thread calls open/close/setRunning through the QC_Audio* shim.
-//  - The MAIN queue delivers audio-session interruptions.
+//  - The MAIN actor delivers the scene-active signal and session interruptions.
 //  - The AUDIO thread runs the render block, which is realtime.
 //
 //  The first two share `lock`. The render block takes NO lock and touches NO
@@ -19,16 +19,37 @@
 //  is exactly what the realtime rule forbids -- and the failure is an audible
 //  glitch rather than a crash, so it would be hard to find.
 //
-//  NOTE: this deliberately does NOT configure AVAudioSession. Both attempts
-//  made things worse. From the engine thread it failed with OSStatus -50
-//  "Session lookup failed"; moved to the main thread it failed the same way
-//  AND blocked the UI -- setActive is a synchronous XPC call, and with the
-//  session machinery erroring it never returned, so the app reported running
-//  while nothing ever appeared on the device. AVAudioEngine creates a session
-//  implicitly in any case (AURemoteIO reaches one either way). If a category
-//  is genuinely needed, it must go through the ASYNCHRONOUS activate API, off
-//  the launch path, and only after proving AVAudioEngine can make a sound in
-//  this app at all.
+//  WHY THIS WAS SHELVED, AND WHAT CHANGED
+//  --------------------------------------
+//  Four device failures were recorded before this rewrite: session config on
+//  the engine thread gave OSStatus -50 "Session lookup failed"; on main it gave
+//  -50 and froze the UI (setActive is synchronous XPC); deferred to the main
+//  queue it hung with no output; and a background-thread start crashed with
+//  EXC_BAD_ACCESS at 0x10.
+//
+//  The crash was a publication bug -- the render block read self.config before
+//  it was visible to the audio thread -- and the by-value RenderConfig capture
+//  below is its fix. The other three were all ONE bug: the device was brought
+//  up during Host_Init, which runs from the console window's onAppear at launch,
+//  BEFORE visionOS has registered this app's audio session with mediaserverd.
+//  "Session lookup failed / -50" is exactly what touching the session that
+//  early looks like, and relying on AVAudioEngine's implicit session reached
+//  the same unready machinery and wedged instead of erroring.
+//
+//  So the device no longer comes up from the engine's boot path at all. open()
+//  (engine thread, inside SNDDMA_Init) only allocates the ring and returns;
+//  QuakeAVPApp calls sceneDidActivate() when scenePhase first reaches .active,
+//  and THAT is what starts the device -- with the audio session explicitly
+//  configured (.playback, setActive) and the whole bring-up on a background
+//  thread, so even a hard wedge leaks one thread and logs rather than freezing
+//  the UI. A 10s watchdog says so out loud.
+//
+//  PROVE IT IN ISOLATION. Launch with QAVP_AUDIO_TONE=1 and the sink is bypassed
+//  entirely for a 440 Hz sine straight out of AVAudioEngine. If you hear it, the
+//  engine, the session and the lifecycle are all good and any remaining silence
+//  is the mixer/ring, not the device. If you do NOT hear it, the log line after
+//  "[audio] tone: starting" is the diagnosis. QAVP_AUDIO_OFF=1 forces the old
+//  snd_null.c behaviour (boots silent, never touches the device).
 //
 //  The ring is allocated once and NEVER freed. close() is reachable only from
 //  S_Shutdown at app teardown, so the lifetime question buys nothing; freeing
@@ -56,54 +77,56 @@ final class AudioSink: @unchecked Sendable {
         let cursor: UnsafeMutablePointer<Int32>
     }
 
-    /// Guards the non-realtime paths only (engine thread + main queue). The
+    /// Forces the old snd_null.c behaviour: SNDDMA_Init fails cleanly and the
+    /// game boots silent. The escape hatch, now an env var rather than a
+    /// recompile -- the device path is the default again.
+    static let disabled = ProcessInfo.processInfo.environment["QAVP_AUDIO_OFF"] == "1"
+
+    /// Bypass the whole mixer for a bare 440 Hz sine out of AVAudioEngine, to
+    /// prove the engine + session + lifecycle independently of Quake's ring.
+    static let toneTest = ProcessInfo.processInfo.environment["QAVP_AUDIO_TONE"] == "1"
+
+    /// Guards the non-realtime paths only (engine thread + main actor). The
     /// render block never takes it.
     private let lock = NSLock()
     private var engine: AVAudioEngine?
     private var node: AVAudioSourceNode?
     private var config: RenderConfig?
     private var interruption: NSObjectProtocol?
+    private var sampleRate = 44100
+
+    /// Lifecycle gates, both under `lock`. The device starts only once BOTH the
+    /// ring exists (open() ran) and the scene is active (sceneDidActivate ran),
+    /// in whichever order those happen. `deviceStarting` latches so the two
+    /// triggers cannot both kick a bring-up.
+    private var sceneActive = false
+    private var deviceStarting = false
 
     private init() {}
 
-    /// Escape hatch, proven useful once: with this true the sink never runs
-    /// and SNDDMA_Init fails cleanly (the old snd_null.c behaviour). The
-    /// 2026-10-04 experiment: the app stalled at boot with the device starting
-    /// inside SNDDMA_Init, and launched perfectly with this true ("[audio]
-    /// sink disabled by kill switch" in the log, 120fps session after it).
-    /// That is why open() below no longer starts the device at all.
-    /// TRUE: the sink is OFF and SNDDMA_Init fails cleanly, the old snd_null.c
-    /// behaviour that launches and plays. Left on deliberately.
-    ///
-    /// The device path is NOT safe to enable as written. On this hardware
-    /// 2026-10-04: starting it on the engine thread or on main WEDGES that
-    /// thread (session -50 over XPC), and starting it on a background thread
-    /// with the float32 render block CRASHED -- EXC_BAD_ACCESS at 0x10, a null
-    /// deref, almost certainly the ring conversion in the render block running
-    /// before config/buffer are safely published to that thread. Both the
-    /// wedge and the crash are unsolved. Do not set this false again without
-    /// first proving, in isolation, that a bare AVAudioEngine can start and
-    /// play a tone in this app at all -- every attempt so far has assumed it
-    /// can, and it has not.
-    static let disabled = true
+    // MARK: - Engine thread (SNDDMA_Init)
 
     /// Called on the ENGINE THREAD inside SNDDMA_Init, in the middle of
-    /// Host_Init. Therefore it does nothing that can block: it allocates the
-    /// ring and the cursor (pure memory) and hands them to Quake, then
-    /// schedules the DEVICE to start later, asynchronously, on the main queue.
+    /// Host_Init. Does nothing that can block and nothing that touches the audio
+    /// session: it allocates the ring and the cursor (pure memory) and hands
+    /// them to Quake. The DEVICE is started later, from sceneDidActivate(), once
+    /// visionOS has actually registered our session.
     ///
-    /// Starting AVAudioEngine here hung the whole boot on device: the audio
-    /// session machinery is not up that early (-50 "Session lookup failed"
-    /// over XPC), and whatever start() blocks on, it blocks the engine thread
-    /// and the game never finishes initialising. Until the device comes up the
-    /// cursor simply never advances -- the mixer paints a little ahead and
-    /// waits, which is silence, not a fault. If the device never comes up, the
-    /// game plays on silently, which beats not playing.
+    /// Until the device comes up the cursor never advances -- the mixer paints a
+    /// little ahead and waits, which is silence, not a fault. If the device
+    /// never comes up at all, the game plays on silently, which beats not
+    /// playing.
     func open(speed: Int, channels: Int, bits: Int)
         -> (buffer: UnsafeMutablePointer<UInt8>, monoSamples: Int)? {
 
         if Self.disabled {
-            print("[audio] sink disabled by kill switch; booting silent")
+            print("[audio] QAVP_AUDIO_OFF set; booting silent")
+            return nil
+        }
+        if Self.toneTest {
+            // The tone bypasses the ring entirely; refuse the sink so the mixer
+            // runs in null mode and cannot fight the tone for the device.
+            print("[audio] QAVP_AUDIO_TONE set; sink not opened, tone owns the device")
             return nil
         }
 
@@ -128,40 +151,87 @@ final class AudioSink: @unchecked Sendable {
         let cursor = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
         cursor.pointee = 0
 
-        let cfg = RenderConfig(buffer: buf, monoSamples: monoSamples,
-                               channels: channels, bytesPerSample: bps,
-                               cursor: cursor)
-        config = cfg
+        config = RenderConfig(buffer: buf, monoSamples: monoSamples,
+                              channels: channels, bytesPerSample: bps,
+                              cursor: cursor)
         sampleRate = speed
 
-        // On a BACKGROUND thread that is allowed to never come back. start()
-        // does not fail on this device -- it WEDGES the calling thread (proven
-        // on the engine thread, then proven again on main, which hung the UI).
-        // A global-queue thread that wedges is a leaked thread and a log line;
-        // main and the engine thread stay untouchable by construction.
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.startDevice(attempt: 1)
+        // open() may run AFTER the scene is already active (the engine boots a
+        // beat into the window being up). If so, the scene-active trigger has
+        // already fired and found no ring; start now. Otherwise sceneDidActivate
+        // will start us.
+        if sceneActive {
+            kickBringUpLocked()
+        } else {
+            print("[audio] ring ready (\(monoSamples) mono samples); waiting for scene-active")
         }
         return (buf, monoSamples)
     }
 
-    /// Device-side sample rate requested by the engine; set once in open().
-    private var sampleRate = 44100
+    // MARK: - Main actor (scene lifecycle)
 
-    /// MAIN QUEUE, after launch. Builds and starts the device against the ring
-    /// open() already handed to Quake. Uses the STANDARD format (deinterleaved
-    /// float32) because that is the one format every AVAudioEngine graph
-    /// accepts -- connect() raises an uncatchable ObjC exception on a format
-    /// it dislikes, and int16-interleaved is exactly the kind it might. The
-    /// render block converts from the int16 ring per sample; arithmetic only,
-    /// still realtime-safe.
-    ///
-    /// Retries: the session machinery that fails at boot may simply need the
-    /// app to finish coming up, so a refusal here is retried a few times
-    /// rather than treated as final. Every attempt logs its outcome.
-    /// Tracks whether an attempt ever completed, for the watchdog. Guarded by
-    /// `lock`.
+    /// Called from QuakeAVPApp when scenePhase first reaches .active. This is
+    /// the moment the audio session is actually reachable -- the whole reason
+    /// the device start moved here. Safe to call more than once; it latches.
+    func sceneDidActivate() {
+        if Self.disabled { return }
+        lock.lock()
+        sceneActive = true
+        if Self.toneTest {
+            let go = !deviceStarting
+            if go { deviceStarting = true }
+            lock.unlock()
+            if go {
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    self?.startTone()
+                }
+            }
+            return
+        }
+        // Real sink: start only once the ring also exists.
+        if config != nil {
+            kickBringUpLocked()
+        }
+        lock.unlock()
+    }
+
+    /// Caller holds `lock`. Kicks the device bring-up on a background thread,
+    /// once. A wedge inside AVAudioEngine leaks that thread and logs; main and
+    /// the engine thread are never the ones that block.
+    private func kickBringUpLocked() {
+        guard !deviceStarting else { return }
+        deviceStarting = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.startDevice(attempt: 1)
+        }
+    }
+
+    // MARK: - Device bring-up (background thread)
+
+    /// Set once an attempt completes (started or failed), read by the watchdog.
+    /// Guarded by `lock`.
     private var startOutcome = "pending"
+
+    /// Configure and activate the audio session. ON THE BACKGROUND THREAD: a
+    /// -50 here used to come back only because the session was touched during
+    /// Host_Init, before the app was registered; from scene-active it should
+    /// succeed, and if it still wedges, it wedges a disposable thread. Returns
+    /// false on a clean failure (caller retries); a wedge never returns at all
+    /// and the watchdog reports it.
+    private func configureSession() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            // .playback: a game owns its audio; it should play regardless of
+            // other apps and route to the headset. Plain options -- no
+            // mixWithOthers, the world should not duck to someone else's music.
+            try session.setCategory(.playback, mode: .default, options: [])
+            try session.setActive(true)
+            return true
+        } catch {
+            print("[audio] session setup failed: \(error)")
+            return false
+        }
+    }
 
     private func startDevice(attempt: Int) {
         lock.lock()
@@ -172,17 +242,14 @@ final class AudioSink: @unchecked Sendable {
 
         // Printed BEFORE anything that can wedge, so a silent log after this
         // line is itself the diagnosis. The watchdog says so out loud: if the
-        // attempt has not completed in 10s, the thread is gone and no retry is
-        // scheduled -- each retry would leak another thread into the same wall.
+        // attempt has not completed in 10s, the thread is gone.
         print("[audio] starting device, attempt \(attempt)...")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            guard let self else { return }
-            self.lock.lock(); let outcome = self.startOutcome; self.lock.unlock()
-            if outcome == "pending" {
-                print("[audio] attempt \(attempt) WEDGED inside AVAudioEngine after 10s; "
-                    + "audio stays off, the game plays on. This is a platform/session "
-                    + "problem, not a mixer one.")
-            }
+        armWatchdog(attempt: attempt)
+
+        guard configureSession() else {
+            lock.lock(); startOutcome = "failed"; lock.unlock()
+            retryOrGiveUp(attempt: attempt, why: "session")
+            return
         }
 
         guard let fmt = AVAudioFormat(standardFormatWithSampleRate: rate,
@@ -227,14 +294,7 @@ final class AudioSink: @unchecked Sendable {
         } catch {
             lock.lock(); startOutcome = "failed"; lock.unlock()
             newEngine.detach(node)
-            if attempt < 3 {
-                print("[audio] start attempt \(attempt) failed cleanly (\(error)); retrying in 5s")
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in
-                    self?.startDevice(attempt: attempt + 1)
-                }
-            } else {
-                print("[audio] giving up after \(attempt) attempts (\(error)); the game plays on silent")
-            }
+            retryOrGiveUp(attempt: attempt, why: "start: \(error)")
             return
         }
 
@@ -249,6 +309,118 @@ final class AudioSink: @unchecked Sendable {
         print("[audio] device up on attempt \(attempt): float32 deinterleaved, "
             + "\(Int(rate)) Hz requested, device \(Int(real)) Hz, \(cfg.monoSamples) samples")
     }
+
+    /// 10s watchdog. If the attempt has not reported started/failed, the thread
+    /// is wedged inside AVAudioEngine/AVAudioSession and there is nothing to do
+    /// but say so -- a retry would leak another thread into the same wall.
+    private func armWatchdog(attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self else { return }
+            self.lock.lock(); let outcome = self.startOutcome; self.lock.unlock()
+            if outcome == "pending" {
+                print("[audio] attempt \(attempt) WEDGED inside AVAudioEngine/"
+                    + "AVAudioSession after 10s; audio stays off, the game plays "
+                    + "on. This is a platform/session problem, not a mixer one.")
+            }
+        }
+    }
+
+    private func retryOrGiveUp(attempt: Int, why: String) {
+        if attempt < 3 {
+            print("[audio] attempt \(attempt) failed cleanly (\(why)); retrying in 2s")
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 2) {
+                [weak self] in self?.startDevice(attempt: attempt + 1)
+            }
+        } else {
+            print("[audio] giving up after \(attempt) attempts (\(why)); "
+                + "the game plays on silent")
+        }
+    }
+
+    // MARK: - Tone self-test
+
+    /// On-demand version of the tone, for a Debug-tab button -- so the device
+    /// can be proven from a Home View launch, where env vars cannot be set and
+    /// where the original -50/wedge failures actually happened. If the real
+    /// device is already up, says so: then any silence is the mixer, not the
+    /// device, and the tone would only fight it for the output.
+    func requestToneTest() {
+        if Self.disabled { print("[audio] QAVP_AUDIO_OFF set; tone refused"); return }
+        lock.lock()
+        if engine != nil {
+            lock.unlock()
+            print("[audio] device already running; if you hear nothing it is the "
+                + "mixer/ring, not the device")
+            return
+        }
+        guard !deviceStarting else { lock.unlock(); print("[audio] start already in flight"); return }
+        deviceStarting = true
+        lock.unlock()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.startTone()
+        }
+    }
+
+    /// A bare 440 Hz sine straight out of AVAudioEngine, no ring, no mixer. If
+    /// this is audible on device, the engine, the session and the lifecycle are
+    /// all working and any remaining silence is upstream. Realtime block: a
+    /// phase accumulator by value, nothing else.
+    private func startTone() {
+        print("[audio] tone: starting")
+        armWatchdog(attempt: 0)
+        lock.lock(); startOutcome = "pending"; lock.unlock()
+
+        guard configureSession() else {
+            lock.lock(); startOutcome = "failed"; lock.unlock()
+            print("[audio] tone: session setup failed; cannot prove the engine")
+            return
+        }
+
+        let rate = 48000.0
+        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) else {
+            print("[audio] tone: no format"); return
+        }
+        let newEngine = AVAudioEngine()
+        let twoPiFOverRate = Float(2.0 * Double.pi * 440.0 / rate)
+        let phase = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+        phase.pointee = 0
+        let node = AVAudioSourceNode(format: fmt) { _, _, frameCount, abl in
+            let buffers = UnsafeMutableAudioBufferListPointer(abl)
+            var ph = phase.pointee
+            let frames = Int(frameCount)
+            for out in buffers {
+                guard let raw = out.mData else { continue }
+                let dst = raw.assumingMemoryBound(to: Float.self)
+                let maxFrames = min(frames, Int(out.mDataByteSize) / 4)
+                var local = ph
+                for i in 0..<maxFrames {
+                    dst[i] = sinf(local) * 0.2
+                    local += twoPiFOverRate
+                    if local > .pi { local -= 2 * .pi }
+                }
+            }
+            ph += twoPiFOverRate * Float(frames)
+            ph = ph.truncatingRemainder(dividingBy: 2 * .pi)
+            phase.pointee = ph
+            return noErr
+        }
+        newEngine.attach(node)
+        newEngine.connect(node, to: newEngine.mainMixerNode, format: fmt)
+        do {
+            try newEngine.start()
+        } catch {
+            lock.lock(); startOutcome = "failed"; lock.unlock()
+            print("[audio] tone: start failed (\(error))")
+            return
+        }
+        lock.lock(); self.engine = newEngine; self.node = node
+        startOutcome = "started"; lock.unlock()
+        let real = newEngine.outputNode.outputFormat(forBus: 0).sampleRate
+        print("[audio] tone: PLAYING 440 Hz at device \(Int(real)) Hz -- if you hear "
+            + "this, the engine/session/lifecycle are all good")
+    }
+
+    // MARK: - Engine thread / interruptions
 
     var samplePosition: Int {
         lock.lock(); defer { lock.unlock() }
@@ -297,7 +469,7 @@ final class AudioSink: @unchecked Sendable {
     }
 
     /// Stops the device. Deliberately does NOT free the ring or the cursor:
-    /// close() is reachable only from S_Shutdown at app teardown, so the 8 KB
+    /// close() is reachable only from S_Shutdown at app teardown, so the memory
     /// is a process-lifetime allocation either way, and freeing it would mean
     /// proving the realtime block has returned -- which AVAudioEngine does not
     /// document for AVAudioSourceNode. Leaking it on the way out is strictly
