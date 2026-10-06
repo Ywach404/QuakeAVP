@@ -827,6 +827,12 @@ struct ContentView: View {
                 AudioSink.shared.requestToneTest()
             }
             .font(.caption)
+            // Persisted; read once at launch (audio mode is fixed per run), so
+            // this takes effect on the NEXT launch. The recovery hatch if a
+            // launch ever misbehaves with audio on.
+            Toggle("Game audio (next launch)", isOn: Binding(
+                get: { UserDefaults.standard.object(forKey: "audioEnabled") as? Bool ?? true },
+                set: { UserDefaults.standard.set($0, forKey: "audioEnabled") }))
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
             Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
