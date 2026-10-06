@@ -31,6 +31,13 @@ struct QuakeAVPApp: App {
 
     @State private var immersion = ImmersionSettings.shared
 
+    // The audio device is brought up here, not on the engine's boot path. The
+    // session is only reachable once visionOS marks the scene active; starting
+    // it earlier (during Host_Init) was what gave -50 "Session lookup failed"
+    // and the two wedges. AudioSink.sceneDidActivate latches, so repeated
+    // .active transitions are harmless.
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some Scene {
         // A unique Window, not a WindowGroup. The console is one debug surface,
         // not a document you open several of -- and WindowGroup made the summon
@@ -52,6 +59,11 @@ struct QuakeAVPApp: App {
         }
         .defaultSize(width: 960, height: 900)
         .windowResizability(.contentSize)
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            // First time the app is foregrounded, the audio session is finally
+            // reachable: bring the device up. Latches inside the sink.
+            if phase == .active { AudioSink.shared.sceneDidActivate() }
+        }
         // A closed window has no in-app way back without this: a menu command
         // + Cmd-0 reopen it. Losing the console used to mean relaunching.
         .commands {
