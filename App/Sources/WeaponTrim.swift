@@ -147,6 +147,19 @@ final class WeaponTrim: @unchecked Sendable {
 
     private var slot: Int { mode * 8 + current }
 
+    /// Which input profile is live. Pushed from ProfileStore.active's didSet,
+    /// so it follows the profile by construction rather than by remembering to
+    /// call applyRig -- which bails when the console has never been opened,
+    /// leaving `mode` at 0 while the PSVR2 profile was active. Every placement
+    /// edit would then have been written into the HANDS slots.
+    func setMode(_ m: Int) {
+        lock.lock()
+        guard m != mode else { lock.unlock(); return }
+        mode = m
+        lock.unlock()
+        publish()
+    }
+
     /// Pushed by ProfileStore on apply: which input profile is live and what
     /// its global placement is. Untuned weapons follow these.
     func setProfileBase(mode: Int, back: Float, up: Float, side: Float, grip: Float) {

@@ -184,7 +184,15 @@ final class ProfileStore {
 
     var hands: InputProfile { didSet { save() } }
     var psvr2: InputProfile { didSet { save() } }
-    var active: InputMode { didSet { UserDefaults.standard.set(active.rawValue, forKey: Self.activeKey) } }
+    var active: InputMode {
+        didSet {
+            UserDefaults.standard.set(active.rawValue, forKey: Self.activeKey)
+            // Not left to applyRig: that returns early before the console has
+            // been opened, and a mode that lags the profile means placement
+            // edits land in the other input's slots.
+            WeaponTrim.shared.setMode(active.rawValue)
+        }
+    }
 
     private static let key = "inputProfiles.v1"
     private static let activeKey = "inputProfiles.active"

@@ -8,6 +8,7 @@
 
 import SwiftUI
 import UIKit
+import os
 
 /// Which section the persistent control panel shows. Replaces the old Comfort
 /// and Weapon pop-out popovers, which auto-dismissed and hid your values.
@@ -908,11 +909,26 @@ struct ContentView: View {
                         // Reads the whole table into the console so the
                         // numbers can leave the device. Device UserDefaults is
                         // the only copy, and a reinstall takes it with it.
+                        // Four channels, because the useful one depends on how
+                        // the app was launched. `print` only reaches Xcode when
+                        // Xcode started the process -- tap the icon on the Home
+                        // View instead and it goes nowhere, which is exactly
+                        // how a finished tuning session nearly got stranded on
+                        // the device. os_log reaches Console.app with no
+                        // debugger attached, and the clipboard reaches the Mac
+                        // through Universal Clipboard.
                         Button("Dump all weapon values") {
-                            for line in WeaponTrim.shared.summary() {
-                                engine.note(line)   // readable in the headset
-                                print(line)         // and COPYABLE from Xcode
+                            let lines = WeaponTrim.shared.summary()
+                            let log = Logger(subsystem: "com.acervantez.quakeavp",
+                                             category: "weapons")
+                            for line in lines {
+                                engine.note(line)       // readable in the headset
+                                print(line)             // Xcode, if it launched us
+                                log.notice("\(line, privacy: .public)")
                             }
+                            UIPasteboard.general.string = lines.joined(separator: "\n")
+                            engine.note("[weapons] copied to clipboard ("
+                                        + "\(lines.count) lines)")
                         }
                         .font(.caption)
                         Button("Reset gun") {
