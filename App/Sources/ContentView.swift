@@ -909,21 +909,24 @@ struct ContentView: View {
                         // Reads the whole table into the console so the
                         // numbers can leave the device. Device UserDefaults is
                         // the only copy, and a reinstall takes it with it.
-                        // Four channels, because the useful one depends on how
-                        // the app was launched. `print` only reaches Xcode when
-                        // Xcode started the process -- tap the icon on the Home
-                        // View instead and it goes nowhere, which is exactly
-                        // how a finished tuning session nearly got stranded on
-                        // the device. os_log reaches Console.app with no
-                        // debugger attached, and the clipboard reaches the Mac
-                        // through Universal Clipboard.
+                        // Three channels, because the useful one depends on
+                        // how the app was launched. os_log reaches both Xcode
+                        // and Console.app with no debugger attached (print
+                        // needs Xcode to have started the process, which a tap
+                        // on the Home View is not), and the clipboard reaches
+                        // the Mac through Universal Clipboard.
                         Button("Dump all weapon values") {
                             let lines = WeaponTrim.shared.summary()
                             let log = Logger(subsystem: "com.acervantez.quakeavp",
                                              category: "weapons")
                             for line in lines {
                                 engine.note(line)       // readable in the headset
-                                print(line)             // Xcode, if it launched us
+                                // os_log only. stdout is ALSO captured by the
+                                // unified log, so a print here showed up in
+                                // Console.app a second time and the first dump
+                                // came back with every line doubled. Logger
+                                // reaches Xcode's console as well, so print
+                                // bought nothing.
                                 log.notice("\(line, privacy: .public)")
                             }
                             UIPasteboard.general.string = lines.joined(separator: "\n")
