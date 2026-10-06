@@ -17,34 +17,34 @@
 //  there is no `self`, no ARC traffic, and no optional loads on the realtime
 //  path.
 //
-//  WHY THIS IS A PROBE, NOT A CLAIM
-//  --------------------------------
-//  Five device attempts have now failed to produce sound, four of them with the
-//  shelf note's own warning unheeded: "prove a bare AVAudioEngine can play a
-//  tone before trusting the full path." The most recent attempt started the
-//  device at scene-active with an explicit AVAudioSession, and the app hung at
-//  launch ("loading forever") with the last log line being "[audio] starting
-//  device, attempt 1..." -- which prints immediately before setActive(). That
-//  points hard at session activation, whose own history is "a synchronous XPC
-//  call that never returns."
+//  WHAT THE DEVICE LOGS PROVED (and the thread split that follows)
+//  ---------------------------------------------------------------
+//  Successive device runs ruled the suspects out one by one:
+//   - setActive is NOT the problem. "session: ACTIVE ok" prints; it succeeds.
+//   - The failure is AURemoteIO at `connect`: "-50 Creating proxy session
+//     failed ... no reporter associated with ... session". AVAudioEngine's
+//     output unit cannot register its session reporter.
+//   - "no reporter" is a RUN-LOOP signature: the engine was being built on a
+//     bare GCD global queue, which has no run loop for CoreAudio to attach its
+//     property listeners to.
 //
-//  So this file no longer assumes anything. QAVP_AUDIO selects a mode, each
-//  isolating ONE variable, and every sub-step logs BEFORE the call it is about
-//  to make -- so the LAST line printed names the call that stalled, from a
-//  single launch:
+//  So the split is: the SESSION work (setCategory + setActive) runs on a
+//  background thread -- proven safe and successful there -- and the ENGINE
+//  bring-up (attach/connect/start) is handed to the MAIN thread, which has a
+//  run loop. See runEngine -> buildEngineOnMain.
 //
-//    off      (default) SNDDMA_Init fails, the game boots silent. Known good.
-//    session  ONLY AVAudioSession.setCategory + setActive, then idle. If the
-//             app stalls, session activation is the culprit, full stop.
-//    tone     AVAudioEngine + a 440 Hz sine, IMPLICIT session (no setActive).
-//             If audible, the engine works at scene-active without touching the
-//             session -- which is the real sink's path too.
-//    on       The real sink: ring + render block, implicit session. Same engine
-//             bring-up as `tone`; only `session` mode ever calls setActive.
+//  A separate bug lives upstream in Quake itself: SNDDMA_Init returning true
+//  makes S_Init run its precache/codec/mixer on device for the first time ever,
+//  and something there hangs boot. QAVP_AUDIO=ring isolates it (ring + mixer,
+//  no device). That is why `on` is not the default yet.
 //
-//  The real sink deliberately does NOT call setActive: AVAudioEngine reaches a
-//  session implicitly, and setActive is the one call with a proven hang. The
-//  `session` mode exists only to confirm that is the right call to avoid.
+//  QAVP_AUDIO selects a mode, each isolating one variable, every sub-step logged
+//  before its call so the last line printed names any hang:
+//    off      (default) SNDDMA_Init fails, boots silent. Known good.
+//    ring     ring + mixer, NO device. Isolates the Quake-side boot hang.
+//    session  setCategory + setActive only. (Confirmed: succeeds.)
+//    tone     session (bg) + AVAudioEngine 440 Hz (main). Bug-2 test.
+//    on       the real sink: ring + device, engine on main.
 //
 //  The ring is allocated once and NEVER freed. close() is reachable only from
 //  S_Shutdown at app teardown, so freeing it would mean proving the render
@@ -202,7 +202,7 @@ final class AudioSink: @unchecked Sendable {
         case .session:
             kick { self.runSessionProbe() }
         case .tone:
-            kick { self.runEngine(tone: true, attempt: 1, maxAttempts: 5) }
+            kick { self.runEngine(tone: true, attempt: 1, maxAttempts: 2) }
         case .on:
             lock.lock()
             sceneActive = true
@@ -220,7 +220,7 @@ final class AudioSink: @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + afterSeconds) {
             [weak self] in
             guard let self else { return }
-            self.kick { self.runEngine(tone: false, attempt: 1, maxAttempts: 8) }
+            self.kick { self.runEngine(tone: false, attempt: 1, maxAttempts: 3) }
         }
     }
 
@@ -277,11 +277,17 @@ final class AudioSink: @unchecked Sendable {
 
     // MARK: - Engine bring-up (tone and real sink share this)
 
+    /// Runs on a BACKGROUND thread (session work is proven safe there and
+    /// setActive succeeds). The ENGINE bring-up is then handed to the MAIN
+    /// thread, because that is where the fix lives: AURemoteIO failed with
+    /// "-50 ... no reporter associated with ... session" at connect, which is
+    /// the signature of an audio unit registering property listeners on a
+    /// thread with no run loop. A GCD global queue has none; the main thread
+    /// does. So: session off-main, engine on-main.
     private func runEngine(tone: Bool, attempt: Int, maxAttempts: Int) {
         let what = tone ? "tone" : "sink"
         step("\(what): attempt \(attempt)/\(maxAttempts)")
 
-        // Session FIRST. The whole point of the fix.
         guard establishSession() else {
             step("\(what): session not ready on attempt \(attempt)")
             scheduleRetryOrGiveUp(tone: tone, attempt: attempt, maxAttempts: maxAttempts,
@@ -289,6 +295,16 @@ final class AudioSink: @unchecked Sendable {
             return
         }
 
+        DispatchQueue.main.async { [weak self] in
+            self?.buildEngineOnMain(tone: tone, attempt: attempt, maxAttempts: maxAttempts)
+        }
+    }
+
+    /// MAIN THREAD. Builds, connects and starts the engine where AURemoteIO has
+    /// a run loop to attach its session reporter to. The prior -50 came from
+    /// doing exactly this on a run-loop-less background queue.
+    private func buildEngineOnMain(tone: Bool, attempt: Int, maxAttempts: Int) {
+        let what = tone ? "tone" : "sink"
         let rate = tone ? 48000.0 : Double(sampleRate)
         let channels: AVAudioChannelCount = tone ? 2 : AVAudioChannelCount(configChannels)
         guard let fmt = AVAudioFormat(standardFormatWithSampleRate: rate,
@@ -303,11 +319,11 @@ final class AudioSink: @unchecked Sendable {
             step("\(what): no render config; aborting"); finishAttempt(running: false); return
         }
 
-        step("\(what): attach + connect to mainMixer...")
+        step("\(what): [main] attach + connect to mainMixer...")
         newEngine.attach(srcNode)
         newEngine.connect(srcNode, to: newEngine.mainMixerNode, format: fmt)
 
-        step("\(what): engine.start()...")
+        step("\(what): [main] engine.start()...")
         do {
             try newEngine.start()
         } catch {
@@ -427,7 +443,7 @@ final class AudioSink: @unchecked Sendable {
         lock.unlock()
         // kick() guards inFlight; a prior FAILED attempt has cleared it, so a
         // second press genuinely retries rather than printing "already in flight".
-        kick { self.runEngine(tone: true, attempt: 1, maxAttempts: 5) }
+        kick { self.runEngine(tone: true, attempt: 1, maxAttempts: 2) }
     }
 
     // MARK: - Engine thread / interruptions
