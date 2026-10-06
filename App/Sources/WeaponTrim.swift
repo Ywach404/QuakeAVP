@@ -36,14 +36,52 @@ final class WeaponTrim: @unchecked Sendable {
     /// axe, shotgun, super shotgun, nailgun, super nailgun, GL, RL, lightning.
     private static let bits: [UInt32] = [4096, 1, 2, 4, 8, 16, 32, 64]
     /// Order: axe, shotgun, super shotgun, nailgun, super nailgun, GL, RL,
-    /// lightning. The axe (melee) and lightning gun (hitscan beam) load no
-    /// round, so their model has no projectile to trim -- default them to 1
-    /// (untouched); the projectile weapons default to a rear shave.
+    /// lightning. The axe (melee) loads no round, so its model has no
+    /// projectile to trim -- it stays at 1 (untouched).
     private static let defaultFront = [Float](repeating: 1, count: 8)
-    private static let defaultRear:  [Float] = [1, 0.79, 0.79, 0.79, 0.79, 0.79, 0.79, 1]
+    /// Promoted from a completed hands tuning pass (2026-10-06). The flat 0.79
+    /// these replace was one guess applied to every projectile weapon; each
+    /// gun's round actually sits at its own depth, which is why the measured
+    /// values spread from 0.500 to 0.851. The lightning gun turned out to need
+    /// a shave too -- it fires a hitscan beam and loads no round, but its
+    /// model's rear end still reaches back into the hand.
+    private static let defaultRear: [Float] = [
+        1,      // axe -- melee, nothing to trim
+        0.657,  // shotgun
+        0.500,  // super shotgun
+        0.733,  // nailgun
+        0.500,  // super nailgun
+        0.500,  // grenade launcher
+        0.522,  // rocket launcher
+        0.851   // lightning gun
+    ]
 
-    /// Per (input mode, weapon) placement. nil = never tuned, use the
-    /// profile's global. Index: mode.rawValue * 8 + weapon.
+    /// Per-weapon placement defaults, same index as `place`: mode * 8 + weapon.
+    ///
+    /// From the same pass, and **hands only**. PSVR2 stays nil because it was
+    /// never tuned -- where the gun is held differs between bare hands and a
+    /// controller, so copying these across would be inventing numbers rather
+    /// than promoting measured ones. Those weapons keep following the profile
+    /// global, exactly as before.
+    ///
+    /// The spread here is the whole argument for placement being per weapon:
+    /// `back` runs from 3.452 on the super shotgun to 15.841 on the lightning
+    /// gun. The axe is the only weapon needing a real `side` and a positive
+    /// `up`, which follows from it being swung rather than aimed.
+    private static let defaultPlace: [Placement?] = [
+        // mode 0 -- hands
+        Placement(back:  7.510, up:  6.913, side: -4.132),  // axe
+        Placement(back: 10.406, up:  0.071, side:  0.000),  // shotgun
+        Placement(back:  3.452, up: -1.651, side:  0.000),  // super shotgun
+        Placement(back:  7.078, up: -1.392, side:  0.000),  // nailgun
+        Placement(back:  9.592, up: -1.941, side:  0.000),  // super nailgun
+        Placement(back:  9.796, up: -1.401, side:  0.000),  // grenade launcher
+        Placement(back:  8.276, up: -4.937, side:  3.161),  // rocket launcher
+        Placement(back: 15.841, up: -1.900, side:  0.000),  // lightning gun
+        // mode 1 -- psvr2, untuned
+        nil, nil, nil, nil, nil, nil, nil, nil
+    ]
+
     /// Per-weapon placement. NOT grip: it slides the model along the same axis
     /// as `back`, so the two were one degree of freedom with two knobs, and
     /// tuning all eight weapons left grip at its default on every one of them
@@ -53,7 +91,10 @@ final class WeaponTrim: @unchecked Sendable {
     private let lock = NSLock()
     private var front = defaultFront
     private var rear  = defaultRear
-    private var place = [Placement?](repeating: nil, count: 16)
+    /// Per (input mode, weapon), index mode.rawValue * 8 + weapon. Starts at
+    /// the shipped tuning; `load` overrides any slot this device has stored.
+    /// nil = no value for that weapon, so it follows `global`.
+    private var place = defaultPlace
     private var mode = 0                    // InputMode.rawValue
     private var global = Placement(back: 0, up: 0, side: 0)
     /// The global grip, kept here only to push the cvar on profile apply.
@@ -136,9 +177,13 @@ final class WeaponTrim: @unchecked Sendable {
         publish(); save()
     }
 
-    /// Drop this weapon's own placement and fall back to the profile global.
+    /// Put this weapon back to its SHIPPED placement -- the on-device tuning
+    /// in `defaultPlace`, not the profile global. For hands that tuning is the
+    /// good answer, so reverting to the global would be a downgrade. A weapon
+    /// with no shipped default (every PSVR2 slot, for now) still falls back to
+    /// the global, which is what `nil` means.
     func resetCurrentPlacement() {
-        lock.lock(); place[slot] = nil; lock.unlock()
+        lock.lock(); place[slot] = Self.defaultPlace[slot]; lock.unlock()
         publish(); save()
     }
 
