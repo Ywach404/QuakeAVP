@@ -63,13 +63,15 @@ final class AudioSink: @unchecked Sendable {
         case off, session, tone, on
     }
 
-    /// QAVP_AUDIO selects the mode; default off, so a launch with no scheme
-    /// change loads the game silent exactly as the shelved build did. Audio is
-    /// opt-in until a device launch proves which path works.
+    /// QAVP_AUDIO selects the mode; default `on`. The device log proved the
+    /// audio failure (-50) fails FAST and does not hang the app -- the immersive
+    /// space kept rendering at 120fps right through it -- so `on` is safe as the
+    /// default: worst case is no sound and a clear log, never a stall. Set
+    /// QAVP_AUDIO=off to force the old silent boot, `tone`/`session` to isolate.
     static let mode: Mode = {
         let raw = ProcessInfo.processInfo.environment["QAVP_AUDIO"]?
-            .lowercased() ?? "off"
-        return Mode(rawValue: raw) ?? .off
+            .lowercased() ?? "on"
+        return Mode(rawValue: raw) ?? .on
     }()
 
     /// Everything the render block needs, by value. Immutable, so it can be
@@ -93,11 +95,16 @@ final class AudioSink: @unchecked Sendable {
     private var interruption: NSObjectProtocol?
     private var sampleRate = 44100
 
-    /// Lifecycle gates, both under `lock`. The real device starts only once BOTH
-    /// the ring exists (open ran) and the scene is active (sceneDidActivate ran).
-    /// `started` latches so nothing kicks a second bring-up.
+    /// Lifecycle gates, all under `lock`. `sceneActive` and the ring both gate
+    /// the real sink's auto-start. `inFlight` latches during a bring-up attempt
+    /// and `engineRunning` once one succeeds -- but a FAILED attempt clears
+    /// `inFlight`, so the Debug button (and the `on` retry) can try again
+    /// rather than wedging on a one-shot latch. The -50 proxy-session failure
+    /// came back on the FIRST attempt; a retriable latch is how we learn
+    /// whether it is transient.
     private var sceneActive = false
-    private var started = false
+    private var inFlight = false
+    private var engineRunning = false
 
     private init() {}
 
@@ -145,101 +152,140 @@ final class AudioSink: @unchecked Sendable {
                               cursor: cursor)
         sampleRate = speed
 
-        if sceneActive { kickLocked() }
-        else { step("ring ready (\(monoSamples) mono samples); waiting for scene-active") }
+        // If the scene already went active before the ring existed, start (with
+        // the same settle delay); otherwise sceneDidActivate drives it.
+        if sceneActive {
+            scheduleRealStart(afterSeconds: 2)
+        } else {
+            step("ring ready (\(monoSamples) mono samples); waiting for scene-active")
+        }
         return (buf, monoSamples)
     }
 
     // MARK: - Main actor (scene lifecycle)
 
-    /// From QuakeAVPApp at scenePhase == .active -- the moment the session is
-    /// reachable. Latches. For `on` it waits for the ring; the probes run
-    /// straight away.
+    /// From QuakeAVPApp at scenePhase == .active. For `on` it waits for the ring
+    /// and then brings the device up with retries; the probes run straight away.
     func sceneDidActivate() {
         switch Self.mode {
         case .off:
             return
         case .session:
-            kickOnce { self.runSessionProbe() }
+            kick { self.runSessionProbe() }
         case .tone:
-            kickOnce { self.runEngine(tone: true) }
+            kick { self.runEngine(tone: true, attempt: 1, maxAttempts: 5) }
         case .on:
             lock.lock()
             sceneActive = true
-            if config != nil { kickLocked() }
+            let go = config != nil
             lock.unlock()
+            // Delay the first real attempt past the launch handshake: audio ops
+            // DURING it hung before, audio ops when settled fail fast. 2s is
+            // well clear -- the log reaches 120fps within the first second.
+            if go { scheduleRealStart(afterSeconds: 2) }
         }
     }
 
-    /// Caller holds `lock`. Real-sink bring-up, once.
-    private func kickLocked() {
-        guard !started else { return }
-        started = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.runEngine(tone: false)
+    /// Start the real sink after a settle delay, once.
+    private func scheduleRealStart(afterSeconds: Double) {
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + afterSeconds) {
+            [weak self] in
+            guard let self else { return }
+            self.kick { self.runEngine(tone: false, attempt: 1, maxAttempts: 8) }
         }
     }
 
-    /// Probe bring-up, once, off the main thread so a hang leaks a disposable
-    /// thread rather than freezing the UI.
-    private func kickOnce(_ body: @escaping () -> Void) {
+    /// Claim an attempt. Returns false if one is in flight or an engine is
+    /// already running. Off the main thread so a hang leaks a disposable thread.
+    private func kick(_ body: @escaping () -> Void) {
         lock.lock()
-        guard !started else { lock.unlock(); return }
-        started = true
+        guard !inFlight, !engineRunning else { lock.unlock(); return }
+        inFlight = true
         lock.unlock()
         DispatchQueue.global(qos: .userInitiated).async(execute: body)
     }
 
-    // MARK: - Session probe (isolates setActive)
+    private func finishAttempt(running: Bool) {
+        lock.lock(); inFlight = false; engineRunning = running; lock.unlock()
+    }
 
-    /// ONLY the audio session, so a stall here indicts setActive by itself. This
-    /// is the one place setActive is called at all; the real sink never does.
-    private func runSessionProbe() {
-        let session = AVAudioSession.sharedInstance()
+    // MARK: - Session (now established FIRST, explicitly)
+
+    /// The fix the device log forced: AVAudioEngine's AURemoteIO cannot create
+    /// its proxy session implicitly in this app ("-50 Session lookup failed"
+    /// at connect time, even fully up and rendering). So establish the session
+    /// ourselves, before the engine, and the engine finds it instead of trying
+    /// to make one. setActive's old -50 was a boot-timing artefact; this runs
+    /// well after launch. Returns false on a clean failure (caller retries).
+    private func establishSession() -> Bool {
+        let s = AVAudioSession.sharedInstance()
         step("session: setCategory(.playback)...")
         do {
-            try session.setCategory(.playback, mode: .default, options: [])
+            try s.setCategory(.playback, mode: .default, options: [])
         } catch {
-            step("session: setCategory FAILED: \(error)"); return
+            step("session: setCategory FAILED: \(error)"); return false
         }
-        step("session: setActive(true)...  (if the log stops here, THIS is the hang)")
+        step("session: setActive(true)...")
         do {
-            try session.setActive(true)
+            try s.setActive(true)
         } catch {
-            step("session: setActive FAILED: \(error)"); return
+            step("session: setActive FAILED: \(error)"); return false
         }
-        step("session: ACTIVE and idle -- setActive returns fine here, so the "
-            + "stall is elsewhere. Try QAVP_AUDIO=tone next.")
+        step("session: ACTIVE ok")
+        return true
+    }
+
+    // MARK: - Session-only probe
+
+    private func runSessionProbe() {
+        if establishSession() {
+            step("session: established and idle; the -50 is NOT the session itself")
+        } else {
+            step("session: could NOT be established -- this is the -50 at its source")
+        }
+        finishAttempt(running: false)
     }
 
     // MARK: - Engine bring-up (tone and real sink share this)
 
-    private func runEngine(tone: Bool) {
+    private func runEngine(tone: Bool, attempt: Int, maxAttempts: Int) {
         let what = tone ? "tone" : "sink"
-        step("\(what): building engine (implicit session, no setActive)...")
+        step("\(what): attempt \(attempt)/\(maxAttempts)")
+
+        // Session FIRST. The whole point of the fix.
+        guard establishSession() else {
+            step("\(what): session not ready on attempt \(attempt)")
+            scheduleRetryOrGiveUp(tone: tone, attempt: attempt, maxAttempts: maxAttempts,
+                                  why: "session -50")
+            return
+        }
 
         let rate = tone ? 48000.0 : Double(sampleRate)
         let channels: AVAudioChannelCount = tone ? 2 : AVAudioChannelCount(configChannels)
         guard let fmt = AVAudioFormat(standardFormatWithSampleRate: rate,
                                       channels: channels) else {
-            step("\(what): no standard format at \(rate) Hz; giving up"); return
+            step("\(what): no standard format at \(rate) Hz; giving up")
+            finishAttempt(running: false); return
         }
 
         let newEngine = AVAudioEngine()
         let srcNode = tone ? makeToneNode(format: fmt) : makeSinkNode(format: fmt)
-        guard let srcNode else { step("\(what): no render config; aborting"); return }
+        guard let srcNode else {
+            step("\(what): no render config; aborting"); finishAttempt(running: false); return
+        }
 
-        step("\(what): attach + connect to mainMixer...  (this reaches the audio "
-            + "graph; a stall here is the engine, not the session)")
+        step("\(what): attach + connect to mainMixer...")
         newEngine.attach(srcNode)
         newEngine.connect(srcNode, to: newEngine.mainMixerNode, format: fmt)
 
-        step("\(what): engine.start()...  (if the log stops here, start() is the hang)")
+        step("\(what): engine.start()...")
         do {
             try newEngine.start()
         } catch {
-            step("\(what): start FAILED cleanly: \(error)")
+            step("\(what): start FAILED: \(error)")
             newEngine.detach(srcNode)
+            scheduleRetryOrGiveUp(tone: tone, attempt: attempt, maxAttempts: maxAttempts,
+                                  why: "start \(error)")
             return
         }
 
@@ -248,13 +294,34 @@ final class AudioSink: @unchecked Sendable {
         self.node = srcNode
         if !tone { observeInterruptionsLocked() }
         lock.unlock()
+        finishAttempt(running: true)
 
         let real = newEngine.outputNode.outputFormat(forBus: 0).sampleRate
         if tone {
             step("tone: PLAYING 440 Hz at device \(Int(real)) Hz -- if you HEAR this, "
-                + "the engine/lifecycle are good and the real sink will work too")
+                + "the engine works and the real sink (QAVP_AUDIO=on) will too")
         } else {
             step("sink: device UP, \(Int(rate)) Hz requested / device \(Int(real)) Hz")
+        }
+    }
+
+    /// Clears the in-flight latch and, if attempts remain, schedules another a
+    /// second later. The -50 may be the session server not yet ready for this
+    /// process even past launch; a few spaced retries cost nothing and tell us
+    /// whether it is transient or permanent.
+    private func scheduleRetryOrGiveUp(tone: Bool, attempt: Int, maxAttempts: Int, why: String) {
+        finishAttempt(running: false)
+        guard attempt < maxAttempts else {
+            step("\((tone ? "tone" : "sink")): gave up after \(attempt) attempts (\(why)); "
+                + "if every one was -50, the session server is refusing this app a "
+                + "session -- not an in-process fix")
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1) {
+            [weak self] in
+            guard let self else { return }
+            self.kick { self.runEngine(tone: tone, attempt: attempt + 1,
+                                       maxAttempts: maxAttempts) }
         }
     }
 
@@ -327,13 +394,11 @@ final class AudioSink: @unchecked Sendable {
     /// actually loaded, i.e. with QAVP_AUDIO unset/off.
     func requestToneTest() {
         lock.lock()
-        if engine != nil { lock.unlock(); step("device already up; silence is the mixer, not the device"); return }
-        guard !started else { lock.unlock(); step("a start is already in flight"); return }
-        started = true
+        if engineRunning { lock.unlock(); step("device already up; silence is the mixer, not the device"); return }
         lock.unlock()
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.runEngine(tone: true)
-        }
+        // kick() guards inFlight; a prior FAILED attempt has cleared it, so a
+        // second press genuinely retries rather than printing "already in flight".
+        kick { self.runEngine(tone: true, attempt: 1, maxAttempts: 5) }
     }
 
     // MARK: - Engine thread / interruptions
