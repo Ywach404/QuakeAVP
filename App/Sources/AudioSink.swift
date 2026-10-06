@@ -133,13 +133,20 @@ final class AudioSink: @unchecked Sendable {
 
     private init() {}
 
-    /// Step trace. Printed BEFORE the call it names, so a silent log after a
-    /// step line is that step hanging -- the whole point of the probe. Goes to
-    /// os_log too, so a debugger-detached Home View launch is still observable
-    /// in Console.app.
+    /// Wired by ContentView to the in-headset console (engine.note), so the
+    /// audio trace is readable IN THE HEADSET on a debugger-detached Home View
+    /// launch -- no Mac, no Console.app. That is what finally makes the detached
+    /// test practical.
+    nonisolated(unsafe) var onLog: (@Sendable (String) -> Void)?
+
+    /// Step trace, to three places: print (Xcode), os_log (Console.app, even
+    /// detached), and the in-headset console (readable with no Mac at all).
+    /// Printed BEFORE the call it names, so a silent log after a step line is
+    /// that step hanging.
     private func step(_ s: String) {
         print("[audio] \(s)")
         Self.log.notice("[audio] \(s, privacy: .public)")
+        onLog?("[audio] \(s)")
     }
 
     // MARK: - Engine thread (SNDDMA_Init)
@@ -331,17 +338,33 @@ final class AudioSink: @unchecked Sendable {
         }
 
         step("\(what): [main] attach + connect to mainMixer...")
-        newEngine.attach(srcNode)
-        newEngine.connect(srcNode, to: newEngine.mainMixerNode, format: fmt)
+        // connect raises an ObjC NSException (not a Swift error) when AURemoteIO
+        // has failed its session -- that is the "kills the app" crash. Catch it.
+        var exReason: NSString?
+        let connected = QAVPTry({
+            newEngine.attach(srcNode)
+            newEngine.connect(srcNode, to: newEngine.mainMixerNode, format: fmt)
+        }, &exReason)
+        guard connected else {
+            let r = (exReason as String?) ?? "unknown"
+            step("\(what): connect RAISED [\(r)] -- caught; this is the AURemoteIO "
+                + "-50, the app survives it now")
+            scheduleRetryOrGiveUp(tone: tone, attempt: attempt, maxAttempts: maxAttempts,
+                                  why: "connect exception")
+            return
+        }
 
         step("\(what): [main] engine.start()...")
-        do {
-            try newEngine.start()
-        } catch {
-            step("\(what): start FAILED: \(error)")
-            newEngine.detach(srcNode)
+        var startError: Error?
+        let startedOk = QAVPTry({
+            do { try newEngine.start() } catch { startError = error }
+        }, nil)
+        if !startedOk || startError != nil {
+            let r = startError.map { "\($0)" } ?? "ObjC exception"
+            step("\(what): start FAILED [\(r)]")
+            QAVPTry({ newEngine.detach(srcNode) }, nil)
             scheduleRetryOrGiveUp(tone: tone, attempt: attempt, maxAttempts: maxAttempts,
-                                  why: "start \(error)")
+                                  why: "start failed")
             return
         }
 
