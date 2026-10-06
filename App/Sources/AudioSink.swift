@@ -79,24 +79,34 @@ final class AudioSink: @unchecked Sendable {
         case off, ring, session, tone, on
     }
 
-    /// QAVP_AUDIO selects the mode; default `off`.
+    /// QAVP_AUDIO selects the mode; default `on` -- audio is the shipping path.
     ///
-    /// `off` is the default on purpose, and the hard lesson behind it: enabling
-    /// the real sink (`on`) makes Quake's S_Init actually initialise and run its
-    /// mixer on device for the FIRST time ever -- precache, codec init, and the
-    /// per-frame S_Update -- and something in that path hangs the engine thread
-    /// before it reaches the frame loop, so the immersive space never gets a
-    /// frame and the app "loads forever." That is a SEPARATE bug from the -50
-    /// AudioSession failure, and it must not hold the whole app hostage. So the
-    /// default boots silent and loads, and audio is proven in stages:
-    ///   tone     -> does AVAudioEngine make sound at all (session + engine)?
-    ///   session  -> does setActive succeed, in isolation?
-    ///   on       -> the real sink (only once tone works AND S_Init is fixed).
-    /// The Debug-tab tone button runs `tone` on demand from this default launch.
+    /// The whole saga resolved to ONE cause: running under the Xcode debugger.
+    /// lldb ptracing the process disrupted the audio XPC (and the compositor
+    /// XPC), which produced the "-50 Creating proxy session failed" at connect
+    /// AND, almost certainly, the "loads forever" boot hang -- the latter being
+    /// the immersive layer's XPC stalling, not Quake's S_Init. Launched normally
+    /// from the Home View, with no debugger attached, AVAudioEngine comes up and
+    /// plays. So `on` is correct as the default, and it MUST be the default,
+    /// because env vars only reach launches started FROM Xcode -- a Home View
+    /// launch never sees QAVP_AUDIO, so the shipping path cannot be opt-in.
+    ///
+    /// The env var still overrides from Xcode, which is the recovery hatch: if a
+    /// Home View launch ever misbehaves, run once from Xcode with QAVP_AUDIO=off
+    /// (loads clean -- off needs no audio session) and flip the Debug "Game
+    /// audio" toggle, which persists and wins on the next Home View launch.
     static let mode: Mode = {
-        let raw = ProcessInfo.processInfo.environment["QAVP_AUDIO"]?
-            .lowercased() ?? "off"
-        return Mode(rawValue: raw) ?? .off
+        if let raw = ProcessInfo.processInfo.environment["QAVP_AUDIO"]?.lowercased(),
+           let m = Mode(rawValue: raw) {
+            return m                          // Xcode override wins
+        }
+        // Persisted Debug toggle; default on. UserDefaults, because env vars do
+        // not reach a Home View launch and this must be settable from inside the
+        // app for recovery.
+        if UserDefaults.standard.object(forKey: "audioEnabled") != nil {
+            return UserDefaults.standard.bool(forKey: "audioEnabled") ? .on : .off
+        }
+        return .on
     }()
 
     /// Everything the render block needs, by value. Immutable, so it can be
