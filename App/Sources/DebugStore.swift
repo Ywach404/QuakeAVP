@@ -29,6 +29,10 @@ final class DebugStore {
     var turnDebug: Bool    { didSet { save(); HandDebug.shared.turnDebug = turnDebug } }
     var fireDebug: Bool    { didSet { save(); HandDebug.shared.fireDebug = fireDebug } }
     var showLimbs: Bool    { didSet { save(); ImmersionSettings.shared.handsVisible = showLimbs } }
+    /// The low-poly stand-in hand drawn over your real one while the world is
+    /// solid. Hands-only by nature: HandInput is the only thing that publishes
+    /// it, so with a controller attached there is nothing to show either way.
+    var virtualHands: Bool { didSet { save(); VirtualHand.shared.visible = virtualHands } }
     /// Engine cvar, so this one only takes effect through applyEngine.
     var pathDebug: Bool    { didSet { save() } }
 
@@ -54,6 +58,7 @@ final class DebugStore {
         fireDebug   = d["fireDebug"] ?? false
         pathDebug   = d["pathDebug"] ?? false
         showLimbs   = d["showLimbs"] ?? true      // passthrough limbs on by default
+        virtualHands = d["virtualHands"] ?? true  // stand-in hand on by default
     }
 
     private func save() {
@@ -61,6 +66,7 @@ final class DebugStore {
             "fingerDebug": fingerDebug, "aimRayDebug": aimRayDebug,
             "strobeDebug": strobeDebug, "turnDebug": turnDebug,
             "fireDebug": fireDebug, "pathDebug": pathDebug, "showLimbs": showLimbs,
+            "virtualHands": virtualHands,
         ], forKey: Self.key)
     }
 
@@ -73,6 +79,7 @@ final class DebugStore {
         HandDebug.shared.turnDebug = turnDebug
         HandDebug.shared.fireDebug = fireDebug
         ImmersionSettings.shared.handsVisible = showLimbs
+        VirtualHand.shared.visible = virtualHands
         VRSettings.shared.inputLog = inputLog
     }
 
