@@ -328,12 +328,12 @@ final class HandInput: @unchecked Sendable {
         fireStatusVerts = buildFireStatus(aim, fired: now - lastFireTime < Self.fireFlash)
         fireDebugVerts = buildFireDebug(aim, now: now)
 
-        // Turn: one of three styles (Comfort menu). Stick and clutch accumulate
-        // hand motion into comfort snaps via emitTurnSnap; flick is the whip.
+        // Turning is flick-only: whip the gun hand sideways to snap. Stick and
+        // clutch were removed -- flick is the one that reads well in the headset.
         let dt = Float(max(0, min(0.1, now - lastTurnTime)))
         lastTurnTime = now
-        switch VRSettings.shared.turnStyle {
-        case .flick:
+        _ = dt   // retained for the (now unused) accumulate path's signature
+        do {
             turnIntent = 0; stickNeutral = nil; clutchAnchor = nil
             // The pinch-drag is checked first (a deliberate held fallback); if it
             // isn't driving, a quick sideways whip fires one snap.
@@ -378,47 +378,6 @@ final class HandInput: @unchecked Sendable {
                            posThreshold: posThreshold, negThreshold: negThreshold, refSpeed: refSpeed,
                            armed: flickArmed, firing: firing)
 
-        case .stick:
-            // Pinchless: off-hand lateral displacement from an auto-zeroed
-            // neutral sets the snap cadence. Measured in the ROOM frame, so
-            // "hand held right" keeps turning right no matter how far you've
-            // already turned; resting the hand re-centres.
-            if let ow = move.wrist {
-                let lat = (TrackingSpace.correction * SIMD4(ow, 1)).x
-                let neutral = stickNeutral ?? lat
-                let offset = lat - neutral
-                turnDebugOffset = offset
-                if abs(offset) < Self.stickDeadzone {
-                    stickNeutral = neutral + (lat - neutral) * 0.08   // rest redefines centre
-                } else {
-                    stickNeutral = neutral                            // hold centre while turning
-                    let rate = (abs(offset) - Self.stickDeadzone) * Self.stickGain
-                    turnIntent += rate * dt * (offset > 0 ? 1 : -1)
-                }
-            } else {
-                stickNeutral = nil
-                turnIntent = 0
-                turnDebugOffset = 0
-            }
-            emitTurnSnap(now: now, slice: &slice)
-            turnGaugeVerts = buildTurnDebug(wrist: move.wrist, forearm: move.aimBaseDir,
-                                            engaged: abs(turnDebugOffset) >= Self.stickDeadzone,
-                                            offset: turnDebugOffset, deadzone: Self.stickDeadzone, now: now)
-
-        case .clutch:
-            // MPH stylus: hold the aim-hand MIDDLE pinch to engage, drag
-            // laterally to add snap intent, release to re-centre. Fire stays on
-            // the index, so shooting and turning never collide.
-            if aim.middlePinched, let aw = aim.wrist {
-                let lat = (TrackingSpace.correction * SIMD4(aw, 1)).x
-                if let anchor = clutchAnchor { turnIntent += (lat - anchor) * Self.clutchGain }
-                clutchAnchor = lat
-            } else {
-                clutchAnchor = nil
-            }
-            emitTurnSnap(now: now, slice: &slice)
-            turnGaugeVerts = buildTurnDebug(wrist: aim.wrist, forearm: aim.aimBaseDir,
-                                            engaged: aim.middlePinched, offset: 0, deadzone: 0, now: now)
         }
 
         // Input telemetry: the exact aim + turn signals (final slice), so a miss
@@ -804,21 +763,34 @@ final class HandInput: @unchecked Sendable {
     ///   throughout. Handedness-agnostic via rightHanded.
     private func wheel(left: HandState, right: HandState) {
         let rightHanded = VRSettings.shared.rightHanded
-        let summonHand = rightHanded ? left : right   // off hand holds it open
+        let offHand = rightHanded ? left : right   // off hand holds AND anchors
+        let gunHand = rightHanded ? right : left
 
-        WheelState.shared.setHold(summonHand.palmUp, source: .hands)
-        guard summonHand.palmUp else { return }
-
-        let selectHand: HandState
-        switch VRSettings.shared.wheelSelectHand {
-        case .offHand:   selectHand = summonHand
-        case .dominant:  selectHand = rightHanded ? right : left
-        }
+        WheelState.shared.setHold(offHand.palmUp, source: .hands)
+        guard offHand.palmUp else { return }
 
         let correction = TrackingSpace.correction
-        if let wrist = selectHand.wrist {
+        // The ring is ALWAYS anchored to the off hand -- it stays locked to that
+        // hand (flipped for left-handers) in both selection modes. The earlier
+        // version fed the gun wrist here, which dragged the ring to the gun hand
+        // (toward the body centre); that was the bug.
+        if let wrist = offHand.wrist {
             let p = correction * SIMD4(wrist, 1)
             WheelState.shared.setAnchor(trackingPosition: SIMD3(p.x, p.y, p.z))
+        }
+
+        // "Other hand": the gun hand POINTS to select, exactly like the Sense
+        // controllers (setPointer) -- the ring does not move. Default (offHand)
+        // keeps the off-hand wrist-travel selection setAnchor just derived.
+        if VRSettings.shared.wheelSelectHand == .dominant,
+           let o0 = gunHand.aimOrigin, let d0 = gunHand.aimDir {
+            let oc = correction * SIMD4(o0, 1)
+            let dc = correction * SIMD4(d0, 0)
+            let dir = SIMD3(dc.x, dc.y, dc.z)
+            if simd_length(dir) > 1e-5 {
+                WheelState.shared.setPointer(trackingOrigin: SIMD3(oc.x, oc.y, oc.z),
+                                             direction: simd_normalize(dir))
+            }
         }
     }
 
