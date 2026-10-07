@@ -60,6 +60,10 @@ extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
 extern int QR_HandOrigin (vec3_t out);	/* M6 hand position, world (in_null.c) */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 extern cvar_t vr_reticle;		/* aiming reticle toggle (alt/with the laser) */
+extern cvar_t vr_reticlestyle;		/* reticle shape 0..4 */
+extern cvar_t vr_reticlecolor;		/* reticle palette index */
+extern cvar_t vr_lasercolor;		/* laser palette index */
+extern cvar_t vr_wheelclip;		/* wheel-model front-trim keep fraction */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 /* The held gun's own placement, pulled from the table the UI publishes; 0
@@ -76,6 +80,10 @@ extern cvar_t vr_projhand;					/* draw my missiles from the hand */
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
    and the gun draws in the world like any other alias entity. */
 static int qr_handweapon;
+/* Set only while QR_EmitWheel emits its ring models, so the alias path knows to
+   front-trim the baked muzzle round off wheel icons (vr_wheelclip) the way the
+   hand weapon trims its own (vr_weaponclip). */
+static int qr_wheelclip_on;
 
 /* Visual weapon recoil: an eased 0..1 kick on the hand weapon, armed when the
    view weapon animates a new fire frame and decayed on the sim clock. */
@@ -3035,13 +3043,14 @@ extern cvar_t vr_weaponclip, vr_weaponclipback;
 extern cvar_t vr_wheelpitch, vr_wheelyaw, vr_wheelroll, vr_wheelradius;
 extern cvar_t vr_wheelfwd, vr_wheelup, vr_wheelside;	/* ring fine-placement, body frame */
 
-static void QR_WeaponClip (aliashdr_t *h, float out[4])
+static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
 {
 	int		i, nv, minb = 255, maxb = 0, front, rear, nb = 0;
 	trivertx_t	*v;
 	double		sy = 0, sz = 0;
-	float		ff = CLAMP (0.3f, vr_weaponclip.value, 1.f);       /* keep from rear */
-	float		fb = CLAMP (0.3f, vr_weaponclipback.value, 1.f);   /* keep from front */
+
+	ff = CLAMP (0.3f, ff, 1.f);       /* keep from rear */
+	fb = CLAMP (0.3f, fb, 1.f);       /* keep from front */
 
 	/* disabled: front plane above every byte, rear plane below every byte */
 	out[0] = 255.f; out[1] = -1.f; out[2] = out[3] = 128.f;
@@ -3065,6 +3074,12 @@ static void QR_WeaponClip (aliashdr_t *h, float out[4])
 	out[1] = (fb  >= 0.999f) ? -1.f  : (float) rear;
 	out[2] = nb ? (float)(sy / nb) : 128.f;
 	out[3] = nb ? (float)(sz / nb) : 128.f;
+}
+
+/* The held weapon's clip, driven by the two trim cvars. */
+static void QR_WeaponClip (aliashdr_t *h, float out[4])
+{
+	QR_WeaponClipF (h, vr_weaponclip.value, vr_weaponclipback.value, out);
 }
 
 /*
@@ -3155,6 +3170,12 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 		if (vr_weapontint.value)
 			rec.dbg[0] = 1.f;   /* debug: paint the hand weapon green */
 	}
+	else if (qr_wheelclip_on && vr_wheelclip.value < 0.999f)
+		/* Trim the REAR only (ff = 1), exactly like the hand weapon's
+		   vr_weaponclipback: the baked round sits near the grip, NOT at the
+		   muzzle, so front-trimming (what the first pass did) chopped the
+		   barrels to stubs. Keep the whole barrel, retract the rear round. */
+		QR_WeaponClipF (paliashdr, 1.f, vr_wheelclip.value, rec.clip);
 
 	entity = QR_AppendEntity (slot, &rec);
 
@@ -3588,14 +3609,37 @@ would hit, no trace needed. `angles` is cl.viewangles, the fired aim, so the
 line lands where the bullets do.
 ================
 */
+/* Shared reticle/laser colour palette. Index set by vr_lasercolor /
+   vr_reticlecolor; the laser default (0) is the historical red, the reticle
+   default (3) the historical amber. */
+#define QR_VRCOLORS	9
+static void QR_VrColor (int idx, float *r, float *g, float *b)
+{
+	static const float pal[QR_VRCOLORS][3] = {
+		{1.00f, 0.15f, 0.12f},	/* 0 red        */
+		{0.20f, 1.00f, 0.30f},	/* 1 green      */
+		{0.20f, 0.90f, 1.00f},	/* 2 cyan       */
+		{1.00f, 0.85f, 0.20f},	/* 3 amber      */
+		{1.00f, 1.00f, 1.00f},	/* 4 white      */
+		{1.00f, 0.25f, 0.90f},	/* 5 magenta    */
+		{1.00f, 0.95f, 0.20f},	/* 6 yellow     */
+		{0.35f, 0.55f, 1.00f},	/* 7 blue       */
+		{0.82f, 0.66f, 0.46f},	/* 8 Quake beige -- the status-bar tan */
+	};
+	if (idx < 0 || idx >= QR_VRCOLORS) idx = 0;
+	*r = pal[idx][0]; *g = pal[idx][1]; *b = pal[idx][2];
+}
+
 static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
 			  const vec3_t angles)
 {
 	vec3_t	fwd, right, up, end, look, perp;
 	vec3_t	a0, a1, b0, b1;
 	float	hw = 0.35f;	/* half width, Quake units */
+	float	cr, cg, cb;
 	int	k;
 
+	QR_VrColor ((int) vr_lasercolor.value, &cr, &cg, &cb);
 	AngleVectors (angles, fwd, right, up);
 	VectorMA (start, 4096.f, fwd, end);
 	/* Face the eye from the START, not the beam midpoint. The midpoint sits
@@ -3621,68 +3665,304 @@ static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
 		b0[k] = end[k] - perp[k] * hw;
 		b1[k] = end[k] + perp[k] * hw;
 	}
-	QR_ParticleVert (slot, a0, 1.f, 0.15f, 0.12f);
-	QR_ParticleVert (slot, a1, 1.f, 0.15f, 0.12f);
-	QR_ParticleVert (slot, b1, 1.f, 0.15f, 0.12f);
-	QR_ParticleVert (slot, a0, 1.f, 0.15f, 0.12f);
-	QR_ParticleVert (slot, b1, 1.f, 0.15f, 0.12f);
-	QR_ParticleVert (slot, b0, 1.f, 0.15f, 0.12f);
+	QR_ParticleVert (slot, a0, cr, cg, cb);
+	QR_ParticleVert (slot, a1, cr, cg, cb);
+	QR_ParticleVert (slot, b1, cr, cg, cb);
+	QR_ParticleVert (slot, a0, cr, cg, cb);
+	QR_ParticleVert (slot, b1, cr, cg, cb);
+	QR_ParticleVert (slot, b0, cr, cg, cb);
+}
+
+/* --- reticle primitives, all billboarded in the (bx,by) plane at centre c --- */
+#define QR_RET_SEGS	18
+
+/* A filled rectangle, half-extents hx along bx and hy along by. */
+static void QR_RetQuad (qr_frame_slot_t *slot, const vec3_t c,
+			const vec3_t bx, const vec3_t by, float hx, float hy,
+			float r, float g, float b)
+{
+	vec3_t	p0, p1, p2, p3;
+	int	k;
+	for (k = 0; k < 3; k++)
+	{
+		p0[k] = c[k] - bx[k]*hx - by[k]*hy;
+		p1[k] = c[k] + bx[k]*hx - by[k]*hy;
+		p2[k] = c[k] + bx[k]*hx + by[k]*hy;
+		p3[k] = c[k] - bx[k]*hx + by[k]*hy;
+	}
+	QR_ParticleVert (slot, p0, r, g, b); QR_ParticleVert (slot, p1, r, g, b);
+	QR_ParticleVert (slot, p2, r, g, b); QR_ParticleVert (slot, p0, r, g, b);
+	QR_ParticleVert (slot, p2, r, g, b); QR_ParticleVert (slot, p3, r, g, b);
+}
+
+/* A filled disc of radius rad (triangle fan). */
+static void QR_RetDisc (qr_frame_slot_t *slot, const vec3_t c,
+			const vec3_t bx, const vec3_t by, float rad,
+			float r, float g, float b)
+{
+	vec3_t	p0, p1;
+	int	i, k;
+	for (i = 0; i < QR_RET_SEGS; i++)
+	{
+		float a0 = 2.f*(float)M_PI*i/QR_RET_SEGS;
+		float a1 = 2.f*(float)M_PI*(i+1)/QR_RET_SEGS;
+		for (k = 0; k < 3; k++)
+		{
+			p0[k] = c[k] + rad*(bx[k]*cosf(a0) + by[k]*sinf(a0));
+			p1[k] = c[k] + rad*(bx[k]*cosf(a1) + by[k]*sinf(a1));
+		}
+		QR_ParticleVert (slot, c, r, g, b);
+		QR_ParticleVert (slot, p0, r, g, b);
+		QR_ParticleVert (slot, p1, r, g, b);
+	}
+}
+
+/* An annulus between rin and rout (a drawn circle outline). */
+static void QR_RetRing (qr_frame_slot_t *slot, const vec3_t c,
+			const vec3_t bx, const vec3_t by, float rin, float rout,
+			float r, float g, float b)
+{
+	vec3_t	i0, i1, o0, o1;
+	int	i, k;
+	for (i = 0; i < QR_RET_SEGS; i++)
+	{
+		float a0 = 2.f*(float)M_PI*i/QR_RET_SEGS;
+		float a1 = 2.f*(float)M_PI*(i+1)/QR_RET_SEGS;
+		for (k = 0; k < 3; k++)
+		{
+			i0[k] = c[k] + rin *(bx[k]*cosf(a0) + by[k]*sinf(a0));
+			i1[k] = c[k] + rin *(bx[k]*cosf(a1) + by[k]*sinf(a1));
+			o0[k] = c[k] + rout*(bx[k]*cosf(a0) + by[k]*sinf(a0));
+			o1[k] = c[k] + rout*(bx[k]*cosf(a1) + by[k]*sinf(a1));
+		}
+		QR_ParticleVert (slot, i0, r, g, b); QR_ParticleVert (slot, o0, r, g, b);
+		QR_ParticleVert (slot, o1, r, g, b); QR_ParticleVert (slot, i0, r, g, b);
+		QR_ParticleVert (slot, o1, r, g, b); QR_ParticleVert (slot, i1, r, g, b);
+	}
 }
 
 /*
 ================
-QR_EmitReticle -- a small view-facing crosshair where the shot lands. Traces
-the aim from the muzzle, drops a billboarded plus at the hit point sized to
-stay a constant angular size, in the depth-tested particle channel. An
-alternative (or companion) to the laser for players who don't want a beam.
+QR_TraceSurface -- like TraceLine (chase.c) but also returns the hit plane's
+normal, which the ground-decal reticle needs. Returns true on a real hit.
+================
+*/
+static qboolean QR_TraceSurface (const vec3_t start, const vec3_t end,
+				 vec3_t impact, vec3_t normal)
+{
+	trace_t	trace;
+
+	memset (&trace, 0, sizeof(trace));
+	if (!cl.worldmodel)
+	{
+		VectorCopy (end, impact);
+		normal[0] = normal[1] = normal[2] = 0.f;
+		return false;
+	}
+	SV_RecursiveHullCheck (cl.worldmodel->hulls, 0, 0, 1,
+			       (float *) start, (float *) end, &trace);
+	VectorCopy (trace.endpos, impact);
+	VectorCopy (trace.plane.normal, normal);
+	return trace.fraction < 1.f;
+}
+
+/*
+================
+QR_NearestEntityHit -- the nearest visible entity the ray start+t*dir enters,
+within maxdist, by ray/AABB against each visedict's model bounds (a touch
+inflated so hovering reads generously). The world trace ignores monsters and
+movers, so without this the reticle sails through an enemy onto the wall. dir
+must be unit length. Returns the entry distance in *outt.
+================
+*/
+static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
+				     float maxdist, float *outt)
+{
+	int		i, a;
+	qboolean	found = false;
+	float		best = maxdist;
+
+	for (i = 0; i < cl_numvisedicts; i++)
+	{
+		entity_t	*e = cl_visedicts[i];
+		vec3_t		amin, amax, lo, hi;
+		float		tmin = 1.f, tmax = best, t1, t2;
+		qboolean	miss = false;
+
+		if (!e->model)
+			continue;
+		if (e->model->type != mod_alias && e->model->type != mod_brush)
+			continue;
+		/* Skip things the shot passes through, so the reticle does too:
+		   gibs and gibbed heads (non-solid), and -- the spazzing bug -- the
+		   player's OWN in-flight projectiles, which fly straight down the aim
+		   line and would snatch the reticle off into the air. */
+		{
+			const char *mn = e->model->name;
+			if (strstr (mn, "gib") || !strncmp (mn, "progs/h_", 8) ||
+			    strstr (mn, "spike")   || strstr (mn, "grenade") ||
+			    strstr (mn, "missile") || strstr (mn, "lavaball") ||
+			    strstr (mn, "laser"))
+				continue;
+		}
+
+		/* Bounds. For an alias model use the CURRENT FRAME's bbox, not the
+		   all-frames union: a corpse in a death frame is flat and near the
+		   floor, where the union box would stand tall and leave the reticle
+		   hanging in the air above it. */
+		if (e->model->type == mod_alias)
+		{
+			aliashdr_t	*ah = (aliashdr_t *) Mod_Extradata (e->model);
+			int		fr = e->frame;
+
+			if (fr < 0 || fr >= ah->numframes) fr = 0;
+			for (a = 0; a < 3; a++)
+			{
+				lo[a] = ah->frames[fr].bboxmin.v[a] * ah->scale[a] + ah->scale_origin[a];
+				hi[a] = ah->frames[fr].bboxmax.v[a] * ah->scale[a] + ah->scale_origin[a];
+			}
+		}
+		else
+		{
+			VectorCopy (e->model->mins, lo);
+			VectorCopy (e->model->maxs, hi);
+		}
+		for (a = 0; a < 3; a++)
+		{
+			amin[a] = e->origin[a] + lo[a] - 2.f;
+			amax[a] = e->origin[a] + hi[a] + 2.f;
+			if (fabsf (dir[a]) < 1e-5f)
+			{
+				if (start[a] < amin[a] || start[a] > amax[a]) { miss = true; break; }
+				continue;
+			}
+			t1 = (amin[a] - start[a]) / dir[a];
+			t2 = (amax[a] - start[a]) / dir[a];
+			if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+			if (t1 > tmin) tmin = t1;
+			if (t2 < tmax) tmax = t2;
+			if (tmin > tmax) { miss = true; break; }
+		}
+		if (miss)
+			continue;
+		if (tmin < best)
+		{
+			best = tmin;
+			found = true;
+		}
+	}
+	*outt = best;
+	return found;
+}
+
+/*
+================
+QR_EmitReticle -- an aim mark where the shot lands, in the depth-tested
+particle channel. It lies FLAT ON THE HIT SURFACE (a decal oriented to the
+surface normal), lifted a hair toward the eye -- so on a wall it faces you and
+on the floor it lies flat like a teleport marker, and it no longer clips into
+the geometry when you aim down. In open air (no hit) it billboards to face the
+eye at a fixed throw. Shape is vr_reticlestyle (cross / circle+dot / dot /
+circle), colour vr_reticlecolor.
 ================
 */
 static void QR_EmitReticle (qr_frame_slot_t *slot, const vec3_t start,
 			    const vec3_t angles)
 {
-	vec3_t	fwd, r, u, far, hit, look, bx, by, wup = { 0.f, 0.f, 1.f };
-	vec3_t	h0, h1, h2, h3, v0, v1, v2, v3;
-	float	dist, sz, hw;
-	const float	cr = 1.f, cg = 0.85f, cb = 0.2f;	/* amber */
-	int	k;
+	vec3_t	fwd, rv, uv, far, hit, n, bx, by, look, ref;
+	vec3_t	wup = { 0.f, 0.f, 1.f };
+	float	dist, sz, hw, cr, cg, cb, raydist, entt;
+	int	style = (int) vr_reticlestyle.value;
+	int	hitsurf, flat, k;
 
-	AngleVectors (angles, fwd, r, u);
+	QR_VrColor ((int) vr_reticlecolor.value, &cr, &cg, &cb);
+	AngleVectors (angles, fwd, rv, uv);
 	VectorMA (start, 4096.f, fwd, far);
-	TraceLine (start, far, hit);
-	if (hit[0] == 0.f && hit[1] == 0.f && hit[2] == 0.f)
+	hitsurf = QR_TraceSurface (start, far, hit, n);
+	/* how far down the aim the world hit is (fwd is unit length) */
+	raydist = hitsurf
+		? (hit[0]-start[0])*fwd[0] + (hit[1]-start[1])*fwd[1] + (hit[2]-start[2])*fwd[2]
+		: 4096.f;
+
+	if (QR_NearestEntityHit (start, fwd, raydist, &entt))
+	{
+		/* An enemy/mover is nearer than the wall: stop ON it, facing the eye
+		   (a decal makes no sense on a monster). This is why the reticle no
+		   longer phases through things you aim at. */
+		VectorMA (start, entt, fwd, hit);
+		flat = 0;
+	}
+	else if (hitsurf && VectorLength (n) > 0.1f)
+	{
+		flat = 1;	/* world surface: lie flat as a decal */
+	}
+	else
+	{
 		VectorMA (start, 1000.f, fwd, hit);	/* open air: a fixed throw */
+		flat = 0;
+	}
 
 	VectorSubtract (hit, r_origin, look);
 	dist = VectorLength (look);
 	if (dist < 1.f)
 		return;
-	CrossProduct (look, wup, bx);
-	if (VectorNormalize (bx) < 0.01f) { bx[0] = 1.f; bx[1] = 0.f; bx[2] = 0.f; }
-	CrossProduct (bx, look, by);
-	VectorNormalize (by);
 
-	sz = dist * 0.011f;	/* half-length of each bar; constant angular size */
-	hw = sz * 0.16f;	/* half-thickness */
-
-	for (k = 0; k < 3; k++)
+	if (flat)
 	{
-		/* horizontal bar */
-		h0[k] = hit[k] - bx[k]*sz - by[k]*hw;
-		h1[k] = hit[k] + bx[k]*sz - by[k]*hw;
-		h2[k] = hit[k] + bx[k]*sz + by[k]*hw;
-		h3[k] = hit[k] - bx[k]*sz + by[k]*hw;
-		/* vertical bar */
-		v0[k] = hit[k] - bx[k]*hw - by[k]*sz;
-		v1[k] = hit[k] + bx[k]*hw - by[k]*sz;
-		v2[k] = hit[k] + bx[k]*hw + by[k]*sz;
-		v3[k] = hit[k] - bx[k]*hw + by[k]*sz;
+		/* Decal: orient to the surface plane. A reference axis not parallel
+		   to the normal spans the plane with two tangents -- world forward
+		   for a near-horizontal surface (floor/ceiling), world up otherwise. */
+		float	lift, toeye;
+
+		if (fabsf (n[2]) > 0.9f) { ref[0] = 1.f; ref[1] = 0.f; ref[2] = 0.f; }
+		else                     { ref[0] = 0.f; ref[1] = 0.f; ref[2] = 1.f; }
+		CrossProduct (ref, n, bx);
+		if (VectorNormalize (bx) < 0.01f) { bx[0] = 1.f; bx[1] = 0.f; bx[2] = 0.f; }
+		CrossProduct (n, bx, by);
+		VectorNormalize (by);
+
+		/* Lift a hair off the surface toward the eye so the decal doesn't
+		   z-fight the wall/floor it sits on. Along the normal, flipped if the
+		   normal faces away from us. */
+		toeye = -DotProduct (look, n);		/* >0 when n points at the eye */
+		lift = 1.5f;
+		for (k = 0; k < 3; k++)
+			hit[k] += n[k] * (toeye >= 0.f ? lift : -lift);
+		/* the lift moved the point; refresh the view distance */
+		VectorSubtract (hit, r_origin, look);
+		dist = VectorLength (look);
+		if (dist < 1.f)
+			return;
 	}
-	QR_ParticleVert (slot, h0, cr, cg, cb); QR_ParticleVert (slot, h1, cr, cg, cb);
-	QR_ParticleVert (slot, h2, cr, cg, cb); QR_ParticleVert (slot, h0, cr, cg, cb);
-	QR_ParticleVert (slot, h2, cr, cg, cb); QR_ParticleVert (slot, h3, cr, cg, cb);
-	QR_ParticleVert (slot, v0, cr, cg, cb); QR_ParticleVert (slot, v1, cr, cg, cb);
-	QR_ParticleVert (slot, v2, cr, cg, cb); QR_ParticleVert (slot, v0, cr, cg, cb);
-	QR_ParticleVert (slot, v2, cr, cg, cb); QR_ParticleVert (slot, v3, cr, cg, cb);
+	else
+	{
+		/* Billboard facing the eye (entity hit or open air). */
+		CrossProduct (look, wup, bx);
+		if (VectorNormalize (bx) < 0.01f) { bx[0] = 1.f; bx[1] = 0.f; bx[2] = 0.f; }
+		CrossProduct (bx, look, by);
+		VectorNormalize (by);
+	}
+
+	sz = dist * 0.011f;	/* mark half-size; constant angular size */
+	hw = sz * 0.16f;	/* bar half-thickness */
+
+	switch (style)
+	{
+	case 1:	/* circle + centre dot (Wii-style) */
+		QR_RetRing (slot, hit, bx, by, sz*0.72f, sz*0.92f, cr, cg, cb);
+		QR_RetDisc (slot, hit, bx, by, sz*0.26f, cr, cg, cb);
+		break;
+	case 2:	/* dot */
+		QR_RetDisc (slot, hit, bx, by, sz*0.30f, cr, cg, cb);
+		break;
+	case 3:	/* circle */
+		QR_RetRing (slot, hit, bx, by, sz*0.72f, sz*0.92f, cr, cg, cb);
+		break;
+	default:	/* 0: cross */
+		QR_RetQuad (slot, hit, bx, by, sz, hw, cr, cg, cb);
+		QR_RetQuad (slot, hit, bx, by, hw, sz, cr, cg, cb);
+		break;
+	}
 }
 
 /*
@@ -4379,6 +4659,7 @@ static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
+	static int	models_isview[8];	/* slot fell back to the v_ viewmodel */
 	static qmodel_t	*cachekey;
 	/* full-menu gaze state, function scope so a close can reset it. The menu
 	   commits on RELEASE: you hold to open, look at a weapon, let go to pick. */
@@ -4406,6 +4687,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		{
 			int m;
 			models[i] = NULL;
+			models_isview[i] = 0;
 			if (qr_wheel_pickupnames[i])
 				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
 					if (!strcmp (cl.model_precache[m]->name, qr_wheel_pickupnames[i]))
@@ -4418,6 +4700,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 					if (!strcmp (cl.model_precache[m]->name, qr_wheel_modelnames[i]))
 					{
 						models[i] = cl.model_precache[m];
+						models_isview[i] = 1;	/* viewmodel: may bake a round */
 						break;
 					}
 		}
@@ -4658,7 +4941,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		{
 			aliashdr_t	*mh = (aliashdr_t *) Mod_Extradata (e.model);
 			float		sfc = ENTSCALE_DECODE (e.scale);
-			vec3_t		mc, ef, er, eu;
+			vec3_t		mc, ef, er, eu, rad;
 			int		a;
 
 			for (a = 0; a < 3; a++)
@@ -4667,10 +4950,25 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			AngleVectors (e.angles, ef, er, eu);
 			for (a = 0; a < 3; a++)
 				e.origin[a] = slotpos[a] - sfc * (ef[a]*mc[0] - er[a]*mc[1] + eu[a]*mc[2]);
+
+			/* Push every model OUTWARD by the same fraction of the ring
+			   radius, so the guns sit clear of the spoke notch with a real
+			   gap, not crowding it. A FIXED offset, not the model's own
+			   extent: the models spin, so an extent-based push changed every
+			   frame and flung long models (the axe's arm bbox) out at
+			   scattered distances. */
+			VectorSubtract (slotpos, center, rad);
+			if (VectorNormalize (rad) > 0.01f)
+				VectorMA (e.origin, radius * 0.58f, rad, e.origin);
 		}
 
 		before = slot->frame.num_entities;
+		/* Only trim a slot that fell back to the viewmodel (clean pickup
+		   models need none), and never the axe (0) or lightning (7), which
+		   load no round and whose rear is real geometry. */
+		qr_wheelclip_on = (models_isview[i] && i != 0 && i != 7) ? 1 : 0;
 		QR_EmitAliasModel (slot, &e);
+		qr_wheelclip_on = 0;
 		if (slot->frame.num_entities > before)
 		{
 			/* room lighting is right in spirit but a wheel item
@@ -4690,16 +4988,55 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		   slot's label glows white; the rest are dimmer. */
 		if (qr_conchars_texnum)
 		{
-			vec3_t	labelorg, worldup = {0.f, 0.f, 1.f};
+			vec3_t	labelorg, worldup = {0.f, 0.f, 1.f}, lrad;
 			float	lcol[4];
 
-			/* under the slot (the model's visual centre), not e.origin */
-			VectorCopy (slotpos, labelorg);
-			labelorg[2] -= 4.5f;
+			if (!vr_fullmenu.value)
+			{
+				/* Out at the GUN'S radius (pushed with it), then DROPPED
+				   below the barrel. Radial-only placement put the side
+				   labels right alongside the horizontal guns and they
+				   collided; a vertical drop lands each name beneath its gun
+				   instead. The old -4.5 offset dragged them toward centre. */
+				VectorSubtract (slotpos, center, lrad);
+				if (VectorNormalize (lrad) > 0.01f)
+					VectorMA (slotpos, radius * 0.58f, lrad, labelorg);
+				else
+					VectorCopy (slotpos, labelorg);
+				labelorg[2] -= radius * 0.22f;
+			}
+			else
+			{
+				/* vertical list: name just under the model */
+				VectorCopy (slotpos, labelorg);
+				labelorg[2] -= 4.5f;
+			}
 			lcol[0] = lcol[1] = lcol[2] = highlighted ? 1.f : 0.7f;
 			lcol[3] = 1.f;
-			QR_EmitText (slot, qr_wheel_labels[i], labelorg, rightv,
-				     worldup, 1.6f, lcol);
+			{
+				const char	*lbl = qr_wheel_labels[i];
+				const char	*sp = strchr (lbl, ' ');
+				const float	lcw = 1.6f;
+
+				if (sp && !vr_fullmenu.value)
+				{
+					/* Stack a two-word name ("Super Shotgun") on two lines
+					   so it doesn't run sideways into its neighbours. */
+					char	w1[32], w2[32];
+					vec3_t	l1, l2;
+					size_t	n1 = (size_t) (sp - lbl);
+
+					if (n1 >= sizeof(w1)) n1 = sizeof(w1) - 1;
+					memcpy (w1, lbl, n1); w1[n1] = 0;
+					q_strlcpy (w2, sp + 1, sizeof(w2));
+					VectorCopy (labelorg, l1); l1[2] += lcw * 0.6f;
+					VectorCopy (labelorg, l2); l2[2] -= lcw * 0.6f;
+					QR_EmitText (slot, w1, l1, rightv, worldup, lcw, lcol);
+					QR_EmitText (slot, w2, l2, rightv, worldup, lcw, lcol);
+				}
+				else
+					QR_EmitText (slot, lbl, labelorg, rightv, worldup, lcw, lcol);
+			}
 		}
 		k++;
 	}
@@ -4916,15 +5253,17 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 
 			/* Visual recoil, purely cosmetic (the shot already left with
 			   cl.viewangles). The view weapon idles at frame 0 and steps
-			   through fire poses when shooting, so a step to a new nonzero
-			   frame is a shot: re-arm the kick then. Rapid weapons keep it
-			   topped up for a sustained shake, single-shot kicks once. It
+			   through its fire poses when shooting, so the ENTER of a fire
+			   sequence -- idle(0) to the first nonzero pose -- is the shot:
+			   arm the kick once there and let it decay across the rest of the
+			   animation. Arming on every frame STEP (the old test) re-pinned
+			   it to full for the whole multi-frame sequence once the real
+			   animation was restored, which read as a sustained shake. It
 			   decays on the sim clock, so it eases in bullet-time too. */
 			{
 				vec3_t	gf, gr, gu;
 
-				if (cl.viewent.frame != qr_recoil_prevframe
-				    && cl.viewent.frame != 0)
+				if (qr_recoil_prevframe == 0 && cl.viewent.frame != 0)
 					qr_recoil = 1.f;
 				qr_recoil_prevframe = cl.viewent.frame;
 

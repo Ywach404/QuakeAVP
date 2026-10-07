@@ -37,6 +37,13 @@ struct ContentView: View {
     @State private var fullMenu = false
     @State private var laser = false
     @State private var reticle = false
+    @State private var reticleStyle: Int = 0
+    @State private var reticleColor: Int = 3
+    @State private var laserColor: Int = 0
+    @State private var wheelClipUI: Float = 0.79
+    @State private var offHandPitchUI: Float = 0
+    @State private var offHandYawUI: Float = 0
+    @State private var offHandRollUI: Float = 0
     @State private var turnFlick: Float = 0.85
     // Sound mixer (Debug tab). Defaults match Quake's volume/bgmvolume defaults;
     // the engine's archived values win in-game until a slider is touched.
@@ -115,6 +122,11 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
 
     private var coordinator: RendererCoordinator { .shared }
+
+    /// Reticle/laser palette labels; indices match QR_VrColor in qr_bridge.c.
+    static let vrColorNames = ["Red", "Green", "Cyan", "Amber",
+                               "White", "Magenta", "Yellow", "Blue",
+                               "Quake beige"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -477,6 +489,27 @@ struct ContentView: View {
                 Toggle("Swap controller hands", isOn: Binding(
                     get: { swapSenseHands },
                     set: { swapSenseHands = $0; VRSettings.shared.swapSenseHands = $0 }))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Off-hand model angle (PSVR controllers)").font(.caption).foregroundStyle(.secondary)
+                    Text("Rotate the rigid off-hand into a handshake. Dial these on device.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    offHandSlider("Pitch°", $offHandPitchUI, set: { VRSettings.shared.offHandPitch = $0 },
+                                  persist: \.offHandPitch)
+                    offHandSlider("Yaw°", $offHandYawUI, set: { VRSettings.shared.offHandYaw = $0 },
+                                  persist: \.offHandYaw)
+                    offHandSlider("Roll°", $offHandRollUI, set: { VRSettings.shared.offHandRoll = $0 },
+                                  persist: \.offHandRoll)
+                    Button("Reset off-hand angle") {
+                        offHandPitchUI = 0; offHandYawUI = 0; offHandRollUI = 0
+                        VRSettings.shared.offHandPitch = 0
+                        VRSettings.shared.offHandYaw = 0
+                        VRSettings.shared.offHandRoll = 0
+                        var p = ProfileStore.shared.current
+                        p.offHandPitch = 0; p.offHandYaw = 0; p.offHandRoll = 0
+                        ProfileStore.shared.current = p
+                    }
+                    .font(.caption)
+                }
                 Toggle("Full weapon menu (look to pick)", isOn: Binding(
                     get: { fullMenu },
                     set: { fullMenu = $0
@@ -976,26 +1009,31 @@ struct ContentView: View {
                                 placementSlider("Size", $wheelRadiusUI, in: 0.4...2.5,
                                                 cvar: "vr_wheelradius", fmt: "%.2f",
                                                 persist: \.wheelRadius)
-                                placementSlider("Fwd", $wheelFwdUI, in: -12...12,
+                                placementSlider("Fwd", $wheelFwdUI, in: -40...40,
                                                 cvar: "vr_wheelfwd", persist: \.wheelFwd)
                                 placementSlider("Up", $wheelUpUI, in: -12...12,
                                                 cvar: "vr_wheelup", persist: \.wheelUp)
                                 placementSlider("Side", $wheelSideUI, in: -12...12,
                                                 cvar: "vr_wheelside", persist: \.wheelSide)
+                                placementSlider("Trim", $wheelClipUI, in: 0.4...1.0,
+                                                cvar: "vr_wheelclip", fmt: "%.2f",
+                                                persist: \.wheelClip)
+                                Text("Retracts the loaded round near the grip on slots that fall back to the viewmodel (1 = off). Barrels are untouched.")
+                                    .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
                         Button("Reset wheel") {
                             wheelPitchUI = 0; wheelYawUI = 0; wheelRollUI = 0; wheelRadiusUI = 1
-                            wheelFwdUI = 0; wheelUpUI = 0; wheelSideUI = 0
+                            wheelFwdUI = 0; wheelUpUI = 0; wheelSideUI = 0; wheelClipUI = 0.79
                             VRSettings.shared.wheelPitch = 0
                             VRSettings.shared.wheelYaw = 0
                             VRSettings.shared.wheelRoll = 0
                             for c in ["vr_wheelpitch 0", "vr_wheelyaw 0", "vr_wheelroll 0",
                                       "vr_wheelradius 1", "vr_wheelfwd 0", "vr_wheelup 0",
-                                      "vr_wheelside 0"] { engine.send(c) }
+                                      "vr_wheelside 0", "vr_wheelclip 0.79"] { engine.send(c) }
                             var p = ProfileStore.shared.current
                             p.wheelPitch = 0; p.wheelYaw = 0; p.wheelRoll = 0; p.wheelRadius = 1
-                            p.wheelFwd = 0; p.wheelUp = 0; p.wheelSide = 0
+                            p.wheelFwd = 0; p.wheelUp = 0; p.wheelSide = 0; p.wheelClip = 0.79
                             ProfileStore.shared.current = p
                         }
                         .font(.caption)
@@ -1052,19 +1090,49 @@ struct ContentView: View {
                         }
                     }
                     Divider()
+                    // RETICLE — its own group with its own color.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Target reticle", isOn: Binding(
+                            get: { reticle },
+                            set: { reticle = $0; engine.send("vr_reticle \($0 ? 1 : 0)")
+                                   ProfileStore.shared.current.reticle = $0 }))
+                            .font(.headline)
+                        Text("A mark where the shot lands. It lies flat on whatever surface you aim at — like a teleport marker on the floor.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Picker("Reticle style", selection: Binding(
+                            get: { reticleStyle },
+                            set: { reticleStyle = $0; engine.send("vr_reticlestyle \($0)")
+                                   ProfileStore.shared.current.reticleStyle = $0 })) {
+                            Text("Cross").tag(0)
+                            Text("Circle + dot").tag(1)
+                            Text("Dot").tag(2)
+                            Text("Circle").tag(3)
+                        }
+                        Picker("Reticle color", selection: Binding(
+                            get: { reticleColor },
+                            set: { reticleColor = $0; engine.send("vr_reticlecolor \($0)")
+                                   ProfileStore.shared.current.reticleColor = $0 })) {
+                            ForEach(0..<Self.vrColorNames.count, id: \.self) { idx in
+                                Text(Self.vrColorNames[idx]).tag(idx)
+                            }
+                        }
+                    }
+                    Divider()
+                    // LASER — its own group with its own color.
                     VStack(alignment: .leading, spacing: 6) {
                         Toggle("Aiming laser", isOn: Binding(
                             get: { laser },
                             set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)")
                                    ProfileStore.shared.current.laser = $0 }))
                             .font(.headline)
-                        Toggle("Target reticle", isOn: Binding(
-                            get: { reticle },
-                            set: { reticle = $0; engine.send("vr_reticle \($0 ? 1 : 0)")
-                                   ProfileStore.shared.current.reticle = $0 }))
-                            .font(.headline)
-                        Text("A crosshair where the shot lands. Use with or instead of the laser.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Picker("Laser color", selection: Binding(
+                            get: { laserColor },
+                            set: { laserColor = $0; engine.send("vr_lasercolor \($0)")
+                                   ProfileStore.shared.current.laserColor = $0 })) {
+                            ForEach(0..<Self.vrColorNames.count, id: \.self) { idx in
+                                Text(Self.vrColorNames[idx]).tag(idx)
+                            }
+                        }
                         Text("Move the beam's start to the barrel tip. Forward reaches the muzzle.")
                             .font(.caption).foregroundStyle(.secondary)
                         placementSlider("Fwd", $laserForward, in: -10...60, cvar: "vr_laserforward", persist: \.laserForward)
@@ -1311,6 +1379,8 @@ struct ContentView: View {
         wheelPitchUI = p.wheelPitch; wheelYawUI = p.wheelYaw
         wheelRollUI = p.wheelRoll; wheelRadiusUI = p.wheelRadius
         wheelFwdUI = p.wheelFwd; wheelUpUI = p.wheelUp; wheelSideUI = p.wheelSide
+        wheelClipUI = p.wheelClip
+        offHandPitchUI = p.offHandPitch; offHandYawUI = p.offHandYaw; offHandRollUI = p.offHandRoll
         curlSensUI = p.curlSensitivity; hammerDropUI = p.hammerDropDeg
         hudFwdUI = p.hudForward; hudUpUI = p.hudUp; hudSideUI = p.hudSide
         hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll; hudYawUI = p.hudYaw ?? 0
@@ -1319,6 +1389,8 @@ struct ContentView: View {
         aimPitch = p.aimPitch; aimYaw = p.aimYaw
         laser = p.laser
         reticle = p.reticle
+        reticleStyle = p.reticleStyle; reticleColor = p.reticleColor
+        laserColor = p.laserColor
         laserForward = p.laserForward; laserUp = p.laserUp; laserSide = p.laserSide
         laserPitch = p.laserPitch; laserYaw = p.laserYaw
     }
@@ -1339,6 +1411,26 @@ struct ContentView: View {
                        if let kp { ProfileStore.shared.current[keyPath: kp] = Float($0) } }),
                 in: range)
             Text(String(format: fmt, value.wrappedValue))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    /// Off-hand model angle slider: feeds VRSettings (read on the render
+    /// thread) via `set`, and persists to the active profile. Not a cvar --
+    /// the presence model lives entirely Swift-side.
+    private func offHandSlider(_ label: String, _ value: Binding<Float>,
+                               set: @escaping (Float) -> Void,
+                               persist kp: WritableKeyPath<InputProfile, Float>) -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 46, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Float($0)
+                       set(Float($0))
+                       ProfileStore.shared.current[keyPath: kp] = Float($0) }),
+                in: -180...180)
+            Text(String(format: "%.0f", value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }

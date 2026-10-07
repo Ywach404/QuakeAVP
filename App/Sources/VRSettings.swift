@@ -63,6 +63,26 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _heightOffset = newValue; lock.unlock() }
     }
 
+    /// Off-hand controller presence-model rotation offset, degrees, in the
+    /// controller-local frame. The rigid hand is modelled reaching forward;
+    /// these dial it to a handshake angle on device (hard to predict off the
+    /// headset). Read on the render thread, so lock-guarded like the rest.
+    private var _offHandPitch: Float = 0
+    private var _offHandYaw: Float = 0
+    private var _offHandRoll: Float = 0
+    var offHandPitch: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _offHandPitch }
+        set { lock.lock(); _offHandPitch = newValue; lock.unlock() }
+    }
+    var offHandYaw: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _offHandYaw }
+        set { lock.lock(); _offHandYaw = newValue; lock.unlock() }
+    }
+    var offHandRoll: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _offHandRoll }
+        set { lock.lock(); _offHandRoll = newValue; lock.unlock() }
+    }
+
     /// Swap which physical Sense controller is treated as left vs right.
     /// Chirality auto-detection is a vendor-name/connection-order guess that
     /// can land backwards; this is the honest override. Read live at slice
