@@ -100,13 +100,16 @@ final class AudioSink: @unchecked Sendable {
            let m = Mode(rawValue: raw) {
             return m                          // Xcode override wins
         }
-        // Persisted Debug toggle; default on. UserDefaults, because env vars do
-        // not reach a Home View launch and this must be settable from inside the
-        // app for recovery.
+        // Persisted Debug toggle. Default OFF so the app ALWAYS loads -- audio
+        // on by default was shipped before the full sink path was ever confirmed
+        // to boot on device, and under the debugger (or if the sound init really
+        // does hang) that is a non-loading app with no in-app way back. Opt in
+        // with the "Game audio (next launch)" toggle, then relaunch DETACHED.
+        // UserDefaults because env vars never reach a Home View launch.
         if UserDefaults.standard.object(forKey: "audioEnabled") != nil {
             return UserDefaults.standard.bool(forKey: "audioEnabled") ? .on : .off
         }
-        return .on
+        return .off
     }()
 
     /// Everything the render block needs, by value. Immutable, so it can be
