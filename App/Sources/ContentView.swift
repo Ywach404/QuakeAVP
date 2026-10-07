@@ -50,6 +50,7 @@ struct ContentView: View {
     @State private var fireMode: FireMode = .pinch
     @State private var summonGesture: SummonGesture = .prayer
     @State private var turnStyle: TurnStyle = .stick
+    @State private var wheelSelectHand: WheelSelectHand = .offHand
     @State private var aimSmoothUI: Float = 0.4
     @State private var pinchCloseUI: Float = 1.5   // cm
     @State private var curlSensUI: Float = 0.72
@@ -443,6 +444,21 @@ struct ContentView: View {
                     Text("Left-handed").tag(false)
                 }
                 .pickerStyle(.segmented)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
+                    Picker("Wheel select hand", selection: Binding(
+                        get: { wheelSelectHand },
+                        set: { wheelSelectHand = $0; VRSettings.shared.wheelSelectHand = $0
+                               ProfileStore.shared.current.wheelSelectHand = $0.rawValue })) {
+                        Text("Same hand").tag(WheelSelectHand.offHand)
+                        Text("Other hand").tag(WheelSelectHand.dominant)
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                    Text(wheelSelectHand == .dominant
+                         ? "Off hand holds the wheel open; reach with the gun hand to pick. The gun follows your reaching hand while the wheel is up."
+                         : "The hand that opens the wheel also picks.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 Toggle("Move where I look", isOn: Binding(
                     get: { lookRelative },
                     set: { lookRelative = $0; engine.send("vr_moverelative \($0 ? 1 : 0)") }))
@@ -464,7 +480,7 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Turn style").font(.caption).foregroundStyle(.secondary)
+                        Text("Turn style (hands only)").font(.caption).foregroundStyle(.secondary)
                         Picker("Turn style", selection: Binding(
                             get: { turnStyle },
                             set: { turnStyle = $0; VRSettings.shared.turnStyle = $0
@@ -474,8 +490,15 @@ struct ContentView: View {
                             Text("Flick").tag(TurnStyle.flick)
                         }
                         .pickerStyle(.segmented).labelsHidden()
+                        // Hands-only: with a controller attached the hardware
+                        // drives turning (right stick + the Snap/Smooth picker
+                        // above), and this choice does nothing -- so grey it out
+                        // rather than let it look broken.
+                        .disabled(gamepad.hasPhysicalController)
                     }
-                    Text("Stick: hold the off hand out to turn. Clutch: hold the aim-hand middle pinch and drag. Flick: whip the gun hand (gauge on the wireframe).")
+                    Text(gamepad.hasPhysicalController
+                         ? "A controller is connected, so turning uses the stick and the Snap/Smooth setting above. Stick / Clutch / Flick apply to bare-hand play only."
+                         : "Stick: hold the off hand out to turn. Clutch: hold the aim-hand middle pinch and drag. Flick: whip the gun hand (gauge on the wireframe).")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Text("Flick ease").font(.caption)
@@ -1217,6 +1240,7 @@ struct ContentView: View {
         fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         turnStyle = TurnStyle(rawValue: p.turnStyle) ?? .stick
+        wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand
         aimSmoothUI = p.aimSmooth; pinchCloseUI = p.pinchClose * 100
         wheelPitchUI = p.wheelPitch; wheelYawUI = p.wheelYaw
         wheelRollUI = p.wheelRoll; wheelRadiusUI = p.wheelRadius

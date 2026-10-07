@@ -787,21 +787,36 @@ final class HandInput: @unchecked Sendable {
             + mark(l.forward.y >= PrayerPose.fingersUpMin && r.forward.y >= PrayerPose.fingersUpMin))
     }
 
-    /// Weapon wheel, ONE-HANDED. The off-hand palm gesture holds the ring
-    /// open; the ring then LOCKS in place and the same wrist is the selector
-    /// -- move the whole hand toward a weapon to highlight it and rest there
-    /// ~0.28s to swap to it live; flip the palm back to close. No finger
-    /// pointing (it was too fiddly on a ring anchored to that same wrist);
-    /// every other gesture stays suppressed while it's open.
+    /// Weapon wheel. The OFF-hand palm gesture always holds the ring open; the
+    /// ring then LOCKS in place and a wrist is the selector -- move the whole
+    /// hand toward a weapon to highlight it and rest there ~0.28s to swap to it
+    /// live; flip the palm back to close. No finger pointing (it was too fiddly
+    /// on a ring anchored to a wrist); every other gesture stays suppressed
+    /// while it's open.
+    ///
+    /// Which wrist SELECTS is a setting (VRSettings.wheelSelectHand):
+    /// - offHand (default): the summoning off hand also selects -- one-handed,
+    ///   today's behaviour.
+    /// - dominant: the off hand holds the ring open while the GUN hand reaches
+    ///   to select -- two-handed, matching the Sense-controller feel. The gun
+    ///   visibly follows the reaching hand mid-select (firing is already
+    ///   suppressed while the wheel is open), and the off-hand palm must stay up
+    ///   throughout. Handedness-agnostic via rightHanded.
     private func wheel(left: HandState, right: HandState) {
         let rightHanded = VRSettings.shared.rightHanded
-        let hand = rightHanded ? left : right
+        let summonHand = rightHanded ? left : right   // off hand holds it open
 
-        WheelState.shared.setHold(hand.palmUp, source: .hands)
-        guard hand.palmUp else { return }
+        WheelState.shared.setHold(summonHand.palmUp, source: .hands)
+        guard summonHand.palmUp else { return }
+
+        let selectHand: HandState
+        switch VRSettings.shared.wheelSelectHand {
+        case .offHand:   selectHand = summonHand
+        case .dominant:  selectHand = rightHanded ? right : left
+        }
 
         let correction = TrackingSpace.correction
-        if let wrist = hand.wrist {
+        if let wrist = selectHand.wrist {
             let p = correction * SIMD4(wrist, 1)
             WheelState.shared.setAnchor(trackingPosition: SIMD3(p.x, p.y, p.z))
         }
