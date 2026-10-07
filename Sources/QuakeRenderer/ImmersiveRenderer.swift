@@ -293,8 +293,16 @@ final class ImmersiveRenderer {
             // VirtualHand and we must not fight it. The gun hand gets no model.
             if SpatialControllerTracker.shared.isTracking,
                let offPose = SpatialControllerTracker.shared.pose(left: rightHanded) {
+                // Fold the handshake-angle offset (tuned on device) into the
+                // pose, in the controller-local frame -- so it rotates the hand
+                // relative to the controller, not the world.
+                let d = Float.pi / 180
+                let rx = simd_quatf(angle: VRSettings.shared.offHandPitch * d, axis: [1, 0, 0])
+                let ry = simd_quatf(angle: VRSettings.shared.offHandYaw * d, axis: [0, 1, 0])
+                let rz = simd_quatf(angle: VRSettings.shared.offHandRoll * d, axis: [0, 0, 1])
+                let rot = simd_float4x4(ry * rx * rz)
                 VirtualHand.shared.publish(
-                    ControllerHandModel.posed(by: recenterCorrection * offPose,
+                    ControllerHandModel.posed(by: recenterCorrection * offPose * rot,
                                               leftHand: rightHanded))
             }
 

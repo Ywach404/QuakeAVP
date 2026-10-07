@@ -12,9 +12,11 @@
 //  existing draw path, the 1-phase fade and the "virtual hand" hide toggle all
 //  apply unchanged.
 //
-//  Local frame = the controller frame: +X right, +Y up, forward = -Z. The grip
-//  layout below is a FIRST PASS -- the numbers are what to tune on device if the
-//  hand sits wrong relative to the controller; mirror on X serves both hands.
+//  Local frame = the controller frame: +X right, +Y up, forward = -Z. The hand
+//  is modelled OPEN and reaching forward (fingers toward -Z, thumb out +X);
+//  the exact handshake angle comes from the off-hand rotation offset the
+//  caller folds into the pose matrix (vr_offhand{pitch,yaw,roll} sliders), so
+//  it can be dialled in on device. Mirror on X serves both hands.
 //
 
 import simd
@@ -77,17 +79,32 @@ enum ControllerHandModel {
             }
         }
 
-        // Palm just below/at the controller point.
-        bead(0.0, -0.01, 0.0, 0.028)
-        // Four fingers wrapping the grip: a knuckle forward (-Z) and a curled
-        // tip below, spread across X.
-        for x in [Float(-0.022), -0.008, 0.006, 0.020] {
-            bead(x, -0.015, -0.028, 0.012)   // knuckle
-            bead(x, -0.035, -0.020, 0.009)   // curled tip
+        // An OPEN hand REACHING FORWARD (fingers toward -Z) -- the basis for a
+        // handshake once the off-hand rotation offset (vr_offhand* sliders)
+        // rolls it to the exact angle. A presence stand-in, not an accurate
+        // grip, so it reads as a hand rather than a fist on the controller.
+        // Bigger than the first curled pass so it's visible.
+
+        // Palm: three beads for a flat-ish heel-and-pad shape, back a touch.
+        bead( 0.000, 0.0,  0.020, 0.040)   // heel of palm
+        bead(-0.018, 0.0, -0.008, 0.034)   // pad, little-finger side
+        bead( 0.018, 0.0, -0.008, 0.034)   // pad, index side
+
+        // Four straight fingers pointing forward (-Z), splayed apart with
+        // length, middle longest. Three beads each (base knuckle / mid / tip).
+        let fx:   [Float] = [-0.030, -0.010, 0.010, 0.030]   // pinky .. index
+        let flen: [Float] = [ 0.085,  0.110, 0.115, 0.095]
+        for n in 0..<4 {
+            let x = fx[n], L = flen[n]
+            let fan = x * 0.25            // fingers fan apart as they extend
+            bead(x,           0.0, -0.035,       0.015)    // base
+            bead(x + fan*0.5, 0.0, -0.035 - L*0.5, 0.0135) // mid
+            bead(x + fan,     0.0, -0.035 - L,     0.012)  // tip
         }
-        // Thumb across the top of the grip.
-        bead(0.030, 0.0, -0.006, 0.012)
-        bead(0.034, -0.016, -0.018, 0.009)
+
+        // Thumb out to the side (mirrored for the left hand), angled up/fwd.
+        bead(0.042, 0.012, -0.010, 0.016)   // base
+        bead(0.058, 0.030, -0.030, 0.013)   // tip
         return v
     }
 }

@@ -91,6 +91,20 @@ struct InputProfile: Codable, Equatable {
     var laserSide: Float = 0
     var laserPitch: Float = 0
     var laserYaw: Float = 0
+    /// Reticle shape (0 cross, 1 circle+dot, 2 dot, 3 circle, 4 cross+dot) and
+    /// palette colour indices for the reticle (amber) and laser (red). See
+    /// QR_VrColor in qr_bridge.c for the palette.
+    var reticleStyle: Int = 0
+    var reticleColor: Int = 3
+    var laserColor: Int = 0
+    /// Wheel-icon rear keep fraction (1 = whole model). Hides the baked round
+    /// near the grip on wheel slots that fall back to the viewmodel; matches
+    /// the hand weapon's vr_weaponclipback.
+    var wheelClip: Float = 0.79
+    /// Off-hand presence-model rotation offset, degrees (controller frame).
+    var offHandPitch: Float = 0
+    var offHandYaw: Float = 0
+    var offHandRoll: Float = 0
 
     init() {}
 
@@ -176,6 +190,13 @@ struct InputProfile: Codable, Equatable {
         laserSide = f(.laserSide, 0)
         laserPitch = f(.laserPitch, 0)
         laserYaw = f(.laserYaw, 0)
+        reticleStyle = i(.reticleStyle, 0)
+        reticleColor = i(.reticleColor, 3)
+        laserColor = i(.laserColor, 0)
+        wheelClip = f(.wheelClip, 0.79)
+        offHandPitch = f(.offHandPitch, 0)
+        offHandYaw = f(.offHandYaw, 0)
+        offHandRoll = f(.offHandRoll, 0)
     }
 }
 
@@ -288,6 +309,9 @@ final class ProfileStore {
         s.summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         s.wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand
         s.heightOffset = p.heightOffset
+        s.offHandPitch = p.offHandPitch
+        s.offHandYaw = p.offHandYaw
+        s.offHandRoll = p.offHandRoll
         s.hudForward = p.hudForward
         s.hudUp = p.hudUp
         s.hudSide = p.hudSide
@@ -319,8 +343,12 @@ final class ProfileStore {
         send("vr_wheelfwd \(p.wheelFwd)")
         send("vr_wheelup \(p.wheelUp)")
         send("vr_wheelside \(p.wheelSide)")
+        send("vr_wheelclip \(p.wheelClip)")
         send("vr_laser \(p.laser ? 1 : 0)")
         send("vr_reticle \(p.reticle ? 1 : 0)")
+        send("vr_reticlestyle \(p.reticleStyle)")
+        send("vr_reticlecolor \(p.reticleColor)")
+        send("vr_lasercolor \(p.laserColor)")
         send("vr_laserforward \(p.laserForward)")
         send("vr_laserup \(p.laserUp)")
         send("vr_laserside \(p.laserSide)")

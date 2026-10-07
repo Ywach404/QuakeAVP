@@ -278,8 +278,20 @@ cvar_t		vr_wheelradius = {"vr_wheelradius", "1", CVAR_ARCHIVE};
 cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_ARCHIVE};
+/* Rear keep-fraction for a WHEEL model that fell back to the viewmodel (1 =
+   whole model). Those bake a loaded round near the GRIP -- same place the hand
+   weapon's vr_weaponclipback (0.79) trims -- so the wheel retracts the rear the
+   same way. Clean pickup models, the axe and the lightning gun are never
+   trimmed (see QR_EmitWheel). */
+cvar_t		vr_wheelclip = {"vr_wheelclip", "0.79", CVAR_ARCHIVE};
 cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
 cvar_t		vr_reticle = {"vr_reticle", "0", CVAR_ARCHIVE};
+/* Reticle shape (0 cross, 1 circle+dot, 2 dot, 3 circle, 4 cross+dot) and the
+   colour indices into the shared palette for the reticle and the laser (see
+   QR_VrColor in qr_bridge.c). Laser defaults to red, reticle to amber. */
+cvar_t		vr_reticlestyle = {"vr_reticlestyle", "0", CVAR_ARCHIVE};
+cvar_t		vr_reticlecolor = {"vr_reticlecolor", "3", CVAR_ARCHIVE};
+cvar_t		vr_lasercolor   = {"vr_lasercolor",   "0", CVAR_ARCHIVE};
 /* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
    (muzzle). Low values push the barrel forward off the hand -- megaman
    arm-cannon. Read by qr_bridge; tune live on device. */
@@ -1057,8 +1069,12 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_wheelfwd);
 	Cvar_RegisterVariable (&vr_wheelup);
 	Cvar_RegisterVariable (&vr_wheelside);
+	Cvar_RegisterVariable (&vr_wheelclip);
 	Cvar_RegisterVariable (&vr_laser);
 	Cvar_RegisterVariable (&vr_reticle);
+	Cvar_RegisterVariable (&vr_reticlestyle);
+	Cvar_RegisterVariable (&vr_reticlecolor);
+	Cvar_RegisterVariable (&vr_lasercolor);
 	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_weaponback);
 	Cvar_RegisterVariable (&vr_weaponup);
