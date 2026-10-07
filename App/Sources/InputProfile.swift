@@ -76,6 +76,9 @@ struct InputProfile: Codable, Equatable {
     var wheelYaw: Float = 0
     var wheelRoll: Float = 0
     var wheelRadius: Float = 1
+    var wheelFwd: Float = 0
+    var wheelUp: Float = 0
+    var wheelSide: Float = 0
 
     // Aiming laser (engine cvars). Offsets are deliberately 0 and should stay
     // there: the laser's job is to SHOW where the arm actually points so the
@@ -162,6 +165,9 @@ struct InputProfile: Codable, Equatable {
         wheelYaw = f(.wheelYaw, 0)
         wheelRoll = f(.wheelRoll, 0)
         wheelRadius = f(.wheelRadius, 1)
+        wheelFwd = f(.wheelFwd, 0)
+        wheelUp = f(.wheelUp, 0)
+        wheelSide = f(.wheelSide, 0)
         laser = b(.laser, false)
         laserForward = f(.laserForward, 0)
         laserUp = f(.laserUp, 0)
@@ -308,6 +314,9 @@ final class ProfileStore {
         send("vr_wheelyaw \(p.wheelYaw)")
         send("vr_wheelroll \(p.wheelRoll)")
         send("vr_wheelradius \(p.wheelRadius)")
+        send("vr_wheelfwd \(p.wheelFwd)")
+        send("vr_wheelup \(p.wheelUp)")
+        send("vr_wheelside \(p.wheelSide)")
         send("vr_laser \(p.laser ? 1 : 0)")
         send("vr_laserforward \(p.laserForward)")
         send("vr_laserup \(p.laserUp)")

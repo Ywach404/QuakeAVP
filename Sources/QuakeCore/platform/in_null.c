@@ -275,6 +275,9 @@ cvar_t		vr_wheelpitch  = {"vr_wheelpitch",  "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelyaw    = {"vr_wheelyaw",    "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelroll   = {"vr_wheelroll",   "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelradius = {"vr_wheelradius", "1", CVAR_ARCHIVE};
+cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_ARCHIVE};
+cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_ARCHIVE};
+cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_ARCHIVE};
 cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
 /* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
    (muzzle). Low values push the barrel forward off the hand -- megaman
@@ -1050,6 +1053,9 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_wheelyaw);
 	Cvar_RegisterVariable (&vr_wheelroll);
 	Cvar_RegisterVariable (&vr_wheelradius);
+	Cvar_RegisterVariable (&vr_wheelfwd);
+	Cvar_RegisterVariable (&vr_wheelup);
+	Cvar_RegisterVariable (&vr_wheelside);
 	Cvar_RegisterVariable (&vr_laser);
 	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_weaponback);
