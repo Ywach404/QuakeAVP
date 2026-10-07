@@ -39,6 +39,9 @@ struct InputProfile: Codable, Equatable {
     /// SummonGesture.rawValue. Optional so profiles saved before the
     /// prayer sign existed still decode, defaulting to prayer.
     var summonGesture: Int? = 0
+    /// WheelSelectHand.rawValue. Optional so older profiles decode, defaulting
+    /// to offHand (today's one-handed wheel).
+    var wheelSelectHand: Int? = 0
     var heightOffset: Float = 0.4
 
     // On-arm debug HUD placement (VRSettings-consumed).
@@ -139,6 +142,7 @@ struct InputProfile: Codable, Equatable {
         fireMode = i(.fireMode, 0)
         turnStyle = i(.turnStyle, 0)
         summonGesture = (try? c.decodeIfPresent(Int.self, forKey: .summonGesture)) ?? nil
+        wheelSelectHand = (try? c.decodeIfPresent(Int.self, forKey: .wheelSelectHand)) ?? nil
         heightOffset = f(.heightOffset, 0.4)
         hudForward = f(.hudForward, 0)
         hudUp = f(.hudUp, 0.14)
@@ -274,6 +278,7 @@ final class ProfileStore {
         s.fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         s.turnStyle = TurnStyle(rawValue: p.turnStyle) ?? .stick
         s.summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
+        s.wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand
         s.heightOffset = p.heightOffset
         s.hudForward = p.hudForward
         s.hudUp = p.hudUp

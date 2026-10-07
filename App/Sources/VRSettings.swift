@@ -33,6 +33,13 @@ enum TurnStyle: Int, CaseIterable, Sendable { case stick, clutch, flick }
 /// both palms edge-on to the face, which the system makes no claim on.
 enum SummonGesture: Int, CaseIterable, Sendable { case prayer, palmUp }
 
+/// Which hand SELECTS on the weapon wheel, independent of which hand summons it.
+/// offHand (default) = the hand that holds the wheel open also selects, the
+/// original one-handed flow. dominant = the off hand holds it open while the
+/// gun hand reaches to select (the two-handed feel the Sense controllers use).
+/// Kept in dominant/off terms so it is correct for either handedness.
+enum WheelSelectHand: Int, CaseIterable, Sendable { case offHand, dominant }
+
 final class VRSettings: @unchecked Sendable {
 
     static let shared = VRSettings()
@@ -91,6 +98,14 @@ final class VRSettings: @unchecked Sendable {
     var turnStyle: TurnStyle {
         get { lock.lock(); defer { lock.unlock() }; return _turnStyle }
         set { lock.lock(); _turnStyle = newValue; lock.unlock() }
+    }
+
+    /// Which hand selects on the weapon wheel; default the summoning (off) hand,
+    /// i.e. today's behaviour unchanged unless opted in.
+    private var _wheelSelectHand: WheelSelectHand = .offHand
+    var wheelSelectHand: WheelSelectHand {
+        get { lock.lock(); defer { lock.unlock() }; return _wheelSelectHand }
+        set { lock.lock(); _wheelSelectHand = newValue; lock.unlock() }
     }
 
     /// Live gesture-tuning knobs (Comfort-menu sliders), read per input frame so
