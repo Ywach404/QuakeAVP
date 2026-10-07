@@ -286,6 +286,18 @@ final class ImmersiveRenderer {
                                              yaw: aimYaw, pitch: aimPitch)
             }
 
+            // Off-hand presence model, CONTROLLER mode only. The ARKit hand
+            // session is off then (no joints), but the controller pose is
+            // tracked, so pose a rigid hand on the OFF controller. Only publish
+            // while controllers track -- in hands-only mode HandInput owns
+            // VirtualHand and we must not fight it. The gun hand gets no model.
+            if SpatialControllerTracker.shared.isTracking,
+               let offPose = SpatialControllerTracker.shared.pose(left: rightHanded) {
+                VirtualHand.shared.publish(
+                    ControllerHandModel.posed(by: recenterCorrection * offPose,
+                                              leftHand: rightHanded))
+            }
+
             let yaw = packet.body_yaw * .pi / 180
             let fwdW = SIMD2(cos(yaw), sin(yaw))
             let rightW = SIMD2(sin(yaw), -cos(yaw))
