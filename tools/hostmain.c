@@ -21,6 +21,26 @@ static void on_log (void *ctx, const char *text)
 	fputs (text, stdout);
 }
 
+/*
+ * The audio sink lives in Swift (App/Sources/AudioSink.swift), which this host
+ * build does not compile. Stand in for its shim so the link still proves the
+ * platform layer is complete. Returning 0 from open makes snd_avp.c report "no
+ * audio device" and S_Init disable sound, which is the correct headless
+ * behaviour anyway.
+ */
+int QC_AudioOpen (int speed, int channels, int bits,
+		  unsigned char **buffer, int *mono_samples)
+{
+	(void) speed; (void) channels; (void) bits;
+	if (buffer) *buffer = NULL;
+	if (mono_samples) *mono_samples = 0;
+	return 0;
+}
+
+int  QC_AudioSamplePos (void) { return 0; }
+void QC_AudioClose (void) { }
+void QC_AudioSetRunning (int running) { (void) running; }
+
 static void on_error (void *ctx, const char *err)
 {
 	(void) ctx;
