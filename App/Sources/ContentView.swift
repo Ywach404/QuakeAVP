@@ -830,8 +830,12 @@ struct ContentView: View {
             // Persisted; read once at launch (audio mode is fixed per run), so
             // this takes effect on the NEXT launch. The recovery hatch if a
             // launch ever misbehaves with audio on.
+            // Default shown OFF, to MATCH AudioSink.mode's off fallback. They
+            // disagreed before (toggle showed on, mode read off), so the toggle
+            // looked enabled while audio was actually off and tapping it wrote
+            // false. Now on-screen state == real state.
             Toggle("Game audio (next launch)", isOn: Binding(
-                get: { UserDefaults.standard.object(forKey: "audioEnabled") as? Bool ?? true },
+                get: { UserDefaults.standard.object(forKey: "audioEnabled") as? Bool ?? false },
                 set: { UserDefaults.standard.set($0, forKey: "audioEnabled") }))
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
