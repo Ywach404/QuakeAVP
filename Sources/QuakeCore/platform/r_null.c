@@ -211,6 +211,10 @@ void R_NewMap (void)
    for the sake of one line. */
 void V_CalcRefdef (void);
 
+/* Engine-thread head/body angles, owned by in_null.c and not declared in any
+   header (same situation as V_CalcRefdef). Read here to aim the sound. */
+extern float qr_head_yaw, qr_head_pitch, qr_body_yaw;
+
 void R_RenderView (void)
 {
 	/* Upstream V_RenderView skips V_CalcRefdef entirely while cl.paused --
@@ -233,6 +237,28 @@ void R_RenderView (void)
 		V_CalcRefdef ();
 
 	QR_RenderView ();
+
+	/* Aim the LISTENER at the head, not the body.
+
+	   host.c calls S_Update (r_origin, vpn, vright, vup) after this, and in
+	   this port those vectors are the body/aim frame: the head pose is
+	   late-latched render-side and the engine never sees it, so turning your
+	   head would leave the whole sound field behind. Overwrite the basis here,
+	   between the render that used it and the S_Update that is about to.
+
+	   Done this way rather than by calling S_Update a second time with
+	   corrected vectors: S_Update also runs S_UpdateAmbientSounds, which ramps
+	   ambient volumes on host_frametime, so a second call would ramp them at
+	   double rate. One call, correct arguments. */
+	if (cls.signon == SIGNONS)
+	{
+		vec3_t	hang;
+
+		hang[PITCH] = qr_head_pitch;
+		hang[YAW] = qr_body_yaw + qr_head_yaw;
+		hang[ROLL] = 0;
+		AngleVectors (hang, vpn, vright, vup);
+	}
 }
 
 void R_TranslatePlayerSkin (int playernum)

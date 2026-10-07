@@ -150,6 +150,11 @@ struct ContentView: View {
             WeaponTrim.shared.sendCommand = { command in
                 Task { @MainActor in engine.send(command) }
             }
+            // Audio's step trace into the in-headset console, so the device
+            // audio test is readable in the headset with no Mac attached.
+            AudioSink.shared.onLog = { line in
+                Task { @MainActor in engine.note(line) }
+            }
             // Persisted per-input profiles: pick Hands/PSVR2 by what's attached,
             // push its feel to VRSettings now (the rig cvars land once the engine
             // is running, below), and load its values into the sliders.
@@ -813,6 +818,24 @@ struct ContentView: View {
             Toggle("Projectile spawn offset (console)", isOn: Binding(
                 get: { debug.projDebug },
                 set: { debug.projDebug = $0; engine.send("vr_projdebug \($0 ? 1 : 0)") }))
+            // Proves the audio device independently of Quake's mixer: a bare
+            // 440 Hz tone out of AVAudioEngine. If you hear it, the engine,
+            // session and lifecycle are all good and any game silence is the
+            // mixer; if not, the console line after "[audio] tone: starting"
+            // is the diagnosis.
+            Button("Audio self-test (440 Hz tone)") {
+                AudioSink.shared.requestToneTest()
+            }
+            .font(.caption)
+            // Persisted; read once at launch (audio mode is fixed per run), so
+            // this takes effect on the NEXT launch. The recovery hatch if a
+            // launch ever misbehaves with audio on.
+            // Default shown ON, matching AudioSink.mode's on-by-default. Keep
+            // these two in sync -- when they disagreed, the toggle lied about
+            // the real state.
+            Toggle("Game audio (next launch)", isOn: Binding(
+                get: { UserDefaults.standard.object(forKey: "audioEnabled") as? Bool ?? true },
+                set: { UserDefaults.standard.set($0, forKey: "audioEnabled") }))
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
             Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
