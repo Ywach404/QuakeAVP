@@ -228,12 +228,29 @@ void S_Init (void)
 //	if (shm->buffer)
 //		shm->buffer[4] = shm->buffer[5] = 0x7f;	// force a pop for debugging
 
+#ifdef QAVP_PLATFORM
+	/* TEMP crash-locator (synchronous stderr, shows in `make run --console`).
+	   Remove once the audio-on signal 11 is found. */
+	fprintf (stderr, "[snd] S_Init: precache water1\n");
+#endif
 	ambient_sfx[AMBIENT_WATER] = S_PrecacheSound ("ambience/water1.wav");
+#ifdef QAVP_PLATFORM
+	fprintf (stderr, "[snd] S_Init: precache wind2\n");
+#endif
 	ambient_sfx[AMBIENT_SKY] = S_PrecacheSound ("ambience/wind2.wav");
 
+#ifdef QAVP_PLATFORM
+	fprintf (stderr, "[snd] S_Init: S_CodecInit\n");
+#endif
 	S_CodecInit ();
 
+#ifdef QAVP_PLATFORM
+	fprintf (stderr, "[snd] S_Init: S_StopAllSounds\n");
+#endif
 	S_StopAllSounds (true);
+#ifdef QAVP_PLATFORM
+	fprintf (stderr, "[snd] S_Init: done\n");
+#endif
 }
 
 
