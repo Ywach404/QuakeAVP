@@ -52,6 +52,8 @@ extern float qr_wheel_anchor[3];
 extern int qr_wheel_highlight;
 extern float qr_head[3];		/* body-frame head offset from recenter */
 extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
+extern char qr_centerstring[256];	/* captured svc_centerprint (r_null.c) */
+extern double qr_centertime_until;	/* cl.time expiry for the prompt */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
@@ -4239,6 +4241,50 @@ static void QR_EmitText (qr_frame_slot_t *slot, const char *s, const vec3_t org,
 	}
 }
 
+/*
+================
+QR_EmitCenterPrint -- the engine's svc_centerprint text as a head-locked HUD
+prompt (e.g. the hub warp-gate instructions). Reuses the conchars text pipeline
+QR_EmitText already drives for the wheel labels; no new shader or packet field.
+Placed a fixed distance ahead of the eye, facing where the head looks (body yaw
++ head yaw, level -- no pitch so it stays readable), multi-line split on '\n'.
+The 90/26-unit offsets and 8-unit cell are a first pass; tune on device.
+================
+*/
+static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
+{
+	vec3_t	bang, bf, br, bu, base, rightv, upv;
+	float	col[4] = { 1.f, 1.f, 1.f, 1.f };
+	const float	cw = 8.f;
+	const float	lineStep = cw * 1.3f;
+	char	buf[256];
+	char	*line, *save;
+	int	li;
+
+	if (!qr_centerstring[0] || cl.time >= qr_centertime_until)
+		return;
+	QR_EnsureConchars ();
+	if (!qr_conchars_texnum)
+		return;
+
+	bang[0] = 0; bang[1] = qr_body_yaw + qr_head_yaw; bang[2] = 0;
+	AngleVectors (bang, bf, br, bu);
+	VectorMA (r_refdef.vieworg, 90.f, bf, base);
+	base[2] += qr_height_trim + 26.f;        /* a little above the sightline */
+	rightv[0] = br[0]; rightv[1] = br[1]; rightv[2] = br[2];
+	upv[0] = 0.f; upv[1] = 0.f; upv[2] = 1.f;
+
+	q_strlcpy (buf, qr_centerstring, sizeof(buf));
+	li = 0;
+	for (line = strtok_r (buf, "\n", &save); line;
+	     line = strtok_r (NULL, "\n", &save), li++)
+	{
+		vec3_t	org;
+		VectorMA (base, -(float) li * lineStep, upv, org);
+		QR_EmitText (slot, line, org, rightv, upv, cw, col);
+	}
+}
+
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
@@ -4822,6 +4868,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	QR_EmitPathDebug (slot);
 	QR_ProjDebug ();
 	QR_EmitWheel (slot);
+	QR_EmitCenterPrint (slot);
 }
 
 /* ========================================================================

@@ -467,12 +467,29 @@ void SCR_UpdateScreen (void)
 	GL_EndRendering ();
 }
 
+/* Centerprint text captured for the renderer (head-locked HUD prompt, e.g. the
+   hub's warp-gate instructions). Engine thread writes here; qr_bridge reads it
+   while building the frame -- both engine-thread, so no lock. Upstream's HUD
+   machinery is gone, so without this the string was logged and dropped. */
+char	qr_centerstring[256];
+double	qr_centertime_until;
+
 void SCR_CenterPrint (const char *str)
 {
 	/* The message still belongs in the console log even with no HUD. */
 	if (str && *str)
 		Con_Printf ("%s\n", str);
 	scr_centertime_off = 0;
+
+	if (str && *str)
+	{
+		q_strlcpy (qr_centerstring, str, sizeof(qr_centerstring));
+		qr_centertime_until = cl.time + scr_centertime.value;
+	}
+	else
+	{
+		qr_centerstring[0] = '\0';
+	}
 }
 
 void SCR_BeginLoadingPlaque (void)
