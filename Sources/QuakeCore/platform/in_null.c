@@ -279,6 +279,7 @@ cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_ARCHIVE};
 cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
+cvar_t		vr_reticle = {"vr_reticle", "0", CVAR_ARCHIVE};
 /* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
    (muzzle). Low values push the barrel forward off the hand -- megaman
    arm-cannon. Read by qr_bridge; tune live on device. */
@@ -1057,6 +1058,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_wheelup);
 	Cvar_RegisterVariable (&vr_wheelside);
 	Cvar_RegisterVariable (&vr_laser);
+	Cvar_RegisterVariable (&vr_reticle);
 	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_weaponback);
 	Cvar_RegisterVariable (&vr_weaponup);

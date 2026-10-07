@@ -64,7 +64,18 @@ final class InputHost {
     func refreshActive() {
         let immersive = RendererCoordinator.shared.isImmersiveActive
         let controller = gamepad.hasPhysicalController
-        let active = InputActivation.handsActive(immersive: immersive, hasController: controller)
+        let active: Bool
+        if ProfileStore.shared.manualOverride {
+            // A manual profile choice WINS over the hardware heuristic: picking
+            // "Hands" forces bare-hand input even with controllers still paired
+            // (set them down but still connected), picking "PSVR2" forces the
+            // controller off hands. Without this, toggling to controllerless did
+            // nothing while the Sense pair was still connected -- the exact
+            // "it doesn't take" bug. Still gated on immersive.
+            active = immersive && ProfileStore.shared.active == .hands
+        } else {
+            active = InputActivation.handsActive(immersive: immersive, hasController: controller)
+        }
         // Transitions only, so it's a few lines per session. Reports the two
         // inputs to the decision, because "a controller is attached, so hands
         // stood down" and "the immersive space isn't up" look identical from

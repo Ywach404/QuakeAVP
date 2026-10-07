@@ -85,6 +85,7 @@ struct InputProfile: Codable, Equatable {
     // two trims above can be calibrated against it. A laser with its own
     // angular offset is a reference that lies, and you end up chasing it.
     var laser: Bool = false
+    var reticle: Bool = false
     var laserForward: Float = 0
     var laserUp: Float = 0
     var laserSide: Float = 0
@@ -169,6 +170,7 @@ struct InputProfile: Codable, Equatable {
         wheelUp = f(.wheelUp, 0)
         wheelSide = f(.wheelSide, 0)
         laser = b(.laser, false)
+        reticle = b(.reticle, false)
         laserForward = f(.laserForward, 0)
         laserUp = f(.laserUp, 0)
         laserSide = f(.laserSide, 0)
@@ -318,6 +320,7 @@ final class ProfileStore {
         send("vr_wheelup \(p.wheelUp)")
         send("vr_wheelside \(p.wheelSide)")
         send("vr_laser \(p.laser ? 1 : 0)")
+        send("vr_reticle \(p.reticle ? 1 : 0)")
         send("vr_laserforward \(p.laserForward)")
         send("vr_laserup \(p.laserUp)")
         send("vr_laserside \(p.laserSide)")

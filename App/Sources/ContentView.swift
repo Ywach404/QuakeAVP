@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var swapSenseHands = false
     @State private var fullMenu = false
     @State private var laser = false
+    @State private var reticle = false
     @State private var turnFlick: Float = 0.85
     // Sound mixer (Debug tab). Defaults match Quake's volume/bgmvolume defaults;
     // the engine's archived values win in-game until a slider is touched.
@@ -395,7 +396,11 @@ struct ContentView: View {
                         get: { ProfileStore.shared.active },
                         set: { ProfileStore.shared.manualOverride = true
                                ProfileStore.shared.active = $0
-                               ProfileStore.shared.apply(); syncFromProfile() })) {
+                               ProfileStore.shared.apply(); syncFromProfile()
+                               // Re-evaluate INPUT activation too, so choosing
+                               // "Hands" actually switches to bare hands even
+                               // with the Sense pair still connected.
+                               InputHost.shared.refreshActive() })) {
                         Text("Hands").tag(InputMode.hands)
                         Text("PSVR2").tag(InputMode.psvr2)
                     }
@@ -1053,6 +1058,13 @@ struct ContentView: View {
                             set: { laser = $0; engine.send("vr_laser \($0 ? 1 : 0)")
                                    ProfileStore.shared.current.laser = $0 }))
                             .font(.headline)
+                        Toggle("Target reticle", isOn: Binding(
+                            get: { reticle },
+                            set: { reticle = $0; engine.send("vr_reticle \($0 ? 1 : 0)")
+                                   ProfileStore.shared.current.reticle = $0 }))
+                            .font(.headline)
+                        Text("A crosshair where the shot lands. Use with or instead of the laser.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text("Move the beam's start to the barrel tip. Forward reaches the muzzle.")
                             .font(.caption).foregroundStyle(.secondary)
                         placementSlider("Fwd", $laserForward, in: -10...60, cvar: "vr_laserforward", persist: \.laserForward)
@@ -1306,6 +1318,7 @@ struct ContentView: View {
         weaponBack = p.weaponBack; weaponUp = p.weaponUp; weaponSide = p.weaponSide
         aimPitch = p.aimPitch; aimYaw = p.aimYaw
         laser = p.laser
+        reticle = p.reticle
         laserForward = p.laserForward; laserUp = p.laserUp; laserSide = p.laserSide
         laserPitch = p.laserPitch; laserYaw = p.laserYaw
     }
