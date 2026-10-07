@@ -96,6 +96,9 @@ struct ContentView: View {
     @State private var wheelYawUI: Float = 0
     @State private var wheelRollUI: Float = 0
     @State private var wheelRadiusUI: Float = 1
+    @State private var wheelFwdUI: Float = 0
+    @State private var wheelUpUI: Float = 0
+    @State private var wheelSideUI: Float = 0
     @State private var sightingIn = false
     @State private var sightStatus = "Needs the immersive space"
     @State private var weaponPlacementCustom = false
@@ -968,17 +971,26 @@ struct ContentView: View {
                                 placementSlider("Size", $wheelRadiusUI, in: 0.4...2.5,
                                                 cvar: "vr_wheelradius", fmt: "%.2f",
                                                 persist: \.wheelRadius)
+                                placementSlider("Fwd", $wheelFwdUI, in: -12...12,
+                                                cvar: "vr_wheelfwd", persist: \.wheelFwd)
+                                placementSlider("Up", $wheelUpUI, in: -12...12,
+                                                cvar: "vr_wheelup", persist: \.wheelUp)
+                                placementSlider("Side", $wheelSideUI, in: -12...12,
+                                                cvar: "vr_wheelside", persist: \.wheelSide)
                             }
                         }
                         Button("Reset wheel") {
                             wheelPitchUI = 0; wheelYawUI = 0; wheelRollUI = 0; wheelRadiusUI = 1
+                            wheelFwdUI = 0; wheelUpUI = 0; wheelSideUI = 0
                             VRSettings.shared.wheelPitch = 0
                             VRSettings.shared.wheelYaw = 0
                             VRSettings.shared.wheelRoll = 0
-                            for c in ["vr_wheelpitch 0", "vr_wheelyaw 0",
-                                      "vr_wheelroll 0", "vr_wheelradius 1"] { engine.send(c) }
+                            for c in ["vr_wheelpitch 0", "vr_wheelyaw 0", "vr_wheelroll 0",
+                                      "vr_wheelradius 1", "vr_wheelfwd 0", "vr_wheelup 0",
+                                      "vr_wheelside 0"] { engine.send(c) }
                             var p = ProfileStore.shared.current
                             p.wheelPitch = 0; p.wheelYaw = 0; p.wheelRoll = 0; p.wheelRadius = 1
+                            p.wheelFwd = 0; p.wheelUp = 0; p.wheelSide = 0
                             ProfileStore.shared.current = p
                         }
                         .font(.caption)
@@ -1286,6 +1298,7 @@ struct ContentView: View {
         aimSmoothUI = p.aimSmooth; pinchCloseUI = p.pinchClose * 100
         wheelPitchUI = p.wheelPitch; wheelYawUI = p.wheelYaw
         wheelRollUI = p.wheelRoll; wheelRadiusUI = p.wheelRadius
+        wheelFwdUI = p.wheelFwd; wheelUpUI = p.wheelUp; wheelSideUI = p.wheelSide
         curlSensUI = p.curlSensitivity; hammerDropUI = p.hammerDropDeg
         hudFwdUI = p.hudForward; hudUpUI = p.hudUp; hudSideUI = p.hudSide
         hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll; hudYawUI = p.hudYaw ?? 0

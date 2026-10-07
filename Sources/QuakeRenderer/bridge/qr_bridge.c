@@ -3030,6 +3030,7 @@ per weapon in the Weapon menu -- you can see the model, the math can't.
 */
 extern cvar_t vr_weaponclip, vr_weaponclipback;
 extern cvar_t vr_wheelpitch, vr_wheelyaw, vr_wheelroll, vr_wheelradius;
+extern cvar_t vr_wheelfwd, vr_wheelup, vr_wheelside;	/* ring fine-placement, body frame */
 
 static void QR_WeaponClip (aliashdr_t *h, float out[4])
 {
@@ -4360,6 +4361,14 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		VectorMA (r_refdef.vieworg, 36.f, bfwd, center);
 		center[2] -= 2.f;
 	}
+
+	/* User fine-placement nudge (Comfort sliders), body frame -- the same
+	   axes the wrist anchor uses, applied after every placement branch so it
+	   works with the wrist, the full menu and the flat window alike, and
+	   independent of the gyro tilt which only aims the drawn ring. */
+	VectorMA (center, vr_wheelfwd.value, bfwd, center);
+	VectorMA (center, vr_wheelside.value, bright, center);
+	center[2] += vr_wheelup.value;
 
 	/* The ring FOLLOWS the player: center is rebuilt each frame from the
 	   current vieworg and the body-frame anchor WheelState froze at open
