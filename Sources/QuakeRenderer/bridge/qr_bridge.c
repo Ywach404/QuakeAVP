@@ -4251,15 +4251,18 @@ Placed a fixed distance ahead of the eye, facing where the head looks (body yaw
 The 90/26-unit offsets and 8-unit cell are a first pass; tune on device.
 ================
 */
+#define QR_CP_MAXLINES	12
+#define QR_CP_MAXCOL	24	/* wrap width in chars -- keeps it off the edges */
 static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
 {
 	vec3_t	bang, bf, br, bu, base, rightv, upv;
 	float	col[4] = { 1.f, 1.f, 1.f, 1.f };
-	const float	cw = 8.f;
-	const float	lineStep = cw * 1.3f;
+	const float	cw = 7.f;
+	const float	lineStep = cw * 1.35f;
 	char	buf[256];
-	char	*line, *save;
-	int	li;
+	char	lines[QR_CP_MAXLINES][64];
+	int	nlines = 0, li;
+	char	*src, *save;
 
 	if (!qr_centerstring[0] || cl.time >= qr_centertime_until)
 		return;
@@ -4267,21 +4270,52 @@ static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
 	if (!qr_conchars_texnum)
 		return;
 
+	/* Split on newlines, then WORD-WRAP each piece to QR_CP_MAXCOL so a long
+	   message becomes a few short centred lines instead of one that spans the
+	   whole headset view (the first cut was legible but far too wide/long). */
+	q_strlcpy (buf, qr_centerstring, sizeof(buf));
+	for (src = strtok_r (buf, "\n", &save); src && nlines < QR_CP_MAXLINES;
+	     src = strtok_r (NULL, "\n", &save))
+	{
+		char	*word, *wsave;
+		char	cur[64];
+		cur[0] = '\0';
+		for (word = strtok_r (src, " ", &wsave); word && nlines < QR_CP_MAXLINES;
+		     word = strtok_r (NULL, " ", &wsave))
+		{
+			int	clen = (int) strlen (cur), wlen = (int) strlen (word);
+			if (clen == 0)
+				q_strlcpy (cur, word, sizeof(cur));
+			else if (clen + 1 + wlen <= QR_CP_MAXCOL)
+			{
+				q_strlcat (cur, " ", sizeof(cur));
+				q_strlcat (cur, word, sizeof(cur));
+			}
+			else
+			{
+				q_strlcpy (lines[nlines++], cur, sizeof(lines[0]));
+				q_strlcpy (cur, word, sizeof(cur));
+			}
+		}
+		if (cur[0] && nlines < QR_CP_MAXLINES)
+			q_strlcpy (lines[nlines++], cur, sizeof(lines[0]));
+	}
+	if (nlines == 0)
+		return;
+
 	bang[0] = 0; bang[1] = qr_body_yaw + qr_head_yaw; bang[2] = 0;
 	AngleVectors (bang, bf, br, bu);
 	VectorMA (r_refdef.vieworg, 90.f, bf, base);
 	base[2] += qr_height_trim + 26.f;        /* a little above the sightline */
+	base[2] += (nlines - 1) * 0.5f * lineStep;	/* centre the stack vertically */
 	rightv[0] = br[0]; rightv[1] = br[1]; rightv[2] = br[2];
 	upv[0] = 0.f; upv[1] = 0.f; upv[2] = 1.f;
 
-	q_strlcpy (buf, qr_centerstring, sizeof(buf));
-	li = 0;
-	for (line = strtok_r (buf, "\n", &save); line;
-	     line = strtok_r (NULL, "\n", &save), li++)
+	for (li = 0; li < nlines; li++)
 	{
 		vec3_t	org;
 		VectorMA (base, -(float) li * lineStep, upv, org);
-		QR_EmitText (slot, line, org, rightv, upv, cw, col);
+		QR_EmitText (slot, lines[li], org, rightv, upv, cw, col);
 	}
 }
 

@@ -220,6 +220,14 @@ final class AudioSink: @unchecked Sendable {
     /// From QuakeAVPApp at scenePhase == .active. For `on` it waits for the ring
     /// and then brings the device up with retries; the probes run straight away.
     func sceneDidActivate() {
+        // Re-foreground path: if the device engine already exists but the system
+        // stopped/deactivated it while the app was backgrounded (window closed,
+        // then relaunched from the app drawer -- not a fresh process), restart
+        // it. Without this, sound never came back after a window-close/relaunch
+        // because the first-start latch below is already satisfied.
+        lock.lock(); let haveEngine = engine != nil; lock.unlock()
+        if haveEngine { resumeDeviceIfNeeded(); return }
+
         switch Self.mode {
         case .off:
             return
@@ -242,6 +250,27 @@ final class AudioSink: @unchecked Sendable {
             // DURING it hung before, audio ops when settled fail fast. 2s is
             // well clear -- the log reaches 120fps within the first second.
             if go { scheduleRealStart(afterSeconds: 2) }
+        }
+    }
+
+    /// Re-foreground recovery. The engine exists from an earlier launch, but
+    /// backgrounding (closing the window) can leave the audio session
+    /// deactivated and/or the engine stopped, and relaunching from the drawer
+    /// is NOT a fresh process -- so re-activate the session and restart the
+    /// engine if it is not running. Off the main thread, like every other audio
+    /// op here.
+    private func resumeDeviceIfNeeded() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            self.lock.lock(); let e = self.engine; self.lock.unlock()
+            guard let e else { return }
+            // The session may have been deactivated while backgrounded; re-arm
+            // it before (re)starting, same as the first bring-up does.
+            try? AVAudioSession.sharedInstance().setActive(true)
+            if !e.isRunning {
+                do { try e.start(); self.step("audio resumed on re-foreground") }
+                catch { self.step("audio resume failed: \(error)") }
+            }
         }
     }
 
