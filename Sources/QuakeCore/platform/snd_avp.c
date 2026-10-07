@@ -50,6 +50,15 @@ qboolean SNDDMA_Init (dma_t *dma)
 	fprintf (stderr, "[snd] SNDDMA_Init: QC_AudioOpen ok, %d mono samples, buffer %p\n",
 			mono_samples, (void *) buffer);
 
+	/* Point the engine's global mixer handle at this dma. Upstream's
+	   SNDDMA_Init does `shm = dma` first thing; ours never did, so shm stayed
+	   NULL and the very next line in S_Startup -- Con_Printf("Audio: ...",
+	   shm->samplebits, ...) -- dereferenced NULL and crashed with signal 11 the
+	   instant the sound subsystem went active. Everything in snd_mix.c /
+	   snd_dma.c reads shm, so this one assignment is what makes the whole mixer
+	   usable, not just that Con_Printf. */
+	shm = dma;
+
 	memset (dma, 0, sizeof(*dma));
 	dma->channels = channels;
 	dma->samplebits = bits;
