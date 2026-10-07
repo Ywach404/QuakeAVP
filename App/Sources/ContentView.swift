@@ -37,6 +37,11 @@ struct ContentView: View {
     @State private var fullMenu = false
     @State private var laser = false
     @State private var turnFlick: Float = 0.85
+    // Sound mixer (Debug tab). Defaults match Quake's volume/bgmvolume defaults;
+    // the engine's archived values win in-game until a slider is touched.
+    @State private var sfxVolume: Float = 0.7
+    @State private var musicVolume: Float = 1.0
+    @State private var audioMuted = false
     @State private var hudFwdUI: Float = 0
     @State private var hudUpUI: Float = 0.14
     @State private var hudSideUI: Float = 0
@@ -49,7 +54,6 @@ struct ContentView: View {
     @State private var hudScaleUI: Float = 1
     @State private var fireMode: FireMode = .pinch
     @State private var summonGesture: SummonGesture = .prayer
-    @State private var turnStyle: TurnStyle = .stick
     @State private var wheelSelectHand: WheelSelectHand = .offHand
     @State private var aimSmoothUI: Float = 0.4
     @State private var pinchCloseUI: Float = 1.5   // cm
@@ -479,26 +483,9 @@ struct ContentView: View {
                         Text("Smooth").tag(true)
                     }
                     .pickerStyle(.segmented)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Turn style (hands only)").font(.caption).foregroundStyle(.secondary)
-                        Picker("Turn style", selection: Binding(
-                            get: { turnStyle },
-                            set: { turnStyle = $0; VRSettings.shared.turnStyle = $0
-                                   ProfileStore.shared.current.turnStyle = $0.rawValue })) {
-                            Text("Stick").tag(TurnStyle.stick)
-                            Text("Clutch").tag(TurnStyle.clutch)
-                            Text("Flick").tag(TurnStyle.flick)
-                        }
-                        .pickerStyle(.segmented).labelsHidden()
-                        // Hands-only: with a controller attached the hardware
-                        // drives turning (right stick + the Snap/Smooth picker
-                        // above), and this choice does nothing -- so grey it out
-                        // rather than let it look broken.
-                        .disabled(gamepad.hasPhysicalController)
-                    }
                     Text(gamepad.hasPhysicalController
-                         ? "A controller is connected, so turning uses the stick and the Snap/Smooth setting above. Stick / Clutch / Flick apply to bare-hand play only."
-                         : "Stick: hold the off hand out to turn. Clutch: hold the aim-hand middle pinch and drag. Flick: whip the gun hand (gauge on the wireframe).")
+                         ? "Controller connected: turning uses the right stick and the Snap/Smooth setting above."
+                         : "Bare hands turn by flicking the gun hand sideways (gauge on the wireframe). Flick ease sets how hard a whip it takes.")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Text("Flick ease").font(.caption)
@@ -841,24 +828,41 @@ struct ContentView: View {
             Toggle("Projectile spawn offset (console)", isOn: Binding(
                 get: { debug.projDebug },
                 set: { debug.projDebug = $0; engine.send("vr_projdebug \($0 ? 1 : 0)") }))
-            // Proves the audio device independently of Quake's mixer: a bare
-            // 440 Hz tone out of AVAudioEngine. If you hear it, the engine,
-            // session and lifecycle are all good and any game silence is the
-            // mixer; if not, the console line after "[audio] tone: starting"
-            // is the diagnosis.
-            Button("Audio self-test (440 Hz tone)") {
-                AudioSink.shared.requestToneTest()
+            // Sound mixer (the tone self-test and reboot-enable toggle are gone
+            // now that audio works). `volume` is the sfx/creature/world level,
+            // `bgmvolume` the music level -- both CVAR_ARCHIVE, so the engine
+            // persists them in config.cfg. Mute zeroes both and unmute restores
+            // the slider values, so it works regardless of the archived levels.
+            // (Music has no codec wired yet, so that slider is forward-looking.)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Sound").font(.caption.weight(.semibold))
+                Toggle("Mute", isOn: Binding(
+                    get: { audioMuted },
+                    set: { audioMuted = $0
+                           if $0 { engine.send("volume 0"); engine.send("bgmvolume 0") }
+                           else { engine.send("volume \(sfxVolume)")
+                                  engine.send("bgmvolume \(musicVolume)") } }))
+                HStack {
+                    Text("Effects").font(.caption).frame(width: 60, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(sfxVolume) },
+                        set: { sfxVolume = Float($0)
+                               if !audioMuted { engine.send("volume \(sfxVolume)") } }), in: 0...1)
+                    Text(String(format: "%.0f%%", sfxVolume * 100))
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .frame(width: 44, alignment: .trailing)
+                }
+                HStack {
+                    Text("Music").font(.caption).frame(width: 60, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(musicVolume) },
+                        set: { musicVolume = Float($0)
+                               if !audioMuted { engine.send("bgmvolume \(musicVolume)") } }), in: 0...1)
+                    Text(String(format: "%.0f%%", musicVolume * 100))
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .frame(width: 44, alignment: .trailing)
+                }
             }
-            .font(.caption)
-            // Persisted; read once at launch (audio mode is fixed per run), so
-            // this takes effect on the NEXT launch. The recovery hatch if a
-            // launch ever misbehaves with audio on.
-            // Default shown ON, matching AudioSink.mode's on-by-default. Keep
-            // these two in sync -- when they disagreed, the toggle lied about
-            // the real state.
-            Toggle("Game audio (next launch)", isOn: Binding(
-                get: { UserDefaults.standard.object(forKey: "audioEnabled") as? Bool ?? true },
-                set: { UserDefaults.standard.set($0, forKey: "audioEnabled") }))
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
             Toggle("Motion strobe: aim ray (figure)", isOn: Binding(
@@ -867,15 +871,20 @@ struct ContentView: View {
                 get: { debug.turnDebug }, set: { debug.turnDebug = $0 }))
             Toggle("Fire threshold meter (pinch/curl/bang)", isOn: Binding(
                 get: { debug.fireDebug }, set: { debug.fireDebug = $0 }))
-            // HUD dock placement as typed transform fields (exact numbers beat
-            // fishing with sliders). Position in cm, rotation in degrees.
+            // HUD dock placement. Sliders, not typed fields -- typing into a
+            // text box in the headset is miserable; dragging is what you want in
+            // space. Position in cm, rotation on the gyro below.
             VStack(alignment: .leading, spacing: 8) {
-                Text("HUD Position").font(.caption.weight(.semibold))
-                transformField("Fwd X", $hudFwdUI, unit: "cm", display: 100) {
+                HStack {
+                    Text("HUD Position").font(.caption.weight(.semibold))
+                    Spacer()
+                    Button("Reset") { resetHUDPlacement() }.font(.caption)
+                }
+                transformSlider("Fwd", $hudFwdUI, -0.2...0.6, unit: "cm", display: 100) {
                     VRSettings.shared.hudForward = $0; ProfileStore.shared.current.hudForward = $0 }
-                transformField("Up Y", $hudUpUI, unit: "cm", display: 100) {
+                transformSlider("Up", $hudUpUI, -0.3...0.4, unit: "cm", display: 100) {
                     VRSettings.shared.hudUp = $0; ProfileStore.shared.current.hudUp = $0 }
-                transformField("Side Z", $hudSideUI, unit: "cm", display: 100) {
+                transformSlider("Side", $hudSideUI, -0.3...0.3, unit: "cm", display: 100) {
                     VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
                 Text("HUD Transform").font(.caption.weight(.semibold)).padding(.top, 2)
                 HStack(alignment: .center, spacing: 14) {
@@ -1213,6 +1222,40 @@ struct ContentView: View {
         }
     }
 
+    /// A labelled DRAG slider for a HUD transform value (position/scale), with a
+    /// numeric readout. Sliders beat typed fields in the headset. `display`
+    /// scales the readout (e.g. metres shown as cm).
+    private func transformSlider(_ label: String, _ value: Binding<Float>,
+                                 _ range: ClosedRange<Float>, unit: String,
+                                 display: Float = 1,
+                                 apply: @escaping (Float) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { let v = Float($0); value.wrappedValue = v; apply(v) }),
+                in: Double(range.lowerBound)...Double(range.upperBound))
+            Text(String(format: "%.0f%@", value.wrappedValue * display, unit))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .trailing)
+        }
+    }
+
+    /// Reset the HUD dock to defaults -- position, the gyro rotation, and scale
+    /// all at once (the gyro needs a way back, and so does a dragged-off HUD).
+    private func resetHUDPlacement() {
+        hudFwdUI = 0; hudUpUI = 0.14; hudSideUI = 0
+        hudPitchUI = 0; hudYawUI = 0; hudRollUI = 0; hudScaleUI = 1
+        let s = VRSettings.shared
+        s.hudForward = 0; s.hudUp = 0.14; s.hudSide = 0
+        s.hudPitch = 0; s.hudYaw = 0; s.hudRoll = 0; s.hudScale = 1
+        var p = ProfileStore.shared.current
+        p.hudForward = 0; p.hudUp = 0.14; p.hudSide = 0
+        p.hudPitch = 0; p.hudYaw = 0; p.hudRoll = 0; p.hudScale = 1
+        ProfileStore.shared.current = p
+    }
+
     /// One row of the gesture-tuning panel: a labelled slider over a custom
     /// range that pushes the value straight to VRSettings, so the hand-input
     /// feel changes live in the headset without a rebuild.
@@ -1239,7 +1282,6 @@ struct ContentView: View {
         turnFlick = p.turnFlickSpeed
         fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
-        turnStyle = TurnStyle(rawValue: p.turnStyle) ?? .stick
         wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand
         aimSmoothUI = p.aimSmooth; pinchCloseUI = p.pinchClose * 100
         wheelPitchUI = p.wheelPitch; wheelYawUI = p.wheelYaw
