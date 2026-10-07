@@ -59,6 +59,7 @@ extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
 extern int QR_HandOrigin (vec3_t out);	/* M6 hand position, world (in_null.c) */
 extern cvar_t vr_laser;			/* M6 aiming laser toggle */
+extern cvar_t vr_reticle;		/* aiming reticle toggle (alt/with the laser) */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 /* The held gun's own placement, pulled from the table the UI publishes; 0
@@ -3630,6 +3631,62 @@ static void QR_EmitLaser (qr_frame_slot_t *slot, const vec3_t start,
 
 /*
 ================
+QR_EmitReticle -- a small view-facing crosshair where the shot lands. Traces
+the aim from the muzzle, drops a billboarded plus at the hit point sized to
+stay a constant angular size, in the depth-tested particle channel. An
+alternative (or companion) to the laser for players who don't want a beam.
+================
+*/
+static void QR_EmitReticle (qr_frame_slot_t *slot, const vec3_t start,
+			    const vec3_t angles)
+{
+	vec3_t	fwd, r, u, far, hit, look, bx, by, wup = { 0.f, 0.f, 1.f };
+	vec3_t	h0, h1, h2, h3, v0, v1, v2, v3;
+	float	dist, sz, hw;
+	const float	cr = 1.f, cg = 0.85f, cb = 0.2f;	/* amber */
+	int	k;
+
+	AngleVectors (angles, fwd, r, u);
+	VectorMA (start, 4096.f, fwd, far);
+	TraceLine (start, far, hit);
+	if (hit[0] == 0.f && hit[1] == 0.f && hit[2] == 0.f)
+		VectorMA (start, 1000.f, fwd, hit);	/* open air: a fixed throw */
+
+	VectorSubtract (hit, r_origin, look);
+	dist = VectorLength (look);
+	if (dist < 1.f)
+		return;
+	CrossProduct (look, wup, bx);
+	if (VectorNormalize (bx) < 0.01f) { bx[0] = 1.f; bx[1] = 0.f; bx[2] = 0.f; }
+	CrossProduct (bx, look, by);
+	VectorNormalize (by);
+
+	sz = dist * 0.011f;	/* half-length of each bar; constant angular size */
+	hw = sz * 0.16f;	/* half-thickness */
+
+	for (k = 0; k < 3; k++)
+	{
+		/* horizontal bar */
+		h0[k] = hit[k] - bx[k]*sz - by[k]*hw;
+		h1[k] = hit[k] + bx[k]*sz - by[k]*hw;
+		h2[k] = hit[k] + bx[k]*sz + by[k]*hw;
+		h3[k] = hit[k] - bx[k]*sz + by[k]*hw;
+		/* vertical bar */
+		v0[k] = hit[k] - bx[k]*hw - by[k]*sz;
+		v1[k] = hit[k] + bx[k]*hw - by[k]*sz;
+		v2[k] = hit[k] + bx[k]*hw + by[k]*sz;
+		v3[k] = hit[k] - bx[k]*hw + by[k]*sz;
+	}
+	QR_ParticleVert (slot, h0, cr, cg, cb); QR_ParticleVert (slot, h1, cr, cg, cb);
+	QR_ParticleVert (slot, h2, cr, cg, cb); QR_ParticleVert (slot, h0, cr, cg, cb);
+	QR_ParticleVert (slot, h2, cr, cg, cb); QR_ParticleVert (slot, h3, cr, cg, cb);
+	QR_ParticleVert (slot, v0, cr, cg, cb); QR_ParticleVert (slot, v1, cr, cg, cb);
+	QR_ParticleVert (slot, v2, cr, cg, cb); QR_ParticleVert (slot, v0, cr, cg, cb);
+	QR_ParticleVert (slot, v2, cr, cg, cb); QR_ParticleVert (slot, v3, cr, cg, cb);
+}
+
+/*
+================
 QR_EmitDebugLine -- a coloured world-space line between two points, as a thin
 view-facing quad in the particle channel (foveation forbids GL_LINES on
 device). Depth-tested against the world, so a segment behind a wall is hidden.
@@ -4252,13 +4309,13 @@ The 90/26-unit offsets and 8-unit cell are a first pass; tune on device.
 ================
 */
 #define QR_CP_MAXLINES	12
-#define QR_CP_MAXCOL	24	/* wrap width in chars -- keeps it off the edges */
+#define QR_CP_MAXCOL	16	/* wrap width in chars -- keeps it well off the edges */
 static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
 {
 	vec3_t	bang, bf, br, bu, base, rightv, upv;
 	float	col[4] = { 1.f, 1.f, 1.f, 1.f };
-	const float	cw = 7.f;
-	const float	lineStep = cw * 1.35f;
+	const float	cw = 5.f;
+	const float	lineStep = cw * 1.4f;
 	char	buf[256];
 	char	lines[QR_CP_MAXLINES][64];
 	int	nlines = 0, li;
@@ -4305,8 +4362,8 @@ static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
 
 	bang[0] = 0; bang[1] = qr_body_yaw + qr_head_yaw; bang[2] = 0;
 	AngleVectors (bang, bf, br, bu);
-	VectorMA (r_refdef.vieworg, 90.f, bf, base);
-	base[2] += qr_height_trim + 26.f;        /* a little above the sightline */
+	VectorMA (r_refdef.vieworg, 120.f, bf, base);	/* further = smaller in view */
+	base[2] += qr_height_trim + 2.f;         /* near the sightline, not up top */
 	base[2] += (nlines - 1) * 0.5f * lineStep;	/* centre the stack vertically */
 	rightv[0] = br[0]; rightv[1] = br[1]; rightv[2] = br[2];
 	upv[0] = 0.f; upv[1] = 0.f; upv[2] = 1.f;
@@ -4833,7 +4890,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			   (cf/cr/cu, the shot frame), so with the sliders at zero the beam
 			   already emits from the barrel tip and rides it at every aim angle.
 			   The vr_laser{forward,up,side} offsets are then just fine-tune. */
-			if (vr_laser.value)
+			if (vr_laser.value || vr_reticle.value)
 			{
 				vec3_t	lstart, langles;
 				float	lx = bmax[0];   /* idle-frame muzzle, along barrel */
@@ -4849,7 +4906,12 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				langles[0] = cl.viewangles[0] + vr_laserpitch.value;
 				langles[1] = cl.viewangles[1] + vr_laseryaw.value;
 				langles[2] = cl.viewangles[2];
-				QR_EmitLaser (slot, lstart, langles);
+				if (vr_laser.value)
+					QR_EmitLaser (slot, lstart, langles);
+				/* Reticle marks where the SHOT lands (cl.viewangles, not the
+				   laser's barrel-aligned tilt), from the same muzzle. */
+				if (vr_reticle.value)
+					QR_EmitReticle (slot, lstart, cl.viewangles);
 			}
 
 			/* Visual recoil, purely cosmetic (the shot already left with
@@ -4879,16 +4941,13 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				}
 			}
 
-			/* Draw the IDLE pose (frame 0): the fire frames model the loaded
-			   round / muzzle flash poking out of the barrel, which looked like
-			   a stray projectile welded to the gun. Our synthetic recoil above
-			   already carries the fire feel, so we don't need the model's own
-			   fire animation. The recoil block above already read the real
-			   frame for its shot detection, so this only changes what's drawn.
-			   (Forced every hand emit, so the pose never lerps off a fire
-			   frame.) The body-anchored fallback below keeps the animation --
-			   it's the window-only debug view. */
-			cl.viewent.frame = 0;
+			/* Real weapon animation restored: the view weapon plays its fire
+			   frames (cl.viewent.frame = STAT_WEAPONFRAME, set by V_CalcRefdef).
+			   It was pinned to frame 0 to hide the loaded round / muzzle flash
+			   the fire frames model, but at idle STAT_WEAPONFRAME is 0 anyway,
+			   so re-enabling only ADDS the firing animation -- and the synthetic
+			   recoil above still complements it. Per-weapon clip trims hide any
+			   baked round at the muzzle for guns that need it. */
 
 			qr_handweapon = 1;
 			QR_EmitAliasModel (slot, &cl.viewent);
