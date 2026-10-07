@@ -22,6 +22,12 @@ qboolean SNDDMA_Init (dma_t *dma)
 	int		mono_samples = 0;
 	int		speed, channels, bits;
 
+	/* TEMP crash-locator: synchronous stderr (shows in `make run --console`
+	   immediately, unlike Con_Printf which is async and may not flush before a
+	   crash). Brackets the audio init so the last [snd] line before a signal 11
+	   pins where it dies. Remove once the crash is found. */
+	fprintf (stderr, "[snd] SNDDMA_Init: enter\n");
+
 	/* snd_mixspeed is the DEVICE rate (default 44100); sndspeed describes the
 	   source material (default 11025). Driving the device from sndspeed made
 	   the two always equal, which makes snd_mix.c:415's 11025->44100 lowpass
@@ -34,11 +40,15 @@ qboolean SNDDMA_Init (dma_t *dma)
 	channels = 2;
 	bits = 16;
 
+	fprintf (stderr, "[snd] SNDDMA_Init: calling QC_AudioOpen\n");
 	if (!QC_AudioOpen (speed, channels, bits, &buffer, &mono_samples))
 	{
+		fprintf (stderr, "[snd] SNDDMA_Init: QC_AudioOpen declined\n");
 		Con_Printf ("SNDDMA_Init: no audio device\n");
 		return false;
 	}
+	fprintf (stderr, "[snd] SNDDMA_Init: QC_AudioOpen ok, %d mono samples, buffer %p\n",
+			mono_samples, (void *) buffer);
 
 	memset (dma, 0, sizeof(*dma));
 	dma->channels = channels;
@@ -50,6 +60,7 @@ qboolean SNDDMA_Init (dma_t *dma)
 	dma->buffer = buffer;
 
 	snd_open = true;
+	fprintf (stderr, "[snd] SNDDMA_Init: returning true (sound subsystem now active)\n");
 	return true;
 }
 
