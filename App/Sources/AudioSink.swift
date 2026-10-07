@@ -124,6 +124,13 @@ final class AudioSink: @unchecked Sendable {
         /// word: single loads and stores do not tear on arm64, which is all this
         /// needs -- there is no read-modify-write across threads.
         let cursor: UnsafeMutablePointer<Int32>
+        /// Diagnostics, written by the render block, read by a timer. The tone
+        /// works but the sink is silent, so the question is whether the ring the
+        /// mixer fills actually has audio in it. `calls` counts callbacks (is the
+        /// device pulling?), `peak` is the largest |int16| seen since last reset
+        /// (is the ring non-zero, i.e. is Quake painting?).
+        let calls: UnsafeMutablePointer<Int32>
+        let peak: UnsafeMutablePointer<Int32>
     }
 
     private let lock = NSLock()
@@ -198,10 +205,14 @@ final class AudioSink: @unchecked Sendable {
         buf.initialize(repeating: 0, count: monoSamples * bps)
         let cursor = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
         cursor.pointee = 0
+        let calls = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        calls.pointee = 0
+        let peak = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        peak.pointee = 0
 
         config = RenderConfig(buffer: buf, monoSamples: monoSamples,
                               channels: channels, bytesPerSample: bps,
-                              cursor: cursor)
+                              cursor: cursor, calls: calls, peak: peak)
         sampleRate = speed
 
         // Only `on` auto-starts a device; `ring` allocates the buffer and stops
@@ -394,6 +405,30 @@ final class AudioSink: @unchecked Sendable {
                 + "the engine works and the real sink (QAVP_AUDIO=on) will too")
         } else {
             step("sink: device UP, \(Int(rate)) Hz requested / device \(Int(real)) Hz")
+            startDiagTimer()
+        }
+    }
+
+    /// Reports the render-block diagnostics every 2s, so a detached launch can
+    /// show whether the device is pulling (`calls`) and whether the ring the
+    /// mixer fills actually has audio (`peak`). Reads are racy against the
+    /// realtime writes, which is fine for a coarse health indicator.
+    private func startDiagTimer() {
+        DispatchQueue.main.async { [weak self] in
+            let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] t in
+                guard let self else { t.invalidate(); return }
+                self.lock.lock()
+                guard let cfg = self.config, self.engineRunning else { self.lock.unlock(); t.invalidate(); return }
+                let calls = cfg.calls.pointee
+                let peak = cfg.peak.pointee
+                let pos = cfg.cursor.pointee
+                cfg.calls.pointee = 0
+                cfg.peak.pointee = 0
+                self.lock.unlock()
+                self.step("diag: \(calls) callbacks/2s, ring peak \(peak)/32767, cursor \(pos) "
+                    + "-- peak 0 = mixer is not filling the ring; peak>0 + silence = output")
+            }
+            RunLoop.main.add(timer, forMode: .common)
         }
     }
 
@@ -432,6 +467,7 @@ final class AudioSink: @unchecked Sendable {
             let pos = Int(cfg.cursor.pointee)
             let mask = cfg.monoSamples - 1
             let scale = Float(1.0 / 32768.0)
+            var localPeak: Int32 = 0
             cfg.buffer.withMemoryRebound(to: Int16.self,
                                          capacity: cfg.monoSamples) { ring in
                 for (ch, out) in buffers.enumerated() {
@@ -441,7 +477,10 @@ final class AudioSink: @unchecked Sendable {
                     if ch < cfg.channels {
                         for i in 0..<maxFrames {
                             let idx = (pos + i * cfg.channels + ch) & mask
-                            dst[i] = Float(ring[idx]) * scale
+                            let s = ring[idx]
+                            let a = Int32(s < 0 ? -Int32(s) : Int32(s))
+                            if a > localPeak { localPeak = a }
+                            dst[i] = Float(s) * scale
                         }
                     } else {
                         for i in 0..<maxFrames { dst[i] = 0 }
@@ -449,6 +488,8 @@ final class AudioSink: @unchecked Sendable {
                 }
             }
             cfg.cursor.pointee = Int32((pos + frames * cfg.channels) & mask)
+            cfg.calls.pointee = cfg.calls.pointee &+ 1
+            if localPeak > cfg.peak.pointee { cfg.peak.pointee = localPeak }
             return noErr
         }
     }
