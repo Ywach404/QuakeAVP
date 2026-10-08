@@ -47,6 +47,10 @@ struct RenderPipelines {
     /// renderFrame before startSubmission and trips queryNextFrame's
     /// __BUG_IN_CLIENT__ abort). Worst case: no labels, everything else draws.
     let text: MTLRenderPipelineState?
+    /// Sprite models (explosions, bubbles) as depth-tested textured
+    /// billboards. Optional for the same reason as `text`: a build failure
+    /// must not nil the whole set. Worst case: no sprite effects.
+    let sprite: MTLRenderPipelineState?
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
     /// For pass B: pass exactly the prepass depth, write nothing.
@@ -308,6 +312,10 @@ final class RendererCore {
                                     fragment: "text_fragment", blended: true)
         print("[renderer] text pipeline: \(textPipeline == nil ? "FAILED (labels off)" : "ok")")
 
+        let spritePipeline = pipeline(vertex: "sprite_vertex",
+                                      fragment: "sprite_fragment", blended: true)
+        print("[renderer] sprite pipeline: \(spritePipeline == nil ? "FAILED (sprites off)" : "ok")")
+
         return RenderPipelines(
             world: world, worldDepthOnly: worldDepthOnly, worldEqual: worldEqual,
             worldBlend: worldBlend, liquid: liquid,
@@ -315,6 +323,7 @@ final class RendererCore {
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
             vignette: vignette, wheelGuide: wheelGuide,
             text: textPipeline,
+            sprite: spritePipeline,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
             depthEqualNoWrite: depthEqualNoWrite,
             depthAlways: depthAlways)
@@ -596,6 +605,35 @@ final class RendererCore {
             }
         }
 
+        // Sprite models (explosions, bubbles) — textured billboards, one draw
+        // per texture batch, DEPTH-TESTED (depthNoWrite) so the world occludes
+        // them. Built by the bridge in world space; drawn in packet order.
+        if let spritePipeline = pipelines.sprite,
+           frame.num_sprite_batches > 0, frame.num_sprite_verts >= 3,
+           let verts = frame.sprite_verts, let batches = frame.sprite_batches {
+            let floatCount = Int(frame.num_sprite_verts) * 5
+            if let buf = device.makeBuffer(bytes: verts,
+                                           length: floatCount * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
+                setPipeline(spritePipeline, depth: pipelines.depthNoWrite)
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                for i in 0..<Int(frame.num_sprite_batches) {
+                    let b = batches[i]
+                    guard let tex = textures[b.texnum] else { continue }
+                    var u = SpriteUniforms(viewproj0: uniforms.viewproj0,
+                                           viewproj1: uniforms.viewproj1,
+                                           alpha: b.alpha)
+                    withUnsafeBytes(of: &u) { raw in
+                        encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+                    }
+                    encoder.setFragmentTexture(tex, index: 0)
+                    encoder.drawPrimitives(type: .triangle,
+                                           vertexStart: Int(b.first_vert),
+                                           vertexCount: Int(b.vert_count))
+                }
+            }
+        }
+
         // Weapon-wheel guide ring, over the world, before the vignette (so
         // locomotion vignette — never on while the wheel is open — could
         // still darken it, harmlessly).
@@ -849,6 +887,13 @@ final class RendererCore {
     private struct GuideUniforms {
         var viewproj0: simd_float4x4
         var viewproj1: simd_float4x4
+    }
+
+    /// Layout must match SpriteUniforms in Sprite.metal: two matrices + alpha.
+    private struct SpriteUniforms {
+        var viewproj0: simd_float4x4
+        var viewproj1: simd_float4x4
+        var alpha: Float
     }
 
     /// Layout must match AliasUniforms in Alias.metal.
