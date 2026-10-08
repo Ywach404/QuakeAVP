@@ -61,4 +61,8 @@ qboolean QR_SurfaceNeedsRelight (msurface_t *surf, int framecount, int dynamic_o
 void R_RenderDynamicLightmaps (msurface_t *surf);
 int  QR_FlushDirtyLightmaps (void);	/* re-upload dirty atlases; returns count */
 
+/* Sprite models (gl_sprite.c ports). */
+mspriteframe_t *QR_SpriteFrameSelect (msprite_t *psprite, int frame, float time);
+mspriteframe_t *QR_SpriteFrame (entity_t *e);
+
 #endif /* QR_BRIDGE_H */
