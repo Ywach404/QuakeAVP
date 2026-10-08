@@ -2687,6 +2687,59 @@ mspriteframe_t *QR_SpriteFrame (entity_t *e)
 
 /*
 ===============
+QR_SpriteBillboardAxes -- the up/right billboard basis for a sprite, per type.
+Port of gl_sprite.c R_DrawSpriteModel's vector setup, against the view globals
+(vpn/vright/vup, r_refdef.vieworg). Faces the packet view (Approach A); the
+immersive consumer does not re-billboard per eye.
+===============
+*/
+void QR_SpriteBillboardAxes (int type, entity_t *e, vec3_t up, vec3_t right)
+{
+	vec3_t	fwd;
+	float	angle, sr, cr;
+
+	switch (type)
+	{
+	case SPR_VP_PARALLEL_UPRIGHT:	/* faces view plane, up toward the heavens */
+		up[0] = 0; up[1] = 0; up[2] = 1;
+		VectorCopy (vright, right);
+		break;
+	case SPR_FACING_UPRIGHT:	/* faces the viewer, up toward the heavens */
+		VectorSubtract (e->origin, r_refdef.vieworg, fwd);
+		fwd[2] = 0;
+		VectorNormalize (fwd);
+		right[0] = fwd[1];
+		right[1] = -fwd[0];
+		right[2] = 0;
+		up[0] = 0; up[1] = 0; up[2] = 1;
+		break;
+	case SPR_VP_PARALLEL:		/* faces view plane, up toward screen top */
+		VectorCopy (vup, up);
+		VectorCopy (vright, right);
+		break;
+	case SPR_ORIENTED:		/* independent of the camera */
+		AngleVectors (e->angles, fwd, right, up);
+		break;
+	case SPR_VP_PARALLEL_ORIENTED:	/* view-plane parallel, obeys roll */
+		angle = e->angles[ROLL] * (M_PI / 180.0);
+		sr = sin (angle);
+		cr = cos (angle);
+		right[0] = vright[0] * cr + vup[0] * sr;
+		right[1] = vright[1] * cr + vup[1] * sr;
+		right[2] = vright[2] * cr + vup[2] * sr;
+		up[0] = vright[0] * -sr + vup[0] * cr;
+		up[1] = vright[1] * -sr + vup[1] * cr;
+		up[2] = vright[2] * -sr + vup[2] * cr;
+		break;
+	default:			/* treat unknown as VP_PARALLEL */
+		VectorCopy (vup, up);
+		VectorCopy (vright, right);
+		break;
+	}
+}
+
+/*
+===============
 QR_EmitBrushModel -- port of R_DrawBrushModel, emitting batches.
 
 Chains the visible submodel faces exactly as upstream (backface test
