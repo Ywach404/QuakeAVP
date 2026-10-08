@@ -37,6 +37,9 @@ struct ContentView: View {
     @State private var fullMenu = false
     @State private var teleportEnabled = true
     @State private var teleportMarker = true
+    @State private var teleportSound = true
+    @State private var teleportFx = true
+    @State private var telefrag = true
     @State private var offHandModelOnly = false
     @State private var laser = false
     @State private var reticle = false
@@ -48,6 +51,9 @@ struct ContentView: View {
     @State private var offHandYawUI: Float = 0
     @State private var offHandRollUI: Float = 0
     @State private var turnFlick: Float = 0.85
+    @State private var turnHoldEnabled = true
+    @State private var turnHoldSpeedUI: Float = 90
+    @State private var turnHoldDzUI: Float = 18
     // Sound mixer (Debug tab). Defaults match Quake's volume/bgmvolume defaults;
     // the engine's archived values win in-game until a slider is touched.
     @State private var sfxVolume: Float = 0.7
@@ -541,11 +547,23 @@ struct ContentView: View {
                     Toggle("Teleport locomotion", isOn: Binding(
                         get: { teleportEnabled },
                         set: { teleportEnabled = $0; engine.send("vr_teleport \($0 ? 1 : 0)") }))
-                    Text("Aim with the gun reticle; ring-finger pinch (off hand) to blink there.")
+                    Text("Aim with the gun reticle; tap the off-hand ring finger and release to blink there.")
                         .font(.caption2).foregroundStyle(.secondary)
                     Toggle("Tint reticle when landable", isOn: Binding(
                         get: { teleportMarker },
                         set: { teleportMarker = $0; engine.send("vr_teleportcolor \($0 ? 1 : 0)") }))
+                        .font(.caption)
+                    Toggle("Teleport sound", isOn: Binding(
+                        get: { teleportSound },
+                        set: { teleportSound = $0; engine.send("vr_teleportsound \($0 ? 1 : 0)") }))
+                        .font(.caption)
+                    Toggle("Teleport splash effect", isOn: Binding(
+                        get: { teleportFx },
+                        set: { teleportFx = $0; engine.send("vr_teleportfx \($0 ? 1 : 0)") }))
+                        .font(.caption)
+                    Toggle("Telefrag (gib what you land on)", isOn: Binding(
+                        get: { telefrag },
+                        set: { telefrag = $0; engine.send("vr_telefrag \($0 ? 1 : 0)") }))
                         .font(.caption)
                 }
                 if !gamepad.hasPhysicalController {
@@ -568,7 +586,7 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     Text(gamepad.hasPhysicalController
                          ? "Controller connected: turning uses the right stick and the Snap/Smooth setting above."
-                         : "Bare hands turn by flicking the gun hand sideways (gauge on the wireframe). Flick ease sets how hard a whip it takes.")
+                         : "Bare hands: FLICK the gun hand sideways for a quick turn. On Smooth, with Edge turn on, hold the GUN hand aimed out past the dead zone — left or right — to keep turning that way (Metroid Prime Hunters style); center it to stop. Turn speed and dead zone tune it. Flick ease sets how hard a whip the flick takes.")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Text("Flick ease").font(.caption)
@@ -579,6 +597,28 @@ struct ContentView: View {
                                    ProfileStore.shared.current.turnFlickSpeed = Float($0) }),
                                in: 0.2...1.6)
                         Text(String(format: "%.2f", turnFlick))
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    Toggle("Edge turn (aim to a side to turn)", isOn: Binding(
+                        get: { turnHoldEnabled },
+                        set: { turnHoldEnabled = $0; engine.send("vr_edgeturn \($0 ? 1 : 0)") }))
+                        .font(.caption)
+                    HStack {
+                        Text("Turn speed").font(.caption)
+                        Slider(value: Binding(
+                            get: { Double(turnHoldSpeedUI) },
+                            set: { turnHoldSpeedUI = Float($0); engine.send("vr_edgeturn_speed \(Int($0))") }),
+                               in: 30...180)
+                        Text("\(Int(turnHoldSpeedUI))°/s")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Dead zone").font(.caption)
+                        Slider(value: Binding(
+                            get: { Double(turnHoldDzUI) },
+                            set: { turnHoldDzUI = Float($0); engine.send("vr_edgeturn_dz \(Int($0))") }),
+                               in: 8...40)
+                        Text("\(Int(turnHoldDzUI))°")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }

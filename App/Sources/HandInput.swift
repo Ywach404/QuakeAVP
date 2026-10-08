@@ -16,8 +16,9 @@
 //    move palm-up              open the weapon wheel (that hand selects)
 //    gun index pinch           fire (hold for automatic)
 //    gun thumb+ring pinch      jump  [test remap]
-//    gun horizontal flick      snap turn -- quick un-pinched sideways whip
-//    gun thumb+middle drag     turn fallback / smooth-turn's held signal
+//    gun horizontal flick      quick turn -- a fast un-pinched sideways whip
+//    gun thumb+middle hold+drag  CONTINUOUS turn (Smooth mode): hold out to a
+//                              side to keep turning, rate by drag distance
 //
 //  Drag vectors are rotated by the render thread's recenter correction
 //  (TrackingSpace) so "forward" is the body's forward, not the room's
@@ -89,6 +90,7 @@ final class HandInput: @unchecked Sendable {
     private var flickCooldownUntil = 0.0
     private var flickPulseUntil = 0.0
     private var flickDir: Float = 0
+
 
     /// Turn-gauge geometry (corrected tracking space, 7 floats/vertex),
     /// published alongside the debug wireframe when the overlay is on.
@@ -328,20 +330,36 @@ final class HandInput: @unchecked Sendable {
         fireStatusVerts = buildFireStatus(aim, fired: now - lastFireTime < Self.fireFlash)
         fireDebugVerts = buildFireDebug(aim, now: now)
 
-        // Turning is flick-only: whip the gun hand sideways to snap. Stick and
-        // clutch were removed -- flick is the one that reads well in the headset.
+        // Two ways to turn, both on the gun hand:
+        //  - QUICK WHIP (flick): a fast sideways wrist whip fires ONE snap (or a
+        //    brief smooth nudge). Good for a glance.
+        //  - HELD SCROLL (thumb+middle pinch-drag): pinch and hold the hand out
+        //    to a side and it turns CONTINUOUSLY, rate proportional to how far
+        //    you've dragged from where you pinched. With Smooth turning on this
+        //    is a controllerless "right stick" -- hold to keep turning, release
+        //    to stop. (Under Snap it just fires the one snap, like the whip.)
         let dt = Float(max(0, min(0.1, now - lastTurnTime)))
         lastTurnTime = now
         _ = dt   // retained for the (now unused) accumulate path's signature
         do {
             turnIntent = 0; stickNeutral = nil; clutchAnchor = nil
-            // The pinch-drag is checked first (a deliberate held fallback); if it
-            // isn't driving, a quick sideways whip fires one snap.
+            // The held pinch-drag is checked first (it's the deliberate one); if
+            // it isn't driving, a quick sideways whip fires.
             var turnedByPinch = false
             if let drag = aim.middleDrag {
                 let d = basis * drag
-                if abs(d.x) > 0.06 { slice.rx = d.x > 0 ? 1 : -1; turnedByPinch = true }
+                let dz: Float = 0.02, full: Float = 0.12   // deadzone .. full-rate drag (m)
+                if abs(d.x) > dz {
+                    let v = min(1, (abs(d.x) - dz) / (full - dz))
+                    slice.rx = v * (d.x > 0 ? 1 : -1)      // proportional, continuous
+                    turnedByPinch = true
+                }
             }
+
+            // (Continuous "edge turn" is engine-side now -- IN_Teleport's
+            // neighbour in in_null.c reads the gun AIM yaw: hold the aim past a
+            // deadzone to a side and the body follows, Metroid Prime Hunters
+            // style. Nothing to feed from here.)
             let speed = aim.wristVel.map { (basis * $0).x } ?? 0   // body-right m/s
             let mag = abs(speed)
             // Auto-balanced flick: decay each direction's peak, fold in the
@@ -704,7 +722,9 @@ final class HandInput: @unchecked Sendable {
         // is still computed in ingest, reserved for the PSVR dual-wield.
         let off = VRSettings.shared.rightHanded ? left : right
         let pinched = !WheelState.shared.isOpen && off.ringPinched
-        let commit = pinched && !tpRingWas
+        // Commit on the RELEASE of the ring pinch (tap, then let go to blink),
+        // so you can hold and line up the gun reticle, then release to go.
+        let commit = !pinched && tpRingWas
         tpRingWas = pinched
         QC_InputSetTeleport(0, commit ? 1 : 0, 0, 0, 0, 0, 0)
     }
