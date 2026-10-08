@@ -59,5 +59,6 @@ void R_PushDlights (void);
 void QR_DlightMarkOrigin (dlight_t *dl, vec3_t out);
 qboolean QR_SurfaceNeedsRelight (msurface_t *surf, int framecount, int dynamic_on);
 void R_RenderDynamicLightmaps (msurface_t *surf);
+int  QR_FlushDirtyLightmaps (void);	/* re-upload dirty atlases; returns count */
 
 #endif /* QR_BRIDGE_H */

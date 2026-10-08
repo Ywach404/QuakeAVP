@@ -1367,6 +1367,34 @@ void R_RenderDynamicLightmaps (msurface_t *surf)
 }
 
 /*
+===============
+QR_FlushDirtyLightmaps -- Approach A: push every atlas a surface relit this
+frame to the consumer through the existing upload queue (which takes a private
+copy, so the engine thread may keep mutating lm->data). Whole-atlas re-upload;
+rectchange is maintained for a future dirty-rect path but not used here.
+Returns how many atlases were enqueued. Runs once per frame after the walk.
+===============
+*/
+int QR_FlushDirtyLightmaps (void)
+{
+	int	i, n = 0;
+
+	for (i = 0; i < lightmap_count; i++)
+	{
+		if (!lightmaps[i].modified)
+			continue;
+		QR_EnqueueUpload (lightmaps[i].texture, (unsigned *) lightmaps[i].data);
+		lightmaps[i].modified = false;
+		lightmaps[i].rectchange.l = LMBLOCK_WIDTH;
+		lightmaps[i].rectchange.t = LMBLOCK_HEIGHT;
+		lightmaps[i].rectchange.w = 0;
+		lightmaps[i].rectchange.h = 0;
+		n++;
+	}
+	return n;
+}
+
+/*
 ========================
 GL_CreateSurfaceLightmap
 ========================
@@ -5946,6 +5974,10 @@ void QR_RenderView (void)
 	}
 
 	QR_BuildFramePacket (slot);
+
+	/* Push any atlas a surface relit this frame to the consumer (Approach A).
+	   After all world + brush-entity emission, so every relit surface is in. */
+	QR_FlushDirtyLightmaps ();
 
 	if (r_pos.value)
 		Con_Printf ("x %i y %i z %i (pitch %i yaw %i roll %i)\n",
