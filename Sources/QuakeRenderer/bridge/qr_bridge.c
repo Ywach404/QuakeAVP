@@ -2630,6 +2630,63 @@ static void QR_EntityMatrix (float out[16], const vec3_t origin,
 
 /*
 ================
+QR_SpriteFrameSelect -- pick the mspriteframe for a frame index, resolving an
+animated group by time. Pure port of gl_sprite.c R_GetSpriteFrame's selection
+(no Mod_Extradata), so it is unit-testable. `time` is cl.time + syncbase.
+===============
+*/
+mspriteframe_t *QR_SpriteFrameSelect (msprite_t *psprite, int frame, float time)
+{
+	mspritegroup_t	*pspritegroup;
+	mspriteframe_t	*pspriteframe;
+	int		i, numframes;
+	float		*pintervals, fullinterval, targettime;
+
+	if ((frame >= psprite->numframes) || (frame < 0))
+		frame = 0;
+
+	if (psprite->frames[frame].type == SPR_SINGLE)
+	{
+		pspriteframe = psprite->frames[frame].frameptr;
+	}
+	else
+	{
+		pspritegroup = (mspritegroup_t *) psprite->frames[frame].frameptr;
+		pintervals = pspritegroup->intervals;
+		numframes = pspritegroup->numframes;
+		fullinterval = pintervals[numframes-1];
+
+		/* intervals are guaranteed positive at load, so no div-by-zero */
+		targettime = time - ((int)(time / fullinterval)) * fullinterval;
+		for (i = 0; i < (numframes-1); i++)
+			if (pintervals[i] > targettime)
+				break;
+		pspriteframe = pspritegroup->frames[i];
+	}
+	return pspriteframe;
+}
+
+/*
+===============
+QR_SpriteFrame -- the entity wrapper: resolve the model and clock, then
+QR_SpriteFrameSelect. Engine thread (uses Mod_Extradata + cl.time).
+===============
+*/
+mspriteframe_t *QR_SpriteFrame (entity_t *e)
+{
+	msprite_t	*psprite = (msprite_t *) Mod_Extradata (e->model);
+	int		frame = e->frame;
+
+	if ((frame >= psprite->numframes) || (frame < 0))
+	{
+		Con_DPrintf ("QR_SpriteFrame: no such frame %d for '%s'\n", frame, e->model->name);
+		frame = 0;
+	}
+	return QR_SpriteFrameSelect (psprite, frame, cl.time + e->syncbase);
+}
+
+/*
+===============
 QR_EmitBrushModel -- port of R_DrawBrushModel, emitting batches.
 
 Chains the visible submodel faces exactly as upstream (backface test
