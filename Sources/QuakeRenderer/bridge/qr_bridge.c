@@ -37,6 +37,7 @@
 extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farclip;
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
+extern cvar_t r_dynamic, r_flatlightstyles;	/* registered in r_null.c */
 extern cvar_t phase, phase_time, phase_color;
 extern cvar_t vr_vignette, vr_vignette_threshold;
 
@@ -2651,6 +2652,39 @@ void GLMesh_DeleteVertexBuffers (void)
 /* ========================================================================
  * gl_rlight.c -- R_LightPoint, for alias entity lighting
  * ===================================================================== */
+
+/*
+==================
+R_AnimateLight -- drive d_lightstylevalue from the server's lightstyle
+strings each frame. Port of gl_rlight.c; 'a'=0 (dark) .. 'm'=12 (normal)
+.. 'z'=25, value is (map[i%len]-'a')*22. An empty style sits at 256 so an
+unanimated world bakes at full base light rather than black.
+==================
+*/
+void R_AnimateLight (void)
+{
+	int i,j,k;
+
+	i = (int)(cl.time*10);
+	for (j=0 ; j<MAX_LIGHTSTYLES ; j++)
+	{
+		if (!cl_lightstyle[j].length)
+		{
+			d_lightstylevalue[j] = 256;
+			continue;
+		}
+		if (r_flatlightstyles.value == 2)
+			k = cl_lightstyle[j].peak - 'a';
+		else if (r_flatlightstyles.value == 1)
+			k = cl_lightstyle[j].average - 'a';
+		else
+		{
+			k = i % cl_lightstyle[j].length;
+			k = cl_lightstyle[j].map[k] - 'a';
+		}
+		d_lightstylevalue[j] = k*22;
+	}
+}
 
 static vec3_t	lightspot;
 static vec3_t	lightcolor;
@@ -5403,6 +5437,8 @@ void QR_RenderView (void)
 	slot = &qr_slots[qr_building];
 
 	r_framecount++;
+
+	R_AnimateLight ();	/* refresh d_lightstylevalue before the surface walk */
 
 	/* Export third-person cameras: the exporter asks for a world position;
 	   trace from the player's eye so the camera stops at walls (chase.c
