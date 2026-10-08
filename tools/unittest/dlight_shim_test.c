@@ -42,6 +42,16 @@ int main (void)
 	CHECK (!(out[0] == 100 && out[1] == 200 && out[2] == 300) || QR_HandOrigin (out) == 0,
 	       "player dlight, aim on -> relocated to hand");
 
+	/* a keyless dlight (key 0 -- explosions, temp-entity lights) must NOT
+	   relocate even if cl.viewentity is 0 (before connect / between maps).
+	   Otherwise every explosion snaps to the hand. */
+	cl.viewentity = 0;
+	dl.key = 0; dl.origin[0] = 100; dl.origin[1] = 200; dl.origin[2] = 300;
+	qr_aim_active = 1;
+	QR_DlightMarkOrigin (&dl, out);
+	CHECK (out[0] == 100 && out[1] == 200 && out[2] == 300,
+	       "keyless dlight with viewentity 0 -> NOT relocated");
+
 	printf ("%s\n", failures ? "UNIT FAIL" : "UNIT PASS");
 	return failures ? 1 : 0;
 }
