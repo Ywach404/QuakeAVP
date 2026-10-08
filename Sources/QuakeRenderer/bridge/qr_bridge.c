@@ -1383,6 +1383,8 @@ int QR_FlushDirtyLightmaps (void)
 	{
 		if (!lightmaps[i].modified)
 			continue;
+		if (!lightmaps[i].texture)	/* a load that failed to allocate the atlas */
+			continue;
 		QR_EnqueueUpload (lightmaps[i].texture, (unsigned *) lightmaps[i].data);
 		lightmaps[i].modified = false;
 		lightmaps[i].rectchange.l = LMBLOCK_WIDTH;
@@ -2628,9 +2630,9 @@ QR_EmitBrushModel -- port of R_DrawBrushModel, emitting batches.
 
 Chains the visible submodel faces exactly as upstream (backface test
 against the entity-space view origin), then reuses the shared chain
-flattener with this entity's transform. Dynamic light marking
-(R_MarkLights) and R_RenderDynamicLightmaps are still stubbed with the
-rest of the dynamic-light path.
+flattener with this entity's transform. Marks dynamic lights onto the
+submodel's own surfaces (R_MarkLights) so flashes and explosions light
+doors/lifts; the shared flattener relights via R_RenderDynamicLightmaps.
 ================
 */
 static void QR_EmitBrushModel (qr_frame_slot_t *slot, entity_t *e)
@@ -2661,6 +2663,29 @@ static void QR_EmitBrushModel (qr_frame_slot_t *slot, entity_t *e)
 	}
 
 	R_ClearTextureChains (clmodel, chain_model);
+
+	/* Mark dynamic lights onto this brush model's own surfaces, the way
+	   R_DrawBrushModel does -- without this, a muzzle flash or explosion
+	   lights the world walls but leaves adjacent doors/lifts/buttons black.
+	   Submodels share the worldmodel node/surface arrays, so R_MarkLights
+	   (which indexes cl.worldmodel->surfaces) resolves them correctly; the
+	   hand shim still applies via QR_DlightMarkOrigin. r_dynamic gated to
+	   match R_PushDlights and the rebuild predicate. */
+	if (r_dynamic.value && clmodel->firstmodelsurface != 0)
+	{
+		int		k;
+		dlight_t	marked;
+
+		for (k = 0; k < MAX_DLIGHTS; k++)
+		{
+			if (cl_dlights[k].die < cl.time || !cl_dlights[k].radius)
+				continue;
+			marked = cl_dlights[k];
+			QR_DlightMarkOrigin (&cl_dlights[k], marked.origin);
+			R_MarkLights (&marked, k, clmodel->nodes + clmodel->hulls[0].firstclipnode);
+		}
+	}
+
 	psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
 	for (i = 0; i < clmodel->nummodelsurfaces; i++, psurf++)
 	{
@@ -2896,7 +2921,10 @@ Focus); no engine hunk -- this lives entirely on the platform side.
 */
 void QR_DlightMarkOrigin (dlight_t *dl, vec3_t out)
 {
-	if (dl->key == cl.viewentity && qr_aim_active && QR_HandOrigin (out))
+	/* key != 0 pins this to a real entity: keyless lights (explosions, temp
+	   entities) share key 0, which must never match a 0 viewentity (before
+	   connect / between maps) or every explosion would snap to the hand. */
+	if (dl->key != 0 && dl->key == cl.viewentity && qr_aim_active && QR_HandOrigin (out))
 		return;			/* out now holds the hand origin */
 	VectorCopy (dl->origin, out);
 }
@@ -3291,10 +3319,9 @@ static void QR_SetupEntityTransform (entity_t *e, lerpdata_t *lerpdata)
 =================
 R_SetupAliasLighting -- straight port minus the CPU shadedots table (the
 shade-dot quantisation moves into the vertex shader via shadevector).
-Dynamic lights DO contribute here (cl_dlights is engine state, muzzle
-flashes and explosions set it), but surface dlights and lightstyle
-animation are still stubbed, so overall lighting differs from upstream
-until those land.
+Dynamic lights contribute here from cl_dlights (muzzle flashes and
+explosions set it); surface dlights and lightstyle animation now feed the
+world/bmodel lightmaps too, so overall lighting matches upstream.
 =================
 */
 static void QR_SetupAliasLighting (entity_t *e, vec3_t shadevector_out)
