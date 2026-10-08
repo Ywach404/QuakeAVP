@@ -277,6 +277,13 @@ static uint32_t			qr_head_ack_seen;
 
 static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
 static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
+/* Metroid Prime Hunters edge turn: aim the gun past a yaw DEADZONE (deg) to a
+   side and the body follows at up to SPEED (deg/s), ramping over the 40deg past
+   the deadzone. The aim yaw is room-relative so it stays at the edge while the
+   body sweeps -- continuous while held. */
+static cvar_t	vr_edgeturn = {"vr_edgeturn", "1", CVAR_ARCHIVE};
+static cvar_t	vr_edgeturn_dz = {"vr_edgeturn_dz", "18", CVAR_ARCHIVE};
+static cvar_t	vr_edgeturn_speed = {"vr_edgeturn_speed", "90", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 /* M6: aim from the dominant hand/controller ray. 1 = the gun lives in your
@@ -329,6 +336,9 @@ cvar_t		vr_lasercolor   = {"vr_lasercolor",   "0", CVAR_ARCHIVE};
    normal colour. */
 cvar_t		vr_teleport     = {"vr_teleport",     "1", CVAR_ARCHIVE};
 cvar_t		vr_teleportcolor = {"vr_teleportcolor", "1", CVAR_ARCHIVE};
+cvar_t		vr_teleportsound = {"vr_teleportsound", "1", CVAR_ARCHIVE};
+cvar_t		vr_teleportfx    = {"vr_teleportfx",    "1", CVAR_ARCHIVE};	/* particle splash */
+cvar_t		vr_telefrag      = {"vr_telefrag",      "1", CVAR_ARCHIVE};	/* gib what you land on */
 /* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
    (muzzle). Low values push the barrel forward off the hand -- megaman
    arm-cannon. Read by qr_bridge; tune live on device. */
@@ -950,8 +960,12 @@ static void IN_Teleport (void)
 			{
 				VectorCopy (tr.endpos, feet);
 				feet[2] += -player->v.mins[2] + 1.f;
+				/* With telefrag on, ignore monsters for the fit test so you
+				   CAN land on one (and gib it below); the world must still be
+				   clear either way. */
 				fit = SV_Move (feet, player->v.mins, player->v.maxs, feet,
-					       MOVE_NORMAL, player);
+					       vr_telefrag.value ? MOVE_NOMONSTERS : MOVE_NORMAL,
+					       player);
 				contents = SV_PointContents (feet);
 				if (!fit.startsolid && !fit.allsolid
 				    && contents != CONTENTS_LAVA && contents != CONTENTS_SLIME
@@ -969,9 +983,56 @@ static void IN_Teleport (void)
 	   stable under an off-hand pinch, so this frame's destination is good. */
 	if (commit && qr_tp_cached_valid)
 	{
+		vec3_t	oldorg, pmin, pmax;
+		int	a;
+
+		VectorCopy (player->v.origin, oldorg);		/* departure, for the FX */
 		VectorCopy (qr_tp_cached, player->v.origin);
 		player->v.velocity[0] = player->v.velocity[1] = player->v.velocity[2] = 0.f;
 		SV_LinkEdict (player, true);
+
+		/* Telefrag: gib any LIVE monster whose box overlaps where you landed,
+		   the way a trigger_teleport does. Drive each victim's own th_die with
+		   lethal health so it gibs; save/restore the QuakeC `self`. */
+		if (vr_telefrag.value && sv.active)
+		{
+			int	e, saved = pr_global_struct->self;
+
+			for (a = 0; a < 3; a++)
+			{
+				pmin[a] = player->v.origin[a] + player->v.mins[a];
+				pmax[a] = player->v.origin[a] + player->v.maxs[a];
+			}
+			for (e = 1; e < sv.num_edicts; e++)
+			{
+				edict_t *victim = EDICT_NUM (e);
+				eval_t	*die;
+
+				if (victim == player || victim->free)
+					continue;
+				if (victim->v.solid != SOLID_SLIDEBOX || victim->v.health <= 0.f)
+					continue;	/* live monsters only */
+				if (victim->v.absmin[0] > pmax[0] || victim->v.absmax[0] < pmin[0]
+				 || victim->v.absmin[1] > pmax[1] || victim->v.absmax[1] < pmin[1]
+				 || victim->v.absmin[2] > pmax[2] || victim->v.absmax[2] < pmin[2])
+					continue;
+				/* th_die is a QuakeC field, not in entvars_t -- look it up. */
+				die = GetEdictFieldValue (victim, "th_die");
+				victim->v.health = -999.f;
+				pr_global_struct->self = EDICT_TO_PROG (victim);
+				if (die && die->function)
+					PR_ExecuteProgram (die->function);
+			}
+			pr_global_struct->self = saved;
+		}
+
+		if (vr_teleportfx.value)
+		{
+			R_TeleportSplash (oldorg);
+			R_TeleportSplash (player->v.origin);
+		}
+		if (vr_teleportsound.value)
+			S_LocalSound ("misc/r_tele1.wav");
 	}
 }
 
@@ -1177,6 +1238,23 @@ void IN_Move (usercmd_t *cmd)
 			qr_snap_armed = true;
 	}
 
+	/* Metroid Prime Hunters edge turn: hold the gun AIM past a yaw deadzone to a
+	   side and the body follows continuously. aim_yaw_rel is room-relative, so
+	   it stays at the edge while the body sweeps under it -- continuous while
+	   held, stops when you bring the aim back to centre. Yields to an explicit
+	   stick/flick (rx), so a controller's right stick still wins. */
+	if (vr_edgeturn.value && qr_aim_active && fabsf (rx) < 0.2f)
+	{
+		float a = aim_yaw_rel, dz = vr_edgeturn_dz.value;
+		if (fabsf (a) > dz)
+		{
+			float frac = (fabsf (a) - dz) / 40.f;	/* ramp to full over 40 deg */
+			if (frac > 1.f) frac = 1.f;
+			qr_body_yaw += (a > 0.f ? 1.f : -1.f)
+				     * vr_edgeturn_speed.value * frac * (float) host_frametime;
+		}
+	}
+
 	/* Compose the aim yaw from the (possibly just-turned) body plus the hand
 	   ray, and remember it so next frame's adopt-guard can tell a server
 	   setangle from our own write. */
@@ -1195,6 +1273,9 @@ void IN_Init (void)
 {
 	Cvar_RegisterVariable (&vr_snapturn);
 	Cvar_RegisterVariable (&vr_smoothturn);
+	Cvar_RegisterVariable (&vr_edgeturn);
+	Cvar_RegisterVariable (&vr_edgeturn_dz);
+	Cvar_RegisterVariable (&vr_edgeturn_speed);
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
@@ -1215,6 +1296,9 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_lasercolor);
 	Cvar_RegisterVariable (&vr_teleport);
 	Cvar_RegisterVariable (&vr_teleportcolor);
+	Cvar_RegisterVariable (&vr_teleportsound);
+	Cvar_RegisterVariable (&vr_teleportfx);
+	Cvar_RegisterVariable (&vr_telefrag);
 	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_weaponback);
 	Cvar_RegisterVariable (&vr_weaponup);

@@ -254,6 +254,7 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _turnFlickSpeed = newValue; lock.unlock() }
     }
 
+
     /// True when `chirality` is the hand that aims / fires / points the
     /// wheel. The off hand moves and anchors the wheel.
     func isDominant(left: Bool) -> Bool {
