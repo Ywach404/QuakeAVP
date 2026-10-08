@@ -2773,6 +2773,124 @@ void R_AnimateLight (void)
 	}
 }
 
+/*
+=============================================================================
+DYNAMIC LIGHTS
+=============================================================================
+*/
+
+/*
+==================
+QR_DlightMarkOrigin -- the point a dlight is marked onto the world from. The
+local player's own light (the muzzle flash) is relocated to the hand under
+hand aim, the same "where the shot comes from" correction cl_tent.c makes for
+the lightning beam. ANY player-keyed light relocates (see the design's Review
+Focus); no engine hunk -- this lives entirely on the platform side.
+==================
+*/
+void QR_DlightMarkOrigin (dlight_t *dl, vec3_t out)
+{
+	if (dl->key == cl.viewentity && qr_aim_active && QR_HandOrigin (out))
+		return;			/* out now holds the hand origin */
+	VectorCopy (dl->origin, out);
+}
+
+/*
+=============
+R_MarkLights -- johnfitz, LordHavoc speedup. Verbatim gl_rlight.c; the
+muzzle-flash relocation is applied by R_PushDlights before this runs, via a
+dlight copy, so this stays an unmodified port.
+=============
+*/
+void R_MarkLights (dlight_t *light, int num, mnode_t *node)
+{
+	mplane_t	*splitplane;
+	msurface_t	*surf;
+	vec3_t		impact;
+	float		dist, l, maxdist;
+	int		i, j, s, t;
+
+start:
+	if (node->contents < 0)
+		return;
+
+	splitplane = node->plane;
+	if (splitplane->type < 3)
+		dist = light->origin[splitplane->type] - splitplane->dist;
+	else
+		dist = DotProduct (light->origin, splitplane->normal) - splitplane->dist;
+
+	if (dist > light->radius)
+	{
+		node = node->children[0];
+		goto start;
+	}
+	if (dist < -light->radius)
+	{
+		node = node->children[1];
+		goto start;
+	}
+
+	maxdist = light->radius*light->radius;
+/* mark the polygons */
+	surf = cl.worldmodel->surfaces + node->firstsurface;
+	for (i=0 ; i<node->numsurfaces ; i++, surf++)
+	{
+		for (j=0 ; j<3 ; j++)
+			impact[j] = light->origin[j] - surf->plane->normal[j]*dist;
+	/* clamp center of light to corner and check brightness */
+		l = DotProduct (impact, surf->texinfo->vecs[0]) + surf->texinfo->vecs[0][3] - surf->texturemins[0];
+		s = l+0.5; if (s < 0) s = 0; else if (s > surf->extents[0]) s = surf->extents[0];
+		s = l - s;
+		l = DotProduct (impact, surf->texinfo->vecs[1]) + surf->texinfo->vecs[1][3] - surf->texturemins[1];
+		t = l+0.5; if (t < 0) t = 0; else if (t > surf->extents[1]) t = surf->extents[1];
+		t = l - t;
+	/* compare to minimum light */
+		if ((s*s+t*t+dist*dist) < maxdist)
+		{
+			if (surf->dlightframe != r_framecount)	/* not dynamic until now */
+			{
+				surf->dlightbits[num >> 5] = 1U << (num & 31);
+				surf->dlightframe = r_framecount;
+			}
+			else					/* already dynamic */
+				surf->dlightbits[num >> 5] |= 1U << (num & 31);
+		}
+	}
+
+	if (node->children[0]->contents >= 0)
+		R_MarkLights (light, num, node->children[0]);
+	if (node->children[1]->contents >= 0)
+		R_MarkLights (light, num, node->children[1]);
+}
+
+/*
+=============
+R_PushDlights -- mark every live dynamic light onto the surfaces it reaches.
+Gated by r_dynamic. The muzzle-flash hand shim is applied here (on a copy) so
+R_MarkLights stays a verbatim port.
+=============
+*/
+void R_PushDlights (void)
+{
+	int		i;
+	dlight_t	*l;
+	dlight_t	marked;
+
+	if (!r_dynamic.value)
+		return;
+
+	l = cl_dlights;
+	for (i=0 ; i<MAX_DLIGHTS ; i++, l++)
+	{
+		if (l->die < cl.time || !l->radius)
+			continue;
+		marked = *l;
+		QR_DlightMarkOrigin (l, marked.origin);
+		R_MarkLights (&marked, i, cl.worldmodel->nodes);
+	}
+}
+
 static vec3_t	lightspot;
 static vec3_t	lightcolor;
 
@@ -5526,6 +5644,7 @@ void QR_RenderView (void)
 	r_framecount++;
 
 	R_AnimateLight ();	/* refresh d_lightstylevalue before the surface walk */
+	R_PushDlights ();	/* mark live dlights onto surfaces (muzzle flash at the hand) */
 
 	/* Export third-person cameras: the exporter asks for a world position;
 	   trace from the player's eye so the camera stops at walls (chase.c
