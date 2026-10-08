@@ -5076,6 +5076,15 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 						models[i] = cl.model_precache[m];
 						break;
 					}
+			/* Not placed as a pickup on this map, so the server never
+			   precached it. Load the clean g_*.mdl on demand -- Mod_ForName
+			   runs Mod_LoadAliasModel, which builds the mesh VBO, so it draws
+			   like any precached model -- rather than falling back to the
+			   arm-and-muzzle viewmodel. crash=false falls through to the
+			   viewmodel below if the file is absent (e.g. shareware). Cached
+			   per worldmodel, on the engine thread (same as map load). */
+			if (!models[i] && qr_wheel_pickupnames[i])
+				models[i] = Mod_ForName (qr_wheel_pickupnames[i], false);
 			if (!models[i])
 				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
 					if (!strcmp (cl.model_precache[m]->name, qr_wheel_modelnames[i]))
