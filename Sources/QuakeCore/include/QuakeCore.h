@@ -474,6 +474,14 @@ void QC_InputSetHeadPitch (float pitch_deg);
 void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 		     float yaw_deg, float pitch_deg);
 
+/* Point-and-blink teleport. The OFF hand aims a destination in the same
+   body-frame ray form as the aim above (org = fwd/right/up offset from the
+   recenter origin, yaw/pitch room-relative). `active` while the gesture is
+   held (drives the on-floor landing marker); `commit` once on release to
+   jump the player there. Any-thread. */
+void QC_InputSetTeleport (int active, int commit, float org_fwd, float org_right,
+			  float org_up, float yaw_deg, float pitch_deg);
+
 /* Per-weapon gun placement, one entry per weapon slot in wheel order:
    axe, shotgun, super shotgun, nailgun, super nailgun, grenade launcher,
    rocket launcher, lightning gun. Quake units, in the gun's own drawn frame:

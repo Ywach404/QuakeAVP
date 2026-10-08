@@ -15,7 +15,9 @@ import Foundation
 /// Aim-hand fire gesture. pinch = index->thumb (proven default); curl = index
 /// flexes toward the palm (thumb-free trigger pull); hammer = the finger-gun
 /// "bang" (index extended as the barrel, thumb drops from cocked to fire).
-enum FireMode: Int, CaseIterable, Sendable { case pinch, curl, hammer }
+// Hammer (thumb cock-and-drop) was removed -- unintuitive and finicky. Curl is
+// kept: it feels good and suits a limited-control scheme (a Killer7-style mode).
+enum FireMode: Int, CaseIterable, Sendable { case pinch, curl }
 
 /// Snap-turn style. stick = pinchless off-hand lateral displacement; clutch =
 /// hold the aim-hand middle pinch and drag (Metroid Prime Hunters stylus feel);
@@ -56,6 +58,15 @@ final class VRSettings: @unchecked Sendable {
     var rightHanded: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _rightHanded }
         set { lock.lock(); _rightHanded = newValue; lock.unlock() }
+    }
+
+    /// Controllerless (hands) only: draw the 3D hand model on the OFF hand
+    /// alone, leaving the gun hand as just the weapon -- mirrors how the PSVR
+    /// controllers only model the off hand. Default off (both hands drawn).
+    private var _offHandModelOnly = false
+    var offHandModelOnly: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _offHandModelOnly }
+        set { lock.lock(); _offHandModelOnly = newValue; lock.unlock() }
     }
 
     var heightOffset: Float {

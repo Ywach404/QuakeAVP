@@ -57,6 +57,14 @@ static int			qc_aim_valid_shared;	/* dominant-hand aim live? */
 static float			qc_aim_org_shared[3];	/* body frame fwd,right,up */
 static float			qc_aim_yaw_shared;	/* room-relative, Quake deg */
 static float			qc_aim_pitch_shared;
+/* Teleport: the OFF hand arms a destination (same body-frame ray form as the
+   aim). `commit` is latched here and drained engine-side so a release edge
+   between ticks is never lost. */
+static int			qc_tp_active_shared;	/* off-hand aiming a teleport */
+static int			qc_tp_commit_shared;	/* release -> do the jump */
+static float			qc_tp_org_shared[3];	/* body frame fwd,right,up */
+static float			qc_tp_yaw_shared;	/* room-relative, Quake deg */
+static float			qc_tp_pitch_shared;
 
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
@@ -178,6 +186,21 @@ void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
+void QC_InputSetTeleport (int active, int commit, float org_fwd, float org_right,
+			  float org_up, float yaw_deg, float pitch_deg)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_tp_active_shared = active ? 1 : 0;
+	if (commit)
+		qc_tp_commit_shared = 1;	/* latched; drained on the engine thread */
+	qc_tp_org_shared[0] = org_fwd;
+	qc_tp_org_shared[1] = org_right;
+	qc_tp_org_shared[2] = org_up;
+	qc_tp_yaw_shared = yaw_deg;
+	qc_tp_pitch_shared = pitch_deg;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
 void QC_InputSetWheel (int open, int has_anchor,
 		       float fwd, float right, float up, int highlight)
 {
@@ -239,6 +262,14 @@ static float			qr_aim_yaw;		/* room-relative, Quake deg */
 static float			qr_aim_pitch;
 static float			qr_expected_yaw;
 
+/* Teleport, engine-thread. qr_tp_valid/qr_tp_dest are read by qr_bridge.c to
+   draw the landing marker; the rest is the off-hand ray this tick. */
+int				qr_tp_mark_state;	/* -1 hidden, 0 air/red, 1 blocked/yellow, 2 ok/cyan */
+vec3_t				qr_tp_dest;		/* world marker point */
+static int			qr_tp_aiming;		/* off-hand arming this tick */
+static float			qr_tp_org[3];		/* off-hand, body frame */
+static float			qr_tp_yaw, qr_tp_pitch;	/* room-relative, Quake deg */
+
 static int			qr_paused;		/* drained console pause */
 static int			qr_slowmo_raw;		/* drained L3 button */
 static int			qr_slowmo_active;	/* toggled bullet-time */
@@ -292,6 +323,12 @@ cvar_t		vr_reticle = {"vr_reticle", "0", CVAR_ARCHIVE};
 cvar_t		vr_reticlestyle = {"vr_reticlestyle", "0", CVAR_ARCHIVE};
 cvar_t		vr_reticlecolor = {"vr_reticlecolor", "3", CVAR_ARCHIVE};
 cvar_t		vr_lasercolor   = {"vr_lasercolor",   "0", CVAR_ARCHIVE};
+/* Point-and-blink teleport locomotion: aim with the gun reticle, ring-pinch to
+   blink. vr_teleportcolor tints the GUN RETICLE cyan when the spot is a valid
+   landing (one reticle, no second ring); turn it off to keep the reticle's
+   normal colour. */
+cvar_t		vr_teleport     = {"vr_teleport",     "1", CVAR_ARCHIVE};
+cvar_t		vr_teleportcolor = {"vr_teleportcolor", "1", CVAR_ARCHIVE};
 /* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
    (muzzle). Low values push the barrel forward off the hand -- megaman
    arm-cannon. Read by qr_bridge; tune live on device. */
@@ -423,6 +460,16 @@ static void IN_SnapshotInputs (void)
 	qr_aim_org[2] = qc_aim_org_shared[2];
 	qr_aim_yaw = qc_aim_yaw_shared;
 	qr_aim_pitch = qc_aim_pitch_shared;
+	qr_tp_aiming = qc_tp_active_shared;
+	/* NOTE: the one-shot commit latch (qc_tp_commit_shared) is drained in
+	   IN_Teleport, NOT here -- SnapshotInputs runs from BOTH IN_Commands and
+	   IN_Move, so draining it here let the first call eat the commit before
+	   IN_Teleport (in the second) ever saw it. */
+	qr_tp_org[0] = qc_tp_org_shared[0];
+	qr_tp_org[1] = qc_tp_org_shared[1];
+	qr_tp_org[2] = qc_tp_org_shared[2];
+	qr_tp_yaw = qc_tp_yaw_shared;
+	qr_tp_pitch = qc_tp_pitch_shared;
 	qr_head_ack_seen = qc_head_ack;
 	qr_wheel_open = qc_wheel_open_shared || qr_wheel_console_open;
 	qr_wheel_has_anchor = qc_wheel_anchor_shared;
@@ -844,6 +891,92 @@ static void IN_AbsorbHeadOffset (void)
 
 /*
 ================
+IN_Teleport -- point-and-blink locomotion. The OFF hand arms a destination
+(QC_InputSetTeleport feeds the ray in the same body-frame form as the aim);
+this traces it to a floor, validates it, publishes the landing point for the
+marker (qr_tp_dest / qr_tp_valid), and on the release edge jumps the player
+there. Collision-checked: the box must fit, and the floor must be walkable and
+not lava/slime/sky, so you can't blink into a wall or out of the world. The
+move itself is the IN_AbsorbHeadOffset pattern -- set origin, relink.
+================
+*/
+static vec3_t	qr_tp_cached;		/* last valid dest while aiming */
+static int	qr_tp_cached_valid;
+
+static void IN_Teleport (void)
+{
+	vec3_t		right, up, org, dir, end, feet;
+	trace_t		tr, fit;
+	edict_t		*player;
+	int		contents, can, commit;
+
+	/* Drain the one-shot commit latch HERE -- the only consumer -- so neither
+	   IN_Commands' nor IN_Move's SnapshotInputs can swallow it first. */
+	pthread_mutex_lock (&qc_input_lock);
+	commit = qc_tp_commit_shared;
+	qc_tp_commit_shared = 0;
+	pthread_mutex_unlock (&qc_input_lock);
+
+	qr_tp_mark_state = -1;		/* hidden unless we find a destination */
+	qr_tp_cached_valid = 0;
+	can = vr_teleport.value && sv.active && svs.clients && svs.clients[0].active;
+	player = can ? svs.clients[0].edict : NULL;
+
+	/* ONE reticle: the teleport lands where the GUN is already aimed (the same
+	   ray the aiming reticle traces), so there's no second off-hand aim to
+	   manage. The off-hand teleport feed (QC_InputSetTeleport org/yaw/pitch) is
+	   kept in the pipe for a future PSVR dual-wield, but is not read here --
+	   only its `commit` (the ring-finger pinch) is. The landing marker is
+	   gated renderer-side by vr_teleportmarker so it can be hidden; the gun
+	   reticle alone then shows the spot. */
+	if (can)
+	{
+		if (!QR_HandOrigin (org))		/* gun muzzle; eye if no hand aim */
+			VectorCopy (r_refdef.vieworg, org);
+		AngleVectors (cl.viewangles, dir, right, up);	/* the shot direction */
+		VectorMA (org, 8192.f, dir, end);
+
+		tr = SV_Move (org, vec3_origin, vec3_origin, end, MOVE_NOMONSTERS, player);
+		if (tr.allsolid || tr.fraction >= 1.f)
+		{
+			VectorMA (org, 200.f, dir, qr_tp_dest);
+			qr_tp_mark_state = 0;			/* red: open air */
+		}
+		else
+		{
+			VectorCopy (tr.endpos, qr_tp_dest);
+			qr_tp_mark_state = 1;			/* yellow: can't stand */
+			if (tr.plane.normal[2] >= 0.7f)		/* walkable floor */
+			{
+				VectorCopy (tr.endpos, feet);
+				feet[2] += -player->v.mins[2] + 1.f;
+				fit = SV_Move (feet, player->v.mins, player->v.maxs, feet,
+					       MOVE_NORMAL, player);
+				contents = SV_PointContents (feet);
+				if (!fit.startsolid && !fit.allsolid
+				    && contents != CONTENTS_LAVA && contents != CONTENTS_SLIME
+				    && contents != CONTENTS_SKY)
+				{
+					qr_tp_mark_state = 2;		/* cyan: landable */
+					VectorCopy (feet, qr_tp_cached);
+					qr_tp_cached_valid = 1;
+				}
+			}
+		}
+	}
+
+	/* Ring-pinch commit: blink to the current landable spot. The gun aim is
+	   stable under an off-hand pinch, so this frame's destination is good. */
+	if (commit && qr_tp_cached_valid)
+	{
+		VectorCopy (qr_tp_cached, player->v.origin);
+		player->v.velocity[0] = player->v.velocity[1] = player->v.velocity[2] = 0.f;
+		SV_LinkEdict (player, true);
+	}
+}
+
+/*
+================
 IN_SnapTurn -- instant body rotation about the HEAD, not the anchor.
 
 Settle the body under the head first (a full absorb), rotate the absorbed
@@ -915,6 +1048,11 @@ void IN_Move (usercmd_t *cmd)
 	   the hand weapon is rebuilt in the frame it was recorded in. */
 	if (qr_bodyyaw_override)
 		qr_body_yaw = qr_bodyyaw_pinned;
+
+	/* Point-and-blink teleport off the off hand. Runs before the wheel gate
+	   and the stick movement so it works whatever else is happening; the
+	   consumer only arms it when the off hand makes the teleport gesture. */
+	IN_Teleport ();
 
 	/* One source of truth for "the gun is in the hand this tick": the aim
 	   feeds a ray AND vr_handaim allows it. The shot, the move compensation,
@@ -1075,6 +1213,8 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_reticlestyle);
 	Cvar_RegisterVariable (&vr_reticlecolor);
 	Cvar_RegisterVariable (&vr_lasercolor);
+	Cvar_RegisterVariable (&vr_teleport);
+	Cvar_RegisterVariable (&vr_teleportcolor);
 	Cvar_RegisterVariable (&vr_weapongrip);
 	Cvar_RegisterVariable (&vr_weaponback);
 	Cvar_RegisterVariable (&vr_weaponup);

@@ -41,68 +41,65 @@ final class WeaponTrim: @unchecked Sendable {
     /// Order: axe, shotgun, super shotgun, nailgun, super nailgun, GL, RL,
     /// lightning. The axe (melee) loads no round, so its model has no
     /// projectile to trim -- it stays at 1 (untouched).
-    private static let defaultFront = [Float](repeating: 1, count: 16)
-    /// Promoted from a completed hands tuning pass (2026-10-06). The flat 0.79
-    /// these replace was one guess applied to every projectile weapon; each
-    /// gun's round actually sits at its own depth, which is why the measured
-    /// values spread from 0.500 to 0.851. The lightning gun turned out to need
-    /// a shave too -- it fires a hitscan beam and loads no round, but its
-    /// model's rear end still reaches back into the hand.
-    private static let defaultRear: [Float] = [
-        // mode 0 -- hands (tuned 2026-10-06)
-        1,      // axe -- melee, nothing to trim
-        0.657,  // shotgun
-        0.500,  // super shotgun
-        0.733,  // nailgun
-        0.500,  // super nailgun
-        0.500,  // grenade launcher
-        0.522,  // rocket launcher
-        0.851,  // lightning gun
-        // mode 1 -- psvr2 (tuned 2026-10-06, same day)
-        1,      // axe
-        0.632,  // shotgun
-        0.511,  // super shotgun
-        0.721,  // nailgun
-        0.543,  // super nailgun
-        0.500,  // grenade launcher
-        0.500,  // rocket launcher
-        0.608   // lightning gun
-    ]
+    /// FOUR variants, variant = mode*2 + limbs: 0 hands/no-arms, 1 hands/arms,
+    /// 2 psvr2/no-arms, 3 psvr2/arms. 8 weapons each in `bits` order (axe,
+    /// shotgun, super shotgun, nailgun, super nailgun, GL, RL, lightning).
+    /// These are the on-device tuning promoted to code (2026-10-08) so a fresh
+    /// install ships with all four dialled in. `load` still overrides any slot
+    /// stored on this device.
 
-    /// Per-weapon placement defaults, same index as `place`: mode * 8 + weapon.
-    ///
-    /// From the same pass, and **hands only**. PSVR2 stays nil because it was
-    /// never tuned -- where the gun is held differs between bare hands and a
-    /// controller, so copying these across would be inventing numbers rather
-    /// than promoting measured ones. Those weapons keep following the profile
-    /// global, exactly as before.
-    ///
-    /// The spread here is the whole argument for placement being per weapon:
-    /// `back` runs from 3.452 on the super shotgun to 15.841 on the lightning
-    /// gun. The axe is the only weapon needing a real `side` and a positive
-    /// `up`, which follows from it being swung rather than aimed.
-    private static let defaultPlace: [Placement?] = [
-        // mode 0 -- hands
-        Placement(back:  7.510, up:  6.913, side: -4.132),  // axe
-        Placement(back: 10.406, up:  0.071, side:  0.000),  // shotgun
-        Placement(back:  3.452, up: -1.651, side:  0.000),  // super shotgun
-        Placement(back:  7.078, up: -1.392, side:  0.000),  // nailgun
-        Placement(back:  9.592, up: -1.941, side:  0.000),  // super nailgun
-        Placement(back:  9.796, up: -1.401, side:  0.000),  // grenade launcher
-        Placement(back:  8.276, up: -4.937, side:  3.161),  // rocket launcher
-        Placement(back: 15.841, up: -1.900, side:  0.000),  // lightning gun
-        // mode 1 -- psvr2 (tuned 2026-10-06). The hold is visibly different:
-        // `up` is ~0 across the board where hands wanted -1.4 to -1.9, because
-        // the controller puts the model's anchor at about the right height on
-        // its own. The rocket launcher is the outlier in both modes.
-        Placement(back:  8.639, up:  0.000, side:  0.000),  // axe
-        Placement(back: 10.793, up:  0.000, side:  0.000),  // shotgun
-        Placement(back:  3.109, up:  0.000, side:  0.000),  // super shotgun
-        Placement(back:  9.088, up:  0.000, side:  0.000),  // nailgun
-        Placement(back:  8.891, up: -0.066, side:  0.000),  // super nailgun
-        Placement(back: 12.713, up: -0.125, side:  0.000),  // grenade launcher
-        Placement(back:  8.534, up: -4.576, side:  3.887),  // rocket launcher
-        Placement(back: 12.743, up:  0.000, side:  0.000)   // lightning gun
+    /// Barrel-end clip keep-fraction (1 = none; the axe loads no round).
+    private static let defaultFront32: [Float] = [
+        1, 1, 1, 1, 1, 1, 1, 1,                 // hands / no arms
+        1, 0.985, 1, 1, 1, 1, 1, 1,             // hands / arms shown
+        1, 1, 1, 1, 1, 1, 1, 1,                 // psvr2 / no arms
+        1, 1, 1, 1, 1, 1, 1, 1                  // psvr2 / arms shown
+    ]
+    /// Rear clip keep-fraction (retracts the round baked near the grip).
+    private static let defaultRear32: [Float] = [
+        1, 0.705, 0.500, 0.733, 0.500, 0.500, 0.522, 0.851,   // hands / no arms
+        1, 0.800, 0.500, 0.733, 0.500, 0.500, 0.522, 0.851,   // hands / arms
+        1, 0.696, 0.511, 0.721, 0.543, 0.500, 0.500, 0.608,   // psvr2 / no arms
+        1, 0.696, 0.511, 0.721, 0.543, 0.500, 0.500, 0.608    // psvr2 / arms
+    ]
+    /// Per-weapon placement, same index. All four variants are tuned.
+    private static let defaultPlace32: [Placement?] = [
+        // hands / no arms
+        Placement(back:  9.005, up:  4.684, side: -3.204),
+        Placement(back: 10.406, up: -0.159, side:  0.000),
+        Placement(back:  3.452, up: -3.085, side: -1.558),
+        Placement(back:  7.078, up: -4.120, side:  0.000),
+        Placement(back:  9.592, up: -1.941, side:  0.000),
+        Placement(back:  9.796, up: -1.401, side:  0.000),
+        Placement(back:  8.276, up: -4.937, side:  3.161),
+        Placement(back: 15.841, up: -1.900, side:  0.000),
+        // hands / arms shown
+        Placement(back: 13.095, up:  5.200, side: -3.742),
+        Placement(back: -0.055, up:  0.071, side: -1.793),
+        Placement(back: -0.779, up: -0.672, side: -1.929),
+        Placement(back: -0.662, up:  1.095, side: -2.188),
+        Placement(back: -2.897, up: -1.941, side:  0.000),
+        Placement(back:  4.015, up:  1.243, side:  0.000),
+        Placement(back:  8.276, up: -2.418, side:  3.161),
+        Placement(back: 13.987, up:  0.243, side:  0.000),
+        // psvr2 / no arms
+        Placement(back:  8.639, up:  0.000, side:  0.000),
+        Placement(back: 10.793, up:  0.000, side:  0.000),
+        Placement(back:  3.109, up:  0.000, side:  0.000),
+        Placement(back:  9.088, up:  0.000, side:  0.000),
+        Placement(back:  8.891, up: -0.066, side:  0.000),
+        Placement(back: 12.713, up: -0.125, side:  0.000),
+        Placement(back:  8.534, up: -4.576, side:  3.887),
+        Placement(back: 12.743, up:  0.000, side:  0.000),
+        // psvr2 / arms shown
+        Placement(back:  8.639, up:  0.000, side:  0.000),
+        Placement(back: 10.793, up:  0.000, side:  0.000),
+        Placement(back:  3.109, up:  0.000, side:  0.000),
+        Placement(back:  9.088, up:  0.000, side:  0.000),
+        Placement(back:  8.891, up: -0.066, side:  0.000),
+        Placement(back: 12.713, up: -0.125, side:  0.000),
+        Placement(back:  8.534, up: -4.576, side:  3.887),
+        Placement(back: 12.743, up:  0.000, side:  0.000)
     ]
 
     /// Per-weapon placement. NOT grip: it slides the model along the same axis
@@ -111,14 +108,19 @@ final class WeaponTrim: @unchecked Sendable {
     /// while back ranged over 3 to 18 units. Grip stays a single global cvar.
     struct Placement: Equatable { var back, up, side: Float }
 
+    // variant = mode*2 + limbs (limbs = real arms shown via visionOS
+    // upperLimbVisibility). The gun clashes with a visible arm, so each mode
+    // keeps a separate placement for arms-off vs arms-on. Tables are 32 = 4*8;
+    // one slot formula, `variant*8 + weapon`.
     private let lock = NSLock()
-    private var front = defaultFront
-    private var rear  = defaultRear
-    /// Per (input mode, weapon), index mode.rawValue * 8 + weapon. Starts at
-    /// the shipped tuning; `load` overrides any slot this device has stored.
-    /// nil = no value for that weapon, so it follows `global`.
-    private var place = defaultPlace
-    private var mode = 0                    // InputMode.rawValue
+    private var front = defaultFront32
+    private var rear  = defaultRear32
+    /// Per (variant, weapon), index variant*8 + weapon. Starts at the shipped
+    /// tuning; `load` overrides any slot this device has stored. nil = no value
+    /// for that weapon, so it follows `global`.
+    private var place = defaultPlace32
+    private var mode = 0                    // InputMode.rawValue (0 hands, 1 psvr2)
+    private var limbs = 0                   // real arms visible (passthrough) 0/1
     private var global = Placement(back: 0, up: 0, side: 0)
     /// The global grip, kept here only to push the cvar on profile apply.
     private var globalGrip: Float = 0.15
@@ -142,18 +144,18 @@ final class WeaponTrim: @unchecked Sendable {
                      "super nailgun", "grenade launcher", "rocket launcher",
                      "lightning gun"]
         lock.lock()
-        let base = mode * 8
+        let base = variant * 8
         let g = global, gg = globalGrip
         let pl = (0..<8).map { place[base + $0] }
         let fr = (0..<8).map { (front[base + $0], rear[base + $0]) }
-        let m = mode
+        let m = variant
         lock.unlock()
         // Three decimals, not Float's full seventeen. The sliders are coarser
         // than that, and every extra digit is one more to misread -- the first
         // dump came back through OCR with most of its zeroes turned into
         // eights, which made twenty values ambiguous instead of none.
         func n(_ v: Float) -> String { String(format: "%.3f", v) }
-        var out = ["[weapons] mode=\(m) global "
+        var out = ["[weapons] variant=\(m) global "
                    + "back=\(n(g.back)) up=\(n(g.up)) side=\(n(g.side)) "
                    + "grip=\(n(gg)) (grip is global)"]
         for i in 0..<8 {
@@ -169,7 +171,8 @@ final class WeaponTrim: @unchecked Sendable {
 
     private static func index(for bit: UInt32) -> Int { bits.firstIndex(of: bit) ?? 1 }
 
-    private var slot: Int { mode * 8 + current }
+    private var variant: Int { mode * 2 + limbs }
+    private var slot: Int { variant * 8 + current }
 
     /// Which input profile is live. Pushed from ProfileStore.active's didSet,
     /// so it follows the profile by construction rather than by remembering to
@@ -180,6 +183,18 @@ final class WeaponTrim: @unchecked Sendable {
         lock.lock()
         guard m != mode else { lock.unlock(); return }
         mode = m
+        lock.unlock()
+        publish()
+    }
+
+    /// Whether the real arms show through (visionOS passthrough). Flips the
+    /// placement variant so the gun can sit clear of a visible arm. Pushed from
+    /// DebugStore.showLimbs, the same control that drives upperLimbVisibility.
+    func setLimbs(_ on: Bool) {
+        lock.lock()
+        let v = on ? 1 : 0
+        guard v != limbs else { lock.unlock(); return }
+        limbs = v
         lock.unlock()
         publish()
     }
@@ -220,7 +235,7 @@ final class WeaponTrim: @unchecked Sendable {
     /// with no shipped default (every PSVR2 slot, for now) still falls back to
     /// the global, which is what `nil` means.
     func resetCurrentPlacement() {
-        lock.lock(); place[slot] = Self.defaultPlace[slot]; lock.unlock()
+        lock.lock(); place[slot] = Self.defaultPlace32[slot]; lock.unlock()
         publish(); save()
     }
 
@@ -237,7 +252,7 @@ final class WeaponTrim: @unchecked Sendable {
     /// being global.
     private func publish() {
         lock.lock()
-        let base = mode * 8
+        let base = variant * 8
         var table = [qc_weapon_placement_t](repeating: .init(), count: 8)
         for i in 0..<8 {
             guard let p = place[base + i] else { continue }   // custom == 0
@@ -293,7 +308,7 @@ final class WeaponTrim: @unchecked Sendable {
     func resetCurrent() {
         lock.lock()
         let i = slot
-        let f = Self.defaultFront[i], r = Self.defaultRear[i]
+        let f = Self.defaultFront32[i], r = Self.defaultRear32[i]
         front[i] = f; rear[i] = r
         lock.unlock()
         push(f, r); save()
@@ -305,10 +320,10 @@ final class WeaponTrim: @unchecked Sendable {
     }
 
     private func save() {
-        lock.lock(); let f = front, r = rear; lock.unlock()
-        UserDefaults.standard.set(f.map(Double.init), forKey: "weaponTrimFront.v2")
-        UserDefaults.standard.set(r.map(Double.init), forKey: "weaponTrimRear.v2")
-        lock.lock(); let pl = place; lock.unlock()
+        lock.lock(); let f = front, r = rear; lock.unlock()   // 32 each
+        UserDefaults.standard.set(f.map(Double.init), forKey: "weaponTrimFront.v3")
+        UserDefaults.standard.set(r.map(Double.init), forKey: "weaponTrimRear.v3")
+        lock.lock(); let pl = place; lock.unlock()             // 32
         // Flat [back,up,side] per slot, NaN marking "not tuned", so the array
         // shape stays fixed and a missing weapon cannot shift the rest.
         var flat = [Double]()
@@ -316,43 +331,68 @@ final class WeaponTrim: @unchecked Sendable {
             if let p { flat += [Double(p.back), Double(p.up), Double(p.side)] }
             else { flat += [Double.nan, .nan, .nan] }
         }
-        UserDefaults.standard.set(flat, forKey: "weaponPlacement.v2")
+        UserDefaults.standard.set(flat, forKey: "weaponPlacement.v3")
     }
 
     private func load() {
-        // The legacy "weaponTrimFront"/"weaponTrimRear" keys held eight values
-        // with no input mode, which is the bug this replaces -- tuning trim
-        // with a controller overwrote the hands values in place. They are
-        // deliberately NOT migrated: whichever mode they were last written
-        // from, both modes' measured values are now in defaultFront/Rear, so
-        // reading them back would restore one mode's numbers over the other's.
-        if let f = UserDefaults.standard.array(forKey: "weaponTrimFront.v2") as? [Double],
-           f.count == 16 {
+        // v3 is the 4-variant (mode x limbs) layout. If a device only has the
+        // older 2-mode v2, MIGRATE: the v2 values were tuned with the arms
+        // VISIBLE, so they land in the limbs-ON variant; the limbs-OFF variant
+        // keeps the code default (the recovered originals). Clip (front/rear)
+        // doesn't depend on limbs, so it duplicates into both variants.
+        if let f = UserDefaults.standard.array(forKey: "weaponTrimFront.v3") as? [Double],
+           f.count == 32 {
             front = f.map { Float($0) }
+        } else if let f = UserDefaults.standard.array(forKey: "weaponTrimFront.v2") as? [Double],
+                  f.count == 16 {
+            for m in 0..<2 { for w in 0..<8 {
+                let v = Float(f[m*8+w]); front[(m*2)*8+w] = v; front[(m*2+1)*8+w] = v } }
         }
-        if let r = UserDefaults.standard.array(forKey: "weaponTrimRear.v2") as? [Double],
-           r.count == 16 {
+        if let r = UserDefaults.standard.array(forKey: "weaponTrimRear.v3") as? [Double],
+           r.count == 32 {
             rear = r.map { Float($0) }
+        } else if let r = UserDefaults.standard.array(forKey: "weaponTrimRear.v2") as? [Double],
+                  r.count == 16 {
+            for m in 0..<2 { for w in 0..<8 {
+                let v = Float(r[m*8+w]); rear[(m*2)*8+w] = v; rear[(m*2+1)*8+w] = v } }
+        }
+        if let f = UserDefaults.standard.array(forKey: "weaponPlacement.v3") as? [Double],
+           f.count == 96 {
+            for i in 0..<32 {
+                let b = f[i*3]
+                if b.isNaN { place[i] = nil; continue }
+                place[i] = Placement(back: Float(b), up: Float(f[i*3+1]), side: Float(f[i*3+2]))
+            }
+            return
         }
         if let f = UserDefaults.standard.array(forKey: "weaponPlacement.v2") as? [Double],
            f.count == 48 {
             for i in 0..<16 {
-                let b = f[i * 3]
-                if b.isNaN { place[i] = nil; continue }
-                place[i] = Placement(back: Float(b), up: Float(f[i * 3 + 1]),
-                                     side: Float(f[i * 3 + 2]))
+                let m = i / 8, w = i % 8
+                let dst = (m*2 + 1)*8 + w        // limbs-ON variant
+                let b = f[i*3]
+                place[dst] = b.isNaN ? nil
+                    : Placement(back: Float(b), up: Float(f[i*3+1]), side: Float(f[i*3+2]))
             }
-        } else if let f = UserDefaults.standard.array(forKey: "weaponPlacement.v1") as? [Double],
-                  f.count == 64 {
-            // v1 carried a fourth column, grip, which is global now. Fold the
-            // table down rather than discarding it -- these are hand-tuned
-            // values that exist nowhere but this device.
-            for i in 0..<16 {
-                let b = f[i * 4]
-                if b.isNaN { place[i] = nil; continue }
-                place[i] = Placement(back: Float(b), up: Float(f[i * 4 + 1]),
-                                     side: Float(f[i * 4 + 2]))
-            }
+            // limbs-OFF variants keep defaultPlace32 (the originals).
+            return
+        }
+        legacyLoad()
+    }
+
+    /// Only reached when neither v3 nor v2 placement exists: the oldest v1
+    /// format (a fourth grip column, global now). Fold it into the limbs-ON
+    /// variant like v2, leaving limbs-OFF at the code originals. (v2 front/rear
+    /// are already handled in load().)
+    private func legacyLoad() {
+        guard let f = UserDefaults.standard.array(forKey: "weaponPlacement.v1") as? [Double],
+              f.count == 64 else { return }
+        for i in 0..<16 {
+            let m = i / 8, w = i % 8
+            let dst = (m*2 + 1)*8 + w
+            let b = f[i * 4]
+            place[dst] = b.isNaN ? nil
+                : Placement(back: Float(b), up: Float(f[i * 4 + 1]), side: Float(f[i * 4 + 2]))
         }
     }
 }
