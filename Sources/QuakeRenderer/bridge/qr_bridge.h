@@ -52,4 +52,8 @@ gltexture_t *QR_TexMgr_LoadImage (qmodel_t *owner, const char *name,
 				  src_offset_t source_offset, unsigned flags);
 void QR_TexMgr_FreeTexturesForOwner (qmodel_t *owner);
 
+/* Runtime lighting (gl_rlight.c / gl_rsurf.c ports). */
+extern int d_lightstylevalue[256];	/* 8.8 fraction; defined in qr_bridge.c */
+void R_AnimateLight (void);
+
 #endif /* QR_BRIDGE_H */
