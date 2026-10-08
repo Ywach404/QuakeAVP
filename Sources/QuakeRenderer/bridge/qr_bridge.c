@@ -225,6 +225,10 @@ typedef struct qr_frame_slot_s {
 	uint32_t	text_capacity;		/* in floats */
 	float		*particle_verts;	/* 7 floats/vert (xyz rgba) */
 	uint32_t	particle_capacity;	/* in floats */
+	float		*sprite_verts;		/* 5 floats/vert (xyz st) */
+	uint32_t	sprite_capacity;	/* in floats */
+	qc_sprite_batch_t *sprite_batches;
+	uint32_t	sprite_batch_capacity;	/* in entries */
 	int		state;
 	uint64_t	seq;
 } qr_frame_slot_t;
@@ -5724,6 +5728,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_entities = 0;
 	slot->frame.num_text_verts = 0;
 	slot->frame.num_particle_verts = 0;
+	slot->frame.num_sprite_verts = 0;
+	slot->frame.num_sprite_batches = 0;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
@@ -6061,6 +6067,8 @@ void QR_PublishFrame (void)
 	slot->frame.text_verts = slot->text_verts;
 	slot->frame.conchars_texnum = qr_conchars_texnum;
 	slot->frame.particle_verts = slot->particle_verts;
+	slot->frame.sprite_verts = slot->sprite_verts;
+	slot->frame.sprite_batches = slot->sprite_batches;
 
 	/* upstream R_Clear clears to r_clearcolor (a palette index) when
 	   gl_clear is set; keep that, else clear to black */
