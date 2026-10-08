@@ -55,5 +55,7 @@ void QR_TexMgr_FreeTexturesForOwner (qmodel_t *owner);
 /* Runtime lighting (gl_rlight.c / gl_rsurf.c ports). */
 extern int d_lightstylevalue[256];	/* 8.8 fraction; defined in qr_bridge.c */
 void R_AnimateLight (void);
+void R_PushDlights (void);
+void QR_DlightMarkOrigin (dlight_t *dl, vec3_t out);
 
 #endif /* QR_BRIDGE_H */
