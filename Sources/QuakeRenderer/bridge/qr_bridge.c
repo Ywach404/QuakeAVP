@@ -1125,11 +1125,89 @@ static int AllocBlock (int w, int h, int *x, int *y)
 
 /*
 ===============
+R_AddDynamicLights -- fold every dlight touching this surface into
+blocklights before the bound/shift. Port of gl_rlight.c's lit (lordhavoc)
+version; dlightbits says which of cl_dlights reach the surface, set by
+R_MarkLights earlier in the frame.
+===============
+*/
+static void R_AddDynamicLights (msurface_t *surf)
+{
+	int		lnum;
+	int		sd, td;
+	float		dist, rad, minlight;
+	vec3_t		impact, local;
+	int		s, t;
+	int		i;
+	int		smax, tmax;
+	mtexinfo_t	*tex;
+	float		cred, cgreen, cblue, brightness;
+	unsigned	*bl;
+
+	smax = (surf->extents[0]>>4)+1;
+	tmax = (surf->extents[1]>>4)+1;
+	tex = surf->texinfo;
+
+	for (lnum=0 ; lnum<MAX_DLIGHTS ; lnum++)
+	{
+		if ( !(surf->dlightbits[lnum >> 5] & (1U << (lnum & 31))) )
+			continue;		/* not lit by this light */
+
+		rad = cl_dlights[lnum].radius;
+		dist = DotProduct (cl_dlights[lnum].origin, surf->plane->normal) - surf->plane->dist;
+		rad -= fabs(dist);
+		minlight = cl_dlights[lnum].minlight;
+		if (rad < minlight)
+			continue;
+		minlight = rad - minlight;
+
+		for (i=0 ; i<3 ; i++)
+			impact[i] = cl_dlights[lnum].origin[i] - surf->plane->normal[i]*dist;
+
+		local[0] = DotProduct (impact, tex->vecs[0]) + tex->vecs[0][3];
+		local[1] = DotProduct (impact, tex->vecs[1]) + tex->vecs[1][3];
+
+		local[0] -= surf->texturemins[0];
+		local[1] -= surf->texturemins[1];
+
+		bl = blocklights;
+		cred   = cl_dlights[lnum].color[0] * 256.0f;
+		cgreen = cl_dlights[lnum].color[1] * 256.0f;
+		cblue  = cl_dlights[lnum].color[2] * 256.0f;
+		for (t = 0 ; t<tmax ; t++)
+		{
+			td = local[1] - t*16;
+			if (td < 0)
+				td = -td;
+			for (s=0 ; s<smax ; s++)
+			{
+				sd = local[0] - s*16;
+				if (sd < 0)
+					sd = -sd;
+				if (sd > td)
+					dist = sd + (td>>1);
+				else
+					dist = td + (sd>>1);
+				if (dist < minlight)
+				{
+					brightness = rad - dist;
+					bl[0] += (int) (brightness * cred);
+					bl[1] += (int) (brightness * cgreen);
+					bl[2] += (int) (brightness * cblue);
+				}
+				bl += 3;
+			}
+		}
+	}
+}
+
+/*
+===============
 R_BuildLightMap -- combine and scale multiple lightmaps into RGBA
 
-Ported minus dynamic lights and the 10-bit path. Because there is no
-runtime lightmap re-upload yet, styled lights bake at their default value
-(d_lightstylevalue 256); see the roadmap.
+Port of gl_rlight.c minus the 10-bit path. Static styled lightmaps are
+scaled by d_lightstylevalue; dynamic lights are folded in by
+R_AddDynamicLights when the surface is lit this frame.
 ===============
 */
 void R_BuildLightMap (msurface_t *surf, byte *dest, int stride)
@@ -1169,6 +1247,15 @@ void R_BuildLightMap (msurface_t *surf, byte *dest, int stride)
 					*bl++ += *lightmap++ * scale;
 				}
 			}
+
+		/* add all the dynamic lights */
+			if (surf->dlightframe == r_framecount)
+			{
+				R_AddDynamicLights (surf);
+				surf->cached_dlight = true;
+			}
+			else
+				surf->cached_dlight = false;
 		}
 	}
 	else
