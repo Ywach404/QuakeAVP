@@ -214,6 +214,14 @@ typedef struct qc_draw_batch_s {
 
 /* There is no packet version field: both halves of this contract compile in
    the same build, so the structs *are* the protocol. */
+/* A run of sprite billboard quads sharing one texture. */
+typedef struct qc_sprite_batch_s {
+	uint32_t	texnum;		/* sprite frame texture, never 0 */
+	uint32_t	first_vert;	/* into sprite_verts */
+	uint32_t	vert_count;	/* multiple of 6 */
+	float		alpha;		/* ENTALPHA_DECODE(e->alpha), 1 = opaque */
+} qc_sprite_batch_t;
+
 typedef struct qc_frame_s {
 	uint32_t	generation;	/* must match AcquireGeometry's result */
 	float		viewproj[16];	/* column-major, Metal depth range */
@@ -361,6 +369,15 @@ typedef struct qc_frame_s {
 	   draws, so no new shader. Depth-tested against the world, no write. */
 	uint32_t	num_particle_verts;
 	const float	*particle_verts;
+
+	/* Sprite models as 3D billboarded TEXTURED quads (explosions, bubbles).
+	   Five floats per vertex: xyz position (Quake units) and st; six vertices
+	   per quad, batched by texture. Depth-tested against the world, no write,
+	   alpha-blended, fullbright. */
+	uint32_t		num_sprite_verts;
+	const float		*sprite_verts;
+	uint32_t		num_sprite_batches;
+	const qc_sprite_batch_t	*sprite_batches;
 } qc_frame_t;
 
 /* Latest published frame, or NULL only if nothing has been published yet
