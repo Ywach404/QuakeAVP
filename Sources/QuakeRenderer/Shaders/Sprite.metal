@@ -54,6 +54,10 @@ fragment float4 sprite_fragment(SpriteVaryings in [[stage_in]],
     float a = t.a * in.alpha;
     if (a < 0.02)
         discard_fragment();
-    // Premultiplied, matching the mixed-immersion contract.
-    return float4(t.rgb * a, a);
+    // Straight alpha: the blended:true pipeline uses .sourceAlpha for RGB
+    // (like alias/liquid), so the blend unit applies alpha -- pre-multiplying
+    // here too would darken partial-alpha texels by alpha^2. Text.metal gets
+    // away with premultiply only because its conchars use nearest sampling
+    // (alpha is 0 or 1); sprites sample linearly, so every edge is partial.
+    return float4(t.rgb, a);
 }
