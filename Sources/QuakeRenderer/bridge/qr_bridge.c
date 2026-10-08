@@ -2740,6 +2740,94 @@ void QR_SpriteBillboardAxes (int type, entity_t *e, vec3_t up, vec3_t right)
 
 /*
 ===============
+QR_PushSpriteVert / QR_SpriteBatch / QR_EmitSpriteModel -- build a sprite's
+camera-facing textured quad into the per-frame sprite run, batched by texture.
+Mirrors the particle run; drawn by Sprite.metal depth-tested, no depth write.
+===============
+*/
+static void QR_PushSpriteVert (qr_frame_slot_t *slot, const vec3_t p, float s, float t)
+{
+	uint32_t n = slot->frame.num_sprite_verts;
+	float	*o;
+
+	if ((n + 1) * 5 > slot->sprite_capacity)
+	{
+		slot->sprite_capacity = slot->sprite_capacity ? slot->sprite_capacity * 2 : 8192;
+		slot->sprite_verts = (float *) realloc (slot->sprite_verts,
+				slot->sprite_capacity * sizeof(float));
+		slot->frame.sprite_verts = slot->sprite_verts;
+	}
+	o = slot->sprite_verts + n * 5;
+	o[0] = p[0]; o[1] = p[1]; o[2] = p[2];
+	o[3] = s; o[4] = t;
+	slot->frame.num_sprite_verts = n + 1;
+}
+
+static void QR_SpriteBatch (qr_frame_slot_t *slot, uint32_t texnum,
+			    uint32_t first_vert, uint32_t vert_count, float alpha)
+{
+	uint32_t n = slot->frame.num_sprite_batches;
+	qc_sprite_batch_t *b;
+
+	if (n > 0)
+	{
+		b = &slot->sprite_batches[n - 1];
+		if (b->texnum == texnum && b->alpha == alpha
+		 && b->first_vert + b->vert_count == first_vert)
+		{
+			b->vert_count += vert_count;
+			return;
+		}
+	}
+	if ((n + 1) > slot->sprite_batch_capacity)
+	{
+		slot->sprite_batch_capacity = slot->sprite_batch_capacity ? slot->sprite_batch_capacity * 2 : 256;
+		slot->sprite_batches = (qc_sprite_batch_t *) realloc (slot->sprite_batches,
+				slot->sprite_batch_capacity * sizeof(qc_sprite_batch_t));
+		slot->frame.sprite_batches = slot->sprite_batches;
+	}
+	b = &slot->sprite_batches[n];
+	b->texnum = texnum; b->first_vert = first_vert;
+	b->vert_count = vert_count; b->alpha = alpha;
+	slot->frame.num_sprite_batches = n + 1;
+}
+
+static void QR_EmitSpriteModel (qr_frame_slot_t *slot, entity_t *e)
+{
+	msprite_t	*psprite;
+	mspriteframe_t	*frame;
+	vec3_t		up, right;
+	vec3_t		a, b, c, d;		/* down-left, up-left, up-right, down-right */
+	uint32_t	texnum, start;
+	float		alpha;
+
+	psprite = (msprite_t *) Mod_Extradata (e->model);
+	frame = QR_SpriteFrame (e);
+	if (!frame || !frame->gltexture || frame->gltexture->texnum == 0)
+		return;					/* texture not ready -- skip */
+	texnum = frame->gltexture->texnum;
+	alpha = ENTALPHA_DECODE (e->alpha);
+
+	QR_SpriteBillboardAxes (psprite->type, e, up, right);
+
+	VectorMA (e->origin, frame->down, up, a); VectorMA (a, frame->left,  right, a);
+	VectorMA (e->origin, frame->up,   up, b); VectorMA (b, frame->left,  right, b);
+	VectorMA (e->origin, frame->up,   up, c); VectorMA (c, frame->right, right, c);
+	VectorMA (e->origin, frame->down, up, d); VectorMA (d, frame->right, right, d);
+
+	start = slot->frame.num_sprite_verts;
+	QR_PushSpriteVert (slot, a, 0,           frame->tmax);
+	QR_PushSpriteVert (slot, b, 0,           0);
+	QR_PushSpriteVert (slot, c, frame->smax, 0);
+	QR_PushSpriteVert (slot, a, 0,           frame->tmax);
+	QR_PushSpriteVert (slot, c, frame->smax, 0);
+	QR_PushSpriteVert (slot, d, frame->smax, frame->tmax);
+
+	QR_SpriteBatch (slot, texnum, start, slot->frame.num_sprite_verts - start, alpha);
+}
+
+/*
+===============
 QR_EmitBrushModel -- port of R_DrawBrushModel, emitting batches.
 
 Chains the visible submodel faces exactly as upstream (backface test
@@ -5575,7 +5663,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				QR_EmitBrushModel (slot, e);
 			else if (e->model->type == mod_alias)
 				QR_EmitAliasModel (slot, e);
-			/* mod_sprite: not rendered yet (needs per-frame quads) */
+			else if (e->model->type == mod_sprite)
+				QR_EmitSpriteModel (slot, e);
 		}
 
 	QR_EmitTextureChains (slot, cl.worldmodel, chain_world, QC_ENTITY_NONE,
@@ -5592,6 +5681,8 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				QR_EmitBrushModel (slot, e);
 			else if (e->model->type == mod_alias)
 				QR_EmitAliasModel (slot, e);
+			else if (e->model->type == mod_sprite)
+				QR_EmitSpriteModel (slot, e);
 		}
 
 	/* The view weapon, last, like upstream R_DrawViewModel. M6: with a live
