@@ -28,7 +28,8 @@ final class DebugStore {
     var strobeDebug: Bool  { didSet { save(); HandDebug.shared.strobe = strobeDebug } }
     var turnDebug: Bool    { didSet { save(); HandDebug.shared.turnDebug = turnDebug } }
     var fireDebug: Bool    { didSet { save(); HandDebug.shared.fireDebug = fireDebug } }
-    var showLimbs: Bool    { didSet { save(); ImmersionSettings.shared.handsVisible = showLimbs } }
+    var showLimbs: Bool    { didSet { save(); ImmersionSettings.shared.handsVisible = showLimbs
+                                       WeaponTrim.shared.setLimbs(showLimbs) } }
     /// The low-poly stand-in hand drawn over your real one while the world is
     /// solid. Hands-only by nature: HandInput is the only thing that publishes
     /// it, so with a controller attached there is nothing to show either way.
@@ -79,6 +80,7 @@ final class DebugStore {
         HandDebug.shared.turnDebug = turnDebug
         HandDebug.shared.fireDebug = fireDebug
         ImmersionSettings.shared.handsVisible = showLimbs
+        WeaponTrim.shared.setLimbs(showLimbs)
         VirtualHand.shared.visible = virtualHands
         VRSettings.shared.inputLog = inputLog
     }

@@ -35,6 +35,9 @@ struct ContentView: View {
     @State private var wheelSlowmo = true
     @State private var swapSenseHands = false
     @State private var fullMenu = false
+    @State private var teleportEnabled = true
+    @State private var teleportMarker = true
+    @State private var offHandModelOnly = false
     @State private var laser = false
     @State private var reticle = false
     @State private var reticleStyle: Int = 0
@@ -127,6 +130,25 @@ struct ContentView: View {
     static let vrColorNames = ["Red", "Green", "Cyan", "Amber",
                                "White", "Magenta", "Yellow", "Blue",
                                "Quake beige"]
+
+    /// Which input mode's rig you're editing. These values are stored per mode
+    /// (hands vs PSVR2), and the active one auto-follows controller presence, so
+    /// this badge is the only thing telling you which rig a slider will change.
+    @ViewBuilder
+    private var editingModeBadge: some View {
+        let hands = ProfileStore.shared.active == .hands
+        let limbs = DebugStore.shared.showLimbs
+        HStack(spacing: 6) {
+            Image(systemName: hands ? "hand.raised.fill" : "gamecontroller.fill")
+            Text("Editing: \(hands ? "Hands" : "PSVR2") · \(limbs ? "real arms shown" : "no real arms")")
+                .fontWeight(.semibold)
+        }
+        .font(.caption)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8)
+            .fill((hands ? Color.green : Color.blue).opacity(limbs ? 0.30 : 0.16)))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -515,6 +537,26 @@ struct ContentView: View {
                     set: { fullMenu = $0
                            VRSettings.shared.fullMenu = $0
                            engine.send("vr_fullmenu \($0 ? 1 : 0)") }))
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Teleport locomotion", isOn: Binding(
+                        get: { teleportEnabled },
+                        set: { teleportEnabled = $0; engine.send("vr_teleport \($0 ? 1 : 0)") }))
+                    Text("Aim with the gun reticle; ring-finger pinch (off hand) to blink there.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Toggle("Tint reticle when landable", isOn: Binding(
+                        get: { teleportMarker },
+                        set: { teleportMarker = $0; engine.send("vr_teleportcolor \($0 ? 1 : 0)") }))
+                        .font(.caption)
+                }
+                if !gamepad.hasPhysicalController {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle("Model off hand only", isOn: Binding(
+                            get: { offHandModelOnly },
+                            set: { offHandModelOnly = $0; VRSettings.shared.offHandModelOnly = $0 }))
+                        Text("Draw the 3D hand on the off hand only; the gun hand stays just the weapon. Controllerless only.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("Turning", selection: Binding(
@@ -540,19 +582,9 @@ struct ContentView: View {
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Fire gesture").font(.caption).foregroundStyle(.secondary)
-                    Picker("Fire gesture", selection: Binding(
-                        get: { fireMode },
-                        set: { fireMode = $0; VRSettings.shared.fireMode = $0
-                               ProfileStore.shared.current.fireMode = $0.rawValue })) {
-                        Text("Pinch").tag(FireMode.pinch)
-                        Text("Curl").tag(FireMode.curl)
-                        Text("Bang").tag(FireMode.hammer)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
+                // Fire is pinch in quake-avp. The curl gesture stays in code
+                // (HandState.indexCurled, the .curl fire path) for a future
+                // limited-control mode, but isn't exposed here.
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Console summon").font(.caption).foregroundStyle(.secondary)
                     Picker("Console summon", selection: Binding(
@@ -579,10 +611,6 @@ struct ContentView: View {
                     tuneRow("Pinch cm", $pinchCloseUI, 0.8...3.5, fmt: "%.1f") {
                         VRSettings.shared.pinchClose = $0 / 100
                         ProfileStore.shared.current.pinchClose = $0 / 100 }
-                    tuneRow("Curl ease", $curlSensUI, 0.6...0.85) {
-                        VRSettings.shared.curlSensitivity = $0; ProfileStore.shared.current.curlSensitivity = $0 }
-                    tuneRow("Hammer angle", $hammerDropUI, 30...60, fmt: "%.0f°") {
-                        VRSettings.shared.hammerDropDeg = $0; ProfileStore.shared.current.hammerDropDeg = $0 }
                 }
                 Toggle("Slow-mo while weapon wheel is open", isOn: Binding(
                     get: { wheelSlowmo },
@@ -957,6 +985,10 @@ struct ContentView: View {
     /// cvar live and persists into the active profile.
     private var weaponContent: some View {
                 VStack(alignment: .leading, spacing: 14) {
+                    // These rigs are stored PER INPUT MODE. Without this badge
+                    // you could be silently tuning the controller rig while in
+                    // hands, or vice versa -- so say which one, loudly.
+                    editingModeBadge
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Gun placement").font(.headline)
                         Text("Slide the gun onto your hand — updates live in the headset.")

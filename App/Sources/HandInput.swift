@@ -11,10 +11,11 @@
 //  hands). The OFF hand locomotes, the GUN hand aims and turns:
 //    move thumb+middle hold    walk forward (where you look, vr_moverelative)
 //    move thumb+index hold     walk backward
-//    move thumb+ring pinch     jump
+//    off thumb+ring pinch      teleport (aim off-arm at floor, release)  [test]
 //    move thumb+pinky hold     crouch
 //    move palm-up              open the weapon wheel (that hand selects)
 //    gun index pinch           fire (hold for automatic)
+//    gun thumb+ring pinch      jump  [test remap]
 //    gun horizontal flick      snap turn -- quick un-pinched sideways whip
 //    gun thumb+middle drag     turn fallback / smooth-turn's held signal
 //
@@ -85,12 +86,6 @@ final class HandInput: @unchecked Sendable {
     private var flickPeakTime = 0.0
     private var flickArmed = true
 
-    // Finger-gun "bang": one shot per hammer drop. `hammerCocked` latches while
-    // the gun pose holds with the thumb up; the drop emits a short fire pulse
-    // (so the engine tick samples one shot), then you must re-cock.
-    private static let hammerPulse = 0.10
-    private var hammerCocked = false
-    private var hammerPulseUntil = 0.0
     private var flickCooldownUntil = 0.0
     private var flickPulseUntil = 0.0
     private var flickDir: Float = 0
@@ -186,6 +181,7 @@ final class HandInput: @unchecked Sendable {
             }
             emit(left: &left, right: &right)
             wheel(left: left, right: right)
+            teleport(left: left, right: right)
             // Fold every enabled overlay into one published buffer: the
             // wireframe + gauge (full debug), and the figure overlays (aim rays,
             // strobe) which draw over the stylised hand too.
@@ -198,14 +194,27 @@ final class HandInput: @unchecked Sendable {
             if wire || fireDbg { dbg += fireDebugVerts }         // fire-threshold meter
             if HandDebug.shared.aimRays { dbg += aimRayVerts }
             if HandDebug.shared.strobe { dbg += strobeVerts }
+            // The muzzle fire/aim-health "diamond" belongs to the FIRE debug
+            // only -- it used to ride along with the strobe/aim-ray overlays and
+            // clutter the view with a colour-changing marker on the gun hand.
+            if wire || fireDbg { dbg += fireStatusVerts }
             if wire || turnDbg || fireDbg || HandDebug.shared.aimRays || HandDebug.shared.strobe {
-                dbg += fireStatusVerts        // muzzle fire/aim-health indicator
                 HandDebug.shared.publish(dbg)
             }
-            VirtualHand.shared.publish(left.virtualVerts + right.virtualVerts)
+            // Off-hand-only option: with a gun in the dominant hand, a bare
+            // shotgun with no hand reads oddly, so allow modelling just the off
+            // hand (like the PSVR controllers do). Default: both hands.
+            if VRSettings.shared.offHandModelOnly {
+                let off = VRSettings.shared.rightHanded ? left : right
+                VirtualHand.shared.publish(off.virtualVerts)
+            } else {
+                VirtualHand.shared.publish(left.virtualVerts + right.virtualVerts)
+            }
         }
         aggregator.remove(.hands)
         VirtualHand.shared.publish([])   // hands gone: no stand-in to draw
+        QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
+        tpRingWas = false
     }
 
     // MARK: - Gesture synthesis
@@ -277,9 +286,12 @@ final class HandInput: @unchecked Sendable {
         if move.indexPinched { slice.ly += 1 }    // forward
         if move.middlePinched { slice.ly -= 1 }   // backward
 
-        // Jump: move-hand thumb+ring pinch. Crouch: thumb+pinky (held).
-        if move.ringPinched { slice.buttons |= UInt32(QC_PAD_A) }        // +jump
+        // Crouch: off-hand thumb+pinky (held).
         if move.pinkyPinched { slice.buttons |= UInt32(QC_PAD_LTHUMB) }  // +movedown
+        // TEST remap: JUMP is now the GUN-hand ring pinch (thumb+ring), and the
+        // OFF-hand ring pinch drives teleport (see teleport()). Ring is free on
+        // the gun hand -- fire is index pinch/curl/hammer, not ring.
+        if aim.ringPinched { slice.buttons |= UInt32(QC_PAD_A) }         // +jump
 
         let now = CACurrentMediaTime()
 
@@ -290,18 +302,6 @@ final class HandInput: @unchecked Sendable {
             if aim.indexPinched { slice.rt = 1 }
         case .curl:
             if aim.indexCurled { slice.rt = 1 }
-        case .hammer:
-            // Cock while the gun pose holds with the thumb up; the drop fires
-            // one short pulse, then you must re-cock. Losing the pose disarms.
-            if !aim.indexExtended {
-                hammerCocked = false
-            } else if !aim.thumbHammerDown {
-                hammerCocked = true
-            } else if hammerCocked {
-                hammerCocked = false
-                hammerPulseUntil = now + Self.hammerPulse
-            }
-            if now < hammerPulseUntil { slice.rt = 1 }
         }
 
         // Motion strobe: sample the aim ray over time so a still frame shows the
@@ -384,7 +384,7 @@ final class HandInput: @unchecked Sendable {
         // can be read off numbers (paste back) instead of guessed. ~7 Hz.
         if VRSettings.shared.inputLog, now - lastLog > 0.15 {
             lastLog = now
-            let mode = ["pinch", "curl", "hammer"][VRSettings.shared.fireMode.rawValue]
+            let mode = ["pinch", "curl"][VRSettings.shared.fireMode.rawValue]
             let tstyle = ["stick", "clutch", "flick"][VRSettings.shared.turnStyle.rawValue]
             print("[inputlog] fire=\(mode)"
                 + " straight=\(String(format: "%.2f", aim.indexStraightness))"
@@ -638,10 +638,6 @@ final class HandInput: @unchecked Sendable {
         case .curl:
             value01 = min(1, max(0, aim.indexStraightness))
             thresh01 = VRSettings.shared.curlSensitivity
-        case .hammer:
-            value01 = min(1, aim.thumbBarrelDeg / 90)
-            thresh01 = min(1, VRSettings.shared.hammerDropDeg / 90)
-            armed = aim.indexExtended
         }
         guard let dock = hudDock(wrist: aim.wrist, forearm: aim.aimBaseDir) else { return [] }
         let halfW: Float = 0.09
@@ -669,11 +665,15 @@ final class HandInput: @unchecked Sendable {
     private func buildStrobe(now: Double) -> [Float] {
         var v: [Float] = []
         let span = Float(Self.strobeInterval * Double(Self.strobeCount))
+        // At the AIM POINT: a dot projected out along each sampled ray (a fixed
+        // throw, since the hit distance is engine-side), so the trail shows
+        // where you were aiming, not a stub at the hand.
+        let dist: Float = 3.0
         for s in strobeSamples {
             let alpha = max(0, 1 - Float(now - s.t) / span)
             var col = DebugColor.blend
             col.w = 0.12 + 0.78 * alpha
-            lineQuad(&v, s.o, s.o + s.d * 0.35, 0.003 + 0.004 * alpha, col)
+            octa(&v, s.o + s.d * dist, 0.02 + 0.02 * alpha, col)
         }
         return v
     }
@@ -687,6 +687,28 @@ final class HandInput: @unchecked Sendable {
     /// relative to room forward (the engine adds the body yaw), pitch
     /// positive-down, muzzle origin in body-frame Quake units. `valid 0` when
     /// the wrist isn't tracked, so the shot falls back to the body aim.
+    private var tpRingWas = false
+
+    /// Point-and-blink teleport off the OFF hand (non-gun): aim the forearm at
+    /// a floor and hold an index pinch to arm -- the engine shows the landing
+    /// ring and jumps you there on release. Fed in the SAME body-frame ray form
+    /// as feedAim, so IN_Teleport reconstructs the world ray exactly as it does
+    /// the aim. The forearm ray is used (not the fingers): it survives the pinch
+    /// that arms the teleport, where a finger ray would collapse.
+    private func teleport(left: HandState, right: HandState) {
+        // The GUN reticle aims the teleport (engine side), so this ONLY needs
+        // to detect the off-hand ring pinch and fire the commit. It must NOT
+        // gate on the off-hand forearm ray -- that gate (a leftover from when
+        // the off hand aimed) was returning early and swallowing the commit
+        // whenever the off forearm wasn't cleanly tracked. The off-hand aim ray
+        // is still computed in ingest, reserved for the PSVR dual-wield.
+        let off = VRSettings.shared.rightHanded ? left : right
+        let pinched = !WheelState.shared.isOpen && off.ringPinched
+        let commit = pinched && !tpRingWas
+        tpRingWas = pinched
+        QC_InputSetTeleport(0, commit ? 1 : 0, 0, 0, 0, 0, 0)
+    }
+
     private func feedAim(_ hand: HandState) {
         guard let o = hand.aimOrigin, let d = hand.aimDir else {
             TrackRecorder.shared.feedAim(valid: false, origin: .zero, yaw: 0, pitch: 0)
@@ -840,6 +862,12 @@ private struct HandState {
     var aimOrigin: SIMD3<Float>?      // wrist, room frame
     var aimDir: SIMD3<Float>?         // blended aim, room frame
     var aimBaseDir: SIMD3<Float>?     // raw forearm bone, unsmoothed (debug figure)
+    // Teleport pointing ray (room frame): wrist -> middle knuckle, which DOES
+    // follow wrist flex, so pointing the hand down aims at the floor. Uses the
+    // inferred pose so it's stable through the ring pinch that arms teleport.
+    // Deliberately NOT the forearm aim ray, which ignores the hand on purpose.
+    var pointOrigin: SIMD3<Float>?
+    var pointDir: SIMD3<Float>?
 
     /// Coloured finger bones for the debug overlay, corrected-tracking
     /// space, 7 floats/vertex (xyz + rgba), line list. Built in ingest.
@@ -883,7 +911,6 @@ private struct HandState {
         switch VRSettings.shared.fireMode {
         case .pinch:  return indexPinched
         case .curl:   return indexCurled
-        case .hammer: return indexExtended && thumbHammerDown
         }
     }
 
@@ -916,6 +943,17 @@ private struct HandState {
             let j = skeleton.joint(joint)
             guard j.isTracked else { return nil }
             let world = anchor.originFromAnchorTransform * j.anchorFromJointTransform
+            return SIMD3(world.columns.3.x, world.columns.3.y, world.columns.3.z)
+        }
+        // The INFERRED joint pose (ignores isTracked): ARKit still reports a
+        // transform for an occluded joint, which keeps every finger drawn
+        // through a fist. Used for the DRAWN mesh and the teleport POINTING ray
+        // only. GESTURES stay on strict `tip`: the finger-gun/hammer pose keeps
+        // its joints visible anyway, and inferred angles proved less reliable
+        // than observed ones (the hammer never crossed its threshold on them).
+        func vtip(_ joint: HandSkeleton.JointName) -> SIMD3<Float>? {
+            let world = anchor.originFromAnchorTransform
+                * skeleton.joint(joint).anchorFromJointTransform
             return SIMD3(world.columns.3.x, world.columns.3.y, world.columns.3.z)
         }
         // A lost thumb tip (easy to occlude when curling toward the palm) only
@@ -962,6 +1000,7 @@ private struct HandState {
             indexExtended = false
         }
 
+
         // Thumb hammer: the ANGLE between the thumb and the index barrel. Splayed
         // up ~90 deg = cocked; dropped alongside the barrel ~25 deg = fired.
         // Angle, not height, so it reads the same in any wrist roll.
@@ -1007,6 +1046,18 @@ private struct HandState {
 
         // Wheel facts: the wrist, the palm's facing, the index ray.
         wrist = tip(.wrist)
+
+        // Teleport pointing ray: wrist -> middle knuckle (inferred, so it
+        // survives the ring pinch), which follows wrist flex -- point the hand
+        // at the floor and this aims down, unlike the forearm aim ray.
+        if let w = vtip(.wrist), let mk = vtip(.middleFingerKnuckle),
+           simd_length(mk - w) > 1e-4 {
+            pointOrigin = w
+            pointDir = simd_normalize(mk - w)
+        } else {
+            pointOrigin = nil
+            pointDir = nil
+        }
         // Wrist velocity for the flick snap-turn. Skip the first sample and
         // any dt spike (tracking resuming after a dropout would read as a
         // huge phantom velocity and fire a bogus turn).
@@ -1118,8 +1169,12 @@ private struct HandState {
             aimSmoothed = nil
         }
 
-        buildDebug(tip: tip)
-        buildVirtual(tip: tip, isLeft: isLeft)
+        buildDebug(tip: vtip)   // inferred, so the wireframe doesn't drop fingers either
+        // The DRAWN hand uses the INFERRED pose (vtip, defined above): ARKit
+        // still reports a transform for an occluded joint, which is how
+        // three.js/WebXR keeps every finger visible in a fist. Dropping
+        // !isTracked joints was the dropout.
+        buildVirtual(tip: vtip, isLeft: isLeft)
     }
 
     /// The stylised virtual hand as DISCONNECTED oval beads: one flattened palm
@@ -1146,7 +1201,7 @@ private struct HandState {
             var xc = simd_cross(SIMD3<Float>(0, 1, 0), zc)
             xc = simd_length(xc) > 1e-5 ? simd_normalize(xc) : SIMD3(1, 0, 0)
             let yc = simd_normalize(simd_cross(zc, xc))
-            let lon = 6, lat = 3
+            let lon = 8, lat = 4
             func pt(_ i: Int, _ j: Int) -> SIMD3<Float> {
                 let phi = Float.pi * Float(j) / Float(lat)          // pole (0) to pole (pi)
                 let th  = 2 * Float.pi * Float(i) / Float(lon)
@@ -1166,32 +1221,33 @@ private struct HandState {
             }
         }
 
-        // Palm: one oval from the wrist toward the middle knuckle.
-        let knuckles = [HandSkeleton.JointName.indexFingerKnuckle, .middleFingerKnuckle,
-                        .ringFingerKnuckle, .littleFingerKnuckle].compactMap { tip($0) }
-        if let midK = knuckles.count > 1 ? knuckles[1] : knuckles.first {
-            bead((wristPt + midK) * 0.5, midK - wristPt, 0.038, 0.020, skin)
+        // WebXR webxr_vr_handinput style: a round sphere at EVERY joint of the
+        // 25-joint set (wrist + 4 metacarpals + knuckles + phalanges + tips),
+        // no bones -- the spheres read as a hand on their own. Fed the inferred
+        // pose (vtip), so none drop out in a fist. Mild taper from the fuller
+        // knuckles to the small tips; the metacarpals and wrist fill the palm.
+        _ = wristPt   // the guard above proves the hand is present
+        func sphere(_ at: SIMD3<Float>, _ rad: Float) {
+            bead(at, SIMD3<Float>(0, 1, 0), rad, rad, skin)   // long == rad -> round
         }
+        if let w = tip(.wrist) { sphere(w, 0.013) }
 
-        // Fingers: a bead per joint, fat at the knuckle tapering to the tip,
-        // each elongated along the bone toward the next joint.
         let fingers: [[HandSkeleton.JointName]] = [
             [.thumbKnuckle, .thumbIntermediateBase, .thumbIntermediateTip, .thumbTip],
-            [.indexFingerKnuckle, .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip],
-            [.middleFingerKnuckle, .middleFingerIntermediateBase, .middleFingerIntermediateTip, .middleFingerTip],
-            [.ringFingerKnuckle, .ringFingerIntermediateBase, .ringFingerIntermediateTip, .ringFingerTip],
-            [.littleFingerKnuckle, .littleFingerIntermediateBase, .littleFingerIntermediateTip, .littleFingerTip],
+            [.indexFingerMetacarpal, .indexFingerKnuckle, .indexFingerIntermediateBase,
+             .indexFingerIntermediateTip, .indexFingerTip],
+            [.middleFingerMetacarpal, .middleFingerKnuckle, .middleFingerIntermediateBase,
+             .middleFingerIntermediateTip, .middleFingerTip],
+            [.ringFingerMetacarpal, .ringFingerKnuckle, .ringFingerIntermediateBase,
+             .ringFingerIntermediateTip, .ringFingerTip],
+            [.littleFingerMetacarpal, .littleFingerKnuckle, .littleFingerIntermediateBase,
+             .littleFingerIntermediateTip, .littleFingerTip],
         ]
         for joints in fingers {
-            let pts = joints.map { tip($0) }
-            for (i, cur) in pts.enumerated() {
-                guard let cur else { continue }
+            for (i, j) in joints.enumerated() {
+                guard let p = tip(j) else { continue }
                 let t = Float(i) / Float(max(1, joints.count - 1))
-                let rad = 0.011 - 0.005 * t              // fat knuckle -> small tip
-                var axis = SIMD3<Float>(0, 1, 0)
-                if i + 1 < pts.count, let nxt = pts[i + 1] { axis = nxt - cur }
-                else if i > 0, let prv = pts[i - 1] { axis = cur - prv }
-                bead(cur, axis, rad * 1.5, rad, skin)
+                sphere(p, 0.0105 - 0.0045 * t)   // knuckle -> tip
             }
         }
         virtualVerts = v

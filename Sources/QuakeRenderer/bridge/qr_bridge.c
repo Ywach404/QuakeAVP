@@ -64,6 +64,9 @@ extern cvar_t vr_reticlestyle;		/* reticle shape 0..4 */
 extern cvar_t vr_reticlecolor;		/* reticle palette index */
 extern cvar_t vr_lasercolor;		/* laser palette index */
 extern cvar_t vr_wheelclip;		/* wheel-model front-trim keep fraction */
+extern cvar_t vr_teleport;		/* teleport locomotion on */
+extern cvar_t vr_teleportcolor;		/* tint the reticle cyan when landable */
+extern int qr_tp_mark_state;		/* -1 hidden, 0 air, 1 blocked, 2 ok */
 extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 /* The held gun's own placement, pulled from the table the UI publishes; 0
@@ -3876,6 +3879,12 @@ static void QR_EmitReticle (qr_frame_slot_t *slot, const vec3_t start,
 	int	hitsurf, flat, k;
 
 	QR_VrColor ((int) vr_reticlecolor.value, &cr, &cg, &cb);
+	/* Teleport feedback on the ONE reticle: tint it cyan when the spot you're
+	   aiming at is a valid landing (qr_tp_mark_state 2). No second ring. */
+	if (vr_teleport.value && vr_teleportcolor.value && qr_tp_mark_state == 2)
+	{
+		cr = 0.25f; cg = 0.95f; cb = 1.00f;
+	}
 	AngleVectors (angles, fwd, rv, uv);
 	VectorMA (start, 4096.f, fwd, far);
 	hitsurf = QR_TraceSurface (start, far, hit, n);
