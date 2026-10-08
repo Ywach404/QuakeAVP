@@ -64,5 +64,6 @@ int  QR_FlushDirtyLightmaps (void);	/* re-upload dirty atlases; returns count */
 /* Sprite models (gl_sprite.c ports). */
 mspriteframe_t *QR_SpriteFrameSelect (msprite_t *psprite, int frame, float time);
 mspriteframe_t *QR_SpriteFrame (entity_t *e);
+void QR_SpriteBillboardAxes (int type, entity_t *e, vec3_t up, vec3_t right);
 
 #endif /* QR_BRIDGE_H */
