@@ -1292,6 +1292,81 @@ void R_BuildLightMap (msurface_t *surf, byte *dest, int stride)
 }
 
 /*
+===============
+QR_SurfaceNeedsRelight -- the rebuild decision from upstream
+R_RenderDynamicLightmaps, extracted so it is unit-testable. Rebuild iff a
+lightstyle value drifted from the cache OR a dlight touches the surface (this
+frame or last), AND r_dynamic is on. r_dynamic 0 freezes the lightmap
+entirely, matching QuakeSpasm (its goto lands inside the r_dynamic gate).
+===============
+*/
+qboolean QR_SurfaceNeedsRelight (msurface_t *surf, int framecount, int dynamic_on)
+{
+	int		maps;
+	qboolean	changed = false;
+
+	for (maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++)
+		if (d_lightstylevalue[surf->styles[maps]] != surf->cached_light[maps])
+		{
+			changed = true;
+			break;
+		}
+
+	if (!changed
+	 && !(surf->dlightframe == framecount)	/* dynamic this frame */
+	 && !surf->cached_dlight)		/* dynamic previously */
+		return false;
+
+	return dynamic_on ? true : false;
+}
+
+/*
+===============
+R_RenderDynamicLightmaps -- rebuild a surface's lightmap block into its atlas
+CPU buffer when it needs relighting, and grow the atlas dirty rect. Port of
+gl_rsurf.c (the GL chain bits dropped). Called per visible surface.
+===============
+*/
+void R_RenderDynamicLightmaps (msurface_t *surf)
+{
+	byte			*base;
+	glRect_t		*theRect;
+	struct lightmap_s	*lm;
+	int			smax, tmax;
+
+	if (surf->flags & SURF_DRAWTILED)	/* not a lightmapped surface */
+		return;
+
+	if (!QR_SurfaceNeedsRelight (surf, r_framecount, (int) r_dynamic.value))
+		return;
+
+	lm = &lightmaps[surf->lightmaptexturenum];
+	lm->modified = true;
+	theRect = &lm->rectchange;
+	if (surf->light_t < theRect->t)
+	{
+		if (theRect->h)
+			theRect->h += theRect->t - surf->light_t;
+		theRect->t = surf->light_t;
+	}
+	if (surf->light_s < theRect->l)
+	{
+		if (theRect->w)
+			theRect->w += theRect->l - surf->light_s;
+		theRect->l = surf->light_s;
+	}
+	smax = (surf->extents[0]>>4)+1;
+	tmax = (surf->extents[1]>>4)+1;
+	if ((theRect->w + theRect->l) < (surf->light_s + smax))
+		theRect->w = (surf->light_s - theRect->l) + smax;
+	if ((theRect->h + theRect->t) < (surf->light_t + tmax))
+		theRect->h = (surf->light_t - theRect->t) + tmax;
+	base = lm->data;
+	base += surf->light_t * LMBLOCK_WIDTH * lightmap_bytes + surf->light_s * lightmap_bytes;
+	R_BuildLightMap (surf, base, LMBLOCK_WIDTH*lightmap_bytes);
+}
+
+/*
 ========================
 GL_CreateSurfaceLightmap
 ========================
@@ -2393,7 +2468,10 @@ static void QR_EmitTextureChains (qr_frame_slot_t *slot, qmodel_t *model,
 			start = slot->frame.num_indices;
 			for (s2 = s; s2; s2 = s2->texturechain)
 				if (s2->lightmaptexturenum == lm)
+				{
+					R_RenderDynamicLightmaps (s2);	/* relight into the atlas before emit */
 					QR_EmitSurface (slot, s2);
+				}
 
 			QR_AppendBatch (slot, QC_BATCH_WORLD, texnum,
 					(lm < lightmap_count && lightmaps[lm].texture) ?
