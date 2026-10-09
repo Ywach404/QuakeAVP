@@ -5283,12 +5283,14 @@ static void QR_EnsureWhite (void)
 static void QR_OverlayAppend (qr_frame_slot_t *slot, uint32_t texnum,
 			      const float *verts, int nverts)
 {
-	uint32_t	base = slot->frame.num_overlay_verts;
-	uint32_t	floats_have = base * 9, floats_need = (base + nverts) * 9;
+	uint32_t	base, floats_have, floats_need;
 	qc_overlay_batch_t *b;
 
 	if (!slot || nverts <= 0 || !texnum)
 		return;
+	base = slot->frame.num_overlay_verts;
+	floats_have = base * 9;
+	floats_need = (base + nverts) * 9;
 	if (floats_need > slot->overlay_capacity)
 	{
 		while (floats_need > slot->overlay_capacity)
