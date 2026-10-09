@@ -30,6 +30,9 @@ struct ContentView: View {
     @State private var showComfort = false
     @State private var heightOffset: Float = 0.4
     @State private var rightHanded = true
+    /// vr_hud: 0 off, 1 wrist (default), 2 float. Mirrors the cvar's own
+    /// default since there is no live cvar read-back; matches r_null.c.
+    @State private var hudPanelMode: Int = 1
     @State private var lookRelative = true
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
@@ -496,6 +499,21 @@ struct ContentView: View {
                     Text("Left-handed").tag(false)
                 }
                 .pickerStyle(.segmented)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Status bar (vr_hud)").font(.caption).foregroundStyle(.secondary)
+                    Picker("Status bar", selection: Binding(
+                        get: { hudPanelMode },
+                        set: { hudPanelMode = $0; engine.send("vr_hud \($0)") })) {
+                        Text("Off").tag(0)
+                        Text("Wrist").tag(1)
+                        Text("Floating").tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Text("Wrist rides the off hand (falls back to floating if it isn't tracked); "
+                         + "Floating holds ~1.5 m ahead, head-stabilized.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
                     Picker("Wheel select hand", selection: Binding(

@@ -412,6 +412,15 @@ final class ImmersiveRenderer {
         let virtualHand: [Float] = HandDebug.shared.enabled ? [] : VirtualHand.shared.snapshot()
         let handOpacity: Float = 1 - (packet?.phase ?? 0)
 
+        // 2D HUD panel (vr_hud): wrist or float, in the SAME corrected
+        // tracking space and handViewproj as the hand debug/virtual hand
+        // above -- a world-space panel built once per frame, composed with
+        // each eye's handViewproj at the draw call below.
+        let hudModel: simd_float4x4? = packet.flatMap {
+            hudPanelModel(packet: $0, originFromDevice: originFromDevice,
+                         headPoseAvailable: deviceAnchor != nil)
+        }
+
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
                 for: drawable, textureIndex: 0, slice: nil, clear: clear)
@@ -430,6 +439,12 @@ final class ImmersiveRenderer {
                                      pipelines: pipelines, encoder: encoder)
                 core.drawHandDebug(handDebug, viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                    pipelines: pipelines, encoder: encoder)
+                if let hudModel {
+                    core.drawOverlay(frame: packet,
+                                     viewproj0: handViewproj[0] * hudModel,
+                                     viewproj1: handViewproj[1] * hudModel,
+                                     pipelines: pipelines, encoder: encoder)
+                }
             }
             encoder.endEncoding()
         } else {
@@ -457,6 +472,11 @@ final class ImmersiveRenderer {
                                          pipelines: pipelines, encoder: encoder)
                     core.drawHandDebug(handDebug, viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                        pipelines: pipelines, encoder: encoder)
+                    if let hudModel {
+                        let hv = handViewproj[index] * hudModel
+                        core.drawOverlay(frame: packet, viewproj0: hv, viewproj1: hv,
+                                         pipelines: pipelines, encoder: encoder)
+                    }
                 }
                 encoder.endEncoding()
             }
@@ -507,6 +527,83 @@ final class ImmersiveRenderer {
             loggedSetup = true
             print("[immersive] layout=\(configuration.layout) foveation=\(configuration.isFoveationEnabled) singlePassStereo=\(singlePassStereo) color=\(configuration.colorFormat.rawValue)")
         }
+    }
+
+    // MARK: - HUD panel placement (vr_hud)
+
+    /// Panel sizes keep the overlay's 320x200 aspect (1.6:1) so the status
+    /// bar isn't stretched. Device-tuned; nudge on device, not guessed here.
+    private static let wristPanelWidth: Float = 0.22
+    private static let wristPanelHeight: Float = 0.1375
+    /// Lift the panel off the wrist along its own "up" so it doesn't clip
+    /// into the forearm.
+    private static let wristLift: Float = 0.03
+    private static let floatPanelWidth: Float = 0.8
+    private static let floatPanelHeight: Float = 0.5
+    private static let floatDistance: Float = 1.5
+    /// Dropped below eye level so the float panel reads as a lower-centre
+    /// HUD rather than sitting on the forward sightline.
+    private static let floatLowerOffset: Float = 0.25
+
+    /// This frame's HUD panel model matrix (overlay-space -> corrected
+    /// tracking space), or nil to draw nothing. `hud_mode == 0` is off;
+    /// `hud_mode == 1` (wrist) anchors to the off-hand and billboards
+    /// toward the eye, falling back to the float placement the instant the
+    /// off-hand isn't tracked (Review Focus #3: never anchor to a stale or
+    /// zero pose); `hud_mode == 2` floats ahead of the head, yaw+level only
+    /// — no pitch, mirroring `QR_EmitCenterPrint`'s placement basis class.
+    /// Picked once per frame and shared by both eyes.
+    private func hudPanelModel(packet: qc_frame_t, originFromDevice: simd_float4x4,
+                               headPoseAvailable: Bool) -> simd_float4x4? {
+        guard packet.hud_mode != 0 else { return nil }
+
+        if packet.hud_mode == 1, let wrist = offHandWristPosition() {
+            let eye = ViewerPose.shared.eye
+            let toEye = eye - wrist
+            let toward = simd_length(toEye) > 1e-4 ? simd_normalize(toEye) : SIMD3<Float>(0, 0, 1)
+            let basis = RendererCore.billboardBasis(toward: toward)
+            let origin = wrist + basis.up * Self.wristLift
+            return RendererCore.hudPanelModel(origin: origin, right: basis.right, up: basis.up,
+                                              widthMeters: Self.wristPanelWidth,
+                                              heightMeters: Self.wristPanelHeight)
+        }
+
+        // Float placement: hud_mode == 2 outright, or the wrist mode's
+        // fallback this frame because the off-hand isn't tracked. Hide
+        // entirely if even the head pose is unavailable -- there is nothing
+        // sane left to anchor to.
+        guard headPoseAvailable else { return nil }
+        let headPos = originFromDevice.columns.3
+        let headForward4 = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
+        let flatForward = SIMD3(headForward4.x, 0, headForward4.z)
+        let forward = simd_length(flatForward) > 1e-4 ? simd_normalize(flatForward) : SIMD3<Float>(0, 0, -1)
+        let origin = SIMD3(headPos.x, headPos.y, headPos.z)
+            + forward * Self.floatDistance
+            - SIMD3<Float>(0, Self.floatLowerOffset, 0)
+        // toward is horizontal by construction, so billboardBasis's "up"
+        // comes out as world-up exactly -- level, no pitch, no roll.
+        let basis = RendererCore.billboardBasis(toward: -forward)
+        return RendererCore.hudPanelModel(origin: origin, right: basis.right, up: basis.up,
+                                          widthMeters: Self.floatPanelWidth,
+                                          heightMeters: Self.floatPanelHeight)
+    }
+
+    /// The off-hand wrist position for the wrist-mode panel, corrected
+    /// tracking space: the Sense controller pose when controllers are
+    /// tracking (the same source the off-hand rigid-hand model reads,
+    /// above), else the ARKit wrist `HandInput` publishes continuously
+    /// whenever hands are the active input (see `OffHandWrist`). nil when
+    /// neither source currently has the off-hand -- the caller's cue to
+    /// fall back to the float placement.
+    private func offHandWristPosition() -> SIMD3<Float>? {
+        let rightHanded = VRSettings.shared.rightHanded
+        if SpatialControllerTracker.shared.isTracking,
+           let offPose = SpatialControllerTracker.shared.pose(left: rightHanded) {
+            let p = recenterCorrection * offPose.columns.3
+            return SIMD3(p.x, p.y, p.z)
+        }
+        let snap = OffHandWrist.shared.snapshot()
+        return snap.valid ? snap.position : nil
     }
 
     // MARK: - Engine reporting

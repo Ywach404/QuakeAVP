@@ -145,6 +145,7 @@ final class HandInput: @unchecked Sendable {
             session = nil
             aggregator.remove(.hands)
             VirtualHand.shared.publish([])
+            OffHandWrist.shared.invalidate()
         }
     }
 
@@ -215,6 +216,7 @@ final class HandInput: @unchecked Sendable {
         }
         aggregator.remove(.hands)
         VirtualHand.shared.publish([])   // hands gone: no stand-in to draw
+        OffHandWrist.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
         tpRingWas = false
     }
@@ -808,6 +810,17 @@ final class HandInput: @unchecked Sendable {
         let offHand = rightHanded ? left : right   // off hand holds AND anchors
         let gunHand = rightHanded ? right : left
 
+        // Publish the off-hand wrist for the wrist-mode HUD panel, every
+        // frame the wrist is tracked -- NOT gated on palmUp like the wheel's
+        // own anchor below, since the HUD should ride the wrist whenever
+        // it's visible, not only while the wheel gesture is held.
+        if let wrist = offHand.wrist {
+            let p = TrackingSpace.correction * SIMD4(wrist, 1)
+            OffHandWrist.shared.publish(position: SIMD3(p.x, p.y, p.z), valid: true)
+        } else {
+            OffHandWrist.shared.invalidate()
+        }
+
         WheelState.shared.setHold(offHand.palmUp, source: .hands)
         guard offHand.palmUp else { return }
 
@@ -1394,6 +1407,36 @@ final class ViewerPose: @unchecked Sendable {
     private var _eye = SIMD3<Float>(0, 1.2, 0)
     func setEye(_ e: SIMD3<Float>) { lock.lock(); _eye = e; lock.unlock() }
     var eye: SIMD3<Float> { lock.lock(); defer { lock.unlock() }; return _eye }
+}
+
+/// The OFF hand's wrist position, corrected-tracking space, for the
+/// wrist-mode HUD panel (vr_hud 1). Published from `wheel()` every hand
+/// update using the exact same `offHand.wrist` + `TrackingSpace.correction`
+/// the weapon wheel's own anchor is built from — unlike `WheelState`'s
+/// anchor, which only updates while the palm-up hold is active, this tracks
+/// the wrist whenever it's visible so the HUD can ride it continuously.
+/// Invalid (not just stale) the instant the wrist drops out of tracking or
+/// hands stand down for a controller (see `HandInput.setActive`), so the
+/// render thread's fallback to the float placement has a real signal to
+/// read instead of a frozen pose.
+final class OffHandWrist: @unchecked Sendable {
+    static let shared = OffHandWrist()
+    private let lock = NSLock()
+    private var _position = SIMD3<Float>.zero
+    private var _valid = false
+
+    func publish(position: SIMD3<Float>, valid: Bool) {
+        lock.lock(); _position = position; _valid = valid; lock.unlock()
+    }
+
+    func invalidate() {
+        lock.lock(); _valid = false; lock.unlock()
+    }
+
+    func snapshot() -> (position: SIMD3<Float>, valid: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        return (_position, _valid)
+    }
 }
 
 /// Shared debug-figure palette, reused across overlays so every screenshot
