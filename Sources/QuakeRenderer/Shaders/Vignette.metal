@@ -42,3 +42,18 @@ fragment float4 vignette_fragment(VignetteVaryings in [[stage_in]],
     float a = uniforms.strength * smoothstep(0.55, 1.05, d);
     return float4(0.0, 0.0, 0.0, a);
 }
+
+// Polyblend: the engine's v_blend, a uniform fullscreen rgba tint (damage,
+// pickup, powerup, underwater/lava/slime). Reuses vignette_vertex. Output is
+// PREMULTIPLIED to match the mixed-immersion contract, so the (one,
+// oneMinusSourceAlpha) blend tints the rendered world and passthrough alike.
+struct PolyblendUniforms {
+    float4 blend;       // qc_frame_t.v_blend: rgb + alpha
+};
+
+fragment float4 polyblend_fragment(VignetteVaryings in [[stage_in]],
+                                   constant PolyblendUniforms &uniforms [[buffer(0)]])
+{
+    float a = uniforms.blend.a;
+    return float4(uniforms.blend.rgb * a, a);
+}

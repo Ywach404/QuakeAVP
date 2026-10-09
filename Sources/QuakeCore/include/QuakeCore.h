@@ -242,6 +242,11 @@ typedef struct qc_frame_s {
 	float		fog_color[3];
 	float		sky_fog;
 
+	/* Polyblend: the engine's v_blend, a fullscreen rgba tint over the 3D
+	   scene -- damage red, pickup/bonus flash, powerup tints, and the
+	   underwater/lava/slime contents tint. Drawn like the vignette. */
+	float		v_blend[4];
+
 	/* The player's world->view basis, in Quake units/degrees. The immersive
 	   consumer composes per-eye matrices from this *after* sampling the head
 	   pose (late latch); building them engine-side would cost a frame of

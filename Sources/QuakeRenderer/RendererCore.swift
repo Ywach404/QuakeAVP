@@ -39,6 +39,9 @@ struct RenderPipelines {
     let aliasBlend: MTLRenderPipelineState
     /// Comfort vignette: fullscreen periphery fade, drawn last.
     let vignette: MTLRenderPipelineState
+    /// Polyblend: fullscreen v_blend tint (damage/pickup/underwater). Optional
+    /// like text/sprite -- a build failure must not nil the whole set.
+    let polyblend: MTLRenderPipelineState?
     /// Weapon-wheel guide: wireframe ring + highlight, line primitives.
     let wheelGuide: MTLRenderPipelineState
     /// Billboarded 2D text (wheel labels, item selector, HUD) from conchars.
@@ -319,12 +322,16 @@ final class RendererCore {
                                       fragment: "sprite_fragment", blended: true)
         print("[renderer] sprite pipeline: \(spritePipeline == nil ? "FAILED (sprites off)" : "ok")")
 
+        let polyblendPipeline = pipeline(vertex: "vignette_vertex",
+                                         fragment: "polyblend_fragment", blended: true)
+        print("[renderer] polyblend pipeline: \(polyblendPipeline == nil ? "FAILED (polyblend off)" : "ok")")
+
         return RenderPipelines(
             world: world, worldDepthOnly: worldDepthOnly, worldEqual: worldEqual,
             worldBlend: worldBlend, liquid: liquid,
             skyLayers: skyLayers, skyBox: skyBox,
             aliasOpaque: aliasOpaque, aliasBlend: aliasBlend,
-            vignette: vignette, wheelGuide: wheelGuide,
+            vignette: vignette, polyblend: polyblendPipeline, wheelGuide: wheelGuide,
             text: textPipeline,
             sprite: spritePipeline,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
@@ -645,6 +652,19 @@ final class RendererCore {
             }
         }
 
+        // Polyblend: the engine's v_blend screen tint over the 3D scene
+        // (damage/pickup/powerup/underwater), under the HUD overlays below so
+        // they stay readable during a flash. Fullscreen, no depth, blended.
+        if let polyblendPipeline = pipelines.polyblend, frame.v_blend.3 > 0.001 {
+            setPipeline(polyblendPipeline, depth: pipelines.depthAlways)
+            var u = PolyblendUniforms(blend: SIMD4<Float>(
+                frame.v_blend.0, frame.v_blend.1, frame.v_blend.2, frame.v_blend.3))
+            withUnsafeBytes(of: &u) { raw in
+                encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+            }
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
+
         // Weapon-wheel guide ring, over the world, before the vignette (so
         // locomotion vignette — never on while the wheel is open — could
         // still darken it, harmlessly).
@@ -895,6 +915,11 @@ final class RendererCore {
     /// Layout must match VignetteUniforms in Vignette.metal.
     private struct VignetteUniforms {
         var strength: Float
+    }
+
+    /// Layout must match PolyblendUniforms in Vignette.metal: one float4.
+    private struct PolyblendUniforms {
+        var blend: SIMD4<Float>
     }
 
     /// Layout must match GuideUniforms in WheelGuide.metal: two matrices.
