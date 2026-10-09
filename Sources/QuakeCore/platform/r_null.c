@@ -685,17 +685,8 @@ void GL_SubdivideSurface (msurface_t *fa)
    BSPs aren't a target and their sky needs its own two-layer split. */
 void Sky_LoadTextureQ64 (qmodel_t *m, texture_t *mt)	{ (void)m; (void)mt; }
 
-void Fog_ParseServerMessage (void)
-{
-	/* svc_fog carries 5 bytes: density + rgb + time. They must be consumed
-	   or the rest of the message stream desyncs. This is a stub that still
-	   has to be correct. */
-	MSG_ReadByte ();	/* density */
-	MSG_ReadByte ();	/* red */
-	MSG_ReadByte ();	/* green */
-	MSG_ReadByte ();	/* blue */
-	MSG_ReadShort ();	/* time */
-}
+/* Fog_ParseServerMessage moved to qr_bridge.c (gl_fog.c port) -- it now
+   stores the fog instead of dropping it. */
 
 /* ========================================================================
  * r_part.c -- particles

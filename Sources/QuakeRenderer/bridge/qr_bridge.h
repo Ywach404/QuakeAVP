@@ -55,6 +55,10 @@ void QR_TexMgr_FreeTexturesForOwner (qmodel_t *owner);
 /* Runtime lighting (gl_rlight.c / gl_rsurf.c ports). */
 extern int d_lightstylevalue[256];	/* 8.8 fraction; defined in qr_bridge.c */
 void R_AnimateLight (void);
+
+/* Global exp2 fog (gl_fog.c port). Fog_Init/GetDensity/GetColor/
+   ParseServerMessage are declared in glquake.h; only Fog_Update is new. */
+void Fog_Update (float density, float red, float green, float blue, float time);
 void R_PushDlights (void);
 void QR_DlightMarkOrigin (dlight_t *dl, vec3_t out);
 qboolean QR_SurfaceNeedsRelight (msurface_t *surf, int framecount, int dynamic_on);
