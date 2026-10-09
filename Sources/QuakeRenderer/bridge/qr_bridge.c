@@ -5950,6 +5950,8 @@ void QR_BeginFrame (void)
 	slot->frame.fog_density = 0.f;
 	slot->frame.fog_color[0] = slot->frame.fog_color[1] = slot->frame.fog_color[2] = 0.f;
 	slot->frame.sky_fog = 0.f;
+	slot->frame.v_blend[0] = slot->frame.v_blend[1] =
+		slot->frame.v_blend[2] = slot->frame.v_blend[3] = 0.f;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
@@ -6099,6 +6101,11 @@ void QR_RenderView (void)
 		slot->frame.fog_color[2] = fc[2];
 		slot->frame.sky_fog = (fd > 0.f) ? skyfog : 0.f;	/* sky at infinity: fog by fraction */
 	}
+	/* Polyblend: the engine computes v_blend each frame (V_CalcBlend). */
+	slot->frame.v_blend[0] = v_blend[0];
+	slot->frame.v_blend[1] = v_blend[1];
+	slot->frame.v_blend[2] = v_blend[2];
+	slot->frame.v_blend[3] = v_blend[3];
 	slot->frame.vieworg[0] = r_origin[0];
 	slot->frame.vieworg[1] = r_origin[1];
 	slot->frame.vieworg[2] = r_origin[2];
