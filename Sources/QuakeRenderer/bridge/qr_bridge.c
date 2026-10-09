@@ -247,6 +247,7 @@ typedef struct qr_frame_slot_s {
 	uint32_t	overlay_capacity;	/* in floats */
 	qc_overlay_batch_t *overlay_batches;
 	uint32_t	overlay_batch_capacity;	/* in entries */
+	qc_hud_tile_t	hud_tiles[QC_HUD_TILE_COUNT]; /* fixed size -- no realloc */
 	int		state;
 	uint64_t	seq;
 } qr_frame_slot_t;
@@ -5814,6 +5815,41 @@ void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
 }
 #endif /* QAVP_HOSTCHECK */
 
+/*
+================
+QR_EmitModularHud -- drive the compact per-tile emitters behind vr_hud 3,
+mirroring QR_EmitHud's gating (empty / console-up / no-world / intermission
+draws nothing) but filling qr_frame_slot_t.hud_tiles instead of the preset
+status bar. Mutually exclusive with QR_EmitHud by mode: that call draws the
+preset bar for modes 1/2 and returns immediately for mode 3; this one draws
+tiles only for mode 3. Calling both every frame is correct.
+================
+*/
+static void QR_EmitModularHud (qr_frame_slot_t *slot)
+{
+	qc_hud_tile_t	tiles[QC_HUD_TILE_COUNT];
+	int		i;
+
+	slot->frame.hud_mode = (int) vr_hud.value;
+	if ((int) vr_hud.value != 3 || cls.signon != SIGNONS || !cl.worldmodel
+	    || cl.intermission)
+		return;
+
+	QR_EnsureConchars ();
+	QR_EnsureWhite ();
+
+	QR_ResolveHudLayout (tiles);
+
+	qr_overlay_slot = slot;
+	for (i = 0; i < QC_HUD_TILE_COUNT; i++)
+		if (qr_hud_tile_visible[i])
+			QR_EmitTile (slot, tiles[i].tile_id, &tiles[i]);
+	qr_overlay_slot = NULL;
+
+	memcpy (slot->hud_tiles, tiles, sizeof (slot->hud_tiles));
+	slot->frame.num_hud_tiles = QC_HUD_TILE_COUNT;
+}
+
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
@@ -6472,6 +6508,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	QR_EmitWheel (slot);
 	QR_EmitCenterPrint (slot);
 	QR_EmitHud (slot);
+	QR_EmitModularHud (slot);
 }
 
 /* ========================================================================
@@ -6509,6 +6546,7 @@ void QR_BeginFrame (void)
 	slot->frame.num_sprite_batches = 0;
 	slot->frame.num_overlay_verts = 0;
 	slot->frame.num_overlay_batches = 0;
+	slot->frame.num_hud_tiles = 0;
 	slot->frame.hud_mode = 0;
 	slot->frame.fog_density = 0.f;
 	slot->frame.fog_color[0] = slot->frame.fog_color[1] = slot->frame.fog_color[2] = 0.f;
@@ -6870,6 +6908,7 @@ void QR_PublishFrame (void)
 	slot->frame.sprite_batches = slot->sprite_batches;
 	slot->frame.overlay_verts = slot->overlay_verts;
 	slot->frame.overlay_batches = slot->overlay_batches;
+	slot->frame.hud_tiles = slot->hud_tiles;
 
 	/* upstream R_Clear clears to r_clearcolor (a palette index) when
 	   gl_clear is set; keep that, else clear to black */
