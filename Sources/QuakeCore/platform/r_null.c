@@ -550,16 +550,8 @@ void Draw_NewGame (void)
 
 qpic_t *Draw_PicFromWad (const char *name)
 {
-	/* Honest implementation: gfx.wad is already resident and the lump is a
-	   qpic_t. Returning it gives correct dimensions for free. */
-	qpic_t *p = (qpic_t *) W_GetLumpName (name);
-
-	if (!p)
-		return QAVP_DummyPic ();
-
-	p->width = LittleLong (p->width);
-	p->height = LittleLong (p->height);
-	return p;
+	qpic_t *p = QR_DrawPicFromWad (name);
+	return p ? p : QAVP_DummyPic ();
 }
 
 qpic_t *Draw_CachePic (const char *path)
@@ -571,17 +563,17 @@ qpic_t *Draw_CachePic (const char *path)
 	return QAVP_DummyPic ();
 }
 
-void Draw_Character (int x, int y, int num)			{ (void)x; (void)y; (void)num; }
-void Draw_DebugChar (char num)					{ (void)num; }
-void Draw_Pic (int x, int y, qpic_t *pic)			{ (void)x; (void)y; (void)pic; }
-void Draw_ConsoleBackground (void)				{ }
-void Draw_TileClear (int x, int y, int w, int h)		{ (void)x; (void)y; (void)w; (void)h; }
-void Draw_FadeScreen (void)					{ }
-void Draw_String (int x, int y, const char *str)		{ (void)x; (void)y; (void)str; }
+void Draw_Character (int x, int y, int num)		{ QR_DrawCharacter (x, y, num); }
+void Draw_DebugChar (char num)				{ (void)num; }
+void Draw_Pic (int x, int y, qpic_t *pic)		{ QR_DrawPic (x, y, pic); }
+void Draw_ConsoleBackground (void)			{ }
+void Draw_TileClear (int x, int y, int w, int h)	{ (void)x; (void)y; (void)w; (void)h; }
+void Draw_FadeScreen (void)				{ }
+void Draw_String (int x, int y, const char *str)	{ QR_DrawString (x, y, str); }
 
 void Draw_Fill (int x, int y, int w, int h, int c, float alpha)
 {
-	(void)x; (void)y; (void)w; (void)h; (void)c; (void)alpha;
+	QR_DrawFill (x, y, w, h, c, alpha);
 }
 
 void Draw_TransPicTranslate (int x, int y, qpic_t *pic, int top, int bottom)
@@ -591,7 +583,7 @@ void Draw_TransPicTranslate (int x, int y, qpic_t *pic, int top, int bottom)
 
 void GL_SetCanvas (canvastype newcanvas)
 {
-	(void) newcanvas;
+	QR_SetCanvas (newcanvas);
 }
 
 /* ========================================================================
