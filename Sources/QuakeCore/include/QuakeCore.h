@@ -235,9 +235,12 @@ typedef struct qc_frame_s {
 					   must not substitute its own. */
 
 	/* Global exp2 fog (gl_fog.c). 0 density = no fog. Color is linear rgb
-	   in the same space the world fragment outputs. */
+	   in the same space the world fragment outputs. sky_fog is the fraction
+	   the sky blends toward fog_color (r_skyfog/worldspawn skyfog when fog is
+	   on, else 0) -- the sky is at infinity so it can't fog by distance. */
 	float		fog_density;
 	float		fog_color[3];
+	float		sky_fog;
 
 	/* The player's world->view basis, in Quake units/degrees. The immersive
 	   consumer composes per-eye matrices from this *after* sampling the head

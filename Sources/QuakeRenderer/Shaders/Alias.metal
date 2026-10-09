@@ -47,7 +47,19 @@ struct AliasUniforms {
                             // x = front plane, y = rear plane, zw = collapse
                             // centre (y,z). x>=255 & y<0 disable each end.
     float4 dbg;             // dbg.x > 0.5 => draw solid green (identify tint)
+    float4 eyeorg[2];       // per-eye view origin, Quake units (for fog)
+    float4 fog;             // xyz = fog color, w = exp2 density (0 = no fog)
 };
+
+// Global exp2 distance fog (gl_fog.c), base-e matching GL_EXP2. Same as
+// World.metal's apply_fog; density 0 short-circuits.
+inline float3 alias_apply_fog(float3 rgb, float3 worldpos, float3 eyeorg, float4 fog)
+{
+    if (fog.w <= 0.0) return rgb;
+    float d = fog.w * length(worldpos - eyeorg);
+    float f = clamp(exp(-d * d), 0.0, 1.0);
+    return mix(fog.xyz, rgb, f);
+}
 
 // Retract geometry the view models bake past EITHER end of the gun (a nail
 // out the barrel, a round behind the receiver): any vertex forward of the
@@ -65,6 +77,9 @@ struct AliasVaryings {
     float2 st;
     float4 color;
     float dbgHi [[flat]];   // > 0.5 => solid-green identify tint
+    float3 worldpos;
+    float3 eyeorg [[flat]];
+    float4 fog [[flat]];
 };
 
 // From MH (via upstream's GLSL vertex shader): reproduces the anorm_dots
@@ -109,6 +124,9 @@ vertex AliasVaryings alias_vertex(uint vid [[vertex_id]],
     out.st = texcoords[vid];
     out.color = float4(uniforms.light.rgb * mix(dot1, dot2, blend), uniforms.light.a);
     out.dbgHi = uniforms.dbg.x;
+    out.worldpos = world.xyz;
+    out.eyeorg = uniforms.eyeorg[amp].xyz;
+    out.fog = uniforms.fog;
     return out;
 }
 
@@ -129,5 +147,6 @@ fragment float4 alias_fragment(AliasVaryings in [[stage_in]],
         discard_fragment();
 
     float3 rgb = tex.rgb * in.color.rgb + fullbright.sample(skinSampler, in.st).rgb;
-    return qavp_out(float4(clamp(rgb, 0.0, 1.0), in.color.a));
+    rgb = alias_apply_fog(clamp(rgb, 0.0, 1.0), in.worldpos, in.eyeorg, in.fog);
+    return qavp_out(float4(rgb, in.color.a));
 }

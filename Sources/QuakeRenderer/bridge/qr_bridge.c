@@ -5949,6 +5949,7 @@ void QR_BeginFrame (void)
 	slot->frame.num_sprite_batches = 0;
 	slot->frame.fog_density = 0.f;
 	slot->frame.fog_color[0] = slot->frame.fog_color[1] = slot->frame.fog_color[2] = 0.f;
+	slot->frame.sky_fog = 0.f;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */
@@ -6091,10 +6092,12 @@ void QR_RenderView (void)
 	slot->frame.time = (float) cl.time;
 	{
 		float *fc = Fog_GetColor ();		/* fade resolves on read against cl.time */
-		slot->frame.fog_density = Fog_GetDensity ();
+		float fd = Fog_GetDensity ();
+		slot->frame.fog_density = fd;
 		slot->frame.fog_color[0] = fc[0];
 		slot->frame.fog_color[1] = fc[1];
 		slot->frame.fog_color[2] = fc[2];
+		slot->frame.sky_fog = (fd > 0.f) ? skyfog : 0.f;	/* sky at infinity: fog by fraction */
 	}
 	slot->frame.vieworg[0] = r_origin[0];
 	slot->frame.vieworg[1] = r_origin[1];

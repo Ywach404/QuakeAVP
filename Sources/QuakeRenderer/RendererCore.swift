@@ -379,7 +379,10 @@ final class RendererCore {
         encoder.setFragmentSamplerState(worldSampler, index: 0)
         encoder.setFragmentSamplerState(lightmapSampler, index: 1)
 
-        var skyUniforms = SkyUniforms(time: frame.time, skyalpha: 1, fade: phase.skyFade)
+        var skyUniforms = SkyUniforms(
+            time: frame.time, skyalpha: 1, fade: phase.skyFade,
+            fog: SIMD4<Float>(frame.fog_color.0, frame.fog_color.1,
+                              frame.fog_color.2, frame.sky_fog))
         var phaseUniforms = PhaseFragUniforms(
             headorgRadius: SIMD4(phase.headorg.x, phase.headorg.y, phase.headorg.z, phase.radius),
             rimColor: SIMD4(phase.rimColor.x, phase.rimColor.y, phase.rimColor.z, 0))
@@ -465,7 +468,10 @@ final class RendererCore {
                     shadeblend: SIMD4(entity.shadevector.0, entity.shadevector.1,
                                       entity.shadevector.2, entity.blend),
                     clip: SIMD4(entity.clip.0, entity.clip.1, entity.clip.2, entity.clip.3),
-                    dbg: SIMD4(entity.dbg.0, entity.dbg.1, entity.dbg.2, entity.dbg.3))
+                    dbg: SIMD4(entity.dbg.0, entity.dbg.1, entity.dbg.2, entity.dbg.3),
+                    eyeorg0: uniforms.eyeorg0, eyeorg1: uniforms.eyeorg1,
+                    fog: SIMD4<Float>(frame.fog_color.0, frame.fog_color.1,
+                                      frame.fog_color.2, frame.fog_density))
                 withUnsafeBytes(of: &aliasUniforms) { raw in
                     encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 3)
                 }
@@ -870,6 +876,9 @@ final class RendererCore {
         var time: Float
         var skyalpha: Float
         var fade: Float
+        // xyz = fog color, w = sky fog fraction. SIMD4 forces 16-byte align,
+        // matching Metal's float4 after the three floats.
+        var fog: SIMD4<Float>
     }
 
     /// Layout must match PhaseFragUniforms in World.metal: float4s only,
@@ -910,6 +919,9 @@ final class RendererCore {
         var shadeblend: SIMD4<Float>
         var clip: SIMD4<Float>
         var dbg: SIMD4<Float>
+        var eyeorg0: SIMD4<Float>
+        var eyeorg1: SIMD4<Float>
+        var fog: SIMD4<Float>
     }
 
     /// Mirror the engine's world vertex array on generation change. The
