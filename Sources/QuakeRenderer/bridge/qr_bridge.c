@@ -6357,6 +6357,121 @@ void QC_RendererReleaseFrame (void)
  * init / map load
  * ===================================================================== */
 
+/* ========================================================================
+ * gl_fog.c -- global exponential fog
+ * ===================================================================== */
+
+static float fog_density, fog_red, fog_green, fog_blue;
+static float old_density, old_red, old_green, old_blue;
+static float fade_time, fade_done;
+
+void Fog_Update (float density, float red, float green, float blue, float time)
+{
+	/* save the current (possibly mid-fade) values as the fade's start */
+	if (time > 0 && fade_done > cl.time)
+	{
+		float f = (fade_done - cl.time) / fade_time;
+		old_density = f * old_density + (1.0f - f) * fog_density;
+		old_red     = f * old_red     + (1.0f - f) * fog_red;
+		old_green   = f * old_green   + (1.0f - f) * fog_green;
+		old_blue    = f * old_blue    + (1.0f - f) * fog_blue;
+	}
+	else
+	{
+		old_density = fog_density;
+		old_red = fog_red; old_green = fog_green; old_blue = fog_blue;
+	}
+	fog_density = density;
+	fog_red = red; fog_green = green; fog_blue = blue;
+	fade_time = time;
+	fade_done = cl.time + time;
+}
+
+static void Fog_FogCommand_f (void)
+{
+	switch (Cmd_Argc ())
+	{
+	default:
+	case 1:
+		Con_Printf ("usage: fog <density> <red> <green> <blue>\n");
+		Con_Printf ("current: %f %f %f %f\n", fog_density, fog_red, fog_green, fog_blue);
+		break;
+	case 2:
+		Fog_Update (q_max (0.f, (float) atof (Cmd_Argv(1))),
+			    fog_red, fog_green, fog_blue, 0.f);
+		break;
+	case 3:	/* density + time */
+		Fog_Update (q_max (0.f, (float) atof (Cmd_Argv(1))),
+			    fog_red, fog_green, fog_blue, (float) atof (Cmd_Argv(2)));
+		break;
+	case 5:	/* density + rgb */
+		Fog_Update (q_max (0.f, (float) atof (Cmd_Argv(1))),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(2)), 1.f),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(3)), 1.f),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(4)), 1.f), 0.f);
+		break;
+	case 6:	/* density + rgb + time */
+		Fog_Update (q_max (0.f, (float) atof (Cmd_Argv(1))),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(2)), 1.f),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(3)), 1.f),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(4)), 1.f),
+			    (float) atof (Cmd_Argv(5)));
+		break;
+	}
+}
+
+void Fog_Init (void)
+{
+	Cmd_AddCommand ("fog", Fog_FogCommand_f);
+	fog_density = 0.f;
+	fog_red = 0.3f; fog_green = 0.3f; fog_blue = 0.3f;	/* upstream defaults */
+}
+
+void Fog_ParseServerMessage (void)
+{
+	float density, red, green, blue, time;
+	density = MSG_ReadByte () / 255.0f;
+	red     = MSG_ReadByte () / 255.0f;
+	green   = MSG_ReadByte () / 255.0f;
+	blue    = MSG_ReadByte () / 255.0f;
+	time    = MSG_ReadShort () / 100.0f;
+	if (time < 0.f)
+		time = 0.f;
+	Fog_Update (density, red, green, blue, time);
+}
+
+float Fog_GetDensity (void)
+{
+	if (fade_done > cl.time)
+	{
+		float f = (fade_done - cl.time) / fade_time;
+		return f * old_density + (1.0f - f) * fog_density;
+	}
+	return fog_density;
+}
+
+float *Fog_GetColor (void)
+{
+	static float c[4];
+
+	if (fade_done > cl.time)
+	{
+		float f = (fade_done - cl.time) / fade_time;
+		c[0] = f * old_red   + (1.0f - f) * fog_red;
+		c[1] = f * old_green + (1.0f - f) * fog_green;
+		c[2] = f * old_blue  + (1.0f - f) * fog_blue;
+	}
+	else
+	{
+		c[0] = fog_red; c[1] = fog_green; c[2] = fog_blue;
+	}
+	c[0] = CLAMP (0.f, c[0], 1.f);
+	c[1] = CLAMP (0.f, c[1], 1.f);
+	c[2] = CLAMP (0.f, c[2], 1.f);
+	c[3] = 1.0f;
+	return c;
+}
+
 void QR_Init (void)
 {
 	int i;
@@ -6366,6 +6481,8 @@ void QR_Init (void)
 	   the world black. */
 	for (i = 0; i < 256; i++)
 		d_lightstylevalue[i] = 256;
+
+	Fog_Init ();
 }
 
 void QR_NewMap (void)
