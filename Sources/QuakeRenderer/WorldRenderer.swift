@@ -118,15 +118,13 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
                 radius: f.phase_radius,
                 skyFade: 1 - f.phase,
                 rimColor: SIMD3(f.phase_color.0, f.phase_color.1, f.phase_color.2))
+            // windowHud: the 2D status bar draws inside encode(), right
+            // before the comfort vignette, so it dims with the rest of the
+            // frame during a snap-turn/locomotion vignette instead of
+            // punching through at full brightness.
             core.encode(frame: f, with: encoder, pipelines: pipelines,
                         uniforms: uniforms, phase: phase, amplificationCount: 1,
-                        viewmodelViewport: viewports)
-            // 2D HUD overlay, screen-mapped to the drawable (classic Quake
-            // stretch) — Task 4's placement, unchanged by the immersive
-            // panel work. Mono, so the same ortho serves both viewproj slots.
-            let ortho = RendererCore.overlayWindowOrtho()
-            core.drawOverlay(frame: f, viewproj0: ortho, viewproj1: ortho,
-                             pipelines: pipelines, encoder: encoder)
+                        viewmodelViewport: viewports, windowHud: true)
         }
         encoder.endEncoding()
 

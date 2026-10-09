@@ -345,11 +345,17 @@ final class RendererCore {
     /// stereo (with the identity/offset-1 view mappings) and 1 otherwise;
     /// same shaders either way.
     ///
-    /// The 2D HUD overlay is NOT drawn here: each caller (the window, the
-    /// immersive space) draws it itself via `drawOverlay`, after this call,
-    /// with its own `viewproj0`/`viewproj1` — screen-mapped for the window,
-    /// a world-space panel for the immersive space. The exporter burns its
-    /// own sharp HUD in separately and never calls `drawOverlay`.
+    /// `windowHud` opts into drawing the 2D status-bar overlay, screen-
+    /// mapped to the drawable, as the second-to-last step here — UNDER the
+    /// comfort vignette drawn right after it, so the bar dims with the rest
+    /// of the frame during a snap-turn/locomotion vignette instead of
+    /// punching through at full brightness. It defaults to false and must
+    /// stay that way for every caller except the flat window: the immersive
+    /// space draws its own world-space panel itself via `drawOverlay`,
+    /// AFTER this call returns (immersive-vs-vignette order isn't
+    /// constrained the way the window's is), and the exporter burns its own
+    /// sharp HUD in separately — neither may see this draw. Never key this
+    /// off `amplificationCount` — the exporter also passes 1.
     func encode(frame: qc_frame_t,
                 with encoder: MTLRenderCommandEncoder,
                 pipelines: RenderPipelines,
@@ -357,7 +363,8 @@ final class RendererCore {
                 phase: PhaseParams,
                 amplificationCount: Int,
                 viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
-                drawsViewmodel: Bool = false) {
+                drawsViewmodel: Bool = false,
+                windowHud: Bool = false) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -716,6 +723,15 @@ final class RendererCore {
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0,
                                        vertexCount: Int(frame.num_text_verts))
             }
+        }
+
+        // 2D HUD overlay — the authentic status bar from Sbar_Draw, as
+        // textured quads batched by texnum. Window-only (see `windowHud`'s
+        // doc comment); over the world, polyblend and wheel text, under the
+        // vignette drawn next.
+        if windowHud {
+            drawOverlay(frame: frame, viewproj0: Self.overlayWindowOrtho(), viewproj1: Self.overlayWindowOrtho(),
+                       pipelines: pipelines, encoder: encoder)
         }
 
         // Comfort vignette, last over everything, engine-eased strength.
