@@ -236,12 +236,15 @@ struct SkyUniforms {
     float skyalpha;     // r_skyalpha (cloud layer opacity)
     float fade;         // 1 - phase: the sky can't dissolve by distance,
                         // so it fades out with the world as a whole
+    float4 fog;         // xyz = fog color, w = sky fog fraction (0 = none)
 };
 
 // Premultiply AFTER linearizing: the compositor's premultiplied-alpha
 // convention applies to the linear values it decodes, not the sRGB bytes.
-static inline float4 qavp_sky_out(float3 rgb, float fade)
+// Sky is at infinity, so it fogs by a fraction (r_skyfog), not by distance.
+static inline float4 qavp_sky_out(float3 rgb, float fade, float4 fog)
 {
+    rgb = mix(rgb, fog.xyz, fog.w);
     float4 c = qavp_out(float4(rgb, 1.0));
     return float4(c.rgb * fade, fade);
 }
@@ -270,7 +273,7 @@ fragment float4 sky_layers_fragment(WorldVaryings in [[stage_in]],
 
     // Upstream draws the solid layer then blends the cloud layer over it
     // with r_skyalpha; folded into one pass here.
-    return qavp_sky_out(mix(back, front.rgb, front.a * uniforms.skyalpha), uniforms.fade);
+    return qavp_sky_out(mix(back, front.rgb, front.a * uniforms.skyalpha), uniforms.fade, uniforms.fog);
 }
 
 // Sky_ProjectPoly's axis pick plus the st_to_vec/vec_to_st projection from
@@ -311,5 +314,5 @@ fragment float4 sky_box_fragment(WorldVaryings in [[stage_in]],
     float t = sky_component(dir, vec_to_st[axis].y) / dv;
     float2 uv = float2((s + 1.0) * 0.5, 1.0 - (t + 1.0) * 0.5);
 
-    return qavp_sky_out(faces[axis].sample(faceSampler, uv).rgb, uniforms.fade);
+    return qavp_sky_out(faces[axis].sample(faceSampler, uv).rgb, uniforms.fade, uniforms.fog);
 }
