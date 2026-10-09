@@ -344,6 +344,13 @@ final class RendererCore {
     /// Encode one frame packet. `amplificationCount` is 2 for single-pass
     /// stereo (with the identity/offset-1 view mappings) and 1 otherwise;
     /// same shaders either way.
+    ///
+    /// `hudWindow` opts into the 2D status-bar overlay, screen-mapped to the
+    /// drawable. It defaults to false and must stay that way for every
+    /// caller except the flat window: the immersive path owns its own panel
+    /// placement (a later task) and the exporter burns its own sharp HUD in
+    /// separately, so neither may see this draw. Never key this off
+    /// `amplificationCount` — the exporter also passes 1.
     func encode(frame: qc_frame_t,
                 with encoder: MTLRenderCommandEncoder,
                 pipelines: RenderPipelines,
@@ -351,7 +358,8 @@ final class RendererCore {
                 phase: PhaseParams,
                 amplificationCount: Int,
                 viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
-                drawsViewmodel: Bool = false) {
+                drawsViewmodel: Bool = false,
+                hudWindow: Bool = false) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -712,6 +720,14 @@ final class RendererCore {
             }
         }
 
+        // 2D HUD overlay — the authentic status bar from Sbar_Draw, as
+        // textured quads batched by texnum. Window-only (see `hudWindow`'s
+        // doc comment); over the world, polyblend and wheel text, under the
+        // vignette drawn next.
+        if hudWindow {
+            drawOverlay(frame: frame, pipelines: pipelines, encoder: encoder)
+        }
+
         // Comfort vignette, last over everything, engine-eased strength.
         if frame.vignette > 0.001 {
             setPipeline(pipelines.vignette, depth: pipelines.depthAlways)
@@ -748,6 +764,50 @@ final class RendererCore {
         }
         encoder.setFragmentTexture(atlas, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / 9)
+    }
+
+    /// The 2D HUD overlay — Sbar_Draw's status bar, baked by the bridge into
+    /// textured quads (9 floats/vert: xyz uv rgba, same layout as
+    /// `text_verts`) batched by texnum in a fixed 320x200 top-left-origin
+    /// virtual screen. This maps that screen straight to the drawable
+    /// (classic Quake stretch) — the flat window's placement. A later task
+    /// adds the immersive panel's own transform; it will reuse this helper
+    /// with different `viewproj0`/`viewproj1` rather than duplicating the
+    /// batch loop.
+    func drawOverlay(frame: qc_frame_t, pipelines: RenderPipelines,
+                     encoder: MTLRenderCommandEncoder) {
+        guard frame.hud_mode != 0,
+              frame.num_overlay_batches > 0, frame.num_overlay_verts >= 3,
+              let verts = frame.overlay_verts, let batches = frame.overlay_batches,
+              let pipeline = pipelines.text
+        else { return }
+        let floatCount = Int(frame.num_overlay_verts) * 9
+        guard let buf = device.makeBuffer(bytes: verts,
+                                          length: floatCount * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
+
+        var ortho = matrix_identity_float4x4
+        ortho.columns.0 = SIMD4(2 / Float(320), 0, 0, 0)
+        ortho.columns.1 = SIMD4(0, -2 / Float(200), 0, 0)
+        ortho.columns.2 = SIMD4(0, 0, 1, 0)
+        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
+
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
+        var uniforms = GuideUniforms(viewproj0: ortho, viewproj1: ortho)
+        withUnsafeBytes(of: &uniforms) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        for i in 0..<Int(frame.num_overlay_batches) {
+            let b = batches[i]
+            guard let tex = textures[b.texnum] else { continue }
+            encoder.setFragmentTexture(tex, index: 0)
+            encoder.drawPrimitives(type: .triangle,
+                                   vertexStart: Int(b.first_vert),
+                                   vertexCount: Int(b.vert_count))
+        }
     }
 
     /// Draw the finger debug wireframe. `verts` are 7-float TRIANGLE

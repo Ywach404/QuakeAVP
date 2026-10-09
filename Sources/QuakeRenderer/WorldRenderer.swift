@@ -120,7 +120,7 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
                 rimColor: SIMD3(f.phase_color.0, f.phase_color.1, f.phase_color.2))
             core.encode(frame: f, with: encoder, pipelines: pipelines,
                         uniforms: uniforms, phase: phase, amplificationCount: 1,
-                        viewmodelViewport: viewports)
+                        viewmodelViewport: viewports, hudWindow: true)
         }
         encoder.endEncoding()
 
