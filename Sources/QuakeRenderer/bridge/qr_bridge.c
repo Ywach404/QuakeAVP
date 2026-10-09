@@ -1847,6 +1847,7 @@ void Sky_NewMap (void)
 	const char	*data;
 
 	skyfog = r_skyfog.value;
+	Fog_Update (0.f, 0.3f, 0.3f, 0.3f, 0.f);	/* fog off until a fog key says otherwise */
 
 	//
 	// read worldspawn (this is so ugly, and shouldn't it be done on the server?)
@@ -1884,6 +1885,13 @@ void Sky_NewMap (void)
 
 		if (!strcmp("skyfog", key))
 			skyfog = atof(value);
+
+		if (!strcmp("fog", key))
+		{
+			float fd = 0, fr = 0.3f, fg = 0.3f, fb = 0.3f;
+			sscanf (value, "%f %f %f %f", &fd, &fr, &fg, &fb);
+			Fog_Update (fd, fr, fg, fb, 0.f);
+		}
 #if 1 /* also accept non-standard keys */
 		else if (!strcmp("skyname", key)) //half-life
 			Sky_LoadSkyBox(value);
@@ -6081,6 +6089,13 @@ void QR_RenderView (void)
 	/* animation clock and sky state travel in the packet: the consumer
 	   must never substitute its own clock or reach into engine globals */
 	slot->frame.time = (float) cl.time;
+	{
+		float *fc = Fog_GetColor ();		/* fade resolves on read against cl.time */
+		slot->frame.fog_density = Fog_GetDensity ();
+		slot->frame.fog_color[0] = fc[0];
+		slot->frame.fog_color[1] = fc[1];
+		slot->frame.fog_color[2] = fc[2];
+	}
 	slot->frame.vieworg[0] = r_origin[0];
 	slot->frame.vieworg[1] = r_origin[1];
 	slot->frame.vieworg[2] = r_origin[2];
