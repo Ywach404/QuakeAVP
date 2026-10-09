@@ -654,9 +654,16 @@ final class RendererCore {
                     var u = SpriteUniforms(viewproj0: uniforms.viewproj0,
                                            viewproj1: uniforms.viewproj1,
                                            alpha: b.alpha)
-                    withUnsafeBytes(of: &u) { raw in
-                        encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
-                    }
+                    // Bind .stride (144), NOT .size (132): SpriteUniforms ends
+                    // in a bare Float after two 16-aligned matrices, so its
+                    // size has 12 bytes LESS than Metal's struct (which rounds
+                    // to 16-byte alignment). withUnsafeBytes(of:)/raw.count give
+                    // .size, which under-fills the buffer -- Metal draw
+                    // validation then aborts ("space for 132 bytes, but argument
+                    // has a length(144)") the instant a sprite (e.g. the
+                    // s_explod explosion) is drawn. The var's storage is already
+                    // stride-sized, so reading .stride bytes from &u is in bounds.
+                    encoder.setVertexBytes(&u, length: MemoryLayout<SpriteUniforms>.stride, index: 1)
                     encoder.setFragmentTexture(tex, index: 0)
                     encoder.drawPrimitives(type: .triangle,
                                            vertexStart: Int(b.first_vert),
