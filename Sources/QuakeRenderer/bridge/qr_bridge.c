@@ -29,6 +29,7 @@
 
 #include <pthread.h>
 #include <stdlib.h>
+#include <math.h>
 
 /* upstream keeps this in r_brush.c, not a header */
 #define MAX_SANITY_LIGHTMAPS (1u<<20)
@@ -56,6 +57,10 @@ extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern char qr_centerstring[256];	/* captured svc_centerprint (r_null.c) */
 extern double qr_centertime_until;	/* cl.time expiry for the prompt */
 extern cvar_t vr_hud;			/* status bar placement: 0 off, 1 wrist, 2 float */
+/* Modular HUD (Phase 1) per-tile layout cvars; defined+registered in r_null.c */
+extern cvar_t vr_hud_ammo_anchor, vr_hud_ammo_off_x, vr_hud_ammo_off_y, vr_hud_ammo_off_z, vr_hud_ammo_scale, vr_hud_ammo_show;
+extern cvar_t vr_hud_face_anchor, vr_hud_face_off_x, vr_hud_face_off_y, vr_hud_face_off_z, vr_hud_face_scale, vr_hud_face_show;
+extern cvar_t vr_hud_healtharmor_anchor, vr_hud_healtharmor_off_x, vr_hud_healtharmor_off_y, vr_hud_healtharmor_off_z, vr_hud_healtharmor_scale, vr_hud_healtharmor_show;
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
@@ -5528,6 +5533,62 @@ static void QR_EmitHud (qr_frame_slot_t *slot)
 	Sbar_Changed ();	/* per-frame rebuild model: never let Sbar_Draw's skip-redraw drop the overlay */
 	Sbar_Draw ();
 	qr_overlay_slot = NULL;
+}
+
+/* Visibility for each resolved tile (vr_hud_<tile>_show), kept out of
+   qc_hud_tile_t -- see QR_ResolveHudLayout's declaration. */
+static int qr_hud_tile_visible[QC_HUD_TILE_COUNT];
+
+static int32_t clamp_anchor (float v)
+{
+	int	a = (int) v;
+	return (a == QC_HUD_ANCHOR_GUN) ? QC_HUD_ANCHOR_GUN : QC_HUD_ANCHOR_OFFWRIST;
+}
+
+/*
+================
+QR_ResolveHudLayout -- turn the vr_hud_<tile>_* cvars into per-tile
+placement. Pure except for the cvar reads. Out-of-range anchors clamp to
+OFFWRIST; a non-positive scale clamps to a sane floor rather than
+disappearing or inverting. first_vert/vert_count/bbox_w/bbox_h are left at
+0 here; the emitter fills those from the overlay range it actually wrote.
+================
+*/
+void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
+{
+	struct {
+		int	id;
+		cvar_t	*an, *ox, *oy, *oz, *sc, *sh;
+	} m[] = {
+		{ QC_HUD_TILE_AMMO, &vr_hud_ammo_anchor, &vr_hud_ammo_off_x, &vr_hud_ammo_off_y,
+		  &vr_hud_ammo_off_z, &vr_hud_ammo_scale, &vr_hud_ammo_show },
+		{ QC_HUD_TILE_FACE, &vr_hud_face_anchor, &vr_hud_face_off_x, &vr_hud_face_off_y,
+		  &vr_hud_face_off_z, &vr_hud_face_scale, &vr_hud_face_show },
+		{ QC_HUD_TILE_HEALTHARMOR, &vr_hud_healtharmor_anchor, &vr_hud_healtharmor_off_x,
+		  &vr_hud_healtharmor_off_y, &vr_hud_healtharmor_off_z, &vr_hud_healtharmor_scale,
+		  &vr_hud_healtharmor_show },
+	};
+	int	i;
+
+	for (i = 0; i < QC_HUD_TILE_COUNT; i++)
+	{
+		t[i].tile_id = m[i].id;
+		t[i].anchor = clamp_anchor (m[i].an->value);
+
+		t[i].offset[0] = m[i].ox->value;
+		t[i].offset[1] = m[i].oy->value;
+		t[i].offset[2] = m[i].oz->value;
+		if (!isfinite (t[i].offset[0])) t[i].offset[0] = 0.f;
+		if (!isfinite (t[i].offset[1])) t[i].offset[1] = 0.f;
+		if (!isfinite (t[i].offset[2])) t[i].offset[2] = 0.f;
+
+		t[i].scale = (m[i].sc->value > 0.01f) ? m[i].sc->value : 1.f;
+
+		qr_hud_tile_visible[i] = (m[i].sh->value != 0.f);
+
+		t[i].first_vert = t[i].vert_count = 0;
+		t[i].bbox_w = t[i].bbox_h = 0.f;
+	}
 }
 
 static void QR_EmitWheel (qr_frame_slot_t *slot)

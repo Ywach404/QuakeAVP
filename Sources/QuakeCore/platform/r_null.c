@@ -287,6 +287,32 @@ cvar_t	scr_menuscale = {"scr_menuscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE};
 cvar_t	vr_hud = {"vr_hud", "1", CVAR_ARCHIVE};	/* 0 off, 1 wrist, 2 float */
+
+/* Modular HUD (Phase 1): per-tile placement. Default layout A --
+   ammo pins to the gun, face and health/armor pin to the off-hand wrist.
+   anchor: QC_HUD_ANCHOR_OFFWRIST (0) or QC_HUD_ANCHOR_GUN (1). off_x/y/z are
+   metres in the anchor frame; scale is a panel scale multiplier; show is a
+   bool gate independent of anchor. */
+cvar_t	vr_hud_ammo_anchor        = {"vr_hud_ammo_anchor", "1", CVAR_ARCHIVE};	/* gun */
+cvar_t	vr_hud_ammo_off_x         = {"vr_hud_ammo_off_x", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_ammo_off_y         = {"vr_hud_ammo_off_y", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_ammo_off_z         = {"vr_hud_ammo_off_z", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_ammo_scale         = {"vr_hud_ammo_scale", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_ammo_show          = {"vr_hud_ammo_show", "1", CVAR_ARCHIVE};
+
+cvar_t	vr_hud_face_anchor        = {"vr_hud_face_anchor", "0", CVAR_ARCHIVE};	/* wrist */
+cvar_t	vr_hud_face_off_x         = {"vr_hud_face_off_x", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_face_off_y         = {"vr_hud_face_off_y", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_face_off_z         = {"vr_hud_face_off_z", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_face_scale         = {"vr_hud_face_scale", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_face_show          = {"vr_hud_face_show", "1", CVAR_ARCHIVE};
+
+cvar_t	vr_hud_healtharmor_anchor = {"vr_hud_healtharmor_anchor", "0", CVAR_ARCHIVE};	/* wrist */
+cvar_t	vr_hud_healtharmor_off_x  = {"vr_hud_healtharmor_off_x", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_healtharmor_off_y  = {"vr_hud_healtharmor_off_y", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_healtharmor_off_z  = {"vr_hud_healtharmor_off_z", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_healtharmor_scale  = {"vr_hud_healtharmor_scale", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_healtharmor_show   = {"vr_hud_healtharmor_show", "1", CVAR_ARCHIVE};
 cvar_t	scr_conwidth = {"scr_conwidth", "0", CVAR_ARCHIVE};
 cvar_t	scr_conscale = {"scr_conscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_crosshairscale = {"scr_crosshairscale", "1", CVAR_ARCHIVE};
@@ -408,6 +434,24 @@ void SCR_Init (void)
 	Cvar_SetCallback (&scr_sbaralpha, SCR_Callback_refdef);
 	Cvar_RegisterVariable (&scr_sbaralpha);
 	Cvar_RegisterVariable (&vr_hud);
+	Cvar_RegisterVariable (&vr_hud_ammo_anchor);
+	Cvar_RegisterVariable (&vr_hud_ammo_off_x);
+	Cvar_RegisterVariable (&vr_hud_ammo_off_y);
+	Cvar_RegisterVariable (&vr_hud_ammo_off_z);
+	Cvar_RegisterVariable (&vr_hud_ammo_scale);
+	Cvar_RegisterVariable (&vr_hud_ammo_show);
+	Cvar_RegisterVariable (&vr_hud_face_anchor);
+	Cvar_RegisterVariable (&vr_hud_face_off_x);
+	Cvar_RegisterVariable (&vr_hud_face_off_y);
+	Cvar_RegisterVariable (&vr_hud_face_off_z);
+	Cvar_RegisterVariable (&vr_hud_face_scale);
+	Cvar_RegisterVariable (&vr_hud_face_show);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_anchor);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_off_x);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_off_y);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_off_z);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_scale);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_show);
 	Cvar_RegisterVariable (&scr_conwidth);
 	Cvar_RegisterVariable (&scr_conscale);
 	Cvar_RegisterVariable (&scr_crosshairscale);
