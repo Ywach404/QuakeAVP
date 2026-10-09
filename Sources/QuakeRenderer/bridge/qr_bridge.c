@@ -5560,7 +5560,7 @@ static void QR_EmitHud (qr_frame_slot_t *slot)
 	int	mode = (int) vr_hud.value;
 
 	slot->frame.hud_mode = mode;
-	if (mode == 0 || cls.signon != SIGNONS || !cl.worldmodel || cl.intermission)
+	if (mode == 0 || mode == 3 || cls.signon != SIGNONS || !cl.worldmodel || cl.intermission)
 		return;
 	QR_EnsureConchars ();
 	QR_EnsureWhite ();
