@@ -45,8 +45,14 @@ int main (void)
 		CHECK (nv > 0, "healtharmor tile emits verts for health 100");
 		CHECK (FEQ(bw,72) && FEQ(bh,48), "healtharmor bbox is the fixed 72x48");
 
-		/* a 1-digit health keeps the SAME fixed bbox (no jump) -- Review Focus #1 */
+		/* health=9/armor=0 are both <=25, so Sbar_Draw's own color picker
+		   routes both Sbar_DrawNum calls to color 1 (anum_* lumps, also in
+		   the fixture) -- this still draws real (1-digit) glyphs, not the
+		   dummy, so it actually proves "fewer digits, same fixed bbox"
+		   rather than just reusing the hardcoded-bbox path the FACE
+		   missing-pic case already covers. Review Focus #1. */
 		QR_TestEmitTileInto (QC_HUD_TILE_HEALTHARMOR, 9, 0, 0, &bw, &bh, &nv);
+		CHECK (nv > 0, "healtharmor tile still emits verts at 1 digit (color 1 lumps resolve too)");
 		CHECK (FEQ(bw,72) && FEQ(bh,48), "bbox fixed regardless of digit count");
 
 		/* AMMO draws from the same fixture digits; same right-aligned, fixed-bbox deal. */
@@ -55,8 +61,9 @@ int main (void)
 		CHECK (FEQ(bw,72) && FEQ(bh,24), "ammo bbox is the fixed 72x24");
 
 		/* Missing-pic safety (Review Focus #3): the test fixture's synthetic WAD
-		   only carries num_0..num_9, so FACE's pics are absent and every one of
-		   Sbar_DrawFace's Sbar_DrawPic calls resolves to the dummy pic (texnum 0).
+		   only carries num_0..num_9/anum_0..anum_9, so FACE's pics are absent and
+		   every one of Sbar_DrawFace's Sbar_DrawPic calls resolves to the dummy
+		   pic (texnum 0).
 		   QR_DrawPic's existing texnum-0 skip must no-op safely, not crash --
 		   and the tile's bbox still reports its fixed reservation even though
 		   nothing was actually drawn. */

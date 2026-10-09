@@ -250,7 +250,8 @@ typedef struct qc_hud_tile_s {
 	uint32_t	tile_id;	/* QC_HUD_TILE_* */
 	uint32_t	first_vert;	/* into overlay_verts */
 	uint32_t	vert_count;	/* multiple of 6; 0 = emitted nothing */
-	float		bbox_w, bbox_h;	/* tile-local extent the verts span */
+	float		bbox_w, bbox_h;	/* fixed tile-local reservation (does NOT
+					   shrink when a number loses a digit) */
 	int32_t		anchor;		/* QC_HUD_ANCHOR_* */
 	float		offset[3];	/* metres, in the anchor frame */
 	float		scale;		/* panel scale multiplier */
