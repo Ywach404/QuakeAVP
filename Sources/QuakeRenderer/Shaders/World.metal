@@ -45,7 +45,18 @@ struct WorldVertex {
 struct WorldUniforms {
     float4x4 viewproj[2];   // per eye; [1] == [0] on the mono path
     float4 eyeorg[2];       // per-eye view origin, Quake units (w unused)
+    float4 fog;             // xyz = fog color, w = exp2 density (0 = no fog)
 };
+
+// Global exp2 distance fog (gl_fog.c). Per-fragment, per-eye via the eyeorg
+// carried in the varyings. density 0 short-circuits.
+inline float3 apply_fog(float3 rgb, float3 worldpos, float3 eyeorg, float4 fog)
+{
+    if (fog.w <= 0.0) return rgb;
+    float d = fog.w * length(worldpos - eyeorg);
+    float f = clamp(exp2(-d * d), 0.0, 1.0);
+    return mix(fog.xyz, rgb, f);
+}
 
 // Per-batch model->world transform: identity for world batches, the entity
 // transform for brush-entity batches. Multiplying by the identity is
@@ -69,6 +80,7 @@ struct WorldVaryings {
     float3 eyeorg [[flat]];
     float2 st;
     float2 lm;
+    float4 fog [[flat]];
 };
 
 // Vertices are fetched manually so the index buffer's uint32 indices land in
@@ -87,6 +99,7 @@ vertex WorldVaryings world_vertex(uint vid [[vertex_id]],
     out.eyeorg = uniforms.eyeorg[amp].xyz;
     out.st = float2(v.st);
     out.lm = float2(v.lm_st);
+    out.fog = uniforms.fog;
     return out;
 }
 
@@ -107,7 +120,8 @@ fragment float4 world_fragment(WorldVaryings in [[stage_in]],
     // gl_overbright: lightmaps are baked >>8 so full bright is 0.5; the *2
     // here is the other half of that contract (see R_BuildLightMap).
     float3 light = lightmap.sample(lightmapSampler, in.lm).rgb;
-    return qavp_out(float4(albedo.rgb * light * 2.0, uniforms.alpha));
+    float3 rgb = apply_fog(albedo.rgb * light * 2.0, in.worldpos, in.eyeorg, in.fog);
+    return qavp_out(float4(rgb, uniforms.alpha));
 }
 
 // Cheap 3D value noise for the dissolve boundary; feature size is set by
@@ -158,7 +172,9 @@ fragment float4 world_phase_fragment(WorldVaryings in [[stage_in]],
         discard_fragment();
 
     float3 light = lightmap.sample(lightmapSampler, in.lm).rgb;
-    float3 rgb = albedo.rgb * light * 2.0;
+    // Fog the lit surface BEFORE the dissolve, so a melting wall fogs
+    // correctly and the ember rim glows on top unfogged.
+    float3 rgb = apply_fog(albedo.rgb * light * 2.0, in.worldpos, in.eyeorg, in.fog);
 
     if (phase.headorg_radius.w > 0.0) {
         float d = distance(in.worldpos, phase.headorg_radius.xyz);
@@ -209,7 +225,8 @@ fragment float4 liquid_fragment(WorldVaryings in [[stage_in]],
     float4 albedo = diffuse.sample(diffuseSampler, uv);
     // Liquids are unlit: no lightmap, no overbright doubling, upstream
     // modulates by glColor(1,1,1,wateralpha) only.
-    return qavp_out(float4(albedo.rgb, uniforms.alpha));
+    float3 rgb = apply_fog(albedo.rgb, in.worldpos, in.eyeorg, in.fog);
+    return qavp_out(float4(rgb, uniforms.alpha));
 }
 
 // MARK: - Sky
