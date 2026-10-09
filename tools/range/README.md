@@ -8,7 +8,12 @@ system in one room, instead of hunting for the right spot in e1m1:
 - **stairs → raised platform** — step up/down under real and slowed motion
 - **crates** — two jump heights
 - **four pillars** — phase ghost-depth occlusion, monster cover
-- **wading pool** — liquid rendering and wading
+- **wading pool** — liquid rendering and wading; underwater (blue) polyblend
+- **lava + slime pools** — CONTENTS_LAVA / CONTENTS_SLIME polyblend tints
+  (orange / green); a biosuit sits beside each so you can stand in them
+- **powerups** — Quad (blue) and Pentagram (red) screen tints; pick up any
+  item (rack) for the bonus flash, take a hit from the firing line for the
+  damage flash
 - **weapon rack** — all seven weapons + ammo, so the wheel offers everything
 - **firing line** — five grunts and two dogs at known positions, live
 
