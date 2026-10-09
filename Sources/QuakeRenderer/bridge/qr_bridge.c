@@ -5715,8 +5715,13 @@ needs by hand:
     unconditional QR_LoadPalette (which Sys_Errors without a palette file
     on disk) -- the palette tables are left zeroed, which is fine for a
     geometry test that never inspects pixels.
-  - a tiny synthetic WAD registers only the ten num_<d> lumps Sbar_DrawNum
-    needs. Every other name Sbar_LoadPics asks for (faces, armor icons,
+  - a tiny synthetic WAD registers the num_<d> AND anum_<d> lumps
+    Sbar_DrawNum needs for color 0 (white, e.g. ammo) and color 1
+    (gold/pain, e.g. low health or armor) respectively -- both colors have
+    to resolve to real pics, not just color 0, or a low-health/low-armor
+    case (which Sbar_Draw's own color picker always routes to color 1)
+    would emit zero verts for a reason that has nothing to do with digit
+    count. Every other name Sbar_LoadPics asks for (faces, armor icons,
     sbar, ...) is absent, so Draw_PicFromWad falls through to its existing
     dummy-pic substitution -- exactly the missing-pic/texnum-0 path the
     brief asks to exercise, gotten "for free" by NOT adding those lumps.
@@ -5730,7 +5735,7 @@ static void QR_TestEnsureFixtures (void)
 {
 	static int		ready;
 	static qr_test_digit_pic_t pic;
-	static lumpinfo_t	lumps[10];
+	static lumpinfo_t	lumps[20];
 	int			i;
 	char			name[16];
 
@@ -5760,10 +5765,17 @@ static void QR_TestEnsureFixtures (void)
 		lumps[i].disksize = lumps[i].size = sizeof (pic);
 		lumps[i].type = TYP_QPIC;
 		lumps[i].compression = CMP_NONE;
+
+		snprintf (name, sizeof (name), "anum_%d", i);
+		W_CleanupName (name, lumps[10 + i].name);
+		lumps[10 + i].filepos = 0;
+		lumps[10 + i].disksize = lumps[10 + i].size = sizeof (pic);
+		lumps[10 + i].type = TYP_QPIC;
+		lumps[10 + i].compression = CMP_NONE;
 	}
 	wad_base = (byte *) &pic;
 	wad_lumps = lumps;
-	wad_numlumps = 10;
+	wad_numlumps = 20;
 
 	Sbar_LoadPics ();
 	ready = 1;
