@@ -86,6 +86,14 @@ extern cvar_t vr_pathdebug;					/* debug: enemy AI trails */
 extern cvar_t vr_projdebug;					/* debug: projectile spawn offsets */
 extern cvar_t vr_projhand;					/* draw my missiles from the hand */
 
+/* Modular HUD (Phase 1) tile emitters reuse the engine's own status-bar art
+   rather than re-implementing it. Sbar_DrawNum/Sbar_DrawFace are non-static
+   in sbar.c but not declared in sbar.h -- the header only exposes the
+   whole-bar entry points (Sbar_Draw et al.), since nothing outside sbar.c
+   has ever called the per-piece helpers before. */
+extern void Sbar_DrawNum (int x, int y, int num, int digits, int color);
+extern void Sbar_DrawFace (void);
+
 /* Set only while emitting the view weapon at the hand, so QR_EmitAliasModel
    drops the VIEWMODEL flag (view-locked, which the immersive consumer skips)
    and the gun draws in the world like any other alias entity. */
@@ -5270,6 +5278,22 @@ static qr_frame_slot_t	*qr_overlay_slot;
 static canvastype	qr_overlay_canvas = CANVAS_DEFAULT;
 static uint32_t		qr_white_texnum;	/* 1x1 white, for Draw_Fill */
 
+/* Modular HUD (Phase 1): a per-tile screen-space offset, composed on top of
+   whatever qr_overlay_canvas already contributes. QR_CanvasXform itself
+   stays the fixed, canvas-only affine (hud_overlay_test asserts those exact
+   values); this is a second, orthogonal translation that QR_OverlayAppend
+   applies to verts emitted while it's non-zero, so a tile emitter can
+   re-home the engine's own Sbar_DrawNum/Sbar_DrawFace output to tile-local
+   (0,0) without touching how Draw_Pic/Draw_Character/Draw_Fill compute
+   their screen position. Zero outside QR_EmitTile. */
+static float		qr_overlay_tile_ox, qr_overlay_tile_oy;
+
+static void QR_SetCanvasOffset (float ox, float oy)
+{
+	qr_overlay_tile_ox = ox;
+	qr_overlay_tile_oy = oy;
+}
+
 static void QR_EnsureWhite (void)
 {
 	static byte	px[4] = {255,255,255,255};
@@ -5306,6 +5330,17 @@ static void QR_OverlayAppend (qr_frame_slot_t *slot, uint32_t texnum,
 	}
 	memcpy (slot->overlay_verts + floats_have, verts, nverts * 9 * sizeof(float));
 	slot->frame.num_overlay_verts = base + nverts;
+
+	if (qr_overlay_tile_ox != 0.f || qr_overlay_tile_oy != 0.f)
+	{
+		float	*v = slot->overlay_verts + floats_have;
+		int	i;
+		for (i = 0; i < nverts; i++)
+		{
+			v[i * 9 + 0] += qr_overlay_tile_ox;
+			v[i * 9 + 1] += qr_overlay_tile_oy;
+		}
+	}
 
 	if (slot->frame.num_overlay_batches > 0)
 	{
@@ -5590,6 +5625,182 @@ void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 		t[i].bbox_w = t[i].bbox_h = 0.f;
 	}
 }
+
+/*
+================
+QR_EmitTile -- emit one modular-HUD tile's authentic pieces into the overlay
+buffer at tile-local (0,0), by reusing the engine's own Sbar_DrawNum/
+Sbar_DrawFace rather than re-implementing their art.
+
+Canvas is forced to CANVAS_DEFAULT (no +152 sbar shift) so each piece's
+*raw* Draw_Pic argument is the coordinate to cancel: Sbar_DrawFace draws at
+Draw_Pic(112, 0+24); Sbar_DrawNum(x, y, ...) draws each digit at
+Draw_Pic(x, y+24). QR_SetCanvasOffset subtracts exactly that baked origin
+so the result lands at local (0,0):
+  - FACE:         offset (-112, -24)
+  - AMMO:         offset (0, -24)    -- Sbar_DrawNum(0, 0, ...)
+  - HEALTHARMOR:  offset (0, -24)    -- armor row at Sbar y=0 -> local y=0;
+                                         health row at Sbar y=24 -> Draw_Pic
+                                         y=48 -> local y=24, i.e. stacked
+                                         directly under the armor row.
+
+bbox_w/bbox_h are the FIXED per-tile reservation (AMMO 72x24, FACE 24x24,
+HEALTHARMOR 72x48), not derived from the emitted verts: Sbar_DrawNum
+right-aligns its digits, so a 1-digit stat emits fewer verts than a 3-digit
+one but must not shrink the tile -- that would make the tile jump every
+time a number gains or loses a digit (Review Focus #1).
+
+Mirrors the Draw_* guard idiom: relies on the caller (QR_EmitModularHud,
+Task 3; QR_TestEmitTileInto here) having already set qr_overlay_slot, since
+a caller may drive several tiles under one slot without resetting it
+between them.
+================
+*/
+static void QR_EmitTile (qr_frame_slot_t *slot, int tile_id, qc_hud_tile_t *desc)
+{
+	uint32_t	base;
+	int		armorcolor, healthcolor;
+
+	if (!qr_overlay_slot || !slot || !desc)
+		return;
+
+	base = slot->frame.num_overlay_verts;
+	QR_SetCanvas (CANVAS_DEFAULT);
+
+	switch (tile_id)
+	{
+	case QC_HUD_TILE_FACE:
+		QR_SetCanvasOffset (-112.f, -24.f);
+		Sbar_DrawFace ();
+		desc->bbox_w = 24.f; desc->bbox_h = 24.f;
+		break;
+
+	case QC_HUD_TILE_AMMO:
+		QR_SetCanvasOffset (0.f, -24.f);
+		Sbar_DrawNum (0, 0, cl.stats[STAT_AMMO], 3, 0);
+		desc->bbox_w = 72.f; desc->bbox_h = 24.f;
+		break;
+
+	case QC_HUD_TILE_HEALTHARMOR:
+		armorcolor = (cl.stats[STAT_ARMOR] <= 25);
+		healthcolor = (cl.stats[STAT_HEALTH] <= 25);
+		QR_SetCanvasOffset (0.f, -24.f);
+		Sbar_DrawNum (0, 0, cl.stats[STAT_ARMOR], 3, armorcolor);
+		Sbar_DrawNum (0, 24, cl.stats[STAT_HEALTH], 3, healthcolor);
+		desc->bbox_w = 72.f; desc->bbox_h = 48.f;
+		break;
+
+	default:
+		break;
+	}
+
+	QR_SetCanvasOffset (0.f, 0.f);
+	desc->first_vert = base;
+	desc->vert_count = slot->frame.num_overlay_verts - base;
+}
+
+#ifdef QAVP_HOSTCHECK
+/*
+================
+Host-test-only support for QR_TestEmitTileInto -- exercises QR_EmitTile
+through the REAL Draw_PicFromWad -> QR_TexMgr_LoadImage path (rather than
+stubbing texture lookup) so the vert count the test asserts on reflects
+genuine art, not a shortcut. Host unit tests carry no game assets (no
+gfx/palette.lmp, no gfx.wad), so this builds the minimum the real path
+needs by hand:
+
+  - Memory_Init gives Hunk_Alloc (Draw_PicFromWad's qpic_t wrapper, among
+    others) somewhere to allocate.
+  - the gltexture free list is linked directly, skipping QR_TexMgr_Init's
+    unconditional QR_LoadPalette (which Sys_Errors without a palette file
+    on disk) -- the palette tables are left zeroed, which is fine for a
+    geometry test that never inspects pixels.
+  - a tiny synthetic WAD registers only the ten num_<d> lumps Sbar_DrawNum
+    needs. Every other name Sbar_LoadPics asks for (faces, armor icons,
+    sbar, ...) is absent, so Draw_PicFromWad falls through to its existing
+    dummy-pic substitution -- exactly the missing-pic/texnum-0 path the
+    brief asks to exercise, gotten "for free" by NOT adding those lumps.
+================
+*/
+static byte	qr_test_hunk[6 * 1024 * 1024];
+
+typedef struct { int width, height; byte data[8 * 8]; } qr_test_digit_pic_t;
+
+static void QR_TestEnsureFixtures (void)
+{
+	static int		ready;
+	static qr_test_digit_pic_t pic;
+	static lumpinfo_t	lumps[10];
+	int			i;
+	char			name[16];
+
+	if (ready)
+		return;
+
+	/* LittleLong/LittleShort/etc. are function pointers COM_Init sets
+	   based on detected host endianness -- QR_DrawPicFromWad calls
+	   LittleLong on the lump header, so this has to run first or it
+	   calls through NULL. */
+	COM_Init ();
+	Memory_Init (qr_test_hunk, sizeof (qr_test_hunk));
+
+	free_gltextures = &qr_gltextures[0];
+	active_gltextures = NULL;
+	for (i = 0; i < QR_MAX_GLTEXTURES - 1; i++)
+		qr_gltextures[i].next = &qr_gltextures[i + 1];
+	qr_gltextures[QR_MAX_GLTEXTURES - 1].next = NULL;
+	numgltextures = 0;
+
+	pic.width = 8; pic.height = 8;	/* data left zeroed -- never inspected */
+	for (i = 0; i < 10; i++)
+	{
+		snprintf (name, sizeof (name), "num_%d", i);
+		W_CleanupName (name, lumps[i].name);
+		lumps[i].filepos = 0;	/* every lump aliases the one shared pic */
+		lumps[i].disksize = lumps[i].size = sizeof (pic);
+		lumps[i].type = TYP_QPIC;
+		lumps[i].compression = CMP_NONE;
+	}
+	wad_base = (byte *) &pic;
+	wad_lumps = lumps;
+	wad_numlumps = 10;
+
+	Sbar_LoadPics ();
+	ready = 1;
+}
+
+void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
+			  int stat_ammo, float *bbox_w, float *bbox_h, int *nverts)
+{
+	qr_frame_slot_t	slot;
+	qc_hud_tile_t	desc;
+
+	QR_TestEnsureFixtures ();
+
+	memset (&slot, 0, sizeof (slot));
+	memset (&desc, 0, sizeof (desc));
+	desc.tile_id = (uint32_t) tile_id;
+
+	cl.stats[STAT_HEALTH] = stat_health;
+	cl.stats[STAT_ARMOR] = stat_armor;
+	cl.stats[STAT_AMMO] = stat_ammo;
+	cl.items = 0;
+	cl.time = 0.0;
+	cl.faceanimtime = -1.0;	/* force the non-pain face frame, not that this
+				   test asserts on FACE's vert count */
+
+	qr_overlay_slot = &slot;
+	QR_EmitTile (&slot, tile_id, &desc);
+	qr_overlay_slot = NULL;
+
+	if (bbox_w) *bbox_w = desc.bbox_w;
+	if (bbox_h) *bbox_h = desc.bbox_h;
+	if (nverts) *nverts = (int) desc.vert_count;
+
+	free (slot.overlay_verts);
+	free (slot.overlay_batches);
+}
+#endif /* QAVP_HOSTCHECK */
 
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {

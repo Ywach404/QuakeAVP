@@ -102,4 +102,12 @@ void QR_DrawFill (int x, int y, int w, int h, int c, float alpha);
    frame" (e.g. full ammo/health). */
 void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT]);
 
+/* The per-tile emitter (QR_EmitTile, Phase 1 Task 2) stays file-static in
+   qr_bridge.c: it takes the file-local qr_frame_slot_t, and its only
+   callers -- QR_EmitModularHud (Task 3) and the QAVP_HOSTCHECK test hook
+   QR_TestEmitTileInto -- live in that file too. It reuses the engine's own
+   Sbar_DrawNum/Sbar_DrawFace (declared extern in qr_bridge.c; sbar.h only
+   exposes the whole-bar entry points) under a tile-local canvas offset so
+   each tile's authentic art lands at local (0,0). */
+
 #endif /* QR_BRIDGE_H */
