@@ -542,8 +542,12 @@ final class ImmersiveRenderer {
     private static let floatPanelHeight: Float = 0.5
     private static let floatDistance: Float = 1.5
     /// Dropped below eye level so the float panel reads as a lower-centre
-    /// HUD rather than sitting on the forward sightline.
-    private static let floatLowerOffset: Float = 0.25
+    /// HUD rather than sitting on the forward sightline. This is the float
+    /// panel's vertical device-tune knob: larger drops it further down, so
+    /// you glance DOWN to read it instead of up. (0.25 sat too high -- the
+    /// bar is the bottom strip of the plane, so the readable content needs
+    /// the whole panel centre pulled well below the gaze.)
+    private static let floatLowerOffset: Float = 0.6
 
     /// This frame's HUD panel model matrix (overlay-space -> corrected
     /// tracking space), or nil to draw nothing. `hud_mode == 0` is off;
