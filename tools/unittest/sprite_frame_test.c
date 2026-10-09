@@ -55,6 +55,24 @@ int main (void)
 	got = QR_SpriteFrameSelect (ps, 1, 0.25f);
 	CHECK (got == &fb0, "group @t0.25 wraps -> subframe 0");
 
+	/* REGRESSION: QR_SpriteFrame must read model->cache.data DIRECTLY, not via
+	   Mod_Extradata. Sprite extradata is a plain Hunk pointer in cache.data;
+	   Mod_Extradata would run Cache_Check, which walks a bogus cache header in
+	   front of it and CRASHES. This test reproduces that path -- it crashed the
+	   process before the fix, and must now return the frame cleanly. */
+	{
+		static qmodel_t mdl;
+		static entity_t e;
+		mdl.cache.data = ps;		/* plain pointer, NOT a Cache_Alloc entry */
+		strcpy (mdl.name, "progs/s_explod.spr");
+		e.model = &mdl;
+		e.frame = 0;
+		e.syncbase = 0;
+		cl.time = 0;
+		got = QR_SpriteFrame (&e);	/* crashed here before the fix */
+		CHECK (got == &fa, "QR_SpriteFrame reads cache.data directly (no Mod_Extradata)");
+	}
+
 	printf ("%s\n", failures ? "UNIT FAIL" : "UNIT PASS");
 	return failures ? 1 : 0;
 }

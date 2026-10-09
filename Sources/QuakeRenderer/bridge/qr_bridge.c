@@ -2669,14 +2669,22 @@ mspriteframe_t *QR_SpriteFrameSelect (msprite_t *psprite, int frame, float time)
 /*
 ===============
 QR_SpriteFrame -- the entity wrapper: resolve the model and clock, then
-QR_SpriteFrameSelect. Engine thread (uses Mod_Extradata + cl.time).
+QR_SpriteFrameSelect. Engine thread (reads cache.data + cl.time).
+
+Sprite extradata is a plain Hunk allocation that Mod_LoadSpriteModel stores
+in cache.data; it is NOT a Cache_Alloc entry (unlike alias models). So read
+cache.data DIRECTLY, exactly as upstream R_GetSpriteFrame does -- going
+through Mod_Extradata runs Cache_Check, which walks a bogus cache_system_t
+header in front of the hunk pointer and crashes.
 ===============
 */
 mspriteframe_t *QR_SpriteFrame (entity_t *e)
 {
-	msprite_t	*psprite = (msprite_t *) Mod_Extradata (e->model);
+	msprite_t	*psprite = (msprite_t *) e->model->cache.data;
 	int		frame = e->frame;
 
+	if (!psprite)
+		return NULL;
 	if ((frame >= psprite->numframes) || (frame < 0))
 	{
 		Con_DPrintf ("QR_SpriteFrame: no such frame %d for '%s'\n", frame, e->model->name);
@@ -2801,10 +2809,10 @@ static void QR_EmitSpriteModel (qr_frame_slot_t *slot, entity_t *e)
 	uint32_t	texnum, start;
 	float		alpha;
 
-	psprite = (msprite_t *) Mod_Extradata (e->model);
+	psprite = (msprite_t *) e->model->cache.data;	/* hunk ptr, NOT Mod_Extradata */
 	frame = QR_SpriteFrame (e);
-	if (!frame || !frame->gltexture || frame->gltexture->texnum == 0)
-		return;					/* texture not ready -- skip */
+	if (!psprite || !frame || !frame->gltexture || frame->gltexture->texnum == 0)
+		return;					/* not loaded / texture not ready -- skip */
 	texnum = frame->gltexture->texnum;
 	alpha = ENTALPHA_DECODE (e->alpha);
 
