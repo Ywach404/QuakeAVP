@@ -88,6 +88,9 @@ final class RendererCore {
         var viewproj1: simd_float4x4
         var eyeorg0: SIMD4<Float>
         var eyeorg1: SIMD4<Float>
+        // xyz = fog color, w = exp2 density (0 = no fog). Filled per frame
+        // from the packet inside the encoder; callers may omit it.
+        var fog: SIMD4<Float> = .zero
     }
 
     let device: MTLDevice
@@ -367,6 +370,8 @@ final class RendererCore {
         }
 
         var uniforms = uniforms
+        uniforms.fog = SIMD4<Float>(frame.fog_color.0, frame.fog_color.1,
+                                    frame.fog_color.2, frame.fog_density)
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
         withUnsafeBytes(of: &uniforms) { raw in
             encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
