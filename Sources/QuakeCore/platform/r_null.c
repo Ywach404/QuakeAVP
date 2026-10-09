@@ -286,7 +286,7 @@ static qboolean	scr_initialized;
 cvar_t	scr_menuscale = {"scr_menuscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE};
-cvar_t	vr_hud = {"vr_hud", "1", CVAR_ARCHIVE};	/* 0 off, 1 wrist, 2 float */
+cvar_t	vr_hud = {"vr_hud", "1", CVAR_ARCHIVE};	/* 0 off, 1 wrist-preset, 2 float-preset, 3 modular tiles */
 
 /* Modular HUD (Phase 1): per-tile placement. Default layout A --
    ammo pins to the gun, face and health/armor pin to the off-hand wrist.
