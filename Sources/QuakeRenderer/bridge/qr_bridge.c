@@ -5261,7 +5261,6 @@ colour. QR_EnsureWhite backs Draw_Fill with a 1x1 white texel so fills
 share the textured-quad path instead of a separate solid-colour one.
 ================
 */
-extern float		qr_draw_color[4];	/* defined in gl_stubs.c */
 static qr_frame_slot_t	*qr_overlay_slot;
 static canvastype	qr_overlay_canvas = CANVAS_DEFAULT;
 static uint32_t		qr_white_texnum;	/* 1x1 white, for Draw_Fill */
@@ -5526,6 +5525,7 @@ static void QR_EmitHud (qr_frame_slot_t *slot)
 	QR_EnsureWhite ();
 	qr_overlay_slot = slot;
 	qr_overlay_canvas = CANVAS_DEFAULT;
+	Sbar_Changed ();	/* per-frame rebuild model: never let Sbar_Draw's skip-redraw drop the overlay */
 	Sbar_Draw ();
 	qr_overlay_slot = NULL;
 }
