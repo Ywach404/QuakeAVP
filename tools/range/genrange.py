@@ -9,7 +9,9 @@ The range exists to exercise every M4/M5 system in one room:
   - stairs + platform   step-up/step-down during artificial and real motion
   - crates              jump
   - pillars             phase occlusion, monster cover
-  - wading pool         liquid rendering, wading
+  - wading pool         liquid rendering, wading, underwater (blue) polyblend
+  - lava + slime pools  CONTENTS_LAVA/SLIME polyblend tints (biosuit nearby)
+  - powerups            Quad (blue) + Pentagram (red) screen tints
   - weapon rack         all seven weapons + ammo: the wheel offers everything
   - firing line         grunts and dogs at known positions: live targets
 
@@ -33,8 +35,12 @@ FLOOR, WALL, PILLAR = "ground1_6", "tech01_1", "metal1_4"
 STAIR, PLAT, SKY = "sfloor4_2", "plat_top1", "sky4"
 CRATES, CRATET, WATER = "crate0_side", "crate0_top", "*water1"
 LEANWALL = "twall1_1"
+# Liquid textures: qbsp assigns CONTENTS_LAVA / CONTENTS_SLIME from the "*lava"
+# / "*slime" name prefix, which is what drives V_SetContentsColor's screen tint.
+LAVA, SLIME = "*lava1", "*slime"
 
-NEEDED = {FLOOR, WALL, PILLAR, STAIR, PLAT, SKY, CRATES, CRATET, WATER, LEANWALL}
+NEEDED = {FLOOR, WALL, PILLAR, STAIR, PLAT, SKY, CRATES, CRATET, WATER, LEANWALL,
+          LAVA, SLIME}
 
 
 def extract_wad(id1: Path, out: Path) -> None:
@@ -133,12 +139,26 @@ def build_map() -> str:
     b.append(box(96, -192, 0, 160, -128, 32, CRATES, top=CRATET))
     b.append(box(176, -192, 0, 240, -128, 64, CRATES, top=CRATET))
 
-    # wading pool: rimmed basin, water inside
+    # wading pool: rimmed basin, water inside (CONTENTS_WATER -> blue tint)
     b.append(box(512, -352, 0, 768, -344, 24, PILLAR))
     b.append(box(512, -136, 0, 768, -128, 24, PILLAR))
     b.append(box(512, -344, 0, 520, -136, 24, PILLAR))
     b.append(box(760, -344, 0, 768, -136, 24, PILLAR))
     b.append(box(520, -344, 0, 760, -136, 20, WATER))
+
+    # lava pool (NE, CONTENTS_LAVA -> orange tint). Grab the biosuit first.
+    b.append(box(560, 300, 0, 780, 308, 24, PILLAR))
+    b.append(box(560, 492, 0, 780, 500, 24, PILLAR))
+    b.append(box(560, 308, 0, 568, 492, 24, PILLAR))
+    b.append(box(772, 308, 0, 780, 492, 24, PILLAR))
+    b.append(box(568, 308, 0, 772, 492, 20, LAVA))
+
+    # slime pool (SW, CONTENTS_SLIME -> green tint)
+    b.append(box(-780, -500, 0, -560, -492, 24, PILLAR))
+    b.append(box(-780, -308, 0, -560, -300, 24, PILLAR))
+    b.append(box(-780, -492, 0, -772, -308, 24, PILLAR))
+    b.append(box(-568, -492, 0, -560, -308, 24, PILLAR))
+    b.append(box(-772, -492, 0, -568, -308, 20, SLIME))
 
     world = ['"classname" "worldspawn"', '"wad" "range.wad"',
              '"message" "quake-avp input range"',
@@ -158,6 +178,13 @@ def build_map() -> str:
         ents.append(entity(a, (-448 + i * 128, -608, 24), spawnflags=1))
     for i in range(4):
         ents.append(entity("item_health", (-192 + i * 128, -608, 24)))
+
+    # polyblend props: powerups that tint the screen, and a biosuit so you can
+    # stand in the lava/slime pools long enough to see their tint.
+    ents.append(entity("item_artifact_super_damage", (0, 0, 24)))     # Quad -> blue
+    ents.append(entity("item_artifact_invulnerability", (160, 0, 24)))# Pentagram -> red
+    ents.append(entity("item_artifact_envirosuit", (670, 220, 24)))   # biosuit, by the lava
+    ents.append(entity("item_artifact_envirosuit", (-670, -220, 24))) # biosuit, by the slime
 
     # the firing line
     for i in range(5):
