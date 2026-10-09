@@ -17,9 +17,19 @@ void glDisable (GLenum cap)			{ (void)cap; }
 void glBegin (GLenum mode)			{ (void)mode; }
 void glEnd (void)				{ }
 void glVertex2f (GLfloat x, GLfloat y)		{ (void)x; (void)y; }
+
+float	qr_draw_color[4] = {1.f, 1.f, 1.f, 1.f};	/* read by the ported Draw_* */
+
 void glColor4f (GLfloat r, GLfloat g, GLfloat b, GLfloat a)
-						{ (void)r; (void)g; (void)b; (void)a; }
-void glColor4fv (const GLfloat *v)		{ (void)v; }
+{
+	qr_draw_color[0] = r; qr_draw_color[1] = g;
+	qr_draw_color[2] = b; qr_draw_color[3] = a;
+}
+void glColor4fv (const GLfloat *v)
+{
+	qr_draw_color[0] = v[0]; qr_draw_color[1] = v[1];
+	qr_draw_color[2] = v[2]; qr_draw_color[3] = v[3];
+}
 void glMatrixMode (GLenum mode)			{ (void)mode; }
 void glLoadIdentity (void)			{ }
 void glOrtho (GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)

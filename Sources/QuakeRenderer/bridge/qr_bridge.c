@@ -229,6 +229,10 @@ typedef struct qr_frame_slot_s {
 	uint32_t	sprite_capacity;	/* in floats */
 	qc_sprite_batch_t *sprite_batches;
 	uint32_t	sprite_batch_capacity;	/* in entries */
+	float		*overlay_verts;		/* 9 floats/vert */
+	uint32_t	overlay_capacity;	/* in floats */
+	qc_overlay_batch_t *overlay_batches;
+	uint32_t	overlay_batch_capacity;	/* in entries */
 	int		state;
 	uint64_t	seq;
 } qr_frame_slot_t;
@@ -5248,6 +5252,181 @@ int QR_StringVerts (float *out, int x, int y, const char *s, const float col[4],
 
 /*
 ================
+Draw_* backing -- appends textured quads to the building frame's overlay
+buffer, coalesced by texnum into qc_overlay_batch_t runs (same idiom as
+sprite_batches). qr_draw_color is written by gl_stubs.c's glColor4f/4fv
+(defined there, declared extern here) and read as the per-quad vertex
+colour. QR_EnsureWhite backs Draw_Fill with a 1x1 white texel so fills
+share the textured-quad path instead of a separate solid-colour one.
+================
+*/
+extern float		qr_draw_color[4];	/* defined in gl_stubs.c */
+static qr_frame_slot_t	*qr_overlay_slot;
+static canvastype	qr_overlay_canvas = CANVAS_DEFAULT;
+static uint32_t		qr_white_texnum;	/* 1x1 white, for Draw_Fill */
+
+static void QR_EnsureWhite (void)
+{
+	static byte	px[4] = {255,255,255,255};
+	gltexture_t	*glt;
+	if (qr_white_texnum)
+		return;
+	glt = QR_TexMgr_LoadImage (NULL, "qr_white", 1, 1, SRC_RGBA,
+			px, "qr_white", (src_offset_t) 0,
+			TEXPREF_ALPHA | TEXPREF_NEAREST | TEXPREF_PERSIST);
+	if (glt)
+		qr_white_texnum = glt->texnum;
+}
+
+/* Append `nverts` (9 floats each) under `texnum`, coalescing with the last
+   batch when the texnum matches. Grows like text_verts/sprite_batches. */
+static void QR_OverlayAppend (qr_frame_slot_t *slot, uint32_t texnum,
+			      const float *verts, int nverts)
+{
+	uint32_t	base = slot->frame.num_overlay_verts;
+	uint32_t	floats_have = base * 9, floats_need = (base + nverts) * 9;
+	qc_overlay_batch_t *b;
+
+	if (!slot || nverts <= 0 || !texnum)
+		return;
+	if (floats_need > slot->overlay_capacity)
+	{
+		while (floats_need > slot->overlay_capacity)
+			slot->overlay_capacity = slot->overlay_capacity ? slot->overlay_capacity * 2 : 4096;
+		slot->overlay_verts = (float *) realloc (slot->overlay_verts,
+				slot->overlay_capacity * sizeof(float));
+		slot->frame.overlay_verts = slot->overlay_verts;
+	}
+	memcpy (slot->overlay_verts + floats_have, verts, nverts * 9 * sizeof(float));
+	slot->frame.num_overlay_verts = base + nverts;
+
+	if (slot->frame.num_overlay_batches > 0)
+	{
+		b = &slot->overlay_batches[slot->frame.num_overlay_batches - 1];
+		if (b->texnum == texnum)
+		{
+			b->vert_count += nverts;
+			return;
+		}
+	}
+	if (slot->frame.num_overlay_batches + 1 > slot->overlay_batch_capacity)
+	{
+		slot->overlay_batch_capacity = slot->overlay_batch_capacity ? slot->overlay_batch_capacity * 2 : 256;
+		slot->overlay_batches = (qc_overlay_batch_t *) realloc (slot->overlay_batches,
+				slot->overlay_batch_capacity * sizeof(qc_overlay_batch_t));
+		slot->frame.overlay_batches = slot->overlay_batches;
+	}
+	b = &slot->overlay_batches[slot->frame.num_overlay_batches++];
+	b->texnum = texnum; b->first_vert = base; b->vert_count = nverts;
+}
+
+void QR_SetCanvas (canvastype canvas)
+{
+	qr_overlay_canvas = canvas;
+}
+
+typedef struct { gltexture_t *gltexture; float sl, tl, sh, th; } qr_glpic_t;
+
+qpic_t *QR_DrawPicFromWad (const char *name)
+{
+	qpic_t		*src = (qpic_t *) W_GetLumpName (name);
+	qpic_t		*pic;
+	qr_glpic_t	gl;
+	int		w, h;
+
+	if (!src)
+		return NULL;			/* caller (r_null.c) substitutes a dummy */
+	w = LittleLong (src->width);
+	h = LittleLong (src->height);
+	pic = (qpic_t *) Hunk_Alloc (sizeof(qpic_t) - 4 + sizeof(qr_glpic_t));
+	pic->width = w; pic->height = h;
+	gl.gltexture = QR_TexMgr_LoadImage (NULL, name, w, h, SRC_INDEXED,
+			src->data, WADFILENAME, (src_offset_t) src->data,
+			TEXPREF_ALPHA | TEXPREF_NEAREST | TEXPREF_PAD | TEXPREF_PERSIST);
+	gl.sl = 0; gl.tl = 0; gl.sh = 1; gl.th = 1;	/* Metal never pads */
+	memcpy (pic->data, &gl, sizeof(qr_glpic_t));
+	return pic;
+}
+
+static uint32_t QR_PicTexnum (qpic_t *pic)
+{
+	qr_glpic_t	gl;
+	if (!pic)
+		return 0;
+	memcpy (&gl, pic->data, sizeof(qr_glpic_t));
+	return gl.gltexture ? gl.gltexture->texnum : 0;
+}
+
+void QR_DrawPic (int x, int y, qpic_t *pic)
+{
+	float	xf[4], buf[6 * 9];
+	uint32_t texnum;
+	int	n;
+	if (!qr_overlay_slot || !pic)
+		return;
+	texnum = QR_PicTexnum (pic);
+	if (!texnum)
+		return;
+	QR_CanvasXform (qr_overlay_canvas, xf);
+	{
+		float	uv[4] = {0, 0, 1, 1};
+		n = QR_PicVerts (buf, x, y, pic->width, pic->height, uv, qr_draw_color, xf);
+	}
+	QR_OverlayAppend (qr_overlay_slot, texnum, buf, n);
+}
+
+void QR_DrawCharacter (int x, int y, int num)
+{
+	float	xf[4], uv[4], buf[6 * 9];
+	int	n;
+	if (!qr_overlay_slot)
+		return;
+	QR_EnsureConchars ();
+	if (!qr_conchars_texnum)
+		return;
+	QR_CanvasXform (qr_overlay_canvas, xf);
+	QR_GlyphCell (num & 255, uv);
+	n = QR_PicVerts (buf, x, y, 8, 8, uv, qr_draw_color, xf);
+	QR_OverlayAppend (qr_overlay_slot, qr_conchars_texnum, buf, n);
+}
+
+void QR_DrawString (int x, int y, const char *str)
+{
+	float	xf[4], buf[6 * 9 * 256], capped[257];
+	int	n;
+	if (!qr_overlay_slot || !str)
+		return;
+	QR_EnsureConchars ();
+	if (!qr_conchars_texnum)
+		return;
+	/* Draw_String is public; the status bar never passes anything close to
+	   256 chars, but truncate defensively rather than overrun `buf`. */
+	strncpy (capped, str, sizeof(capped) - 1);
+	capped[sizeof(capped) - 1] = '\0';
+	QR_CanvasXform (qr_overlay_canvas, xf);
+	n = QR_StringVerts (buf, x, y, capped, qr_draw_color, xf);
+	QR_OverlayAppend (qr_overlay_slot, qr_conchars_texnum, buf, n);
+}
+
+void QR_DrawFill (int x, int y, int w, int h, int c, float alpha)
+{
+	float	xf[4], buf[6 * 9], col[4];
+	byte	*p;
+	int	n;
+	if (!qr_overlay_slot)
+		return;
+	QR_EnsureWhite ();
+	if (!qr_white_texnum)
+		return;
+	p = (byte *) &d_8to24table[c & 255];
+	col[0] = p[0] / 255.f; col[1] = p[1] / 255.f; col[2] = p[2] / 255.f; col[3] = alpha;
+	QR_CanvasXform (qr_overlay_canvas, xf);
+	n = QR_FillVerts (buf, x, y, w, h, col, xf);
+	QR_OverlayAppend (qr_overlay_slot, qr_white_texnum, buf, n);
+}
+
+/*
+================
 QR_EmitCenterPrint -- the engine's svc_centerprint text as a head-locked HUD
 prompt (e.g. the hub warp-gate instructions). Reuses the conchars text pipeline
 QR_EmitText already drives for the wheel labels; no new shader or packet field.
@@ -6016,6 +6195,9 @@ void QR_BeginFrame (void)
 	slot->frame.num_particle_verts = 0;
 	slot->frame.num_sprite_verts = 0;
 	slot->frame.num_sprite_batches = 0;
+	slot->frame.num_overlay_verts = 0;
+	slot->frame.num_overlay_batches = 0;
+	slot->frame.hud_mode = 0;
 	slot->frame.fog_density = 0.f;
 	slot->frame.fog_color[0] = slot->frame.fog_color[1] = slot->frame.fog_color[2] = 0.f;
 	slot->frame.sky_fog = 0.f;
@@ -6374,6 +6556,8 @@ void QR_PublishFrame (void)
 	slot->frame.particle_verts = slot->particle_verts;
 	slot->frame.sprite_verts = slot->sprite_verts;
 	slot->frame.sprite_batches = slot->sprite_batches;
+	slot->frame.overlay_verts = slot->overlay_verts;
+	slot->frame.overlay_batches = slot->overlay_batches;
 
 	/* upstream R_Clear clears to r_clearcolor (a palette index) when
 	   gl_clear is set; keep that, else clear to black */

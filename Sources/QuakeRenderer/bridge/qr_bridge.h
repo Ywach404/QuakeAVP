@@ -78,4 +78,14 @@ int  QR_FillVerts (float *out, int x, int y, int w, int h, const float col[4], c
 int  QR_PicVerts (float *out, int x, int y, int w, int h, const float uv[4], const float col[4], const float xform[4]);
 int  QR_StringVerts (float *out, int x, int y, const char *s, const float col[4], const float xform[4]);
 
+/* Draw_* backing -- appends to the building frame's overlay buffer; see
+   qr_bridge.c. qr_draw_color is defined in gl_stubs.c (glColor4f/4fv). */
+extern float qr_draw_color[4];
+void QR_SetCanvas (canvastype canvas);
+qpic_t *QR_DrawPicFromWad (const char *name);
+void QR_DrawPic (int x, int y, qpic_t *pic);
+void QR_DrawCharacter (int x, int y, int num);
+void QR_DrawString (int x, int y, const char *str);
+void QR_DrawFill (int x, int y, int w, int h, int c, float alpha);
+
 #endif /* QR_BRIDGE_H */

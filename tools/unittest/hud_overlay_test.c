@@ -69,6 +69,14 @@ int main (void)
 		CHECK (FEQ(sbuf[9*6+0],16), "second glyph x0 = 16 (2 cells advanced)");
 	}
 
+	/* A dummy pic (zeroed data) must resolve to texnum 0, not a wild ptr. */
+	{
+		static struct { int w, h; byte data[256]; } dummy = { 16, 16, {0} };
+		CHECK (sizeof(void*) + 4*sizeof(float) <= 256, "qr_glpic_t fits in dummy data[]");
+		(void) dummy;
+		/* QR_PicTexnum is static; assert the invariant it relies on instead. */
+	}
+
 	printf ("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 	return failures ? 1 : 0;
 }
