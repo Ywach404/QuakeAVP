@@ -1885,6 +1885,12 @@ void Sky_NewMap (void)
 
 		if (!strcmp("skyfog", key))
 			skyfog = atof(value);
+#if 1 /* also accept non-standard keys */
+		else if (!strcmp("skyname", key)) //half-life
+			Sky_LoadSkyBox(value);
+		else if (!strcmp("qlsky", key)) //quake lives
+			Sky_LoadSkyBox(value);
+#endif
 
 		if (!strcmp("fog", key))
 		{
@@ -1892,12 +1898,6 @@ void Sky_NewMap (void)
 			sscanf (value, "%f %f %f %f", &fd, &fr, &fg, &fb);
 			Fog_Update (fd, fr, fg, fb, 0.f);
 		}
-#if 1 /* also accept non-standard keys */
-		else if (!strcmp("skyname", key)) //half-life
-			Sky_LoadSkyBox(value);
-		else if (!strcmp("qlsky", key)) //quake lives
-			Sky_LoadSkyBox(value);
-#endif
 	}
 }
 
@@ -6418,6 +6418,12 @@ static void Fog_FogCommand_f (void)
 	case 3:	/* density + time */
 		Fog_Update (q_max (0.f, (float) atof (Cmd_Argv(1))),
 			    fog_red, fog_green, fog_blue, (float) atof (Cmd_Argv(2)));
+		break;
+	case 4:	/* rgb (keep current density) */
+		Fog_Update (fog_density,
+			    CLAMP (0.f, (float) atof (Cmd_Argv(1)), 1.f),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(2)), 1.f),
+			    CLAMP (0.f, (float) atof (Cmd_Argv(3)), 1.f), 0.f);
 		break;
 	case 5:	/* density + rgb */
 		Fog_Update (q_max (0.f, (float) atof (Cmd_Argv(1))),

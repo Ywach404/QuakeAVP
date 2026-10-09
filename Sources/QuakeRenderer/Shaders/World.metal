@@ -54,7 +54,7 @@ inline float3 apply_fog(float3 rgb, float3 worldpos, float3 eyeorg, float4 fog)
 {
     if (fog.w <= 0.0) return rgb;
     float d = fog.w * length(worldpos - eyeorg);
-    float f = clamp(exp2(-d * d), 0.0, 1.0);
+    float f = clamp(exp(-d * d), 0.0, 1.0);   // base-e, matching GL_EXP2
     return mix(fog.xyz, rgb, f);
 }
 
