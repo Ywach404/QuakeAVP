@@ -222,6 +222,14 @@ typedef struct qc_sprite_batch_s {
 	float		alpha;		/* ENTALPHA_DECODE(e->alpha), 1 = opaque */
 } qc_sprite_batch_t;
 
+/* A run of 2D overlay quads (HUD / status bar) sharing one texture.
+   texnum 0 never occurs: fills use the white-texel handle. */
+typedef struct qc_overlay_batch_s {
+	uint32_t	texnum;
+	uint32_t	first_vert;	/* into overlay_verts */
+	uint32_t	vert_count;	/* multiple of 6 */
+} qc_overlay_batch_t;
+
 typedef struct qc_frame_s {
 	uint32_t	generation;	/* must match AcquireGeometry's result */
 	float		viewproj[16];	/* column-major, Metal depth range */
@@ -391,6 +399,17 @@ typedef struct qc_frame_s {
 	const float		*sprite_verts;
 	uint32_t		num_sprite_batches;
 	const qc_sprite_batch_t	*sprite_batches;
+
+	/* 2D HUD overlay: Quake's authentic status bar, built by the engine's
+	   Sbar_Draw through the ported Draw_* layer. Nine floats per vertex
+	   (x y z, uv, rgba) -- the SAME layout as text_verts, so the text
+	   pipeline draws it -- in a fixed 320x200 top-left-origin virtual
+	   screen (z unused). Batched by texnum; fills use the white texel. */
+	int32_t			hud_mode;	/* vr_hud: 0 off, 1 wrist, 2 float */
+	uint32_t		num_overlay_verts;
+	const float		*overlay_verts;
+	uint32_t		num_overlay_batches;
+	const qc_overlay_batch_t *overlay_batches;
 } qc_frame_t;
 
 /* Latest published frame, or NULL only if nothing has been published yet

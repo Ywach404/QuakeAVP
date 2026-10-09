@@ -70,4 +70,12 @@ mspriteframe_t *QR_SpriteFrameSelect (msprite_t *psprite, int frame, float time)
 mspriteframe_t *QR_SpriteFrame (entity_t *e);
 void QR_SpriteBillboardAxes (int type, entity_t *e, vec3_t up, vec3_t right);
 
+/* 2D HUD overlay geometry (pure quad layout; see qr_bridge.c). */
+#define QR_OVERLAY_FLOATS_PER_VERT 9
+void QR_CanvasXform (canvastype canvas, float out[4]);
+void QR_GlyphCell (int ch, float uv[4]);
+int  QR_FillVerts (float *out, int x, int y, int w, int h, const float col[4], const float xform[4]);
+int  QR_PicVerts (float *out, int x, int y, int w, int h, const float uv[4], const float col[4], const float xform[4]);
+int  QR_StringVerts (float *out, int x, int y, const char *s, const float col[4], const float xform[4]);
+
 #endif /* QR_BRIDGE_H */

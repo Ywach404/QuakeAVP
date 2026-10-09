@@ -5179,6 +5179,75 @@ static void QR_EmitText (qr_frame_slot_t *slot, const char *s, const vec3_t org,
 
 /*
 ================
+2D HUD overlay geometry -- pure quad layout for the ported Draw_* layer.
+All coordinates are a fixed 320x200 top-left-origin virtual screen (z=0);
+the consumer maps that plane to the window or a VR panel. Vertex layout is
+identical to text_verts (xyz, uv, rgba) so the text pipeline draws it.
+================
+*/
+void QR_CanvasXform (canvastype canvas, float out[4])
+{
+	out[0] = 0.f; out[1] = 0.f; out[2] = 1.f; out[3] = 1.f;
+	if (canvas == CANVAS_SBAR)
+		out[1] = 152.f;		/* 320x48 bar at the bottom of 320x200 */
+}
+
+void QR_GlyphCell (int ch, float uv[4])
+{
+	int	cx = ch & 15, cy = (ch >> 4) & 15;
+	uv[0] = cx / 16.f; uv[1] = cy / 16.f;
+	uv[2] = uv[0] + 1.f / 16.f; uv[3] = uv[1] + 1.f / 16.f;
+}
+
+/* Write one quad (6 verts, tl tr bl tr br bl) in screen space. */
+static int QR_OverlayQuad (float *out, float sx0, float sy0, float sx1, float sy1,
+			   float u0, float v0, float u1, float v1, const float col[4])
+{
+	const float	cnr[6][4] = {	/* x, y, u, v -- tl tr bl tr br bl */
+		{sx0,sy0,u0,v0},{sx1,sy0,u1,v0},{sx0,sy1,u0,v1},
+		{sx1,sy0,u1,v0},{sx1,sy1,u1,v1},{sx0,sy1,u0,v1} };
+	int	i;
+	for (i = 0; i < 6; i++)
+	{
+		float	*o = out + i * 9;
+		o[0] = cnr[i][0]; o[1] = cnr[i][1]; o[2] = 0.f;
+		o[3] = cnr[i][2]; o[4] = cnr[i][3];
+		o[5] = col[0]; o[6] = col[1]; o[7] = col[2]; o[8] = col[3];
+	}
+	return 6;
+}
+
+int QR_FillVerts (float *out, int x, int y, int w, int h, const float col[4], const float xform[4])
+{
+	float	sx0 = xform[0] + x * xform[2], sy0 = xform[1] + y * xform[3];
+	float	sx1 = xform[0] + (x + w) * xform[2], sy1 = xform[1] + (y + h) * xform[3];
+	return QR_OverlayQuad (out, sx0, sy0, sx1, sy1, 0.5f, 0.5f, 0.5f, 0.5f, col);
+}
+
+int QR_PicVerts (float *out, int x, int y, int w, int h, const float uv[4], const float col[4], const float xform[4])
+{
+	float	sx0 = xform[0] + x * xform[2], sy0 = xform[1] + y * xform[3];
+	float	sx1 = xform[0] + (x + w) * xform[2], sy1 = xform[1] + (y + h) * xform[3];
+	return QR_OverlayQuad (out, sx0, sy0, sx1, sy1, uv[0], uv[1], uv[2], uv[3], col);
+}
+
+int QR_StringVerts (float *out, int x, int y, const char *s, const float col[4], const float xform[4])
+{
+	int	n = 0, i;
+	for (i = 0; s[i]; i++)
+	{
+		int	ch = (unsigned char) s[i];
+		float	uv[4];
+		if (ch == ' ')
+			continue;
+		QR_GlyphCell (ch, uv);
+		n += QR_PicVerts (out + n * 9, x + i * 8, y, 8, 8, uv, col, xform);
+	}
+	return n;
+}
+
+/*
+================
 QR_EmitCenterPrint -- the engine's svc_centerprint text as a head-locked HUD
 prompt (e.g. the hub warp-gate instructions). Reuses the conchars text pipeline
 QR_EmitText already drives for the wheel labels; no new shader or packet field.
