@@ -39,12 +39,35 @@ int main (void)
 	CHECK (FEQ(buf[9*1+0],40) && FEQ(buf[9*1+1],172), "fill TR x = 10+30");
 	CHECK (FEQ(buf[9*2+1],212), "fill BL y = 172+40");
 
-	/* String advances 8 px/char; space emits nothing. */
-	QR_CanvasXform (CANVAS_DEFAULT, xf);
-	n = QR_StringVerts (buf, 0, 0, "A B", col, xf);	/* 'A', space, 'B' */
-	CHECK (n == 12, "\"A B\" -> 2 glyphs * 6 verts (space skipped)");
-	CHECK (FEQ(buf[0],0), "first glyph x0 = 0");
-	CHECK (FEQ(buf[9*6+0],16), "second glyph x0 = 16 (2 cells advanced)");
+	/* String advances 8 px/char; space emits nothing. Buffer is sized to
+	   EXACTLY strlen("A B")*6*9 floats and pre-seeded with NaN, so a
+	   regression that leaves a gap for the space (e.g. indexing by
+	   character instead of by emitted-vertex count) either lands a NaN
+	   inside [0, n*9) or overflows the buffer -- it can't silently pass
+	   by landing in untouched stack margin. */
+	{
+		const char	*str = "A B";
+		float		sbuf[strlen("A B") * 6 * 9];
+		size_t		i;
+
+		for (i = 0; i < sizeof(sbuf) / sizeof(sbuf[0]); i++)
+			sbuf[i] = NAN;
+
+		QR_CanvasXform (CANVAS_DEFAULT, xf);
+		n = QR_StringVerts (sbuf, 0, 0, str, col, xf);	/* 'A', space, 'B' */
+		CHECK (n == 12, "\"A B\" -> 2 glyphs * 6 verts (space skipped)");
+
+		{
+			int	all_finite = 1;
+			for (i = 0; i < (size_t) n * 9; i++)
+				if (isnan(sbuf[i]))
+					all_finite = 0;
+			CHECK (all_finite, "\"A B\" output is tightly packed (no NaN gap in [0, n*9))");
+		}
+
+		CHECK (FEQ(sbuf[0],0), "first glyph x0 = 0");
+		CHECK (FEQ(sbuf[9*6+0],16), "second glyph x0 = 16 (2 cells advanced)");
+	}
 
 	printf ("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 	return failures ? 1 : 0;
