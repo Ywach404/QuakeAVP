@@ -120,7 +120,13 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
                 rimColor: SIMD3(f.phase_color.0, f.phase_color.1, f.phase_color.2))
             core.encode(frame: f, with: encoder, pipelines: pipelines,
                         uniforms: uniforms, phase: phase, amplificationCount: 1,
-                        viewmodelViewport: viewports, hudWindow: true)
+                        viewmodelViewport: viewports)
+            // 2D HUD overlay, screen-mapped to the drawable (classic Quake
+            // stretch) — Task 4's placement, unchanged by the immersive
+            // panel work. Mono, so the same ortho serves both viewproj slots.
+            let ortho = RendererCore.overlayWindowOrtho()
+            core.drawOverlay(frame: f, viewproj0: ortho, viewproj1: ortho,
+                             pipelines: pipelines, encoder: encoder)
         }
         encoder.endEncoding()
 

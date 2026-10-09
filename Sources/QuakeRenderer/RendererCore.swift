@@ -345,12 +345,11 @@ final class RendererCore {
     /// stereo (with the identity/offset-1 view mappings) and 1 otherwise;
     /// same shaders either way.
     ///
-    /// `hudWindow` opts into the 2D status-bar overlay, screen-mapped to the
-    /// drawable. It defaults to false and must stay that way for every
-    /// caller except the flat window: the immersive path owns its own panel
-    /// placement (a later task) and the exporter burns its own sharp HUD in
-    /// separately, so neither may see this draw. Never key this off
-    /// `amplificationCount` — the exporter also passes 1.
+    /// The 2D HUD overlay is NOT drawn here: each caller (the window, the
+    /// immersive space) draws it itself via `drawOverlay`, after this call,
+    /// with its own `viewproj0`/`viewproj1` — screen-mapped for the window,
+    /// a world-space panel for the immersive space. The exporter burns its
+    /// own sharp HUD in separately and never calls `drawOverlay`.
     func encode(frame: qc_frame_t,
                 with encoder: MTLRenderCommandEncoder,
                 pipelines: RenderPipelines,
@@ -358,8 +357,7 @@ final class RendererCore {
                 phase: PhaseParams,
                 amplificationCount: Int,
                 viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
-                drawsViewmodel: Bool = false,
-                hudWindow: Bool = false) {
+                drawsViewmodel: Bool = false) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -720,14 +718,6 @@ final class RendererCore {
             }
         }
 
-        // 2D HUD overlay — the authentic status bar from Sbar_Draw, as
-        // textured quads batched by texnum. Window-only (see `hudWindow`'s
-        // doc comment); over the world, polyblend and wheel text, under the
-        // vignette drawn next.
-        if hudWindow {
-            drawOverlay(frame: frame, pipelines: pipelines, encoder: encoder)
-        }
-
         // Comfort vignette, last over everything, engine-eased strength.
         if frame.vignette > 0.001 {
             setPipeline(pipelines.vignette, depth: pipelines.depthAlways)
@@ -769,12 +759,15 @@ final class RendererCore {
     /// The 2D HUD overlay — Sbar_Draw's status bar, baked by the bridge into
     /// textured quads (9 floats/vert: xyz uv rgba, same layout as
     /// `text_verts`) batched by texnum in a fixed 320x200 top-left-origin
-    /// virtual screen. This maps that screen straight to the drawable
-    /// (classic Quake stretch) — the flat window's placement. A later task
-    /// adds the immersive panel's own transform; it will reuse this helper
-    /// with different `viewproj0`/`viewproj1` rather than duplicating the
-    /// batch loop.
-    func drawOverlay(frame: qc_frame_t, pipelines: RenderPipelines,
+    /// virtual screen. The overlay's own vertices never change: callers
+    /// supply `viewproj0`/`viewproj1` to place that 320x200 plane wherever
+    /// they need it — the window passes `Self.overlayWindowOrtho()` (classic
+    /// Quake stretch straight to the drawable); the immersive space composes
+    /// `handViewproj * panelModel` for a wrist- or head-anchored world panel
+    /// (see `hudPanelModel`). One batch loop, shared by both.
+    func drawOverlay(frame: qc_frame_t,
+                     viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                     pipelines: RenderPipelines,
                      encoder: MTLRenderCommandEncoder) {
         guard frame.hud_mode != 0,
               frame.num_overlay_batches > 0, frame.num_overlay_verts >= 3,
@@ -787,16 +780,10 @@ final class RendererCore {
                                           options: .storageModeShared)
         else { return }
 
-        var ortho = matrix_identity_float4x4
-        ortho.columns.0 = SIMD4(2 / Float(320), 0, 0, 0)
-        ortho.columns.1 = SIMD4(0, -2 / Float(200), 0, 0)
-        ortho.columns.2 = SIMD4(0, 0, 1, 0)
-        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
-
         encoder.setRenderPipelineState(pipeline)
         encoder.setDepthStencilState(pipelines.depthAlways)
         encoder.setVertexBuffer(buf, offset: 0, index: 0)
-        var uniforms = GuideUniforms(viewproj0: ortho, viewproj1: ortho)
+        var uniforms = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
         withUnsafeBytes(of: &uniforms) { raw in
             encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
         }
@@ -808,6 +795,58 @@ final class RendererCore {
                                    vertexStart: Int(b.first_vert),
                                    vertexCount: Int(b.vert_count))
         }
+    }
+
+    /// The flat window's overlay placement: the 320x200 virtual screen
+    /// mapped straight to the drawable (classic Quake stretch), top-left
+    /// origin, +y down. Mono — the same matrix serves both viewproj slots.
+    static func overlayWindowOrtho() -> simd_float4x4 {
+        var ortho = matrix_identity_float4x4
+        ortho.columns.0 = SIMD4(2 / Float(320), 0, 0, 0)
+        ortho.columns.1 = SIMD4(0, -2 / Float(200), 0, 0)
+        ortho.columns.2 = SIMD4(0, 0, 1, 0)
+        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
+        return ortho
+    }
+
+    /// The immersive HUD panel's model matrix: maps the overlay's 320x200
+    /// top-left-origin plane (+y down, z always 0 — pure 2D quads) onto a
+    /// flat `widthMeters` x `heightMeters` rectangle centred at `origin`,
+    /// in whatever space the caller's viewproj expects (corrected tracking
+    /// space, for the immersive renderer's `handViewproj`). `right`/`up`
+    /// must already be unit and mutually orthogonal (see `billboardBasis`).
+    /// Overlay +x maps to `right`, overlay +y (down) maps to `-up`, so text
+    /// reads right-side-up for a viewer standing where `billboardBasis` was
+    /// told to face.
+    static func hudPanelModel(origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                              widthMeters: Float, heightMeters: Float) -> simd_float4x4 {
+        let rx = right * (widthMeters / 320)
+        let uy = -up * (heightMeters / 200)
+        let corner = origin - right * (widthMeters * 0.5) + up * (heightMeters * 0.5)
+        var m = matrix_identity_float4x4
+        m.columns.0 = SIMD4(rx.x, rx.y, rx.z, 0)
+        m.columns.1 = SIMD4(uy.x, uy.y, uy.z, 0)
+        m.columns.2 = SIMD4(0, 0, 0, 0)
+        m.columns.3 = SIMD4(corner.x, corner.y, corner.z, 1)
+        return m
+    }
+
+    /// Billboard basis for a panel whose face normal points along `toward`
+    /// (unit vector from the panel to the viewer), referencing world up —
+    /// the same construction a camera's right/up derive from a look
+    /// direction, so a viewer standing on the `toward` side and looking back
+    /// along `-toward` reads the panel un-mirrored. Degenerates gracefully
+    /// (falls back to world-right) when `toward` is nearly vertical.
+    static func billboardBasis(toward: SIMD3<Float>) -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+        let worldUp = SIMD3<Float>(0, 1, 0)
+        var right = simd_cross(worldUp, toward)
+        if simd_length(right) < 1e-4 {
+            right = SIMD3<Float>(1, 0, 0)
+        } else {
+            right = simd_normalize(right)
+        }
+        let up = simd_normalize(simd_cross(toward, right))
+        return (right, up)
     }
 
     /// Draw the finger debug wireframe. `verts` are 7-float TRIANGLE
