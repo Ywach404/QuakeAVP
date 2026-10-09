@@ -286,6 +286,7 @@ static qboolean	scr_initialized;
 cvar_t	scr_menuscale = {"scr_menuscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE};
+cvar_t	vr_hud = {"vr_hud", "1", CVAR_ARCHIVE};	/* 0 off, 1 wrist, 2 float */
 cvar_t	scr_conwidth = {"scr_conwidth", "0", CVAR_ARCHIVE};
 cvar_t	scr_conscale = {"scr_conscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_crosshairscale = {"scr_crosshairscale", "1", CVAR_ARCHIVE};
@@ -406,6 +407,7 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_sbarscale);
 	Cvar_SetCallback (&scr_sbaralpha, SCR_Callback_refdef);
 	Cvar_RegisterVariable (&scr_sbaralpha);
+	Cvar_RegisterVariable (&vr_hud);
 	Cvar_RegisterVariable (&scr_conwidth);
 	Cvar_RegisterVariable (&scr_conscale);
 	Cvar_RegisterVariable (&scr_crosshairscale);

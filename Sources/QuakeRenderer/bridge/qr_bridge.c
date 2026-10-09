@@ -55,6 +55,7 @@ extern float qr_head[3];		/* body-frame head offset from recenter */
 extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern char qr_centerstring[256];	/* captured svc_centerprint (r_null.c) */
 extern double qr_centertime_until;	/* cl.time expiry for the prompt */
+extern cvar_t vr_hud;			/* status bar placement: 0 off, 1 wrist, 2 float */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
@@ -5505,6 +5506,30 @@ static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
 	}
 }
 
+/*
+================
+QR_EmitHud -- drive the engine's own Sbar_Draw through the ported Draw_* layer
+so the authentic status bar (original icons, numbers, face) fills the overlay
+buffer. Gated to a live game: an empty / console-up / demo-less frame draws no
+bar. This is the ONLY place Draw_* is driven during the build -- console and
+menu are never invoked, so no 2D leaks over the game.
+================
+*/
+static void QR_EmitHud (qr_frame_slot_t *slot)
+{
+	int	mode = (int) vr_hud.value;
+
+	slot->frame.hud_mode = mode;
+	if (mode == 0 || cls.signon != SIGNONS || !cl.worldmodel || cl.intermission)
+		return;
+	QR_EnsureConchars ();
+	QR_EnsureWhite ();
+	qr_overlay_slot = slot;
+	qr_overlay_canvas = CANVAS_DEFAULT;
+	Sbar_Draw ();
+	qr_overlay_slot = NULL;
+}
+
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
@@ -6162,6 +6187,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	QR_ProjDebug ();
 	QR_EmitWheel (slot);
 	QR_EmitCenterPrint (slot);
+	QR_EmitHud (slot);
 }
 
 /* ========================================================================
