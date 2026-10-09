@@ -5939,6 +5939,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_particle_verts = 0;
 	slot->frame.num_sprite_verts = 0;
 	slot->frame.num_sprite_batches = 0;
+	slot->frame.fog_density = 0.f;
+	slot->frame.fog_color[0] = slot->frame.fog_color[1] = slot->frame.fog_color[2] = 0.f;
 
 	/* an empty packet (console up, no world) must not carry stale sky or
 	   animation state from this slot's previous life */

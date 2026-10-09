@@ -234,6 +234,11 @@ typedef struct qc_frame_s {
 					   Engine-thread clock -- the consumer
 					   must not substitute its own. */
 
+	/* Global exp2 fog (gl_fog.c). 0 density = no fog. Color is linear rgb
+	   in the same space the world fragment outputs. */
+	float		fog_density;
+	float		fog_color[3];
+
 	/* The player's world->view basis, in Quake units/degrees. The immersive
 	   consumer composes per-eye matrices from this *after* sampling the head
 	   pose (late latch); building them engine-side would cost a frame of
