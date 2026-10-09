@@ -15,6 +15,10 @@
 #ifndef QR_BRIDGE_H
 #define QR_BRIDGE_H
 
+/* For qc_hud_tile_t / QC_HUD_* below only -- QuakeCore.h is quakedef.h-free,
+   so this doesn't drag engine internals in ahead of their normal include. */
+#include "QuakeCore.h"
+
 void QR_Init (void);
 void QR_NewMap (void);
 
@@ -87,5 +91,15 @@ void QR_DrawPic (int x, int y, qpic_t *pic);
 void QR_DrawCharacter (int x, int y, int num);
 void QR_DrawString (int x, int y, const char *str);
 void QR_DrawFill (int x, int y, int w, int h, int c, float alpha);
+
+/* Modular HUD (Phase 1): turns the vr_hud_<tile>_* cvars into per-tile
+   placement. Pure except for the cvar reads; fills tile_id/anchor/offset/
+   scale and clamps out-of-range anchor/scale, but leaves first_vert/
+   vert_count/bbox_w/bbox_h at 0 -- QR_EmitHud (or its successors) sets
+   those from the emitted overlay range. Visibility (vr_hud_<tile>_show) is
+   NOT carried in qc_hud_tile_t -- see qr_hud_tile_visible, since
+   vert_count == 0 is ambiguous between "hidden" and "nothing to draw this
+   frame" (e.g. full ammo/health). */
+void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT]);
 
 #endif /* QR_BRIDGE_H */

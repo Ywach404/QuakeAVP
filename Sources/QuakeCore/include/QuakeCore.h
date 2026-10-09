@@ -230,6 +230,32 @@ typedef struct qc_overlay_batch_s {
 	uint32_t	vert_count;	/* multiple of 6 */
 } qc_overlay_batch_t;
 
+/* Modular HUD: anchors a tile may be pinned to. */
+#define QC_HUD_ANCHOR_OFFWRIST	0
+#define QC_HUD_ANCHOR_GUN	1
+
+/* Modular HUD: the fixed set of tiles the authentic status bar splits into. */
+#define QC_HUD_TILE_AMMO		0
+#define QC_HUD_TILE_FACE		1
+#define QC_HUD_TILE_HEALTHARMOR	2
+#define QC_HUD_TILE_COUNT		3
+
+/* One modular HUD tile: a sub-range of the overlay vertex run (first_vert/
+   vert_count index into overlay_verts, same as qc_overlay_batch_t) plus the
+   placement QR_ResolveHudLayout derives from the vr_hud_<tile>_* cvars.
+   vert_count == 0 means this tile emitted nothing this frame (off, or
+   vr_hud_<tile>_show 0); visibility itself is NOT carried here -- see
+   qr_hud_tile_visible in qr_bridge.c. */
+typedef struct qc_hud_tile_s {
+	uint32_t	tile_id;	/* QC_HUD_TILE_* */
+	uint32_t	first_vert;	/* into overlay_verts */
+	uint32_t	vert_count;	/* multiple of 6; 0 = emitted nothing */
+	float		bbox_w, bbox_h;	/* tile-local extent the verts span */
+	int32_t		anchor;		/* QC_HUD_ANCHOR_* */
+	float		offset[3];	/* metres, in the anchor frame */
+	float		scale;		/* panel scale multiplier */
+} qc_hud_tile_t;
+
 typedef struct qc_frame_s {
 	uint32_t	generation;	/* must match AcquireGeometry's result */
 	float		viewproj[16];	/* column-major, Metal depth range */
@@ -410,6 +436,11 @@ typedef struct qc_frame_s {
 	const float		*overlay_verts;
 	uint32_t		num_overlay_batches;
 	const qc_overlay_batch_t *overlay_batches;
+
+	/* Modular HUD (Phase 1): the authentic status bar split into pinnable
+	   tiles. Always QC_HUD_TILE_COUNT entries, indexed by QC_HUD_TILE_*. */
+	uint32_t		num_hud_tiles;
+	const qc_hud_tile_t	*hud_tiles;
 } qc_frame_t;
 
 /* Latest published frame, or NULL only if nothing has been published yet
