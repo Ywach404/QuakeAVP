@@ -47,6 +47,7 @@ struct ContentView: View {
     @State private var hudBgEnabled = true
     @State private var lookRelative = true
     @State private var smoothTurn = false
+    @State private var allowTurnWithConsole = false
     @State private var wheelSlowmo = true
     @State private var swapSenseHands = false
     @State private var fullMenu = false
@@ -72,11 +73,11 @@ struct ContentView: View {
     @State private var turnHoldDzUI: Float = 18
     // Sound mixer (Debug tab). Defaults match Quake's volume/bgmvolume defaults;
     // the engine's archived values win in-game until a slider is touched.
-    @State private var sfxVolume: Float = 0.7
-    // Background music starts quiet (30%) rather than Quake's full-blast
-    // default -- forced at boot in QuakeEngineHost so the engine's archived
-    // value doesn't win. Keep this slider default in sync with that force.
-    @State private var musicVolume: Float = 0.3
+    // Sound effects start very quiet (3%), music moderate (70%), rather than
+    // Quake's full-blast defaults -- forced at boot in QuakeEngineHost so the
+    // engine's archived values don't win. Keep these in sync with that force.
+    @State private var sfxVolume: Float = 0.03
+    @State private var musicVolume: Float = 0.7
     @State private var audioMuted = false
     @State private var hudFwdUI: Float = 0
     @State private var hudUpUI: Float = 0.14
@@ -264,6 +265,18 @@ struct ContentView: View {
             }
             RendererCoordinator.shared.onImmersiveEnded = respawn
             HandInput.summonConsole = respawn
+        }
+        // Console-open tracking for the hands-mode turn lock, by VIEW LIFETIME:
+        // true while this window's view is alive, cleared when the task is
+        // cancelled -- which fires on window close, where a Window's
+        // onDisappear/scenePhase are unreliable on visionOS. Sleeps forever
+        // otherwise; the defer runs on cancellation.
+        .task {
+            ConsoleWindowState.shared.isOpen = true
+            defer { ConsoleWindowState.shared.isOpen = false }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+            }
         }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
@@ -651,6 +664,15 @@ struct ContentView: View {
                         get: { turnHoldEnabled },
                         set: { turnHoldEnabled = $0; engine.send("vr_edgeturn \($0 ? 1 : 0)") }))
                         .font(.caption)
+                    Toggle("Allow turning with the console open", isOn: Binding(
+                        get: { allowTurnWithConsole },
+                        set: { allowTurnWithConsole = $0
+                               VRSettings.shared.allowTurnWithConsole = $0 }))
+                        .font(.caption)
+                    Text(allowTurnWithConsole
+                         ? "Hand turning stays live while the console is open."
+                         : "Hands only: turning is paused while the console window is open, so reaching for it doesn't whip your view away. Controllers are unaffected.")
+                        .font(.caption2).foregroundStyle(.secondary)
                     HStack {
                         Text("Turn speed").font(.caption)
                         Slider(value: Binding(
