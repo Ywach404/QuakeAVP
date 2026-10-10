@@ -4411,14 +4411,26 @@ point whatever the reticle style (or with no reticle shape at all). Driven by
 vr_reticle_arcs, independent of vr_reticle/vr_reticlestyle.
 ================
 */
-static void QR_EmitReticleArcs (qr_frame_slot_t *slot, const vec3_t c,
-				const vec3_t bx, const vec3_t by, float sz)
+static void QR_EmitReticleArcs (qr_frame_slot_t *slot, const vec3_t c, float sz)
 {
 	const float	hs = 0.62f;		/* half-span of each gauge, radians (~36 deg) */
 	const float	rin = sz * 1.45f, rout = sz * 1.80f;
 	float		bgr = 0.12f, bgg = 0.12f, bgb = 0.14f;	/* unfilled track */
 	float		hf, af;
 	int		ammotype, ammomax;
+	vec3_t		look, bx, by;
+	vec3_t		wup = { 0.f, 0.f, 1.f };
+
+	/* The gauges have an up/down (fill) and left/right (health vs ammo), so
+	   unlike the symmetric reticle SHAPE they must stay upright -- always
+	   billboard to the eye with world-up, never the flat surface-decal basis.
+	   Aiming at the floor otherwise lays the whole thing flat and the gauges
+	   read horizontal. */
+	VectorSubtract (c, r_origin, look);
+	CrossProduct (look, wup, bx);
+	if (VectorNormalize (bx) < 0.01f) { bx[0] = 1.f; bx[1] = 0.f; bx[2] = 0.f; }
+	CrossProduct (bx, look, by);
+	VectorNormalize (by);
 
 	/* Health, LEFT (centre angle PI). Full arc at 100; megahealth (>100)
 	   just reads full. */
@@ -4681,7 +4693,7 @@ static void QR_EmitReticle (qr_frame_slot_t *slot, const vec3_t start,
 	}
 
 	if (vr_reticle_arcs.value)
-		QR_EmitReticleArcs (slot, hit, bx, by, sz);
+		QR_EmitReticleArcs (slot, hit, sz);	/* own upright billboard basis */
 }
 
 /*
