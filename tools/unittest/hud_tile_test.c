@@ -36,12 +36,13 @@ int main (void)
 	   any game assets on disk). */
 	{
 		extern void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
-						 int stat_ammo, float *bbox_w, float *bbox_h, int *nverts);
+						 int stat_ammo, int items,
+						 float *bbox_w, float *bbox_h, int *nverts);
 		float	bw, bh;
-		int	nv;
+		int	nv, nv0;
 
 		/* With health=100, the HEALTHARMOR tile emits >0 verts and a bbox ~72x48. */
-		QR_TestEmitTileInto (QC_HUD_TILE_HEALTHARMOR, 100, 50, 0, &bw, &bh, &nv);
+		QR_TestEmitTileInto (QC_HUD_TILE_HEALTHARMOR, 100, 50, 0, 0, &bw, &bh, &nv);
 		CHECK (nv > 0, "healtharmor tile emits verts for health 100");
 		CHECK (FEQ(bw,72) && FEQ(bh,48), "healtharmor bbox is the fixed 72x48");
 
@@ -51,14 +52,27 @@ int main (void)
 		   dummy, so it actually proves "fewer digits, same fixed bbox"
 		   rather than just reusing the hardcoded-bbox path the FACE
 		   missing-pic case already covers. Review Focus #1. */
-		QR_TestEmitTileInto (QC_HUD_TILE_HEALTHARMOR, 9, 0, 0, &bw, &bh, &nv);
+		QR_TestEmitTileInto (QC_HUD_TILE_HEALTHARMOR, 9, 0, 0, 0, &bw, &bh, &nv);
 		CHECK (nv > 0, "healtharmor tile still emits verts at 1 digit (color 1 lumps resolve too)");
 		CHECK (FEQ(bw,72) && FEQ(bh,48), "bbox fixed regardless of digit count");
 
-		/* AMMO draws from the same fixture digits; same right-aligned, fixed-bbox deal. */
-		QR_TestEmitTileInto (QC_HUD_TILE_AMMO, 0, 0, 7, &bw, &bh, &nv);
+		/* AMMO: the active-weapon ammo count, right-aligned in a fixed field,
+		   with the ammo-type emblem to its left. items=0 (e.g. the axe, no
+		   ammo type) draws the count alone, and the reserved bbox is the same
+		   either way so switching to a weapon with no ammo does not resize the
+		   tile. */
+		QR_TestEmitTileInto (QC_HUD_TILE_AMMO, 0, 0, 7, 0, &bw, &bh, &nv);
 		CHECK (nv > 0, "ammo tile emits verts for a 1-digit value");
-		CHECK (FEQ(bw,72) && FEQ(bh,24), "ammo bbox is the fixed 72x24");
+		CHECK (FEQ(bw,96) && FEQ(bh,24), "ammo bbox is the fixed 96x24 (24 emblem slot + 72 digits)");
+		nv0 = nv;
+
+		/* With shells held, the shells emblem is drawn to the left of the
+		   count: exactly one extra pic == 6 more verts than the count alone.
+		   This proves the emblem is actually EMITTED, not merely reserved in
+		   the bbox (a bbox-only check would pass on a blank tile). */
+		QR_TestEmitTileInto (QC_HUD_TILE_AMMO, 0, 0, 7, IT_SHELLS, &bw, &bh, &nv);
+		CHECK (nv == nv0 + 6, "ammo emblem adds one pic (6 verts) when shells are held");
+		CHECK (FEQ(bw,96) && FEQ(bh,24), "ammo bbox unchanged by the emblem");
 
 		/* Missing-pic safety (Review Focus #3): the test fixture's synthetic WAD
 		   only carries num_0..num_9/anum_0..anum_9, so FACE's pics are absent and
@@ -67,7 +81,7 @@ int main (void)
 		   QR_DrawPic's existing texnum-0 skip must no-op safely, not crash --
 		   and the tile's bbox still reports its fixed reservation even though
 		   nothing was actually drawn. */
-		QR_TestEmitTileInto (QC_HUD_TILE_FACE, 100, 50, 0, &bw, &bh, &nv);
+		QR_TestEmitTileInto (QC_HUD_TILE_FACE, 100, 50, 0, 0, &bw, &bh, &nv);
 		CHECK (nv == 0, "face tile with a wad-missing pic emits no verts (dummy, texnum 0), no crash");
 		CHECK (FEQ(bw,24) && FEQ(bh,24), "face bbox stays fixed 24x24 even with nothing drawn");
 	}

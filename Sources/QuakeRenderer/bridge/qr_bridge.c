@@ -5686,10 +5686,55 @@ static void QR_EmitTile (qr_frame_slot_t *slot, int tile_id, qc_hud_tile_t *desc
 		break;
 
 	case QC_HUD_TILE_AMMO:
+	{
+		/* The ammo-type emblem (shells/nails/rockets/cells) sits to the LEFT
+		   of the count, exactly as the classic status bar draws it (sbar.c:
+		   icon at x, count at x+24). Rogue's lava/plasma/multi ammos are not
+		   covered -- id1 and the base weapons in every pack use these four.
+		   The emblem SLOT is reserved in the bbox whether or not a type is
+		   active, so switching to the axe (no ammo) does not resize the tile.
+
+		   The four emblem pics are loaded once and copied into file-scope
+		   static storage: QR_DrawPicFromWad Hunk_Allocs its qpic_t wrapper,
+		   which Host_ClearMemory frees on the next map change -- but the
+		   embedded gltexture is a TEXPREF_PERSIST load that survives, so we
+		   keep a copy of the wrapper (not the hunk pointer) and never touch
+		   the hunk again. */
+		static byte	ammo_store[4][sizeof(qpic_t) - 4 + sizeof(qr_glpic_t)];
+		static qpic_t	*ammo_pic[4];
+		static int	ammo_tried;
+		static const char *ammo_names[4] = {"sb_shells", "sb_nails", "sb_rocket", "sb_cells"};
+		int		ai = -1;
+
 		QR_SetCanvasOffset (0.f, -24.f);
-		Sbar_DrawNum (0, 0, cl.stats[STAT_AMMO], 3, 0);
-		desc->bbox_w = 72.f; desc->bbox_h = 24.f;
+		if (cl.items & IT_SHELLS)	ai = 0;
+		else if (cl.items & IT_NAILS)	ai = 1;
+		else if (cl.items & IT_ROCKETS)	ai = 2;
+		else if (cl.items & IT_CELLS)	ai = 3;
+		if (ai >= 0)
+		{
+			if (!ammo_tried)
+			{
+				int k;
+				for (k = 0; k < 4; k++)
+				{
+					qpic_t *src = QR_DrawPicFromWad (ammo_names[k]);
+					if (src)
+					{
+						memcpy (ammo_store[k], src,
+							sizeof(qpic_t) - 4 + sizeof(qr_glpic_t));
+						ammo_pic[k] = (qpic_t *) ammo_store[k];
+					}
+				}
+				ammo_tried = 1;
+			}
+			if (ammo_pic[ai])
+				QR_DrawPic (0, 24, ammo_pic[ai]);	/* +24: Sbar_DrawPic's baked y origin */
+		}
+		Sbar_DrawNum (24, 0, cl.stats[STAT_AMMO], 3, 0);	/* count, right of the emblem */
+		desc->bbox_w = 96.f; desc->bbox_h = 24.f;		/* 24 emblem slot + 72 for 3 digits */
 		break;
+	}
 
 	case QC_HUD_TILE_HEALTHARMOR:
 		armorcolor = (cl.stats[STAT_ARMOR] <= 25);
@@ -5745,7 +5790,8 @@ static void QR_TestEnsureFixtures (void)
 {
 	static int		ready;
 	static qr_test_digit_pic_t pic;
-	static lumpinfo_t	lumps[20];
+	static lumpinfo_t	lumps[24];
+	static const char	*ammo_names[4] = {"sb_shells", "sb_nails", "sb_rocket", "sb_cells"};
 	int			i;
 	char			name[16];
 
@@ -5783,16 +5829,27 @@ static void QR_TestEnsureFixtures (void)
 		lumps[10 + i].type = TYP_QPIC;
 		lumps[10 + i].compression = CMP_NONE;
 	}
+	/* The four id1 ammo-type emblems the AMMO tile draws, so the icon path
+	   resolves to a real pic here too (all aliasing the one shared pic). */
+	for (i = 0; i < 4; i++)
+	{
+		W_CleanupName (ammo_names[i], lumps[20 + i].name);
+		lumps[20 + i].filepos = 0;
+		lumps[20 + i].disksize = lumps[20 + i].size = sizeof (pic);
+		lumps[20 + i].type = TYP_QPIC;
+		lumps[20 + i].compression = CMP_NONE;
+	}
 	wad_base = (byte *) &pic;
 	wad_lumps = lumps;
-	wad_numlumps = 20;
+	wad_numlumps = 24;
 
 	Sbar_LoadPics ();
 	ready = 1;
 }
 
 void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
-			  int stat_ammo, float *bbox_w, float *bbox_h, int *nverts)
+			  int stat_ammo, int items,
+			  float *bbox_w, float *bbox_h, int *nverts)
 {
 	qr_frame_slot_t	slot;
 	qc_hud_tile_t	desc;
@@ -5806,7 +5863,7 @@ void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
 	cl.stats[STAT_HEALTH] = stat_health;
 	cl.stats[STAT_ARMOR] = stat_armor;
 	cl.stats[STAT_AMMO] = stat_ammo;
-	cl.items = 0;
+	cl.items = items;
 	cl.time = 0.0;
 	cl.faceanimtime = -1.0;	/* force the non-pain face frame, not that this
 				   test asserts on FACE's vert count */
