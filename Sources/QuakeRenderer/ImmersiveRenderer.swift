@@ -674,40 +674,22 @@ final class ImmersiveRenderer {
     }
 
     /// OFFWRIST anchor frame for modular tiles: the off-hand wrist,
-    /// billboarded toward the eye, exactly like the wrist-mode whole panel
-    /// above — falling back to the float frame the instant the off-hand
-    /// isn't tracked (Review Focus #2: never pin a wrist tile to a stale or
-    /// zero pose), and to nil (hide) if even the head pose is unavailable.
-    private func offWristAnchorFrame(originFromDevice: simd_float4x4,
-                                     headPoseAvailable: Bool) -> RendererCore.HudAnchorFrame? {
-        if let wrist = offHandWristPosition() {
-            let eye = ViewerPose.shared.eye
-            let toEye = eye - wrist
-            let toward = simd_length(toEye) > 1e-4 ? simd_normalize(toEye) : SIMD3<Float>(0, 0, 1)
-            let basis = RendererCore.billboardBasis(toward: toward)
-            let origin = wrist + basis.up * Self.wristLift
-            return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
-                                               forward: toward)
-        }
-        guard headPoseAvailable else { return nil }
-        return floatAnchorFrame(originFromDevice: originFromDevice)
-    }
-
-    /// The float placement as an anchor frame — same maths as the
-    /// whole-panel float branch above (ahead of the head, yaw+level only,
-    /// no pitch), reused both as `hud_mode == 2`'s panel source and as the
-    /// OFFWRIST tile fallback when the wrist isn't tracked.
-    private func floatAnchorFrame(originFromDevice: simd_float4x4) -> RendererCore.HudAnchorFrame {
-        let headPos = originFromDevice.columns.3
-        let headForward4 = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
-        let flatForward = SIMD3(headForward4.x, 0, headForward4.z)
-        let forward = simd_length(flatForward) > 1e-4 ? simd_normalize(flatForward) : SIMD3<Float>(0, 0, -1)
-        let origin = SIMD3(headPos.x, headPos.y, headPos.z)
-            + forward * Self.floatDistance
-            - SIMD3<Float>(0, Self.floatLowerOffset, 0)
-        let basis = RendererCore.billboardBasis(toward: -forward)
+    /// billboarded toward the eye. Returns nil (hide the tile) the instant
+    /// the off-hand isn't tracked — deliberately NO float-to-face fallback:
+    /// a wrist tile jumping to a panel in front of your face when your hand
+    /// drops out of view reads as ugly and unwanted (if you want a
+    /// head-fixed readout, anchor the tile to FLOAT or use the face HUD).
+    /// The `_` params are kept for call-site symmetry with the gun frame.
+    private func offWristAnchorFrame(originFromDevice _: simd_float4x4,
+                                     headPoseAvailable _: Bool) -> RendererCore.HudAnchorFrame? {
+        guard let wrist = offHandWristPosition() else { return nil }
+        let eye = ViewerPose.shared.eye
+        let toEye = eye - wrist
+        let toward = simd_length(toEye) > 1e-4 ? simd_normalize(toEye) : SIMD3<Float>(0, 0, 1)
+        let basis = RendererCore.billboardBasis(toward: toward)
+        let origin = wrist + basis.up * Self.wristLift
         return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
-                                           forward: -forward)
+                                           forward: toward)
     }
 
     /// GUN anchor frame for modular tiles: the dominant hand's controller
