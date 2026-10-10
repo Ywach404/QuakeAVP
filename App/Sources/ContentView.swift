@@ -30,9 +30,18 @@ struct ContentView: View {
     @State private var showComfort = false
     @State private var heightOffset: Float = 0.4
     @State private var rightHanded = true
-    /// vr_hud: 0 off, 1 wrist (default), 2 float. Mirrors the cvar's own
-    /// default since there is no live cvar read-back; matches r_null.c.
+    /// vr_hud: 0 off, 1 wrist (default), 2 float, 3 modular. Mirrors the cvar's
+    /// own default since there is no live cvar read-back; matches r_null.c.
     @State private var hudPanelMode: Int = 1
+    /// Per-tile vr_hud_<tile>_anchor/_show seeds (0 wrist, 1 gun). Mirrors the
+    /// shipped default layout A in r_null.c: ammo on the gun, face and
+    /// health/armor on the wrist, all three shown.
+    @State private var hudAmmoAnchor: Int = 1
+    @State private var hudAmmoShown = true
+    @State private var hudFaceAnchor: Int = 0
+    @State private var hudFaceShown = true
+    @State private var hudHealthArmorAnchor: Int = 0
+    @State private var hudHealthArmorShown = true
     @State private var lookRelative = true
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
@@ -507,12 +516,23 @@ struct ContentView: View {
                         Text("Off").tag(0)
                         Text("Wrist").tag(1)
                         Text("Floating").tag(2)
+                        Text("Modular").tag(3)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     Text("Wrist rides the off hand (falls back to floating if it isn't tracked); "
-                         + "Floating holds ~1.5 m ahead, head-stabilized.")
+                         + "Floating holds ~1.5 m ahead, head-stabilized; "
+                         + "Modular places Ammo/Face/Health+Armor as separate tiles below.")
                         .font(.caption2).foregroundStyle(.secondary)
+                }
+                if hudPanelMode == 3 {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Modular tiles").font(.caption).foregroundStyle(.secondary)
+                        hudTileControl("Ammo", anchor: $hudAmmoAnchor, shown: $hudAmmoShown, cvar: "ammo")
+                        hudTileControl("Face", anchor: $hudFaceAnchor, shown: $hudFaceShown, cvar: "face")
+                        hudTileControl("Health + Armor", anchor: $hudHealthArmorAnchor,
+                                       shown: $hudHealthArmorShown, cvar: "healtharmor")
+                    }
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
@@ -1523,6 +1543,37 @@ struct ContentView: View {
             Text(String(format: "%.0f", value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    /// One row of the modular HUD panel (vr_hud 3): an anchor segmented
+    /// control (Wrist/Gun) plus a visibility toggle for one tile, sending
+    /// `vr_hud_<cvar>_anchor` / `vr_hud_<cvar>_show` straight to the engine.
+    /// No live cvar read-back exists, so the bindings seed from the shipped
+    /// default layout A (see hudAmmoAnchor etc.) rather than reading back.
+    private func hudTileControl(_ label: String, anchor: Binding<Int>,
+                                shown: Binding<Bool>, cvar: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(label).font(.caption).frame(width: 110, alignment: .leading)
+                Picker(label, selection: Binding(
+                    get: { anchor.wrappedValue },
+                    set: { anchor.wrappedValue = $0; engine.send("vr_hud_\(cvar)_anchor \($0)") })) {
+                    Text("Wrist").tag(0)
+                    Text("Gun").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Toggle("Show", isOn: Binding(
+                    get: { shown.wrappedValue },
+                    set: { shown.wrappedValue = $0; engine.send("vr_hud_\(cvar)_show \($0 ? 1 : 0)") }))
+                    .font(.caption)
+                    .fixedSize()
+            }
+            if anchor.wrappedValue == 1 {
+                Text("Gun anchor needs a tracked controller -- hands-only play won't show this tile.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 
