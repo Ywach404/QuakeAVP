@@ -436,6 +436,11 @@ typedef struct qc_frame_s {
 	int32_t			hud_bg;		/* vr_hud_bg: draw a background box
 					   behind each modular tile, consumer-
 					   side (0/1) */
+	int32_t			hud_wrist_fallback;	/* vr_hud_wrist_fallback: an
+					   OFFWRIST modular tile when the off-
+					   hand isn't tracked -- 1 falls back
+					   to the float placement, 0 hides the
+					   tile instead, consumer-side (0/1) */
 	uint32_t		num_overlay_verts;
 	const float		*overlay_verts;
 	uint32_t		num_overlay_batches;
