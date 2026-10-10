@@ -54,6 +54,11 @@ struct RenderPipelines {
     /// billboards. Optional for the same reason as `text`: a build failure
     /// must not nil the whole set. Worst case: no sprite effects.
     let sprite: MTLRenderPipelineState?
+    /// Modular HUD tile background panel (vr_hud_bg): procedural stone +
+    /// bevel, drawn behind each tile's content. Optional like `text`/
+    /// `sprite`: a build failure must not take down the rest of the
+    /// renderer. Worst case: no panel, tile content still draws.
+    let hudPanel: MTLRenderPipelineState?
     let depthWrite: MTLDepthStencilState
     let depthNoWrite: MTLDepthStencilState
     /// For pass B: pass exactly the prepass depth, write nothing.
@@ -119,12 +124,6 @@ final class RendererCore {
     /// Black 1x1: bound as the fullbright layer for skins without one, so
     /// the alias fragment's unconditional add contributes nothing.
     private let blackTexture: MTLTexture
-
-    /// White 1x1: lazily created (vr_hud_bg's background box is the only
-    /// consumer) so a tile's dark panel is a solid colour via the SAME
-    /// texture*vertexColor path `text_fragment` already uses for white-
-    /// texel fills, rather than a second shader. nil until first needed.
-    private var hudBgTexture: MTLTexture?
 
     /// One alias model's GPU mesh: all poses' packed vertices followed by
     /// the shared texcoords in one buffer, plus a uint16 index list.
@@ -332,6 +331,10 @@ final class RendererCore {
                                          fragment: "polyblend_fragment", blended: true)
         print("[renderer] polyblend pipeline: \(polyblendPipeline == nil ? "FAILED (polyblend off)" : "ok")")
 
+        let hudPanelPipeline = pipeline(vertex: "hud_panel_vertex",
+                                        fragment: "hud_panel_fragment", blended: true)
+        print("[renderer] hud panel pipeline: \(hudPanelPipeline == nil ? "FAILED (tile bg off)" : "ok")")
+
         return RenderPipelines(
             world: world, worldDepthOnly: worldDepthOnly, worldEqual: worldEqual,
             worldBlend: worldBlend, liquid: liquid,
@@ -340,6 +343,7 @@ final class RendererCore {
             vignette: vignette, polyblend: polyblendPipeline, wheelGuide: wheelGuide,
             text: textPipeline,
             sprite: spritePipeline,
+            hudPanel: hudPanelPipeline,
             depthWrite: depthWrite, depthNoWrite: depthNoWrite,
             depthEqualNoWrite: depthEqualNoWrite,
             depthAlways: depthAlways)
@@ -896,36 +900,41 @@ final class RendererCore {
     /// by the two tiles they actually belong to. Verts are 6/quad and tile
     /// ranges are quad-aligned, so the intersection is always a whole
     /// number of quads.
-    /// First-use creation of the 1x1 white texture `drawHudTiles` binds for
-    /// the vr_hud_bg background box. Kept off `init?()` (unlike
-    /// `neutralLightmap`/`blackTexture`, which every world draw needs) since
-    /// only the modular HUD, and only with the toggle on, ever asks for it.
-    private func ensureHudBgTexture() -> MTLTexture? {
-        if let hudBgTexture { return hudBgTexture }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
-        guard let tex = device.makeTexture(descriptor: descriptor) else { return nil }
-        var white: [UInt8] = [255, 255, 255, 255]
-        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0,
-                   withBytes: &white, bytesPerRow: 4)
-        hudBgTexture = tex
-        return tex
-    }
 
-    /// The vr_hud_bg background quad for one tile, in the SAME tile-local
-    /// (0,0)-(bbox_w,bbox_h) coordinates and 9-float layout (xyz, uv, rgba)
-    /// the tile's own content verts use, so it transforms under the exact
-    /// same per-tile model matrix and tracks the tile. Padded by
-    /// `pad` virtual px on every side; uv is irrelevant (the bg texture is
-    /// 1x1) and left at the origin.
+    /// The vr_hud_bg background panel quad for one tile, in the SAME
+    /// tile-local (0,0)-(bbox_w,bbox_h) coordinates and 9-float layout
+    /// (xyz, uv, rgba) the tile's own content verts use, so it transforms
+    /// under the exact same per-tile model matrix and tracks the tile.
+    /// Padded by `pad` virtual px on every side. uv spans 0..1 across this
+    /// PADDED quad (not the unpadded bbox) and is fed to `hud_panel_fragment`
+    /// for its rounded-rect mask, stone fill and bevel; color is unused by
+    /// that shader and left at white.
     private static func hudBgQuad(bboxW: Float, bboxH: Float, pad: Float) -> [Float] {
         let left: Float = -pad, top: Float = -pad
         let right = bboxW + pad, bottom = bboxH + pad
-        let r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0.6
-        func vert(_ x: Float, _ y: Float) -> [Float] { [x, y, 0, 0, 0, r, g, b, a] }
-        return vert(left, top) + vert(right, top) + vert(left, bottom)
-             + vert(right, top) + vert(right, bottom) + vert(left, bottom)
+        func vert(_ x: Float, _ y: Float, _ u: Float, _ v: Float) -> [Float] {
+            [x, y, 0, u, v, 1, 1, 1, 1]
+        }
+        return vert(left, top, 0, 0) + vert(right, top, 1, 0) + vert(left, bottom, 0, 1)
+             + vert(right, top, 1, 0) + vert(right, bottom, 1, 1) + vert(left, bottom, 0, 1)
     }
+
+    /// Layout must match HudPanelUniforms in HudPanel.metal: two
+    /// view-projections (as GuideUniforms) plus the padded bbox's aspect
+    /// ratio, so the panel's rounded corners and stone noise stay
+    /// isotropic regardless of the tile's own (often very non-square)
+    /// shape.
+    private struct HudPanelUniforms {
+        var viewproj0: simd_float4x4
+        var viewproj1: simd_float4x4
+        var aspect: Float
+    }
+
+    /// DIAGNOSTIC (temporary): texnums already logged as missing from
+    /// `textures`, so the warning below fires once per texnum instead of
+    /// spamming every frame. Mutated only inside a consume cycle, like
+    /// `textures` itself.
+    private var loggedMissingHudTexnums: Set<UInt32> = []
 
     func drawHudTiles(frame: qc_frame_t,
                       tileModels: [simd_float4x4?],
@@ -945,37 +954,46 @@ final class RendererCore {
                                           options: .storageModeShared)
         else { return }
 
-        encoder.setRenderPipelineState(pipeline)
         encoder.setDepthStencilState(pipelines.depthAlways)
-        encoder.setVertexBuffer(buf, offset: 0, index: 0)
 
         let drawBg = frame.hud_bg != 0
-        let bgTexture = drawBg ? ensureHudBgTexture() : nil
+        let pad: Float = 6
 
         let tileCount = min(Int(frame.num_hud_tiles), tileModels.count)
         for i in 0..<tileCount {
             let tile = tiles[i]
             guard tile.vert_count > 0, let model = tileModels[i] else { continue }
 
-            var uniforms = GuideUniforms(viewproj0: viewproj0 * model, viewproj1: viewproj1 * model)
-            withUnsafeBytes(of: &uniforms) { raw in
-                encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
-            }
-
-            // Background box, same per-tile transform, drawn BEFORE the
-            // tile's own content below so it sits behind it. A separate
-            // per-call buffer bound at index 0 for this one draw, then
-            // restored to the shared content buffer for the batch loop.
-            if drawBg, let bgTexture {
-                let quad = Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: 6)
+            // Background panel (stone + bevel), same per-tile transform,
+            // drawn BEFORE the tile's own content below so it sits behind
+            // it. Its own pipeline, uniforms (with the padded aspect) and
+            // vertex buffer for this one draw, then both are restored for
+            // the content batch loop beneath.
+            if drawBg, let panelPipeline = pipelines.hudPanel {
+                let paddedW = tile.bbox_w + 2 * pad
+                let paddedH = tile.bbox_h + 2 * pad
+                let quad = Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: pad)
                 if let bgBuf = device.makeBuffer(bytes: quad,
                                                  length: quad.count * MemoryLayout<Float>.size,
                                                  options: .storageModeShared) {
+                    var panelUniforms = HudPanelUniforms(
+                        viewproj0: viewproj0 * model, viewproj1: viewproj1 * model,
+                        aspect: paddedH > 0 ? paddedW / paddedH : 1)
+                    encoder.setRenderPipelineState(panelPipeline)
+                    withUnsafeBytes(of: &panelUniforms) { raw in
+                        encoder.setVertexBytes(raw.baseAddress!,
+                                               length: MemoryLayout<HudPanelUniforms>.stride, index: 1)
+                    }
                     encoder.setVertexBuffer(bgBuf, offset: 0, index: 0)
-                    encoder.setFragmentTexture(bgTexture, index: 0)
                     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
-                    encoder.setVertexBuffer(buf, offset: 0, index: 0)
                 }
+            }
+
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBuffer(buf, offset: 0, index: 0)
+            var uniforms = GuideUniforms(viewproj0: viewproj0 * model, viewproj1: viewproj1 * model)
+            withUnsafeBytes(of: &uniforms) { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
             }
 
             let tileStart = Int(tile.first_vert)
@@ -987,7 +1005,17 @@ final class RendererCore {
                 let start = max(batchStart, tileStart)
                 let end = min(batchEnd, tileEnd)
                 guard end > start else { continue }   // no overlap with this tile
-                guard let tex = textures[batch.texnum] else { continue }
+                // DIAGNOSTIC (temporary): revert to guard/continue once root
+                // cause is found. Reported bug is both NUMBER tiles blanking
+                // on ammo pickup / damage; the suspect is a texnum missing
+                // from `textures` here. Draw the obvious magenta fallback
+                // instead of silently skipping, and log each distinct miss
+                // once so a device run can confirm (or rule out) this path.
+                if textures[batch.texnum] == nil, !loggedMissingHudTexnums.contains(batch.texnum) {
+                    loggedMissingHudTexnums.insert(batch.texnum)
+                    print("[hud] tile \(i) batch texnum \(batch.texnum) NOT in textures dict")
+                }
+                let tex = textures[batch.texnum] ?? missingTexture
                 encoder.setFragmentTexture(tex, index: 0)
                 encoder.drawPrimitives(type: .triangle,
                                        vertexStart: start,
