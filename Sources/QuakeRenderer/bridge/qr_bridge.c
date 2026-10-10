@@ -6006,7 +6006,7 @@ tiles only for mode 3. Calling both every frame is correct.
 static void QR_EmitModularHud (qr_frame_slot_t *slot)
 {
 	qc_hud_tile_t	tiles[QC_HUD_TILE_COUNT];
-	int		i;
+	int		i, axe;
 
 	slot->frame.hud_mode = (int) vr_hud.value;
 	/* Set unconditionally (ahead of the mode gate below) so the consumer
@@ -6021,10 +6021,20 @@ static void QR_EmitModularHud (qr_frame_slot_t *slot)
 
 	QR_ResolveHudLayout (tiles);
 
+	/* The axe carries no ammo, so its count tile is meaningless -- skip it
+	   (vert_count stays 0 from QR_ResolveHudLayout, so the consumer hides
+	   it). QR_ActiveWeaponBit resolves the axe from the drawn view model,
+	   since the protocol truncates IT_AXE to 0 in STAT_ACTIVEWEAPON. */
+	axe = (QR_ActiveWeaponBit () == IT_AXE);
 	qr_overlay_slot = slot;
 	for (i = 0; i < QC_HUD_TILE_COUNT; i++)
-		if (qr_hud_tile_visible[i])
-			QR_EmitTile (slot, tiles[i].tile_id, &tiles[i]);
+	{
+		if (!qr_hud_tile_visible[i])
+			continue;
+		if (tiles[i].tile_id == QC_HUD_TILE_AMMO && axe)
+			continue;
+		QR_EmitTile (slot, tiles[i].tile_id, &tiles[i]);
+	}
 	qr_overlay_slot = NULL;
 
 	memcpy (slot->hud_tiles, tiles, sizeof (slot->hud_tiles));
