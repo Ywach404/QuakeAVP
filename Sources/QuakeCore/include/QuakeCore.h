@@ -433,6 +433,9 @@ typedef struct qc_frame_s {
 	   pipeline draws it -- in a fixed 320x200 top-left-origin virtual
 	   screen (z unused). Batched by texnum; fills use the white texel. */
 	int32_t			hud_mode;	/* vr_hud: 0 off, 1 wrist, 2 float */
+	int32_t			hud_bg;		/* vr_hud_bg: draw a background box
+					   behind each modular tile, consumer-
+					   side (0/1) */
 	uint32_t		num_overlay_verts;
 	const float		*overlay_verts;
 	uint32_t		num_overlay_batches;

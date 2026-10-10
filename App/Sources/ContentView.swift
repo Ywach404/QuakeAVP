@@ -42,6 +42,9 @@ struct ContentView: View {
     @State private var hudFaceShown = true
     @State private var hudHealthArmorAnchor: Int = 0
     @State private var hudHealthArmorShown = true
+    /// vr_hud_bg seed: the dark panel drawn behind each modular tile.
+    /// Mirrors the cvar's own default (on) since there is no live read-back.
+    @State private var hudBgEnabled = true
     @State private var lookRelative = true
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
@@ -528,6 +531,9 @@ struct ContentView: View {
                 if hudPanelMode == 3 {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Modular tiles").font(.caption).foregroundStyle(.secondary)
+                        Toggle("Background box", isOn: Binding(
+                            get: { hudBgEnabled },
+                            set: { hudBgEnabled = $0; engine.send("vr_hud_bg \($0 ? 1 : 0)") }))
                         hudTileControl("Ammo", anchor: $hudAmmoAnchor, shown: $hudAmmoShown, cvar: "ammo")
                         hudTileControl("Face", anchor: $hudFaceAnchor, shown: $hudFaceShown, cvar: "face")
                         hudTileControl("Health + Armor", anchor: $hudHealthArmorAnchor,
@@ -1569,10 +1575,6 @@ struct ContentView: View {
                     set: { shown.wrappedValue = $0; engine.send("vr_hud_\(cvar)_show \($0 ? 1 : 0)") }))
                     .font(.caption)
                     .fixedSize()
-            }
-            if anchor.wrappedValue == 1 {
-                Text("Gun anchor needs a tracked controller -- hands-only play won't show this tile.")
-                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

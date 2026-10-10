@@ -57,6 +57,7 @@ extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern char qr_centerstring[256];	/* captured svc_centerprint (r_null.c) */
 extern double qr_centertime_until;	/* cl.time expiry for the prompt */
 extern cvar_t vr_hud;			/* status bar placement: 0 off, 1 wrist, 2 float */
+extern cvar_t vr_hud_bg;		/* background box behind modular tiles, drawn consumer-side */
 /* Modular HUD (Phase 1) per-tile layout cvars; defined+registered in r_null.c */
 extern cvar_t vr_hud_ammo_anchor, vr_hud_ammo_off_x, vr_hud_ammo_off_y, vr_hud_ammo_off_z, vr_hud_ammo_scale, vr_hud_ammo_show;
 extern cvar_t vr_hud_face_anchor, vr_hud_face_off_x, vr_hud_face_off_y, vr_hud_face_off_z, vr_hud_face_scale, vr_hud_face_show;
@@ -5831,6 +5832,9 @@ static void QR_EmitModularHud (qr_frame_slot_t *slot)
 	int		i;
 
 	slot->frame.hud_mode = (int) vr_hud.value;
+	/* Set unconditionally (ahead of the mode gate below) so the consumer
+	   always has a current value to read, even while mode 3 is gated off. */
+	slot->frame.hud_bg = (int) vr_hud_bg.value;
 	if ((int) vr_hud.value != 3 || cls.signon != SIGNONS || !cl.worldmodel
 	    || cl.intermission)
 		return;
@@ -6548,6 +6552,7 @@ void QR_BeginFrame (void)
 	slot->frame.num_overlay_batches = 0;
 	slot->frame.num_hud_tiles = 0;
 	slot->frame.hud_mode = 0;
+	slot->frame.hud_bg = 0;
 	slot->frame.fog_density = 0.f;
 	slot->frame.fog_color[0] = slot->frame.fog_color[1] = slot->frame.fog_color[2] = 0.f;
 	slot->frame.sky_fog = 0.f;
