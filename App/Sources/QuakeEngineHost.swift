@@ -183,6 +183,13 @@ final class QuakeEngineHost: @unchecked Sendable {
         // user can still toggle it for the current session.
         "r_dynamic 1\n".withCString { QC_ExecuteCommand($0) }
 
+        // Start the background music quiet. bgmvolume is CVAR_ARCHIVE and
+        // defaults (byte-identically with upstream) to full; forcing it here
+        // after config.cfg loads means the game opens at a calm 30% instead of
+        // blasting, which the player can still raise from the sound mixer.
+        // Keep this in sync with ContentView.musicVolume's starting value.
+        "bgmvolume 0.3\n".withCString { QC_ExecuteCommand($0) }
+
         var previous = CFAbsoluteTimeGetCurrent()
 
         while !shouldStop.isSet {

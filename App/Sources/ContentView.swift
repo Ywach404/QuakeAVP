@@ -73,7 +73,10 @@ struct ContentView: View {
     // Sound mixer (Debug tab). Defaults match Quake's volume/bgmvolume defaults;
     // the engine's archived values win in-game until a slider is touched.
     @State private var sfxVolume: Float = 0.7
-    @State private var musicVolume: Float = 1.0
+    // Background music starts quiet (30%) rather than Quake's full-blast
+    // default -- forced at boot in QuakeEngineHost so the engine's archived
+    // value doesn't win. Keep this slider default in sync with that force.
+    @State private var musicVolume: Float = 0.3
     @State private var audioMuted = false
     @State private var hudFwdUI: Float = 0
     @State private var hudUpUI: Float = 0.14
