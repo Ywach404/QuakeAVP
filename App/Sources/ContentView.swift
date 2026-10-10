@@ -45,11 +45,6 @@ struct ContentView: View {
     /// vr_hud_bg seed: the dark panel drawn behind each modular tile.
     /// Mirrors the cvar's own default (on) since there is no live read-back.
     @State private var hudBgEnabled = true
-    /// vr_hud_wrist_fallback seed: an OFFWRIST tile when the off-hand isn't
-    /// tracked falls back to the float placement (true, the cvar's default)
-    /// or hides outright (false). Mirrors the cvar's own default since
-    /// there is no live read-back.
-    @State private var hudWristFallback = true
     @State private var lookRelative = true
     @State private var smoothTurn = false
     @State private var wheelSlowmo = true
@@ -539,9 +534,6 @@ struct ContentView: View {
                         Toggle("Background box", isOn: Binding(
                             get: { hudBgEnabled },
                             set: { hudBgEnabled = $0; engine.send("vr_hud_bg \($0 ? 1 : 0)") }))
-                        Toggle("Wrist fallback: float (off: hide)", isOn: Binding(
-                            get: { hudWristFallback },
-                            set: { hudWristFallback = $0; engine.send("vr_hud_wrist_fallback \($0 ? 1 : 0)") }))
                         hudTileControl("Ammo", anchor: $hudAmmoAnchor, shown: $hudAmmoShown, cvar: "ammo")
                         hudTileControl("Face", anchor: $hudFaceAnchor, shown: $hudFaceShown, cvar: "face")
                         hudTileControl("Health + Armor", anchor: $hudHealthArmorAnchor,

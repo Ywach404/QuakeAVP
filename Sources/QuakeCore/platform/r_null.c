@@ -288,7 +288,6 @@ cvar_t	scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE};
 cvar_t	vr_hud = {"vr_hud", "1", CVAR_ARCHIVE};	/* 0 off, 1 wrist-preset, 2 float-preset, 3 modular tiles */
 cvar_t	vr_hud_bg = {"vr_hud_bg", "1", CVAR_ARCHIVE};	/* dark panel behind each modular tile, drawn consumer-side */
-cvar_t	vr_hud_wrist_fallback = {"vr_hud_wrist_fallback", "1", CVAR_ARCHIVE};	/* OFFWRIST tile when the off-hand isn't tracked: 1 float fallback, 0 hide */
 
 /* Modular HUD (Phase 1): per-tile placement. Default layout A --
    ammo pins to the gun, face and health/armor pin to the off-hand wrist.
@@ -442,7 +441,6 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_sbaralpha);
 	Cvar_RegisterVariable (&vr_hud);
 	Cvar_RegisterVariable (&vr_hud_bg);
-	Cvar_RegisterVariable (&vr_hud_wrist_fallback);
 	Cvar_RegisterVariable (&vr_hud_ammo_anchor);
 	Cvar_RegisterVariable (&vr_hud_ammo_off_x);
 	Cvar_RegisterVariable (&vr_hud_ammo_off_y);
