@@ -658,8 +658,7 @@ final class ImmersiveRenderer {
         // shares one wrist-or-float frame, every GUN tile shares one
         // gun-or-nothing frame.
         let offwrist = offWristAnchorFrame(originFromDevice: originFromDevice,
-                                           headPoseAvailable: headPoseAvailable,
-                                           wristFallbackFloat: packet.hud_wrist_fallback != 0)
+                                           headPoseAvailable: headPoseAvailable)
         let gun = gunAnchorFrame()
 
         var models: [simd_float4x4?] = []
@@ -679,12 +678,8 @@ final class ImmersiveRenderer {
     /// above — falling back to the float frame the instant the off-hand
     /// isn't tracked (Review Focus #2: never pin a wrist tile to a stale or
     /// zero pose), and to nil (hide) if even the head pose is unavailable.
-    /// `wristFallbackFloat` is this frame's `vr_hud_wrist_fallback` (packet
-    /// field, not read live here): false makes an untracked off-hand hide
-    /// the tile outright instead of falling back to float.
     private func offWristAnchorFrame(originFromDevice: simd_float4x4,
-                                     headPoseAvailable: Bool,
-                                     wristFallbackFloat: Bool) -> RendererCore.HudAnchorFrame? {
+                                     headPoseAvailable: Bool) -> RendererCore.HudAnchorFrame? {
         if let wrist = offHandWristPosition() {
             let eye = ViewerPose.shared.eye
             let toEye = eye - wrist
@@ -694,7 +689,7 @@ final class ImmersiveRenderer {
             return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
                                                forward: toward)
         }
-        guard wristFallbackFloat, headPoseAvailable else { return nil }
+        guard headPoseAvailable else { return nil }
         return floatAnchorFrame(originFromDevice: originFromDevice)
     }
 
