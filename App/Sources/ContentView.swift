@@ -47,7 +47,6 @@ struct ContentView: View {
     @State private var hudBgEnabled = true
     @State private var lookRelative = true
     @State private var smoothTurn = false
-    @State private var allowTurnWithConsole = false
     @State private var wheelSlowmo = true
     @State private var swapSenseHands = false
     @State private var fullMenu = false
@@ -146,7 +145,6 @@ struct ContentView: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.scenePhase) private var scenePhase
 
     private var coordinator: RendererCoordinator { .shared }
 
@@ -207,7 +205,6 @@ struct ContentView: View {
         .background(dashMaterial(28))
         .tint(Self.noctuaBurgundy)
         .onAppear {
-            ConsoleWindowState.shared.isOpen = true
             engine.boot()
             _ = input          // ensure the app-lifetime input host exists
             // The wheel commits through the one console route.
@@ -265,14 +262,6 @@ struct ContentView: View {
             RendererCoordinator.shared.onImmersiveEnded = respawn
             HandInput.summonConsole = respawn
         }
-        // Console-open tracking for the hands-mode turn lock. onAppear sets it
-        // true; scenePhase catches backgrounding (visionOS doesn't fire a
-        // Window's onDisappear on close, so scenePhase is the reliable "no
-        // longer up" signal). onDisappear too, for the cases where it does.
-        .onChange(of: scenePhase) { _, phase in
-            ConsoleWindowState.shared.isOpen = (phase == .active)
-        }
-        .onDisappear { ConsoleWindowState.shared.isOpen = false }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
         .onChange(of: coordinator.isImmersiveActive) { _, active in
@@ -659,15 +648,6 @@ struct ContentView: View {
                         get: { turnHoldEnabled },
                         set: { turnHoldEnabled = $0; engine.send("vr_edgeturn \($0 ? 1 : 0)") }))
                         .font(.caption)
-                    Toggle("Allow turning with the console open", isOn: Binding(
-                        get: { allowTurnWithConsole },
-                        set: { allowTurnWithConsole = $0
-                               VRSettings.shared.allowTurnWithConsole = $0 }))
-                        .font(.caption)
-                    Text(allowTurnWithConsole
-                         ? "Hand turning stays live while the console is open."
-                         : "Hands only: turning is paused while the console window is open, so reaching for it doesn't whip your view away. Controllers are unaffected.")
-                        .font(.caption2).foregroundStyle(.secondary)
                     HStack {
                         Text("Turn speed").font(.caption)
                         Slider(value: Binding(
