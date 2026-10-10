@@ -5669,6 +5669,14 @@ static void QR_EmitTile (qr_frame_slot_t *slot, int tile_id, qc_hud_tile_t *desc
 	base = slot->frame.num_overlay_verts;
 	QR_SetCanvas (CANVAS_DEFAULT);
 
+	/* Force opaque white. Sbar_DrawNum/Face draw at the current qr_draw_color,
+	   and V_PolyBlend leaves it at the last damage/pickup flash (glColor4fv
+	   (v_blend)) -- only ever SETTING it when v_blend[3]>0, never resetting --
+	   so after one hit/pickup the digits inherited the flash's low alpha and
+	   went faint, then invisible (a new pickup re-tinted it briefly). The
+	   modular tiles own their colour; draw them at full alpha regardless. */
+	qr_draw_color[0] = qr_draw_color[1] = qr_draw_color[2] = qr_draw_color[3] = 1.f;
+
 	switch (tile_id)
 	{
 	case QC_HUD_TILE_FACE:
