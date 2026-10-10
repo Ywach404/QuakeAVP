@@ -62,8 +62,9 @@ final class VRSettings: @unchecked Sendable {
 
     /// Controllerless (hands) only: draw the 3D hand model on the OFF hand
     /// alone, leaving the gun hand as just the weapon -- mirrors how the PSVR
-    /// controllers only model the off hand. Default off (both hands drawn).
-    private var _offHandModelOnly = false
+    /// controllers only model the off hand. Default on: a bare gun with no
+    /// hand on it reads better in-headset than two hands clipping the model.
+    private var _offHandModelOnly = true
     var offHandModelOnly: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _offHandModelOnly }
         set { lock.lock(); _offHandModelOnly = newValue; lock.unlock() }

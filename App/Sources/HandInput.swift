@@ -204,10 +204,17 @@ final class HandInput: @unchecked Sendable {
             if wire || fireDbg { dbg += fireStatusVerts }
             if wire || turnDbg || fireDbg || HandDebug.shared.aimRays || HandDebug.shared.strobe {
                 HandDebug.shared.publish(dbg)
+            } else {
+                // All debug overlays off: publish an empty frame so the last
+                // turn/fire meter geometry is cleared. Without this the consumer
+                // keeps drawing the final verts forever -- the meters never go
+                // away after the toggle is switched off.
+                HandDebug.shared.publish([])
             }
             // Off-hand-only option: with a gun in the dominant hand, a bare
             // shotgun with no hand reads oddly, so allow modelling just the off
-            // hand (like the PSVR controllers do). Default: both hands.
+            // hand (like the PSVR controllers do). Default: on -- a bare gun
+            // with no hand on it reads better than two hands clipping the model.
             if VRSettings.shared.offHandModelOnly {
                 let off = VRSettings.shared.rightHanded ? left : right
                 VirtualHand.shared.publish(off.virtualVerts)

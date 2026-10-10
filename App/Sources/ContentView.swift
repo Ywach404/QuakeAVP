@@ -55,7 +55,7 @@ struct ContentView: View {
     @State private var teleportSound = true
     @State private var teleportFx = true
     @State private var telefrag = true
-    @State private var offHandModelOnly = false
+    @State private var offHandModelOnly = true
     @State private var laser = false
     @State private var reticle = false
     @State private var reticleStyle: Int = 0
