@@ -194,14 +194,19 @@ final class HandInput: @unchecked Sendable {
             var dbg: [Float] = []
             let fireDbg = HandDebug.shared.fireDebug
             if wire { dbg += left.debugVerts + right.debugVerts }
-            if wire || turnDbg { dbg += turnGaugeVerts }         // flick gauge / turn meter
-            if wire || fireDbg { dbg += fireDebugVerts }         // fire-threshold meter
+            // The turn and fire meters follow their OWN toggles only. They used
+            // to ride along under `wire` (the hand-wireframe master), which made
+            // their individual switches look dead: with the wireframe up, turning
+            // a meter off left it on screen because `wire ||` kept folding it in.
+            // The wireframe draws the hand bones; the meters are their own thing.
+            if turnDbg { dbg += turnGaugeVerts }         // flick gauge / turn meter
+            if fireDbg { dbg += fireDebugVerts }         // fire-threshold meter
             if HandDebug.shared.aimRays { dbg += aimRayVerts }
             if HandDebug.shared.strobe { dbg += strobeVerts }
             // The muzzle fire/aim-health "diamond" belongs to the FIRE debug
             // only -- it used to ride along with the strobe/aim-ray overlays and
             // clutter the view with a colour-changing marker on the gun hand.
-            if wire || fireDbg { dbg += fireStatusVerts }
+            if fireDbg { dbg += fireStatusVerts }
             if wire || turnDbg || fireDbg || HandDebug.shared.aimRays || HandDebug.shared.strobe {
                 HandDebug.shared.publish(dbg)
             } else {
