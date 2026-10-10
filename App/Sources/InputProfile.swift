@@ -86,6 +86,9 @@ struct InputProfile: Codable, Equatable {
     // angular offset is a reference that lies, and you end up chasing it.
     var laser: Bool = false
     var reticle: Bool = false
+    /// HL2-style curved health/ammo gauges flanking the reticle. Independent
+    /// of `reticle`/`reticleStyle`: on with any shape, or standalone.
+    var reticleArcs: Bool = false
     var laserForward: Float = 0
     var laserUp: Float = 0
     var laserSide: Float = 0
@@ -185,6 +188,7 @@ struct InputProfile: Codable, Equatable {
         wheelSide = f(.wheelSide, 0)
         laser = b(.laser, false)
         reticle = b(.reticle, false)
+        reticleArcs = b(.reticleArcs, false)
         laserForward = f(.laserForward, 0)
         laserUp = f(.laserUp, 0)
         laserSide = f(.laserSide, 0)
@@ -346,6 +350,7 @@ final class ProfileStore {
         send("vr_wheelclip \(p.wheelClip)")
         send("vr_laser \(p.laser ? 1 : 0)")
         send("vr_reticle \(p.reticle ? 1 : 0)")
+        send("vr_reticle_arcs \(p.reticleArcs ? 1 : 0)")
         send("vr_reticlestyle \(p.reticleStyle)")
         send("vr_reticlecolor \(p.reticleColor)")
         send("vr_lasercolor \(p.laserColor)")

@@ -70,6 +70,7 @@ extern cvar_t vr_laser;			/* M6 aiming laser toggle */
 extern cvar_t vr_reticle;		/* aiming reticle toggle (alt/with the laser) */
 extern cvar_t vr_reticlestyle;		/* reticle shape 0..4 */
 extern cvar_t vr_reticlecolor;		/* reticle palette index */
+extern cvar_t vr_reticle_arcs;		/* HL2-style health/ammo gauges flanking the reticle */
 extern cvar_t vr_lasercolor;		/* laser palette index */
 extern cvar_t vr_wheelclip;		/* wheel-model front-trim keep fraction */
 extern cvar_t vr_teleport;		/* teleport locomotion on */
@@ -4354,6 +4355,96 @@ static void QR_RetRing (qr_frame_slot_t *slot, const vec3_t c,
 	}
 }
 
+/* A partial annulus swept from angle a0 to a1 (radians, measured from bx
+   toward by) between rin and rout -- one side of the HL2-style curved gauge.
+   Degenerate (a0==a1) emits nothing, so a zero-fill arc is free. */
+static void QR_RetArc (qr_frame_slot_t *slot, const vec3_t c,
+		       const vec3_t bx, const vec3_t by, float rin, float rout,
+		       float a0, float a1, float r, float g, float b)
+{
+	vec3_t	i0, i1, o0, o1;
+	int	i, k, segs;
+	float	span = a1 - a0;
+
+	if (fabsf (span) < 1e-4f)
+		return;
+	segs = (int) (fabsf (span) / (2.f*(float)M_PI) * QR_RET_SEGS * 2.f) + 1;
+	for (i = 0; i < segs; i++)
+	{
+		float t0 = a0 + span * i / segs;
+		float t1 = a0 + span * (i + 1) / segs;
+		for (k = 0; k < 3; k++)
+		{
+			i0[k] = c[k] + rin *(bx[k]*cosf(t0) + by[k]*sinf(t0));
+			i1[k] = c[k] + rin *(bx[k]*cosf(t1) + by[k]*sinf(t1));
+			o0[k] = c[k] + rout*(bx[k]*cosf(t0) + by[k]*sinf(t0));
+			o1[k] = c[k] + rout*(bx[k]*cosf(t1) + by[k]*sinf(t1));
+		}
+		QR_ParticleVert (slot, i0, r, g, b); QR_ParticleVert (slot, o0, r, g, b);
+		QR_ParticleVert (slot, o1, r, g, b); QR_ParticleVert (slot, i0, r, g, b);
+		QR_ParticleVert (slot, o1, r, g, b); QR_ParticleVert (slot, i1, r, g, b);
+	}
+}
+
+/* The per-ammo-type soft maximum the ammo gauge fills against (id1 backpack
+   caps). Nails hold 200, the rest 100. Returns 0 when no ammo type is held
+   (the axe), which the caller reads as "draw no ammo gauge". */
+static int QR_AmmoGaugeMax (int *out_type)
+{
+	int	type = -1, cap = 0;
+	if (cl.items & IT_SHELLS)	{ type = 0; cap = 100; }
+	else if (cl.items & IT_NAILS)	{ type = 1; cap = 200; }
+	else if (cl.items & IT_ROCKETS)	{ type = 2; cap = 100; }
+	else if (cl.items & IT_CELLS)	{ type = 3; cap = 100; }
+	if (out_type) *out_type = type;
+	return cap;
+}
+
+/*
+================
+QR_EmitReticleArcs -- the HL2-style curved gauges that flank the aim mark:
+health on the LEFT (bulging like a "(" ), the active weapon's ammo on the
+RIGHT (bulging like a ")"), each a dim full-span background arc with a bright
+fill that grows from the bottom with the value. Constant angular size, in the
+same billboarded (bx,by) plane as the reticle shape, so they ride the aim
+point whatever the reticle style (or with no reticle shape at all). Driven by
+vr_reticle_arcs, independent of vr_reticle/vr_reticlestyle.
+================
+*/
+static void QR_EmitReticleArcs (qr_frame_slot_t *slot, const vec3_t c,
+				const vec3_t bx, const vec3_t by, float sz)
+{
+	const float	hs = 0.62f;		/* half-span of each gauge, radians (~36 deg) */
+	const float	rin = sz * 1.45f, rout = sz * 1.80f;
+	float		bgr = 0.12f, bgg = 0.12f, bgb = 0.14f;	/* unfilled track */
+	float		hf, af;
+	int		ammotype, ammomax;
+
+	/* Health, LEFT (centre angle PI). Full arc at 100; megahealth (>100)
+	   just reads full. */
+	hf = cl.stats[STAT_HEALTH] / 100.f;
+	if (hf < 0.f) hf = 0.f; if (hf > 1.f) hf = 1.f;
+	QR_RetArc (slot, c, bx, by, rin, rout,
+		   (float)M_PI - hs, (float)M_PI + hs, bgr, bgg, bgb);
+	if (hf > 0.f)
+		/* fill grows from the bottom (PI+hs) upward toward PI-hs */
+		QR_RetArc (slot, c, bx, by, rin, rout,
+			   (float)M_PI + hs - 2.f*hs*hf, (float)M_PI + hs,
+			   1.f - 0.6f*hf, 0.25f + 0.70f*hf, 0.15f);
+
+	/* Ammo, RIGHT (centre angle 0). Only when the active weapon uses ammo. */
+	ammomax = QR_AmmoGaugeMax (&ammotype);
+	if (ammomax > 0)
+	{
+		af = cl.stats[STAT_AMMO] / (float) ammomax;
+		if (af < 0.f) af = 0.f; if (af > 1.f) af = 1.f;
+		QR_RetArc (slot, c, bx, by, rin, rout, -hs, hs, bgr, bgg, bgb);
+		if (af > 0.f)
+			QR_RetArc (slot, c, bx, by, rin, rout,
+				   -hs, -hs + 2.f*hs*af, 1.f, 0.65f, 0.12f);
+	}
+}
+
 /*
 ================
 QR_TraceSurface -- like TraceLine (chase.c) but also returns the hit plane's
@@ -4565,23 +4656,32 @@ static void QR_EmitReticle (qr_frame_slot_t *slot, const vec3_t start,
 	sz = dist * 0.011f;	/* mark half-size; constant angular size */
 	hw = sz * 0.16f;	/* bar half-thickness */
 
-	switch (style)
+	/* The reticle SHAPE is vr_reticle; the gauges are vr_reticle_arcs. Either
+	   draws alone, or both together -- the caller gates entry on (reticle ||
+	   arcs), so the shape is drawn only when its own cvar is set. */
+	if (vr_reticle.value)
 	{
-	case 1:	/* circle + centre dot (Wii-style) */
-		QR_RetRing (slot, hit, bx, by, sz*0.72f, sz*0.92f, cr, cg, cb);
-		QR_RetDisc (slot, hit, bx, by, sz*0.26f, cr, cg, cb);
-		break;
-	case 2:	/* dot */
-		QR_RetDisc (slot, hit, bx, by, sz*0.30f, cr, cg, cb);
-		break;
-	case 3:	/* circle */
-		QR_RetRing (slot, hit, bx, by, sz*0.72f, sz*0.92f, cr, cg, cb);
-		break;
-	default:	/* 0: cross */
-		QR_RetQuad (slot, hit, bx, by, sz, hw, cr, cg, cb);
-		QR_RetQuad (slot, hit, bx, by, hw, sz, cr, cg, cb);
-		break;
+		switch (style)
+		{
+		case 1:	/* circle + centre dot (Wii-style) */
+			QR_RetRing (slot, hit, bx, by, sz*0.72f, sz*0.92f, cr, cg, cb);
+			QR_RetDisc (slot, hit, bx, by, sz*0.26f, cr, cg, cb);
+			break;
+		case 2:	/* dot */
+			QR_RetDisc (slot, hit, bx, by, sz*0.30f, cr, cg, cb);
+			break;
+		case 3:	/* circle */
+			QR_RetRing (slot, hit, bx, by, sz*0.72f, sz*0.92f, cr, cg, cb);
+			break;
+		default:	/* 0: cross */
+			QR_RetQuad (slot, hit, bx, by, sz, hw, cr, cg, cb);
+			QR_RetQuad (slot, hit, bx, by, hw, sz, cr, cg, cb);
+			break;
+		}
 	}
+
+	if (vr_reticle_arcs.value)
+		QR_EmitReticleArcs (slot, hit, bx, by, sz);
 }
 
 /*
@@ -6502,7 +6602,7 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			   (cf/cr/cu, the shot frame), so with the sliders at zero the beam
 			   already emits from the barrel tip and rides it at every aim angle.
 			   The vr_laser{forward,up,side} offsets are then just fine-tune. */
-			if (vr_laser.value || vr_reticle.value)
+			if (vr_laser.value || vr_reticle.value || vr_reticle_arcs.value)
 			{
 				vec3_t	lstart, langles;
 				float	lx = bmax[0];   /* idle-frame muzzle, along barrel */
@@ -6521,8 +6621,10 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				if (vr_laser.value)
 					QR_EmitLaser (slot, lstart, langles);
 				/* Reticle marks where the SHOT lands (cl.viewangles, not the
-				   laser's barrel-aligned tilt), from the same muzzle. */
-				if (vr_reticle.value)
+				   laser's barrel-aligned tilt), from the same muzzle. Entered
+				   for the shape OR the gauges; QR_EmitReticle draws whichever
+				   their cvars enable. */
+				if (vr_reticle.value || vr_reticle_arcs.value)
 					QR_EmitReticle (slot, lstart, cl.viewangles);
 			}
 

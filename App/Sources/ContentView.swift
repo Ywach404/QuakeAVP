@@ -58,6 +58,7 @@ struct ContentView: View {
     @State private var offHandModelOnly = true
     @State private var laser = false
     @State private var reticle = false
+    @State private var reticleArcs = false
     @State private var reticleStyle: Int = 0
     @State private var reticleColor: Int = 3
     @State private var laserColor: Int = 0
@@ -1215,6 +1216,12 @@ struct ContentView: View {
                             .font(.headline)
                         Text("A mark where the shot lands. It lies flat on whatever surface you aim at — like a teleport marker on the floor.")
                             .font(.caption).foregroundStyle(.secondary)
+                        Toggle("Health / ammo gauges", isOn: Binding(
+                            get: { reticleArcs },
+                            set: { reticleArcs = $0; engine.send("vr_reticle_arcs \($0 ? 1 : 0)")
+                                   ProfileStore.shared.current.reticleArcs = $0 }))
+                        Text("HL2-style curved gauges flanking the aim point — health on the left, the active weapon's ammo on the right. Works with any reticle style, or on its own with the reticle off.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Picker("Reticle style", selection: Binding(
                             get: { reticleStyle },
                             set: { reticleStyle = $0; engine.send("vr_reticlestyle \($0)")
@@ -1505,6 +1512,7 @@ struct ContentView: View {
         aimPitch = p.aimPitch; aimYaw = p.aimYaw
         laser = p.laser
         reticle = p.reticle
+        reticleArcs = p.reticleArcs
         reticleStyle = p.reticleStyle; reticleColor = p.reticleColor
         laserColor = p.laserColor
         laserForward = p.laserForward; laserUp = p.laserUp; laserSide = p.laserSide

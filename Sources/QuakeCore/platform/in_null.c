@@ -329,6 +329,10 @@ cvar_t		vr_reticle = {"vr_reticle", "0", CVAR_ARCHIVE};
    QR_VrColor in qr_bridge.c). Laser defaults to red, reticle to amber. */
 cvar_t		vr_reticlestyle = {"vr_reticlestyle", "0", CVAR_ARCHIVE};
 cvar_t		vr_reticlecolor = {"vr_reticlecolor", "3", CVAR_ARCHIVE};
+/* HL2-style curved gauges flanking the reticle: health left, ammo right.
+   Independent of vr_reticle/vr_reticlestyle -- on with any reticle shape, or
+   standalone with no shape at all. */
+cvar_t		vr_reticle_arcs = {"vr_reticle_arcs", "0", CVAR_ARCHIVE};
 cvar_t		vr_lasercolor   = {"vr_lasercolor",   "0", CVAR_ARCHIVE};
 /* Point-and-blink teleport locomotion: aim with the gun reticle, ring-pinch to
    blink. vr_teleportcolor tints the GUN RETICLE cyan when the spot is a valid
@@ -1293,6 +1297,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_reticle);
 	Cvar_RegisterVariable (&vr_reticlestyle);
 	Cvar_RegisterVariable (&vr_reticlecolor);
+	Cvar_RegisterVariable (&vr_reticle_arcs);
 	Cvar_RegisterVariable (&vr_lasercolor);
 	Cvar_RegisterVariable (&vr_teleport);
 	Cvar_RegisterVariable (&vr_teleportcolor);
