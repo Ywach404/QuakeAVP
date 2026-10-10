@@ -176,6 +176,13 @@ final class QuakeEngineHost: @unchecked Sendable {
             return
         }
 
+        // Force dynamic lighting on after config.cfg has loaded. r_dynamic is
+        // CVAR_ARCHIVE, so a stray "0" (e.g. left from a debugging session)
+        // persists and silently kills muzzle-flash flares and the dynamic
+        // lightmap light/dark shading. This port always wants it lit; the
+        // user can still toggle it for the current session.
+        "r_dynamic 1\n".withCString { QC_ExecuteCommand($0) }
+
         var previous = CFAbsoluteTimeGetCurrent()
 
         while !shouldStop.isSet {
