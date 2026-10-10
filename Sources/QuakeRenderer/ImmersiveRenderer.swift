@@ -421,6 +421,16 @@ final class ImmersiveRenderer {
                          headPoseAvailable: deviceAnchor != nil)
         }
 
+        // Modular HUD tiles (vr_hud 3): per-tile model matrices in the SAME
+        // corrected tracking space as hudModel above, resolved once and
+        // shared by both eyes/branches below. Empty whenever hud_mode != 3
+        // (hudTileModels itself guards that), so drawHudTiles is always
+        // safe to call unconditionally -- it no-ops for modes 0/1/2.
+        let tileModels: [simd_float4x4?] = packet.map {
+            hudTileModels(packet: $0, originFromDevice: originFromDevice,
+                         headPoseAvailable: deviceAnchor != nil)
+        } ?? []
+
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
                 for: drawable, textureIndex: 0, slice: nil, clear: clear)
@@ -445,6 +455,9 @@ final class ImmersiveRenderer {
                                      viewproj1: handViewproj[1] * hudModel,
                                      pipelines: pipelines, encoder: encoder)
                 }
+                core.drawHudTiles(frame: packet, tileModels: tileModels,
+                                  viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                  pipelines: pipelines, encoder: encoder)
             }
             encoder.endEncoding()
         } else {
@@ -477,6 +490,9 @@ final class ImmersiveRenderer {
                         core.drawOverlay(frame: packet, viewproj0: hv, viewproj1: hv,
                                          pipelines: pipelines, encoder: encoder)
                     }
+                    core.drawHudTiles(frame: packet, tileModels: tileModels,
+                                      viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                      pipelines: pipelines, encoder: encoder)
                 }
                 encoder.endEncoding()
             }
@@ -548,18 +564,33 @@ final class ImmersiveRenderer {
     /// bar is the bottom strip of the plane, so the readable content needs
     /// the whole panel centre pulled well below the gaze.)
     private static let floatLowerOffset: Float = 0.6
+    /// Metres per tile-local unit for modular HUD tiles (vr_hud 3): the
+    /// same per-pixel ratio `wristPanelWidth` uses over the full 320px
+    /// virtual screen, so a compact tile (e.g. AMMO's 72x24 bbox) comes out
+    /// a plausible wrist-icon size rather than needing its own device-tune
+    /// pass. `tile.scale` multiplies on top of this.
+    private static let hudTilePixelScale: Float = wristPanelWidth / 320
+    /// How far ahead of the gun hand (controller grip) a gun-anchored tile
+    /// floats, along the same "toward the eye" billboard normal the wrist
+    /// tile uses — enough to clear the modelled weapon without the tile
+    /// overlapping it. Device-tunable like the other HUD placement
+    /// constants above.
+    private static let gunTileLift: Float = 0.08
 
-    /// This frame's HUD panel model matrix (overlay-space -> corrected
+    /// This frame's whole-panel HUD model matrix (overlay-space -> corrected
     /// tracking space), or nil to draw nothing. `hud_mode == 0` is off;
     /// `hud_mode == 1` (wrist) anchors to the off-hand and billboards
     /// toward the eye, falling back to the float placement the instant the
     /// off-hand isn't tracked (Review Focus #3: never anchor to a stale or
     /// zero pose); `hud_mode == 2` floats ahead of the head, yaw+level only
     /// — no pitch, mirroring `QR_EmitCenterPrint`'s placement basis class.
-    /// Picked once per frame and shared by both eyes.
+    /// Picked once per frame and shared by both eyes. `hud_mode == 3`
+    /// (modular tiles) is deliberately EXCLUDED here — it has no single
+    /// panel to place; see `hudTileModels` for the per-tile placement that
+    /// replaces this for that mode.
     private func hudPanelModel(packet: qc_frame_t, originFromDevice: simd_float4x4,
                                headPoseAvailable: Bool) -> simd_float4x4? {
-        guard packet.hud_mode != 0 else { return nil }
+        guard packet.hud_mode == 1 || packet.hud_mode == 2 else { return nil }
 
         if packet.hud_mode == 1, let wrist = offHandWristPosition() {
             let eye = ViewerPose.shared.eye
@@ -608,6 +639,107 @@ final class ImmersiveRenderer {
         }
         let snap = OffHandWrist.shared.snapshot()
         return snap.valid ? snap.position : nil
+    }
+
+    // MARK: - Modular HUD tile placement (vr_hud 3)
+
+    /// This frame's per-tile model matrices for the modular HUD, one entry
+    /// per `packet.hud_tiles[i]` (fixed order AMMO/FACE/HEALTHARMOR — see
+    /// `qc_frame_t`'s doc comment), nil where that tile drew nothing this
+    /// frame (`vert_count == 0`) or its anchor has no live pose right now.
+    /// Resolved once per frame, shared by both eyes, exactly like the
+    /// whole-panel `hudPanelModel(packet:...)` above.
+    private func hudTileModels(packet: qc_frame_t, originFromDevice: simd_float4x4,
+                               headPoseAvailable: Bool) -> [simd_float4x4?] {
+        guard packet.hud_mode == 3, packet.num_hud_tiles > 0, let tiles = packet.hud_tiles
+        else { return [] }
+
+        // Resolved once per frame rather than per tile: every OFFWRIST tile
+        // shares one wrist-or-float frame, every GUN tile shares one
+        // gun-or-nothing frame.
+        let offwrist = offWristAnchorFrame(originFromDevice: originFromDevice,
+                                           headPoseAvailable: headPoseAvailable)
+        let gun = gunAnchorFrame()
+
+        var models: [simd_float4x4?] = []
+        for i in 0..<Int(packet.num_hud_tiles) {
+            let tile = tiles[i]
+            guard tile.vert_count > 0 else { models.append(nil); continue }
+            let anchor = (tile.anchor == QC_HUD_ANCHOR_GUN) ? gun : offwrist
+            guard let anchor else { models.append(nil); continue }
+            models.append(RendererCore.hudTileModel(tile: tile, anchor: anchor,
+                                                     pixelScale: Self.hudTilePixelScale))
+        }
+        return models
+    }
+
+    /// OFFWRIST anchor frame for modular tiles: the off-hand wrist,
+    /// billboarded toward the eye, exactly like the wrist-mode whole panel
+    /// above — falling back to the float frame the instant the off-hand
+    /// isn't tracked (Review Focus #2: never pin a wrist tile to a stale or
+    /// zero pose), and to nil (hide) if even the head pose is unavailable.
+    private func offWristAnchorFrame(originFromDevice: simd_float4x4,
+                                     headPoseAvailable: Bool) -> RendererCore.HudAnchorFrame? {
+        if let wrist = offHandWristPosition() {
+            let eye = ViewerPose.shared.eye
+            let toEye = eye - wrist
+            let toward = simd_length(toEye) > 1e-4 ? simd_normalize(toEye) : SIMD3<Float>(0, 0, 1)
+            let basis = RendererCore.billboardBasis(toward: toward)
+            let origin = wrist + basis.up * Self.wristLift
+            return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
+                                               forward: toward)
+        }
+        guard headPoseAvailable else { return nil }
+        return floatAnchorFrame(originFromDevice: originFromDevice)
+    }
+
+    /// The float placement as an anchor frame — same maths as the
+    /// whole-panel float branch above (ahead of the head, yaw+level only,
+    /// no pitch), reused both as `hud_mode == 2`'s panel source and as the
+    /// OFFWRIST tile fallback when the wrist isn't tracked.
+    private func floatAnchorFrame(originFromDevice: simd_float4x4) -> RendererCore.HudAnchorFrame {
+        let headPos = originFromDevice.columns.3
+        let headForward4 = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
+        let flatForward = SIMD3(headForward4.x, 0, headForward4.z)
+        let forward = simd_length(flatForward) > 1e-4 ? simd_normalize(flatForward) : SIMD3<Float>(0, 0, -1)
+        let origin = SIMD3(headPos.x, headPos.y, headPos.z)
+            + forward * Self.floatDistance
+            - SIMD3<Float>(0, Self.floatLowerOffset, 0)
+        let basis = RendererCore.billboardBasis(toward: -forward)
+        return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
+                                           forward: -forward)
+    }
+
+    /// GUN anchor frame for modular tiles: the dominant hand's controller
+    /// pose, billboarded toward the eye like the wrist frame. nil (hide,
+    /// never a stale pose) whenever controllers aren't tracking — there is
+    /// no ARKit-hands equivalent published continuously enough to trust
+    /// here (the gun hand gets no rigid-hand model either, see
+    /// `offHandWristPosition`'s sibling code above: "the gun hand gets no
+    /// model"), so a GUN-anchored tile simply doesn't draw in hands-only
+    /// play until that's added.
+    private func gunAnchorFrame() -> RendererCore.HudAnchorFrame? {
+        guard let gunPos = gunPosition() else { return nil }
+        let eye = ViewerPose.shared.eye
+        let toEye = eye - gunPos
+        let toward = simd_length(toEye) > 1e-4 ? simd_normalize(toEye) : SIMD3<Float>(0, 0, 1)
+        let basis = RendererCore.billboardBasis(toward: toward)
+        let origin = gunPos + toward * Self.gunTileLift
+        return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
+                                           forward: toward)
+    }
+
+    /// The dominant hand's controller grip position, corrected tracking
+    /// space — the same source (`SpatialControllerTracker`) and correction
+    /// the engine's own aim feed uses above, just read again here rather
+    /// than cached across frames (this runs only when `vr_hud 3`, and
+    /// cheaply). nil whenever controllers aren't tracking.
+    private func gunPosition() -> SIMD3<Float>? {
+        guard SpatialControllerTracker.shared.isTracking else { return nil }
+        let rightHanded = VRSettings.shared.rightHanded
+        guard let domPose = SpatialControllerTracker.shared.pose(left: !rightHanded) else { return nil }
+        let p = recenterCorrection * domPose.columns.3
+        return SIMD3(p.x, p.y, p.z)
     }
 
     // MARK: - Engine reporting

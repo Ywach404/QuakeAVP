@@ -737,8 +737,14 @@ final class RendererCore {
         // doc comment); over the world, polyblend and wheel text, under the
         // vignette drawn next.
         if windowHud {
-            drawOverlay(frame: frame, viewproj0: Self.overlayWindowOrtho(), viewproj1: Self.overlayWindowOrtho(),
-                       pipelines: pipelines, encoder: encoder)
+            if frame.hud_mode == 3 {
+                drawHudTiles(frame: frame, tileModels: Self.windowHudTileModels(frame: frame),
+                            viewproj0: Self.overlayWindowOrtho(), viewproj1: Self.overlayWindowOrtho(),
+                            pipelines: pipelines, encoder: encoder)
+            } else {
+                drawOverlay(frame: frame, viewproj0: Self.overlayWindowOrtho(), viewproj1: Self.overlayWindowOrtho(),
+                           pipelines: pipelines, encoder: encoder)
+            }
         }
 
         // Comfort vignette, last over everything, engine-eased strength.
@@ -792,7 +798,12 @@ final class RendererCore {
                      viewproj0: simd_float4x4, viewproj1: simd_float4x4,
                      pipelines: RenderPipelines,
                      encoder: MTLRenderCommandEncoder) {
-        guard frame.hud_mode != 0,
+        // Presets only (vr_hud 1/2). Mode 3 (modular tiles) fills this SAME
+        // overlay_verts/overlay_batches buffer through the tile path — see
+        // `drawHudTiles` — and must never also go through this whole-panel
+        // draw, which would place every tile's verts under one shared
+        // wrist/float transform instead of each tile's own anchor.
+        guard frame.hud_mode == 1 || frame.hud_mode == 2,
               frame.num_overlay_batches > 0, frame.num_overlay_verts >= 3,
               let verts = frame.overlay_verts, let batches = frame.overlay_batches,
               let pipeline = pipelines.text
@@ -832,19 +843,112 @@ final class RendererCore {
         return ortho
     }
 
-    /// The immersive HUD panel's model matrix: maps the overlay's 320x200
-    /// top-left-origin plane (+y down, z always 0 — pure 2D quads) onto a
-    /// flat `widthMeters` x `heightMeters` rectangle centred at `origin`,
-    /// in whatever space the caller's viewproj expects (corrected tracking
-    /// space, for the immersive renderer's `handViewproj`). `right`/`up`
-    /// must already be unit and mutually orthogonal (see `billboardBasis`).
-    /// Overlay +x maps to `right`, overlay +y (down) maps to `-up`, so text
-    /// reads right-side-up for a viewer standing where `billboardBasis` was
-    /// told to face.
+    /// The window's fixed modular-HUD layout (vr_hud 3): no wrist or gun
+    /// pose exists in the flat mono debug view (see `WorldRenderer`'s doc
+    /// comment — it draws exactly what the packet's own viewproj describes,
+    /// nothing device-tracked), so the three tiles simply stack down the
+    /// left edge of the 320x200 virtual screen, in `hud_tiles[]` order
+    /// (AMMO, FACE, HEALTHARMOR), 4px gaps, ignoring anchor/offset/scale —
+    /// "a simple fixed screen layout" per the brief, debug-only. One entry
+    /// per `frame.hud_tiles[i]`; nil for a tile that emitted nothing this
+    /// frame (`vert_count == 0`), same convention `drawHudTiles` expects.
+    static func windowHudTileModels(frame: qc_frame_t) -> [simd_float4x4?] {
+        guard frame.hud_mode == 3, frame.num_hud_tiles > 0, let tiles = frame.hud_tiles
+        else { return [] }
+        var models: [simd_float4x4?] = []
+        var y: Float = 0
+        for i in 0..<Int(frame.num_hud_tiles) {
+            let tile = tiles[i]
+            guard tile.vert_count > 0 else { models.append(nil); continue }
+            var m = matrix_identity_float4x4
+            m.columns.3 = SIMD4(0, y, 0, 1)
+            models.append(m)
+            y += tile.bbox_h + 4
+        }
+        return models
+    }
+
+    /// Modular HUD tiles (vr_hud 3): each tile's vertex sub-range — into
+    /// the SAME `overlay_verts`/`overlay_batches` the whole-panel presets
+    /// would otherwise have used (`QR_EmitModularHud` writes into the
+    /// identical buffer `QR_EmitHud` would have, see its doc comment) —
+    /// gets its OWN model matrix via `tileModels[i]`, because tiles may pin
+    /// to different anchors (wrist vs gun) or, in the window's fixed
+    /// layout, different fixed offsets. A nil entry skips that tile
+    /// outright: it emitted nothing this frame (`vert_count == 0`) or its
+    /// anchor has no live pose right now — never drawn at a stale
+    /// position. One batch loop, like `drawOverlay`, just re-run per tile
+    /// with that tile's own transform and restricted to its own vert
+    /// range (a tile may span multiple batches — different texnums, e.g.
+    /// HEALTHARMOR's two colour atlases — so every batch wholly inside the
+    /// tile's range is drawn).
+    func drawHudTiles(frame: qc_frame_t,
+                      tileModels: [simd_float4x4?],
+                      viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                      pipelines: RenderPipelines,
+                      encoder: MTLRenderCommandEncoder) {
+        guard frame.hud_mode == 3, frame.num_hud_tiles > 0, !tileModels.isEmpty,
+              let tiles = frame.hud_tiles,
+              frame.num_overlay_batches > 0, frame.num_overlay_verts >= 3,
+              let verts = frame.overlay_verts, let batches = frame.overlay_batches,
+              let pipeline = pipelines.text
+        else { return }
+
+        let floatCount = Int(frame.num_overlay_verts) * 9
+        guard let buf = device.makeBuffer(bytes: verts,
+                                          length: floatCount * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
+
+        let tileCount = min(Int(frame.num_hud_tiles), tileModels.count)
+        for i in 0..<tileCount {
+            let tile = tiles[i]
+            guard tile.vert_count > 0, let model = tileModels[i] else { continue }
+
+            var uniforms = GuideUniforms(viewproj0: viewproj0 * model, viewproj1: viewproj1 * model)
+            withUnsafeBytes(of: &uniforms) { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
+            }
+
+            let tileStart = tile.first_vert
+            let tileEnd = tile.first_vert + tile.vert_count
+            for b in 0..<Int(frame.num_overlay_batches) {
+                let batch = batches[b]
+                guard batch.first_vert >= tileStart, batch.first_vert + batch.vert_count <= tileEnd
+                else { continue }
+                guard let tex = textures[batch.texnum] else { continue }
+                encoder.setFragmentTexture(tex, index: 0)
+                encoder.drawPrimitives(type: .triangle,
+                                       vertexStart: Int(batch.first_vert),
+                                       vertexCount: Int(batch.vert_count))
+            }
+        }
+    }
+
+    /// The immersive HUD panel's model matrix: maps a `sourceWidth` x
+    /// `sourceHeight` top-left-origin plane (+y down, z always 0 — pure 2D
+    /// quads) onto a flat `widthMeters` x `heightMeters` rectangle centred
+    /// at `origin`, in whatever space the caller's viewproj expects
+    /// (corrected tracking space, for the immersive renderer's
+    /// `handViewproj`). `right`/`up` must already be unit and mutually
+    /// orthogonal (see `billboardBasis`). Overlay +x maps to `right`,
+    /// overlay +y (down) maps to `-up`, so text reads right-side-up for a
+    /// viewer standing where `billboardBasis` was told to face.
+    ///
+    /// `sourceWidth`/`sourceHeight` default to the whole-panel presets'
+    /// fixed 320x200 virtual screen; the modular HUD tile path
+    /// (`hudTileModel`) passes a tile's own `bbox_w`/`bbox_h` instead,
+    /// since a tile's verts span only its own local extent, not the full
+    /// screen.
     static func hudPanelModel(origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
-                              widthMeters: Float, heightMeters: Float) -> simd_float4x4 {
-        let rx = right * (widthMeters / 320)
-        let uy = -up * (heightMeters / 200)
+                              widthMeters: Float, heightMeters: Float,
+                              sourceWidth: Float = 320, sourceHeight: Float = 200) -> simd_float4x4 {
+        let rx = right * (widthMeters / sourceWidth)
+        let uy = -up * (heightMeters / sourceHeight)
         let corner = origin - right * (widthMeters * 0.5) + up * (heightMeters * 0.5)
         var m = matrix_identity_float4x4
         m.columns.0 = SIMD4(rx.x, rx.y, rx.z, 0)
@@ -852,6 +956,43 @@ final class RendererCore {
         m.columns.2 = SIMD4(0, 0, 0, 0)
         m.columns.3 = SIMD4(corner.x, corner.y, corner.z, 1)
         return m
+    }
+
+    /// A modular HUD tile anchor's pose (vr_hud 3), in whatever space the
+    /// caller's viewproj expects. `right`/`up`/`forward` must be unit and
+    /// mutually orthogonal — exactly what `billboardBasis` produces, with
+    /// `forward` the `toward` vector it was built from (the panel's face
+    /// normal, pointing at the viewer).
+    struct HudAnchorFrame {
+        var origin: SIMD3<Float>
+        var right: SIMD3<Float>
+        var up: SIMD3<Float>
+        var forward: SIMD3<Float>
+    }
+
+    /// One modular HUD tile's model matrix (vr_hud 3): `tile.offset`
+    /// (metres, in the anchor frame per `qc_hud_tile_t`'s doc comment)
+    /// translates from `anchor.origin` along the anchor's own right/up/
+    /// forward axes, then the tile's fixed `bbox_w` x `bbox_h` (tile-local
+    /// units — the vert sub-range's own extent, NOT the 320x200 virtual
+    /// screen) maps onto a `scale`d physical rectangle via `hudPanelModel`,
+    /// same math class as the whole-panel presets, just sourced from the
+    /// tile's own extent instead of the fixed screen. `pixelScale` is
+    /// metres per tile-local unit — pass the same per-pixel ratio the
+    /// wrist/float panels use for a consistent physical size, or 1 for a
+    /// screen-space pixel anchor (the window's fixed layout).
+    static func hudTileModel(tile: qc_hud_tile_t, anchor: HudAnchorFrame,
+                             pixelScale: Float) -> simd_float4x4 {
+        let scale = tile.scale > 0 ? tile.scale : 1
+        let origin = anchor.origin
+            + anchor.right * tile.offset.0
+            + anchor.up * tile.offset.1
+            + anchor.forward * tile.offset.2
+        let widthMeters = tile.bbox_w * pixelScale * scale
+        let heightMeters = tile.bbox_h * pixelScale * scale
+        return hudPanelModel(origin: origin, right: anchor.right, up: anchor.up,
+                             widthMeters: widthMeters, heightMeters: heightMeters,
+                             sourceWidth: tile.bbox_w, sourceHeight: tile.bbox_h)
     }
 
     /// Billboard basis for a panel whose face normal points along `toward`
