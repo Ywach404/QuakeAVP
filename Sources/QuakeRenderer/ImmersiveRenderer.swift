@@ -711,13 +711,10 @@ final class ImmersiveRenderer {
     }
 
     /// GUN anchor frame for modular tiles: the dominant hand's controller
-    /// pose, billboarded toward the eye like the wrist frame. nil (hide,
-    /// never a stale pose) whenever controllers aren't tracking — there is
-    /// no ARKit-hands equivalent published continuously enough to trust
-    /// here (the gun hand gets no rigid-hand model either, see
-    /// `offHandWristPosition`'s sibling code above: "the gun hand gets no
-    /// model"), so a GUN-anchored tile simply doesn't draw in hands-only
-    /// play until that's added.
+    /// pose, billboarded toward the eye like the wrist frame — or, in
+    /// hands-only play, the ARKit gun-hand wrist (see `gunPosition()`). nil
+    /// (hide, never a stale pose) only when neither source currently has
+    /// the dominant hand.
     private func gunAnchorFrame() -> RendererCore.HudAnchorFrame? {
         guard let gunPos = gunPosition() else { return nil }
         let eye = ViewerPose.shared.eye
@@ -729,17 +726,23 @@ final class ImmersiveRenderer {
                                            forward: toward)
     }
 
-    /// The dominant hand's controller grip position, corrected tracking
-    /// space — the same source (`SpatialControllerTracker`) and correction
-    /// the engine's own aim feed uses above, just read again here rather
-    /// than cached across frames (this runs only when `vr_hud 3`, and
-    /// cheaply). nil whenever controllers aren't tracking.
+    /// The dominant hand's position, corrected tracking space: the
+    /// Sense controller grip pose when controllers are tracking (the same
+    /// source, and the same correction, the engine's own aim feed uses
+    /// above) — read again here rather than cached across frames (this
+    /// runs only when `vr_hud 3`, and cheaply) — else the ARKit gun-hand
+    /// wrist `HandInput` publishes continuously whenever hands are the
+    /// active input (see `GunHand`, the exact mirror of `OffHandWrist`).
+    /// nil when neither source currently has the dominant hand.
     private func gunPosition() -> SIMD3<Float>? {
-        guard SpatialControllerTracker.shared.isTracking else { return nil }
         let rightHanded = VRSettings.shared.rightHanded
-        guard let domPose = SpatialControllerTracker.shared.pose(left: !rightHanded) else { return nil }
-        let p = recenterCorrection * domPose.columns.3
-        return SIMD3(p.x, p.y, p.z)
+        if SpatialControllerTracker.shared.isTracking,
+           let domPose = SpatialControllerTracker.shared.pose(left: !rightHanded) {
+            let p = recenterCorrection * domPose.columns.3
+            return SIMD3(p.x, p.y, p.z)
+        }
+        let snap = GunHand.shared.snapshot()
+        return snap.valid ? snap.position : nil
     }
 
     // MARK: - Engine reporting

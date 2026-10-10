@@ -146,6 +146,7 @@ final class HandInput: @unchecked Sendable {
             aggregator.remove(.hands)
             VirtualHand.shared.publish([])
             OffHandWrist.shared.invalidate()
+            GunHand.shared.invalidate()
         }
     }
 
@@ -217,6 +218,7 @@ final class HandInput: @unchecked Sendable {
         aggregator.remove(.hands)
         VirtualHand.shared.publish([])   // hands gone: no stand-in to draw
         OffHandWrist.shared.invalidate()
+        GunHand.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
         tpRingWas = false
     }
@@ -821,6 +823,15 @@ final class HandInput: @unchecked Sendable {
             OffHandWrist.shared.invalidate()
         }
 
+        // Mirror for the GUN hand, so the gun-anchored HUD tile has a
+        // hands-only source too (see `GunHand`'s doc comment).
+        if let wrist = gunHand.wrist {
+            let p = TrackingSpace.correction * SIMD4(wrist, 1)
+            GunHand.shared.publish(position: SIMD3(p.x, p.y, p.z), valid: true)
+        } else {
+            GunHand.shared.invalidate()
+        }
+
         WheelState.shared.setHold(offHand.palmUp, source: .hands)
         guard offHand.palmUp else { return }
 
@@ -1421,6 +1432,33 @@ final class ViewerPose: @unchecked Sendable {
 /// read instead of a frozen pose.
 final class OffHandWrist: @unchecked Sendable {
     static let shared = OffHandWrist()
+    private let lock = NSLock()
+    private var _position = SIMD3<Float>.zero
+    private var _valid = false
+
+    func publish(position: SIMD3<Float>, valid: Bool) {
+        lock.lock(); _position = position; _valid = valid; lock.unlock()
+    }
+
+    func invalidate() {
+        lock.lock(); _valid = false; lock.unlock()
+    }
+
+    func snapshot() -> (position: SIMD3<Float>, valid: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        return (_position, _valid)
+    }
+}
+
+/// The GUN (dominant) hand's wrist position, corrected-tracking space, for
+/// the gun-anchored HUD tile (vr_hud 3's Ammo tile) in hands-only play --
+/// the exact mirror of `OffHandWrist`, just published from `gunHand` instead
+/// of `offHand`. Before this existed, `ImmersiveRenderer.gunPosition()` had
+/// no hands-only source and fell back to nothing, so the gun tile silently
+/// required a Sense controller. See `OffHandWrist`'s doc comment for the
+/// invalidation contract -- it applies here unchanged.
+final class GunHand: @unchecked Sendable {
+    static let shared = GunHand()
     private let lock = NSLock()
     private var _position = SIMD3<Float>.zero
     private var _valid = false

@@ -120,6 +120,12 @@ final class RendererCore {
     /// the alias fragment's unconditional add contributes nothing.
     private let blackTexture: MTLTexture
 
+    /// White 1x1: lazily created (vr_hud_bg's background box is the only
+    /// consumer) so a tile's dark panel is a solid colour via the SAME
+    /// texture*vertexColor path `text_fragment` already uses for white-
+    /// texel fills, rather than a second shader. nil until first needed.
+    private var hudBgTexture: MTLTexture?
+
     /// One alias model's GPU mesh: all poses' packed vertices followed by
     /// the shared texcoords in one buffer, plus a uint16 index list.
     struct AliasMesh {
@@ -890,6 +896,37 @@ final class RendererCore {
     /// by the two tiles they actually belong to. Verts are 6/quad and tile
     /// ranges are quad-aligned, so the intersection is always a whole
     /// number of quads.
+    /// First-use creation of the 1x1 white texture `drawHudTiles` binds for
+    /// the vr_hud_bg background box. Kept off `init?()` (unlike
+    /// `neutralLightmap`/`blackTexture`, which every world draw needs) since
+    /// only the modular HUD, and only with the toggle on, ever asks for it.
+    private func ensureHudBgTexture() -> MTLTexture? {
+        if let hudBgTexture { return hudBgTexture }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        guard let tex = device.makeTexture(descriptor: descriptor) else { return nil }
+        var white: [UInt8] = [255, 255, 255, 255]
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0,
+                   withBytes: &white, bytesPerRow: 4)
+        hudBgTexture = tex
+        return tex
+    }
+
+    /// The vr_hud_bg background quad for one tile, in the SAME tile-local
+    /// (0,0)-(bbox_w,bbox_h) coordinates and 9-float layout (xyz, uv, rgba)
+    /// the tile's own content verts use, so it transforms under the exact
+    /// same per-tile model matrix and tracks the tile. Padded by
+    /// `pad` virtual px on every side; uv is irrelevant (the bg texture is
+    /// 1x1) and left at the origin.
+    private static func hudBgQuad(bboxW: Float, bboxH: Float, pad: Float) -> [Float] {
+        let left: Float = -pad, top: Float = -pad
+        let right = bboxW + pad, bottom = bboxH + pad
+        let r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0.6
+        func vert(_ x: Float, _ y: Float) -> [Float] { [x, y, 0, 0, 0, r, g, b, a] }
+        return vert(left, top) + vert(right, top) + vert(left, bottom)
+             + vert(right, top) + vert(right, bottom) + vert(left, bottom)
+    }
+
     func drawHudTiles(frame: qc_frame_t,
                       tileModels: [simd_float4x4?],
                       viewproj0: simd_float4x4, viewproj1: simd_float4x4,
@@ -912,6 +949,9 @@ final class RendererCore {
         encoder.setDepthStencilState(pipelines.depthAlways)
         encoder.setVertexBuffer(buf, offset: 0, index: 0)
 
+        let drawBg = frame.hud_bg != 0
+        let bgTexture = drawBg ? ensureHudBgTexture() : nil
+
         let tileCount = min(Int(frame.num_hud_tiles), tileModels.count)
         for i in 0..<tileCount {
             let tile = tiles[i]
@@ -920,6 +960,22 @@ final class RendererCore {
             var uniforms = GuideUniforms(viewproj0: viewproj0 * model, viewproj1: viewproj1 * model)
             withUnsafeBytes(of: &uniforms) { raw in
                 encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
+            }
+
+            // Background box, same per-tile transform, drawn BEFORE the
+            // tile's own content below so it sits behind it. A separate
+            // per-call buffer bound at index 0 for this one draw, then
+            // restored to the shared content buffer for the batch loop.
+            if drawBg, let bgTexture {
+                let quad = Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: 6)
+                if let bgBuf = device.makeBuffer(bytes: quad,
+                                                 length: quad.count * MemoryLayout<Float>.size,
+                                                 options: .storageModeShared) {
+                    encoder.setVertexBuffer(bgBuf, offset: 0, index: 0)
+                    encoder.setFragmentTexture(bgTexture, index: 0)
+                    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                    encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                }
             }
 
             let tileStart = Int(tile.first_vert)
