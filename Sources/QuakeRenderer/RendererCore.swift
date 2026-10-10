@@ -125,6 +125,16 @@ final class RendererCore {
     /// the alias fragment's unconditional add contributes nothing.
     private let blackTexture: MTLTexture
 
+    /// White 1x1: lazily created (the modular HUD tiles' opaque backing is
+    /// the only consumer) so `drawHudTiles` can guarantee a fully OPAQUE
+    /// quad behind every tile's content via the always-available
+    /// `pipelines.text` path — `text_fragment` multiplies this texture's
+    /// (1,1,1,1) sample by the vertex color, so an alpha-1 vertex color
+    /// comes out alpha-1 regardless of the digit glyphs' own transparency
+    /// or whether the optional stone `hudPanel` pipeline built. nil until
+    /// first needed.
+    private var hudSolidTexture: MTLTexture?
+
     /// One alias model's GPU mesh: all poses' packed vertices followed by
     /// the shared texcoords in one buffer, plus a uint16 index list.
     struct AliasMesh {
@@ -901,19 +911,39 @@ final class RendererCore {
     /// ranges are quad-aligned, so the intersection is always a whole
     /// number of quads.
 
+    /// First-use creation of the 1x1 white texture the opaque tile backing
+    /// (see `drawHudTiles`) binds through `pipelines.text`. Kept off
+    /// `init?()` (unlike `neutralLightmap`/`blackTexture`, which every world
+    /// draw needs) since only the modular HUD ever asks for it.
+    private func ensureHudSolidTexture() -> MTLTexture? {
+        if let hudSolidTexture { return hudSolidTexture }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        guard let tex = device.makeTexture(descriptor: descriptor) else { return nil }
+        var white: [UInt8] = [255, 255, 255, 255]
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0,
+                   withBytes: &white, bytesPerRow: 4)
+        hudSolidTexture = tex
+        return tex
+    }
+
     /// The vr_hud_bg background panel quad for one tile, in the SAME
     /// tile-local (0,0)-(bbox_w,bbox_h) coordinates and 9-float layout
     /// (xyz, uv, rgba) the tile's own content verts use, so it transforms
     /// under the exact same per-tile model matrix and tracks the tile.
     /// Padded by `pad` virtual px on every side. uv spans 0..1 across this
     /// PADDED quad (not the unpadded bbox) and is fed to `hud_panel_fragment`
-    /// for its rounded-rect mask, stone fill and bevel; color is unused by
-    /// that shader and left at white.
-    private static func hudBgQuad(bboxW: Float, bboxH: Float, pad: Float) -> [Float] {
+    /// for its rounded-rect mask, stone fill and bevel; `color` is a
+    /// per-vertex tint multiplied onto whatever's sampled — the stone panel
+    /// leaves it at white (unused by that shader), while the opaque backing
+    /// below uses it as the actual fill color against a white 1x1 texture.
+    private static func hudBgQuad(bboxW: Float, bboxH: Float, pad: Float,
+                                   color: (Float, Float, Float, Float) = (1, 1, 1, 1)) -> [Float] {
         let left: Float = -pad, top: Float = -pad
         let right = bboxW + pad, bottom = bboxH + pad
+        let (r, g, b, a) = color
         func vert(_ x: Float, _ y: Float, _ u: Float, _ v: Float) -> [Float] {
-            [x, y, 0, u, v, 1, 1, 1, 1]
+            [x, y, 0, u, v, r, g, b, a]
         }
         return vert(left, top, 0, 0) + vert(right, top, 1, 0) + vert(left, bottom, 0, 1)
              + vert(right, top, 1, 0) + vert(right, bottom, 1, 1) + vert(left, bottom, 0, 1)
@@ -929,12 +959,6 @@ final class RendererCore {
         var viewproj1: simd_float4x4
         var aspect: Float
     }
-
-    /// DIAGNOSTIC (temporary): texnums already logged as missing from
-    /// `textures`, so the warning below fires once per texnum instead of
-    /// spamming every frame. Mutated only inside a consume cycle, like
-    /// `textures` itself.
-    private var loggedMissingHudTexnums: Set<UInt32> = []
 
     func drawHudTiles(frame: qc_frame_t,
                       tileModels: [simd_float4x4?],
@@ -964,28 +988,64 @@ final class RendererCore {
             let tile = tiles[i]
             guard tile.vert_count > 0, let model = tileModels[i] else { continue }
 
-            // Background panel (stone + bevel), same per-tile transform,
-            // drawn BEFORE the tile's own content below so it sits behind
-            // it. Its own pipeline, uniforms (with the padded aspect) and
-            // vertex buffer for this one draw, then both are restored for
-            // the content batch loop beneath.
-            if drawBg, let panelPipeline = pipelines.hudPanel {
-                let paddedW = tile.bbox_w + 2 * pad
-                let paddedH = tile.bbox_h + 2 * pad
-                let quad = Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: pad)
-                if let bgBuf = device.makeBuffer(bytes: quad,
-                                                 length: quad.count * MemoryLayout<Float>.size,
-                                                 options: .storageModeShared) {
-                    var panelUniforms = HudPanelUniforms(
-                        viewproj0: viewproj0 * model, viewproj1: viewproj1 * model,
-                        aspect: paddedH > 0 ? paddedW / paddedH : 1)
-                    encoder.setRenderPipelineState(panelPipeline)
-                    withUnsafeBytes(of: &panelUniforms) { raw in
-                        encoder.setVertexBytes(raw.baseAddress!,
-                                               length: MemoryLayout<HudPanelUniforms>.stride, index: 1)
+            // Backing, same per-tile transform, drawn BEFORE the tile's own
+            // content below so it sits behind it. Two layers, in order:
+            //
+            // 1. An unconditionally OPAQUE dark quad through the
+            //    always-available `pipelines.text` pipeline. This is the
+            //    reliable backing: the digit glyphs are ~53% transparent,
+            //    so without a guaranteed opaque surface behind them the
+            //    rendered 3-D world shows through (the "bars" bug) and the
+            //    thin ink washes out on bright/damage backdrops (the
+            //    "blank" bug). `text_fragment` samples the solid white 1x1
+            //    texture (always (1,1,1,1)) and multiplies by this quad's
+            //    alpha-1 vertex color, so the result is opaque regardless
+            //    of whether the stone panel pipeline built.
+            // 2. The optional stone + bevel panel (`pipelines.hudPanel`) on
+            //    top of that base, unchanged from before — it looks the
+            //    same when it's available, the base just guarantees
+            //    something's there when it isn't.
+            //
+            // Both are gated on `drawBg` together: with vr_hud_bg 0 the
+            // user explicitly wants no box, so skip both and accept
+            // transparent digits in that mode.
+            if drawBg {
+                if let solidTex = ensureHudSolidTexture() {
+                    let baseQuad = Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: pad,
+                                                  color: (0.06, 0.05, 0.045, 1.0))
+                    if let baseBuf = device.makeBuffer(bytes: baseQuad,
+                                                       length: baseQuad.count * MemoryLayout<Float>.size,
+                                                       options: .storageModeShared) {
+                        var baseUniforms = GuideUniforms(viewproj0: viewproj0 * model, viewproj1: viewproj1 * model)
+                        encoder.setRenderPipelineState(pipeline)
+                        withUnsafeBytes(of: &baseUniforms) { raw in
+                            encoder.setVertexBytes(raw.baseAddress!,
+                                                   length: MemoryLayout<GuideUniforms>.stride, index: 1)
+                        }
+                        encoder.setVertexBuffer(baseBuf, offset: 0, index: 0)
+                        encoder.setFragmentTexture(solidTex, index: 0)
+                        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
                     }
-                    encoder.setVertexBuffer(bgBuf, offset: 0, index: 0)
-                    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                }
+
+                if let panelPipeline = pipelines.hudPanel {
+                    let paddedW = tile.bbox_w + 2 * pad
+                    let paddedH = tile.bbox_h + 2 * pad
+                    let quad = Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: pad)
+                    if let bgBuf = device.makeBuffer(bytes: quad,
+                                                     length: quad.count * MemoryLayout<Float>.size,
+                                                     options: .storageModeShared) {
+                        var panelUniforms = HudPanelUniforms(
+                            viewproj0: viewproj0 * model, viewproj1: viewproj1 * model,
+                            aspect: paddedH > 0 ? paddedW / paddedH : 1)
+                        encoder.setRenderPipelineState(panelPipeline)
+                        withUnsafeBytes(of: &panelUniforms) { raw in
+                            encoder.setVertexBytes(raw.baseAddress!,
+                                                   length: MemoryLayout<HudPanelUniforms>.stride, index: 1)
+                        }
+                        encoder.setVertexBuffer(bgBuf, offset: 0, index: 0)
+                        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                    }
                 }
             }
 
@@ -1005,17 +1065,7 @@ final class RendererCore {
                 let start = max(batchStart, tileStart)
                 let end = min(batchEnd, tileEnd)
                 guard end > start else { continue }   // no overlap with this tile
-                // DIAGNOSTIC (temporary): revert to guard/continue once root
-                // cause is found. Reported bug is both NUMBER tiles blanking
-                // on ammo pickup / damage; the suspect is a texnum missing
-                // from `textures` here. Draw the obvious magenta fallback
-                // instead of silently skipping, and log each distinct miss
-                // once so a device run can confirm (or rule out) this path.
-                if textures[batch.texnum] == nil, !loggedMissingHudTexnums.contains(batch.texnum) {
-                    loggedMissingHudTexnums.insert(batch.texnum)
-                    print("[hud] tile \(i) batch texnum \(batch.texnum) NOT in textures dict")
-                }
-                let tex = textures[batch.texnum] ?? missingTexture
+                guard let tex = textures[batch.texnum] else { continue }
                 encoder.setFragmentTexture(tex, index: 0)
                 encoder.drawPrimitives(type: .triangle,
                                        vertexStart: start,
