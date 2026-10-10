@@ -880,8 +880,16 @@ final class RendererCore {
     /// position. One batch loop, like `drawOverlay`, just re-run per tile
     /// with that tile's own transform and restricted to its own vert
     /// range (a tile may span multiple batches — different texnums, e.g.
-    /// HEALTHARMOR's two colour atlases — so every batch wholly inside the
-    /// tile's range is drawn).
+    /// HEALTHARMOR's two colour atlases). The emitter coalesces consecutive
+    /// quads sharing a texnum with no tile-boundary flush, so a batch CAN
+    /// straddle two adjacent tiles (e.g. AMMO's last white digit merging
+    /// with HEALTHARMOR's white armor digit when FACE is hidden and they
+    /// sit back-to-back); each tile therefore draws only the INTERSECTION
+    /// of the batch's vert range with its own range, under its own
+    /// transform — the straddling batch's two halves are drawn once each,
+    /// by the two tiles they actually belong to. Verts are 6/quad and tile
+    /// ranges are quad-aligned, so the intersection is always a whole
+    /// number of quads.
     func drawHudTiles(frame: qc_frame_t,
                       tileModels: [simd_float4x4?],
                       viewproj0: simd_float4x4, viewproj1: simd_float4x4,
@@ -914,17 +922,20 @@ final class RendererCore {
                 encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
             }
 
-            let tileStart = tile.first_vert
-            let tileEnd = tile.first_vert + tile.vert_count
+            let tileStart = Int(tile.first_vert)
+            let tileEnd = tileStart + Int(tile.vert_count)
             for b in 0..<Int(frame.num_overlay_batches) {
                 let batch = batches[b]
-                guard batch.first_vert >= tileStart, batch.first_vert + batch.vert_count <= tileEnd
-                else { continue }
+                let batchStart = Int(batch.first_vert)
+                let batchEnd = batchStart + Int(batch.vert_count)
+                let start = max(batchStart, tileStart)
+                let end = min(batchEnd, tileEnd)
+                guard end > start else { continue }   // no overlap with this tile
                 guard let tex = textures[batch.texnum] else { continue }
                 encoder.setFragmentTexture(tex, index: 0)
                 encoder.drawPrimitives(type: .triangle,
-                                       vertexStart: Int(batch.first_vert),
-                                       vertexCount: Int(batch.vert_count))
+                                       vertexStart: start,
+                                       vertexCount: end - start)
             }
         }
     }
