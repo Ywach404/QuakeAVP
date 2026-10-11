@@ -537,7 +537,12 @@ void SCR_CenterPrint (const char *str)
 	if (str && *str)
 	{
 		q_strlcpy (qr_centerstring, str, sizeof(qr_centerstring));
-		qr_centertime_until = cl.time + scr_centertime.value;
+		/* Expiry on the monotonic WALL clock, NOT cl.time: cl.time resets to
+		   ~0 on a changelevel, so a cl.time-based expiry from the old level
+		   stayed in the future across the transition and the message hung on
+		   the new level until the fresh cl.time slowly caught up (it "would
+		   not go away"). realtime always advances past it within scr_centertime. */
+		qr_centertime_until = realtime + scr_centertime.value;
 	}
 	else
 	{
