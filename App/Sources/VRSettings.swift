@@ -70,15 +70,6 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _offHandModelOnly = newValue; lock.unlock() }
     }
 
-    /// Controllerless (hands) only: when false (default), hand turning is
-    /// swallowed while the console window is open, so reaching for a console
-    /// parked off to the side or overhead doesn't whip the view away from it.
-    /// Set true to keep turning while the console is up.
-    private var _allowTurnWithConsole = false
-    var allowTurnWithConsole: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _allowTurnWithConsole }
-        set { lock.lock(); _allowTurnWithConsole = newValue; lock.unlock() }
-    }
 
     var heightOffset: Float {
         get { lock.lock(); defer { lock.unlock() }; return _heightOffset }

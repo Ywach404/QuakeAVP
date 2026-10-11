@@ -266,18 +266,6 @@ struct ContentView: View {
             RendererCoordinator.shared.onImmersiveEnded = respawn
             HandInput.summonConsole = respawn
         }
-        // Console-open tracking for the hands-mode turn lock, by VIEW LIFETIME:
-        // true while this window's view is alive, cleared when the task is
-        // cancelled -- which fires on window close, where a Window's
-        // onDisappear/scenePhase are unreliable on visionOS. Sleeps forever
-        // otherwise; the defer runs on cancellation.
-        .task {
-            ConsoleWindowState.shared.isOpen = true
-            defer { ConsoleWindowState.shared.isOpen = false }
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
-            }
-        }
         // Hands drive the game only while immersed with no hardware
         // attached; a controller connecting mid-session takes over.
         .onChange(of: coordinator.isImmersiveActive) { _, active in
@@ -667,11 +655,11 @@ struct ContentView: View {
                     Toggle("Allow turning with the console open", isOn: Binding(
                         get: { allowTurnWithConsole },
                         set: { allowTurnWithConsole = $0
-                               VRSettings.shared.allowTurnWithConsole = $0 }))
+                               engine.send("vr_turn_while_paused \($0 ? 1 : 0)") }))
                         .font(.caption)
                     Text(allowTurnWithConsole
-                         ? "Hand turning stays live while the console is open."
-                         : "Hands only: turning is paused while the console window is open, so reaching for it doesn't whip your view away. Controllers are unaffected.")
+                         ? "Turning stays live while the console is open."
+                         : "Turning is frozen while the console is open (the game is paused), so reaching for a console you've parked off to the side doesn't whip your view away.")
                         .font(.caption2).foregroundStyle(.secondary)
                     HStack {
                         Text("Turn speed").font(.caption)
