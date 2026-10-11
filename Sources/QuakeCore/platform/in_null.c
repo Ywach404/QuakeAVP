@@ -276,7 +276,10 @@ static int			qr_slowmo_active;	/* toggled bullet-time */
 static uint32_t			qr_head_ack_seen;
 
 static cvar_t	vr_snapturn = {"vr_snapturn", "45", CVAR_ARCHIVE};
-static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
+/* Smooth turning is the default now. Hands (controllerless) are forced smooth
+   by the Swift side (snap isn't offered there); a controller can still pick
+   snap from the Comfort picker. */
+static cvar_t	vr_smoothturn = {"vr_smoothturn", "1", CVAR_ARCHIVE};
 /* Metroid Prime Hunters edge turn: aim the gun past a yaw DEADZONE (deg) to a
    side and the body follows at up to SPEED (deg/s), ramping over the 40deg past
    the deadzone. The aim yaw is room-relative so it stays at the edge while the
