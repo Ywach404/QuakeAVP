@@ -55,7 +55,7 @@ extern int qr_wheel_highlight;
 extern float qr_head[3];		/* body-frame head offset from recenter */
 extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern char qr_centerstring[256];	/* captured svc_centerprint (r_null.c) */
-extern double qr_centertime_until;	/* cl.time expiry for the prompt */
+extern double qr_centertime_until;	/* realtime (wall-clock) expiry for the prompt */
 extern cvar_t vr_hud;			/* status bar placement: 0 off, 1 wrist, 2 float */
 extern cvar_t vr_hud_bg;		/* background box behind modular tiles, drawn consumer-side */
 /* Modular HUD (Phase 1) per-tile layout cvars; defined+registered in r_null.c */
@@ -5604,7 +5604,7 @@ static void QR_EmitCenterPrint (qr_frame_slot_t *slot)
 	int	nlines = 0, li;
 	char	*src, *save;
 
-	if (!qr_centerstring[0] || cl.time >= qr_centertime_until)
+	if (!qr_centerstring[0] || realtime >= qr_centertime_until)
 		return;
 	QR_EnsureConchars ();
 	if (!qr_conchars_texnum)
