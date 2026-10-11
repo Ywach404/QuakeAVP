@@ -51,13 +51,31 @@ struct QuakePaths {
     /// is never overwritten. A release build simply has no bundled paks, so
     /// this no-ops and the Documents/Files flow is unchanged.
     private static func seedBundledGameData(into baseDirectory: URL) {
+        let fm = FileManager.default
         let id1 = baseDirectory.appendingPathComponent("id1", isDirectory: true)
-        try? FileManager.default.createDirectory(at: id1, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: id1, withIntermediateDirectories: true)
         for name in ["pak0", "pak1"] {
-            guard let src = Bundle.main.url(forResource: name, withExtension: "pak") else { continue }
+            guard let src = Bundle.main.url(forResource: name, withExtension: "pak") else {
+                print("[seed] no bundled \(name).pak in the app -- skipping")
+                continue
+            }
             let dst = id1.appendingPathComponent("\(name).pak")
-            guard !FileManager.default.fileExists(atPath: dst.path) else { continue }
-            try? FileManager.default.copyItem(at: src, to: dst)
+            let bundleSize = (try? src.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+            let dstSize = try? dst.resourceValues(forKeys: [.fileSizeKey]).fileSize
+            // Copy when absent OR when a stale/partial file is there (size
+            // mismatch) -- so a bad pak the user dropped earlier gets replaced
+            // with the known-good bundled one. A matching size is left alone.
+            if dstSize == bundleSize {
+                print("[seed] \(name).pak already present (\(bundleSize) bytes)")
+                continue
+            }
+            try? fm.removeItem(at: dst)
+            do {
+                try fm.copyItem(at: src, to: dst)
+                print("[seed] copied \(name).pak into Documents/id1 (\(bundleSize) bytes)")
+            } catch {
+                print("[seed] FAILED to copy \(name).pak: \(error)")
+            }
         }
     }
 
