@@ -428,6 +428,16 @@ final class HandInput: @unchecked Sendable {
                         flickSettledSince = 0
                         flickPulseUntil = now + Self.flickPulse
                         flickCooldownUntil = now + Self.flickCooldown
+                        // Why this flick fired, for diagnosing phantom snaps:
+                        // a deliberate whip reads as a high speed well over the
+                        // threshold; an aim sweep crossing a decayed threshold
+                        // reads as a modest speed just over a low thr.
+                        if VRSettings.shared.inputLog {
+                            print(String(format:
+                                "[flick] FIRED dir=%+.0f speed=%.2f thr=%.2f peak=%.2f/%.2f travel=%.3f frames=%d floor=%.2f",
+                                dir, speed, effThreshold, flickPeakPos, flickPeakNeg,
+                                travel, flickCandFrames, floor))
+                        }
                         flickCandFrames = 0
                         flickCandStart = nil
                     }
