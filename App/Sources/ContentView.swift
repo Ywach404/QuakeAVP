@@ -67,7 +67,6 @@ struct ContentView: View {
     @State private var offHandPitchUI: Float = 0
     @State private var offHandYawUI: Float = 0
     @State private var offHandRollUI: Float = 0
-    @State private var turnFlick: Float = 0.85
     @State private var turnHoldEnabled = true
     @State private var turnHoldSpeedUI: Float = 90
     @State private var turnHoldDzUI: Float = 18
@@ -640,19 +639,8 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     Text(gamepad.hasPhysicalController
                          ? "Controller connected: turning uses the right stick and the Snap/Smooth setting above."
-                         : "Bare hands: FLICK the gun hand sideways for a quick turn. On Smooth, with Edge turn on, hold the GUN hand aimed out past the dead zone — left or right — to keep turning that way (Metroid Prime Hunters style); center it to stop. Turn speed and dead zone tune it. Flick ease sets how hard a whip the flick takes.")
+                         : "Bare hands: FLICK the gun hand sideways — a deliberate hard whip — for a quick turn. On Smooth, with Edge turn on, hold the GUN hand aimed out past the dead zone — left or right — to keep turning that way (Metroid Prime Hunters style); center it to stop. Turn speed and dead zone tune it.")
                         .font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Text("Flick ease").font(.caption)
-                        Slider(value: Binding(
-                            get: { Double(turnFlick) },
-                            set: { turnFlick = Float($0)
-                                   VRSettings.shared.turnFlickSpeed = Float($0)
-                                   ProfileStore.shared.current.turnFlickSpeed = Float($0) }),
-                               in: 0.2...1.6)
-                        Text(String(format: "%.2f", turnFlick))
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    }
                     Toggle("Edge turn (aim to a side to turn)", isOn: Binding(
                         get: { turnHoldEnabled },
                         set: { turnHoldEnabled = $0; engine.send("vr_edgeturn \($0 ? 1 : 0)") }))
@@ -1512,7 +1500,6 @@ struct ContentView: View {
     private func syncFromProfile() {
         let p = ProfileStore.shared.current
         heightOffset = p.heightOffset
-        turnFlick = p.turnFlickSpeed
         fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand

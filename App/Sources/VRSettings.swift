@@ -245,17 +245,6 @@ final class VRSettings: @unchecked Sendable {
     var hudScale: Float { get { lock.lock(); defer { lock.unlock() }; return _hudScale }
                           set { lock.lock(); _hudScale = newValue; lock.unlock() } }
 
-    /// Gun-hand flick snap-turn ABSOLUTE floor, m/s of body-right wrist motion:
-    /// the minimum whip speed that can ever trigger, below which motion is
-    /// treated as tracking jitter. The live per-direction trigger auto-balances
-    /// above this (see HandInput.flickFraction). Higher = fewer accidental
-    /// turns. Tuned live from the Comfort menu against the on-hand turn gauge.
-    private var _turnFlickSpeed: Float = 0.35
-    var turnFlickSpeed: Float {
-        get { lock.lock(); defer { lock.unlock() }; return _turnFlickSpeed }
-        set { lock.lock(); _turnFlickSpeed = newValue; lock.unlock() }
-    }
-
 
     /// True when `chirality` is the hand that aims / fires / points the
     /// wheel. The off hand moves and anchors the wheel.
