@@ -1063,10 +1063,6 @@ static void IN_SnapTurn (float degrees)
 {
 	float rad, c, s, ax, ay;
 
-	/* DIAG: in hands+smooth this should never fire; if it does while you see a
-	   snap, the turn mode isn't actually smooth. */
-	Con_Printf ("[turn] SNAP %.0f deg (vr_smoothturn=%.0f)\n", degrees, vr_smoothturn.value);
-
 	IN_AbsorbHeadOffset ();
 
 	rad = degrees * M_PI / 180.f;
@@ -1117,17 +1113,22 @@ void IN_Move (usercmd_t *cmd)
 	   last wrote, the server moved it and the body must face the new way --
 	   the aim re-adds below. Also seeds the body yaw from the spawn angle on
 	   the first tick, when qr_expected_yaw is still zero. */
-	if (fabsf (cl.viewangles[YAW] - qr_expected_yaw) > 0.01f)
 	{
-		/* DIAG: a big adopt is a view "snap" the hand telemetry never sees --
-		   the server moved the angle (spawn/respawn, teleport, a setangle
-		   trigger). Logs to the in-headset console so the sporadic snap can be
-		   caught in the act. Small adopts (sub-8 deg) are normal re-sync. */
-		float qr_adopt_d = cl.viewangles[YAW] - qr_body_yaw;
-		if (fabsf (qr_adopt_d) > 8.f)
-			Con_Printf ("[turn] server setangle adopted: body %.0f -> %.0f (d=%.0f)\n",
-				    qr_body_yaw, cl.viewangles[YAW], qr_adopt_d);
-		qr_body_yaw = cl.viewangles[YAW];
+		/* Only a REAL server setangle (spawn/teleport) should move the body.
+		   CL_AdjustAngles anglemod's cl.viewangles[YAW] back into [0,360) every
+		   frame AFTER we compose it, while qr_expected_yaw is the raw value we
+		   wrote -- so when the composed yaw crosses a 0/360 wrap during a turn
+		   the two differ by ~360 and a RAW compare fired a phantom adopt. That
+		   baked the aim offset into the body (cl.viewangles here is body+aim,
+		   not a clean server angle) and the compose re-added it: a ~aim-sized
+		   view snap. Compare the SHORTEST-path delta: a pure wrap is a multiple
+		   of 360 and normalizes to ~0 (ignored); a genuine setangle keeps its
+		   real delta. */
+		float d = cl.viewangles[YAW] - qr_expected_yaw;
+		while (d >  180.f) d -= 360.f;
+		while (d < -180.f) d += 360.f;
+		if (fabsf (d) > 0.01f)
+			qr_body_yaw = cl.viewangles[YAW];
 	}
 
 	/* Export pin: demo playback rewrites cl.viewangles every frame (the
