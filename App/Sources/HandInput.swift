@@ -91,6 +91,17 @@ final class HandInput: @unchecked Sendable {
     private var flickPulseUntil = 0.0
     private var flickDir: Float = 0
 
+    // A whip must clear the threshold for at least `flickMinFrames` in a row
+    // AND carry the wrist `flickMinTravel` metres sideways before it counts --
+    // a one-frame velocity spike or an in-place jitter (same direction, no
+    // real travel) is rejected. A genuine whip satisfies both in ~1 frame of
+    // extra latency. `flickCand*` track the candidate run in progress.
+    private static let flickMinFrames = 2
+    private static let flickMinTravel: Float = 0.02   // m of lateral wrist travel
+    private var flickCandFrames = 0
+    private var flickCandDir: Float = 0
+    private var flickCandStart: SIMD3<Float>?
+
 
     /// Turn-gauge geometry (corrected tracking space, 7 floats/vertex),
     /// published alongside the debug wireframe when the overlay is on.
@@ -393,16 +404,45 @@ final class HandInput: @unchecked Sendable {
             var firing = false
             if !turnedByPinch {
                 if flickArmed, now >= flickCooldownUntil, mag > effThreshold {
-                    flickDir = speed > 0 ? 1 : -1
-                    flickArmed = false
-                    flickSettledSince = 0
-                    flickPulseUntil = now + Self.flickPulse
-                    flickCooldownUntil = now + Self.flickCooldown
-                } else if mag < Self.flickReset {
-                    if flickSettledSince == 0 { flickSettledSince = now }
-                    if now - flickSettledSince >= Self.flickDwell { flickArmed = true }
+                    // Over threshold: open or extend a candidate whip run. A
+                    // direction flip restarts it. Fire only once the run has
+                    // lasted flickMinFrames AND the wrist has actually travelled
+                    // flickMinTravel sideways from where the run began -- so a
+                    // single spiky frame, or a fast wobble that doesn't go
+                    // anywhere, never trips a snap.
+                    let dir: Float = speed > 0 ? 1 : -1
+                    if flickCandFrames == 0 || flickCandDir != dir {
+                        flickCandDir = dir
+                        flickCandStart = aim.wrist
+                        flickCandFrames = 1
+                    } else {
+                        flickCandFrames += 1
+                    }
+                    var travel: Float = 0
+                    if let start = flickCandStart, let w = aim.wrist {
+                        travel = abs((basis * (w - start)).x)
+                    }
+                    if flickCandFrames >= Self.flickMinFrames, travel >= Self.flickMinTravel {
+                        flickDir = dir
+                        flickArmed = false
+                        flickSettledSince = 0
+                        flickPulseUntil = now + Self.flickPulse
+                        flickCooldownUntil = now + Self.flickCooldown
+                        flickCandFrames = 0
+                        flickCandStart = nil
+                    }
                 } else {
-                    flickSettledSince = 0
+                    // Not over threshold this frame: the candidate run is
+                    // broken (a real whip stays over threshold for its whole
+                    // stroke), and the settle/re-arm bookkeeping resumes.
+                    flickCandFrames = 0
+                    flickCandStart = nil
+                    if mag < Self.flickReset {
+                        if flickSettledSince == 0 { flickSettledSince = now }
+                        if now - flickSettledSince >= Self.flickDwell { flickArmed = true }
+                    } else {
+                        flickSettledSince = 0
+                    }
                 }
                 firing = now < flickPulseUntil
                 if firing { slice.rx = flickDir }
@@ -952,6 +992,7 @@ private struct HandState {
 
     private var prevWrist: SIMD3<Float>?
     private var prevWristTime = 0.0
+    private var prevWristVel: SIMD3<Float>?	// low-pass state for wristVel
     private var indexStart: SIMD3<Float>?
     private var middleStart: SIMD3<Float>?
     private var middleStartTime = 0.0
@@ -1120,9 +1161,28 @@ private struct HandState {
         let velNow = CACurrentMediaTime()
         if let w = wrist, let pw = prevWrist {
             let dt = velNow - prevWristTime
-            wristVel = (dt > 0.001 && dt < 0.1) ? (w - pw) / Float(dt) : nil
+            if dt < 0.1 {
+                // Clamp the divisor to a ~120 Hz floor: back-to-back anchor
+                // updates a millisecond apart otherwise turn sub-millimetre
+                // tracking jitter into a huge phantom velocity (1 mm / 1 ms =
+                // 1 m/s) that fires a bogus flick snap. Then one-pole low-pass
+                // it: a single spiky frame can't reach the flick threshold on
+                // its own, while a real (sustained) whip still passes.
+                let dtc = max(Float(dt), 1.0 / 120.0)
+                let raw = (w - pw) / dtc
+                let a: Float = 0.4
+                let smoothed = prevWristVel.map { $0 + (raw - $0) * a } ?? raw
+                wristVel = smoothed
+                prevWristVel = smoothed
+            } else {
+                // dt spike (tracking resumed after a dropout): drop the sample
+                // and reset the filter so the next one restarts clean.
+                wristVel = nil
+                prevWristVel = nil
+            }
         } else {
             wristVel = nil
+            prevWristVel = nil
         }
         prevWrist = wrist
         prevWristTime = velNow
