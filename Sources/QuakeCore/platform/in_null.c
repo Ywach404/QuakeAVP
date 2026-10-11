@@ -1063,6 +1063,10 @@ static void IN_SnapTurn (float degrees)
 {
 	float rad, c, s, ax, ay;
 
+	/* DIAG: in hands+smooth this should never fire; if it does while you see a
+	   snap, the turn mode isn't actually smooth. */
+	Con_Printf ("[turn] SNAP %.0f deg (vr_smoothturn=%.0f)\n", degrees, vr_smoothturn.value);
+
 	IN_AbsorbHeadOffset ();
 
 	rad = degrees * M_PI / 180.f;
@@ -1114,7 +1118,17 @@ void IN_Move (usercmd_t *cmd)
 	   the aim re-adds below. Also seeds the body yaw from the spawn angle on
 	   the first tick, when qr_expected_yaw is still zero. */
 	if (fabsf (cl.viewangles[YAW] - qr_expected_yaw) > 0.01f)
+	{
+		/* DIAG: a big adopt is a view "snap" the hand telemetry never sees --
+		   the server moved the angle (spawn/respawn, teleport, a setangle
+		   trigger). Logs to the in-headset console so the sporadic snap can be
+		   caught in the act. Small adopts (sub-8 deg) are normal re-sync. */
+		float qr_adopt_d = cl.viewangles[YAW] - qr_body_yaw;
+		if (fabsf (qr_adopt_d) > 8.f)
+			Con_Printf ("[turn] server setangle adopted: body %.0f -> %.0f (d=%.0f)\n",
+				    qr_body_yaw, cl.viewangles[YAW], qr_adopt_d);
 		qr_body_yaw = cl.viewangles[YAW];
+	}
 
 	/* Export pin: demo playback rewrites cl.viewangles every frame (the
 	   recorded AIM), which the adopt above would take for a teleport and
