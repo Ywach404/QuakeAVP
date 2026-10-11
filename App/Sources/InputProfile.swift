@@ -33,7 +33,6 @@ struct InputProfile: Codable, Equatable {
     var curlSensitivity: Float = 0.72
     var pinchClose: Float = 0.015
     var hammerDropDeg: Float = 45
-    var turnFlickSpeed: Float = 0.35
     var fireMode: Int = 0            // FireMode.rawValue
     var turnStyle: Int = 0           // TurnStyle.rawValue
     /// SummonGesture.rawValue. Optional so profiles saved before the
@@ -159,7 +158,6 @@ struct InputProfile: Codable, Equatable {
         curlSensitivity = f(.curlSensitivity, 0.72)
         pinchClose = f(.pinchClose, 0.015)
         hammerDropDeg = f(.hammerDropDeg, 45)
-        turnFlickSpeed = f(.turnFlickSpeed, 0.35)
         fireMode = i(.fireMode, 0)
         turnStyle = i(.turnStyle, 0)
         summonGesture = (try? c.decodeIfPresent(Int.self, forKey: .summonGesture)) ?? nil
@@ -307,7 +305,6 @@ final class ProfileStore {
         s.wheelYaw = p.wheelYaw
         s.wheelRoll = p.wheelRoll
         s.hammerDropDeg = p.hammerDropDeg
-        s.turnFlickSpeed = p.turnFlickSpeed
         s.fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         s.turnStyle = TurnStyle(rawValue: p.turnStyle) ?? .stick
         s.summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer

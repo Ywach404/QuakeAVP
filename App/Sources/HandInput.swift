@@ -39,13 +39,18 @@ final class HandInput: @unchecked Sendable {
     private var task: Task<Void, Never>?
 
     // Flick snap-turn on the gun hand: a horizontal wrist speed past
-    // `flickSpeed` fires one snap, then the gesture is disarmed until the
+    // `flickFloor` fires one snap, then the gesture is disarmed until the
     // hand slows below `flickReset` AND the cooldown lapses -- so the return
     // stroke and a continued sweep can't spin you. The pad rx is HELD for
     // `flickPulse` after a trigger so the engine's tick reliably samples it
     // (a single-frame pulse landed between ticks and got dropped -- that was
     // the "turning doesn't work" bug). Watch the on-hand gauge to calibrate.
-    // Trigger speed is live-tunable: VRSettings.turnFlickSpeed (Comfort menu).
+    //
+    // The trigger floor is FIXED, not a user slider: a low value let ordinary
+    // aim motion (~0.8 m/s lateral) cross the bar and fire phantom snaps, so
+    // "Flick ease" was removed and the floor pinned high -- only a deliberate
+    // hard whip clears it. The adaptive peak term can still raise it further.
+    private static let flickFloor: Float = 1.60    // m/s: whip speed to turn
     private static let flickReset: Float = 0.35    // m/s: "settled" speed
     private static let flickCooldown = 0.35        // s to swallow the return
     private static let flickPulse = 0.09           // s to hold the pad pulse
@@ -77,7 +82,7 @@ final class HandInput: @unchecked Sendable {
     // need equal EFFORT even though one whips faster -- the weak side earns a
     // lower absolute bar on its own. Peaks rise by `flickAttack` toward new
     // highs (one frame's spike can't define the bar) and decay over
-    // `flickPeakTau`; an absolute floor (VRSettings.turnFlickSpeed) keeps
+    // `flickPeakTau`; the fixed `flickFloor` keeps ordinary aim motion and
     // tracking jitter from ever triggering.
     private static let flickFraction: Float = 0.55
     private static let flickAttack: Float = 0.35
@@ -397,7 +402,7 @@ final class HandInput: @unchecked Sendable {
             flickPeakNeg *= decay
             if speed > 0, mag > flickPeakPos { flickPeakPos += (mag - flickPeakPos) * Self.flickAttack }
             if speed < 0, mag > flickPeakNeg { flickPeakNeg += (mag - flickPeakNeg) * Self.flickAttack }
-            let floor = max(0.15, VRSettings.shared.turnFlickSpeed)
+            let floor = Self.flickFloor
             let posThreshold = max(floor, flickPeakPos * Self.flickFraction)
             let negThreshold = max(floor, flickPeakNeg * Self.flickFraction)
             let effThreshold = speed >= 0 ? posThreshold : negThreshold
