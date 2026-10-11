@@ -229,6 +229,14 @@ final class QuakeEngineHost: @unchecked Sendable {
         "volume 0.03\n".withCString { QC_ExecuteCommand($0) }
         "bgmvolume 0.7\n".withCString { QC_ExecuteCommand($0) }
 
+        // DEV ONLY -- strip before release. Auto-spawn straight into a test map
+        // on every launch instead of the demo attract loop, so a dev build
+        // drops you into play without touching the launcher. Queued after the
+        // forces above, so it overrides startdemos. Change the map name to pick
+        // a different test level; delete this line to ship (release then boots
+        // to the normal attract loop / launcher).
+        "map e1m1\n".withCString { QC_ExecuteCommand($0) }
+
         var previous = CFAbsoluteTimeGetCurrent()
 
         while !shouldStop.isSet {
