@@ -46,7 +46,7 @@ struct ContentView: View {
     /// Mirrors the cvar's own default (on) since there is no live read-back.
     @State private var hudBgEnabled = true
     @State private var lookRelative = true
-    @State private var smoothTurn = false
+    @State private var smoothTurn = true
     @State private var allowTurnWithConsole = false
     @State private var wheelSlowmo = true
     @State private var swapSenseHands = false
@@ -278,7 +278,7 @@ struct ContentView: View {
             // windowed, it stays behind its toggle.
             if active { showScope = true }
         }
-        .onChange(of: gamepad.hasPhysicalController) { _, _ in
+        .onChange(of: gamepad.hasPhysicalController) { _, hasController in
             // Activation itself is InputHost's job (it must happen with no
             // window open too); the window only mirrors it into the sliders.
             // Auto-switch the active profile when a controller connects/leaves
@@ -286,6 +286,9 @@ struct ContentView: View {
             ProfileStore.shared.refreshActiveFromInput()
             ProfileStore.shared.apply()
             syncFromProfile()
+            // Controllerless is always smooth (no snap offered); a controller
+            // restores its own Snap/Smooth choice.
+            engine.send("vr_smoothturn \(hasController ? (smoothTurn ? 1 : 0) : 1)")
         }
         .onChange(of: exporter.state) { _, state in
             // Mirrored into the console so a simulator log capture shows it.
@@ -311,6 +314,11 @@ struct ContentView: View {
                 // if nothing touches a slider this session.
                 WeaponTrim.shared.applyEngine()
                 DebugStore.shared.applyEngine { engine.send($0) }
+                // Force the turn mode for the current input: controllerless is
+                // always smooth (snap isn't offered for hands), overriding any
+                // archived vr_smoothturn 0 from before. A controller gets its
+                // own Snap/Smooth choice.
+                engine.send("vr_smoothturn \(gamepad.hasPhysicalController ? (smoothTurn ? 1 : 0) : 1)")
                 // Boot-time export for the simulator acceptance test:
                 // QAVP_EXPORT_DEMO=demo1 [QAVP_EXPORT_PRESET=1080p60,gun]
                 // [QAVP_EXPORT_CANCEL_AFTER=seconds]. Run with
@@ -630,13 +638,19 @@ struct ContentView: View {
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Picker("Turning", selection: Binding(
-                        get: { smoothTurn },
-                        set: { smoothTurn = $0; engine.send("vr_smoothturn \($0 ? 1 : 0)") })) {
-                        Text("Snap 45°").tag(false)
-                        Text("Smooth").tag(true)
+                    // Snap vs Smooth is a CONTROLLER choice only. Controllerless
+                    // (hands) is always smooth -- snap on a flick whip read as
+                    // jarring -- so the picker is hidden and smooth is forced
+                    // (see the hasPhysicalController handler and boot apply).
+                    if gamepad.hasPhysicalController {
+                        Picker("Turning", selection: Binding(
+                            get: { smoothTurn },
+                            set: { smoothTurn = $0; engine.send("vr_smoothturn \($0 ? 1 : 0)") })) {
+                            Text("Snap 45°").tag(false)
+                            Text("Smooth").tag(true)
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
                     Text(gamepad.hasPhysicalController
                          ? "Controller connected: turning uses the right stick and the Snap/Smooth setting above."
                          : "Bare hands: FLICK the gun hand sideways — a deliberate hard whip — for a quick turn. On Smooth, with Edge turn on, hold the GUN hand aimed out past the dead zone — left or right — to keep turning that way (Metroid Prime Hunters style); center it to stop. Turn speed and dead zone tune it.")
