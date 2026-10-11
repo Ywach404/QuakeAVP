@@ -73,6 +73,14 @@ targets:
     sources:
       - path: App/Sources
       - path: App/Resources
+      # DEV ONLY -- strip before release. The author's own game paks, bundled
+      # so a dev build runs without a manual Files copy; QuakeEngineHost seeds
+      # them into Documents/id1 on launch only when missing. The .pak files are
+      # gitignored (never committed). To strip: delete this source entry, the
+      # App/DevGameData folder, and seedBundledGameData() in QuakeEngineHost.
+      - path: App/DevGameData
+        excludes:
+          - ".gitkeep"
       # Swift + Metal consumer half of the renderer. Compiled into the app
       # (not QuakeCore, which stays a plain C library); the bridge/ C half
       # is excluded here because QuakeCore compiles it.

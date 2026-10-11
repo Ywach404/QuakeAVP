@@ -39,7 +39,26 @@ struct QuakePaths {
         let userDirectory = support.appendingPathComponent("QuakeAVP", isDirectory: true)
         try FileManager.default.createDirectory(at: userDirectory, withIntermediateDirectories: true)
 
+        seedBundledGameData(into: documents)
+
         return QuakePaths(baseDirectory: documents, userDirectory: userDirectory)
+    }
+
+    /// DEV ONLY -- strip before release (see project.yml `App/DevGameData`).
+    /// The author's own paks are bundled into the dev build; copy any that are
+    /// missing from Documents/id1 so the game runs without a manual Files copy.
+    /// Only fills gaps -- a real user-supplied pak in Documents always wins and
+    /// is never overwritten. A release build simply has no bundled paks, so
+    /// this no-ops and the Documents/Files flow is unchanged.
+    private static func seedBundledGameData(into baseDirectory: URL) {
+        let id1 = baseDirectory.appendingPathComponent("id1", isDirectory: true)
+        try? FileManager.default.createDirectory(at: id1, withIntermediateDirectories: true)
+        for name in ["pak0", "pak1"] {
+            guard let src = Bundle.main.url(forResource: name, withExtension: "pak") else { continue }
+            let dst = id1.appendingPathComponent("\(name).pak")
+            guard !FileManager.default.fileExists(atPath: dst.path) else { continue }
+            try? FileManager.default.copyItem(at: src, to: dst)
+        }
     }
 
     /// True when `id1/pak0.pak` is actually present. Checked before boot so the
