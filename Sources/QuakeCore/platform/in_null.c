@@ -52,7 +52,6 @@ static float			qc_head_yaw_shared;
 static float			qc_head_pitch_shared;
 static int			qc_paused_shared;	/* console pause request */
 static int			qc_slowmo_shared;	/* raw L3 button */
-static int			qc_turnlock_shared;	/* hands: pause turning while console open */
 static float			qc_height_trim_shared;
 static int			qc_aim_valid_shared;	/* dominant-hand aim live? */
 static float			qc_aim_org_shared[3];	/* body frame fwd,right,up */
@@ -126,18 +125,6 @@ void QC_InputSetSlowmo (int pressed)
 {
 	pthread_mutex_lock (&qc_input_lock);
 	qc_slowmo_shared = pressed ? 1 : 0;
-	pthread_mutex_unlock (&qc_input_lock);
-}
-
-/* Hands-mode turn pause: Swift sets this while the console window is open (and
-   the comfort opt-out is off) so reaching for a parked console doesn't turn
-   the body -- via the aim-hand drifting to a side, which is the ENGINE-side
-   edge turn, not anything the Swift slice can cancel. Gates every turn path in
-   IN_Move at once. */
-void QC_InputSetTurnLock (int locked)
-{
-	pthread_mutex_lock (&qc_input_lock);
-	qc_turnlock_shared = locked ? 1 : 0;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -285,7 +272,6 @@ static float			qr_tp_yaw, qr_tp_pitch;	/* room-relative, Quake deg */
 
 static int			qr_paused;		/* drained console pause */
 static int			qr_slowmo_raw;		/* drained L3 button */
-static int			qr_turn_locked;		/* drained turn-lock request */
 static int			qr_slowmo_active;	/* toggled bullet-time */
 static uint32_t			qr_head_ack_seen;
 
@@ -298,6 +284,12 @@ static cvar_t	vr_smoothturn = {"vr_smoothturn", "0", CVAR_ARCHIVE};
 static cvar_t	vr_edgeturn = {"vr_edgeturn", "1", CVAR_ARCHIVE};
 static cvar_t	vr_edgeturn_dz = {"vr_edgeturn_dz", "18", CVAR_ARCHIVE};
 static cvar_t	vr_edgeturn_speed = {"vr_edgeturn_speed", "90", CVAR_ARCHIVE};
+/* Freeze body turning while the sim is paused (i.e. the console is up). The
+   summon pauses the game and head tracking keeps running, so the aim-hand edge
+   turn would otherwise whip the view as you reach for a parked console. Default
+   on (turning frozen while paused); set 1 to allow turning with the console
+   open. */
+static cvar_t	vr_turn_while_paused = {"vr_turn_while_paused", "0", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 /* M6: aim from the dominant hand/controller ray. 1 = the gun lives in your
@@ -482,7 +474,6 @@ static void IN_SnapshotInputs (void)
 	qr_head_yaw = qc_head_yaw_shared;
 	qr_head_pitch = qc_head_pitch_shared;
 	qr_slowmo_raw = qc_slowmo_shared;
-	qr_turn_locked = qc_turnlock_shared;
 	qr_aim_valid = qc_aim_valid_shared;
 	qr_aim_org[0] = qc_aim_org_shared[0];
 	qr_aim_org[1] = qc_aim_org_shared[1];
@@ -1240,12 +1231,14 @@ void IN_Move (usercmd_t *cmd)
 					      cl_maxpitch.value);
 	}
 
-	/* Turn lock (hands, console open): swallow EVERY turn path -- stick/flick
-	   snap, opt-in smooth, and the aim-hand edge turn -- so reaching for a
-	   parked console doesn't spin the view. The aim compose below still runs,
-	   so you can still point; only body rotation is frozen. Keep rx handling
-	   armed-state consistent by simply skipping the whole block. */
-	if (!qr_turn_locked)
+	/* Turn lock while paused (the console is up): swallow EVERY turn path --
+	   stick/flick snap, opt-in smooth, and the aim-hand edge turn -- so
+	   reaching for a parked console doesn't spin the view. The sim is frozen
+	   but head tracking and input keep running, so the edge turn would
+	   otherwise whip from the aim hand drifting to a side. The aim compose
+	   below still runs, so you can still point; only body rotation is frozen.
+	   vr_turn_while_paused opts out. */
+	if (!qr_paused || vr_turn_while_paused.value)
 	{
 	/* Right stick X turns the BODY (snap, or smooth for those who opt in). */
 	if (vr_smoothturn.value)
@@ -1303,6 +1296,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_edgeturn);
 	Cvar_RegisterVariable (&vr_edgeturn_dz);
 	Cvar_RegisterVariable (&vr_edgeturn_speed);
+	Cvar_RegisterVariable (&vr_turn_while_paused);
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);

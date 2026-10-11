@@ -523,12 +523,6 @@ void QC_InputSetWheel (int open, int has_anchor,
    Callable from any thread. */
 void QC_InputSetSlowmo (int pressed);
 
-/* Hands-mode turn lock: while set, IN_Move freezes body rotation (stick/flick
-   snap, smooth, AND the aim-hand edge turn) so reaching for a console window
-   parked off to the side cannot spin the view. Aim still composes, so pointing
-   is unaffected. Swift drives it from console-window-open state. Any thread. */
-void QC_InputSetTurnLock (int locked);
-
 /* The head's yaw relative to the body, degrees, Quake sense (CCW/left
    positive), fed by the render thread from the same pose it draws with.
    Look-relative locomotion (vr_moverelative) rotates the movement stick by

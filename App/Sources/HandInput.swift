@@ -429,19 +429,6 @@ final class HandInput: @unchecked Sendable {
                 + " off=\(String(format: "%.2f", turnDebugOffset)) snap=\(slice.rx)")
         }
 
-        // Console open (hands only): freeze body turning so reaching for a
-        // console parked off to the side -- or up in the sky -- doesn't spin
-        // the view. The lock lives in the ENGINE (QC_InputSetTurnLock): the
-        // worst offender is the aim-hand EDGE turn, applied in IN_Move from the
-        // aim yaw, which no amount of zeroing this slice can cancel. Gated on
-        // controllerless so a Sense controller keeps its stick turn;
-        // SpatialControllerTracker.isTracking is the off-main-safe signal, the
-        // same one gunPosition() reads from the render thread.
-        let lockTurn = !SpatialControllerTracker.shared.isTracking
-            && ConsoleWindowState.shared.isOpen
-            && !VRSettings.shared.allowTurnWithConsole
-        QC_InputSetTurnLock(lockTurn ? 1 : 0)
-
         aggregator.update(.hands, slice)
     }
 
