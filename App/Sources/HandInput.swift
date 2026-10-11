@@ -433,7 +433,7 @@ final class HandInput: @unchecked Sendable {
                         // threshold; an aim sweep crossing a decayed threshold
                         // reads as a modest speed just over a low thr.
                         if VRSettings.shared.inputLog {
-                            print(String(format:
+                            HandDebug.shared.log(String(format:
                                 "[flick] FIRED dir=%+.0f speed=%.2f thr=%.2f peak=%.2f/%.2f travel=%.3f frames=%d floor=%.2f",
                                 dir, speed, effThreshold, flickPeakPos, flickPeakNeg,
                                 travel, flickCandFrames, floor))
@@ -470,13 +470,13 @@ final class HandInput: @unchecked Sendable {
             lastLog = now
             let mode = ["pinch", "curl"][VRSettings.shared.fireMode.rawValue]
             let tstyle = ["stick", "clutch", "flick"][VRSettings.shared.turnStyle.rawValue]
-            print("[inputlog] fire=\(mode)"
+            HandDebug.shared.log("[inputlog] fire=\(mode)"
                 + " straight=\(String(format: "%.2f", aim.indexStraightness))"
                 + " curl=\(aim.indexCurled ? 1 : 0) ext=\(aim.indexExtended ? 1 : 0)"
                 + " thumb=\(Int(aim.thumbBarrelDeg))° ham=\(aim.thumbHammerDown ? 1 : 0)"
                 + " aim=\(aim.aimDir != nil ? 1 : 0) shot=\(slice.rt == 1 ? 1 : 0)"
-                + " | turn=\(tstyle) intent=\(Int(turnIntent))°/\(Int(Self.snapStep))"
-                + " off=\(String(format: "%.2f", turnDebugOffset)) snap=\(slice.rx)")
+                + " | turn=\(tstyle) snap=\(String(format: "%.2f", slice.rx))"
+                + " spd=\(String(format: "%.2f", aim.wristVel.map { (basis * $0).x } ?? 0))")
         }
 
         aggregator.update(.hands, slice)

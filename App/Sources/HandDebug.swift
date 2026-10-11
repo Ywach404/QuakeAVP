@@ -58,6 +58,18 @@ final class HandDebug: @unchecked Sendable {
         set { lock.lock(); _fireDebug = newValue; lock.unlock() }
     }
 
+    /// Sink for input/flick telemetry into the in-headset console (wired to
+    /// QuakeEngineViewModel.note in ContentView.onAppear), the same way
+    /// AudioSink.onLog is -- so the "(console)" telemetry is actually readable
+    /// in the headset. print() alone is invisible on a detached launch (Debug
+    /// executable unchecked), which is the shipping/audio-safe way to run.
+    nonisolated(unsafe) var consoleLog: (@Sendable (String) -> Void)?
+
+    func log(_ line: String) {
+        print(line)             // also to stdout / Console.app when attached
+        consoleLog?(line)       // and to the in-headset console
+    }
+
     func publish(_ v: [Float]) {
         lock.lock(); verts = v; lock.unlock()
     }

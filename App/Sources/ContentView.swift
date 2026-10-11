@@ -224,6 +224,11 @@ struct ContentView: View {
             AudioSink.shared.onLog = { line in
                 Task { @MainActor in engine.note(line) }
             }
+            // Input/flick telemetry into the in-headset console too, so the
+            // "(console)" toggles are readable with no Mac attached.
+            HandDebug.shared.consoleLog = { line in
+                Task { @MainActor in engine.note(line) }
+            }
             // Persisted per-input profiles: pick Hands/PSVR2 by what's attached,
             // push its feel to VRSettings now (the rig cvars land once the engine
             // is running, below), and load its values into the sliders.
