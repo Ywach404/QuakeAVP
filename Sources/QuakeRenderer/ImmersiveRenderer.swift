@@ -763,8 +763,15 @@ final class ImmersiveRenderer {
             let cell = HudEditor.wristCellOffset(slot: slot, spanW: spanW, spanH: spanH)
             let origin = originOverride
                 ?? (frame.origin + frame.right * cell.offset.x + frame.up * cell.offset.y)
+            // Preserve the tile's native aspect: contain-fit its bbox inside the
+            // footprint box rather than stretching each axis to fill it, which
+            // crushed the wide ammo tile (96x24) into a square cell. The
+            // footprint still sets the base size; `s` fine-tunes. A footprint
+            // change never alters the ratio, so the rectangle always returns.
+            let bw = max(tile.bbox_w, 1), bh = max(tile.bbox_h, 1)
+            let fit = min(cell.size.x / bw, cell.size.y / bh)
             return TilePlacement(origin: origin, right: frame.right, up: frame.up,
-                                 width: cell.size.x * s, height: cell.size.y * s,
+                                 width: bw * fit * s, height: bh * fit * s,
                                  sourceWidth: tile.bbox_w, sourceHeight: tile.bbox_h)
         case Int(QC_HUD_ANCHOR_GUN):
             guard let frame = gunFree else { return nil }
