@@ -67,12 +67,13 @@ extension HudEditor {
         /// with r_null.c's registered defaults rather than read from them.
         nonisolated private static var defaultWorking: [TileEdit] {
             var tiles = Array(
-                repeating: TileEdit(anchor: Int(QC_HUD_ANCHOR_OFFWRIST), offset: .zero, scale: 1.6, show: true),
+                repeating: TileEdit(anchor: Int(QC_HUD_ANCHOR_WRIST_OFF), offset: .zero,
+                                    scale: 1.6, show: true, slot: 0, spanW: 1, spanH: 1),
                 count: Int(QC_HUD_TILE_COUNT)
             )
-            tiles[Int(QC_HUD_TILE_AMMO)].anchor = Int(QC_HUD_ANCHOR_GUN)
-            tiles[Int(QC_HUD_TILE_FACE)].offset = SIMD3(0, 0.035, 0)
-            tiles[Int(QC_HUD_TILE_HEALTHARMOR)].offset = SIMD3(0, -0.035, 0)
+            tiles[Int(QC_HUD_TILE_AMMO)].anchor = Int(QC_HUD_ANCHOR_GUN)       // free, by the gun
+            tiles[Int(QC_HUD_TILE_FACE)].slot = 0                             // off wrist, top-left
+            tiles[Int(QC_HUD_TILE_HEALTHARMOR)].slot = 2                      // off wrist, bottom-left
             return tiles
         }
 
@@ -132,6 +133,9 @@ extension HudEditor {
                         QC_CvarValue("vr_hud_\(cvar)_off_z")),
                     scale: QC_CvarValue("vr_hud_\(cvar)_scale"),
                     show: QC_CvarValue("vr_hud_\(cvar)_show") != 0)
+                working[index].slot  = Int(QC_CvarValue("vr_hud_\(cvar)_slot"))
+                working[index].spanW = Int(QC_CvarValue("vr_hud_\(cvar)_span_w"))
+                working[index].spanH = Int(QC_CvarValue("vr_hud_\(cvar)_span_h"))
             }
             snapshot()
             priorHudMode = currentHudMode
@@ -154,6 +158,9 @@ extension HudEditor {
             engine.send("vr_hud_\(cvar)_off_z \(edit.offset.z)")
             engine.send("vr_hud_\(cvar)_scale \(edit.scale)")
             engine.send("vr_hud_\(cvar)_show \(edit.show ? 1 : 0)")
+            engine.send("vr_hud_\(cvar)_slot \(edit.slot)")
+            engine.send("vr_hud_\(cvar)_span_w \(edit.spanW)")
+            engine.send("vr_hud_\(cvar)_span_h \(edit.spanH)")
         }
 
         /// Done: commits every tile's working edit to the engine, restores
