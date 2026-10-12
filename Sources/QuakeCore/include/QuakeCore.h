@@ -231,9 +231,10 @@ typedef struct qc_overlay_batch_s {
 } qc_overlay_batch_t;
 
 /* Modular HUD: anchors a tile may be pinned to. */
-#define QC_HUD_ANCHOR_OFFWRIST	0
-#define QC_HUD_ANCHOR_GUN	1
-#define QC_HUD_ANCHOR_FLOAT	2
+#define QC_HUD_ANCHOR_WRIST_OFF	0	/* off-hand wrist 2x2 grid */
+#define QC_HUD_ANCHOR_WRIST_GUN	1	/* gun-hand wrist 2x2 grid */
+#define QC_HUD_ANCHOR_GUN	2	/* free, rides the gun */
+#define QC_HUD_ANCHOR_FLOAT	3	/* free, in front of the face */
 
 /* Modular HUD: the fixed set of tiles the authentic status bar splits into. */
 #define QC_HUD_TILE_AMMO		0
@@ -255,6 +256,9 @@ typedef struct qc_hud_tile_s {
 					   shrink when a number loses a digit) */
 	int32_t		anchor;		/* QC_HUD_ANCHOR_* */
 	float		offset[3];	/* metres, in the anchor frame */
+	int32_t		slot;		/* wrist grid origin cell 0-3: row=slot/2, col=slot%2 (0=TL 1=TR 2=BL 3=BR) */
+	int32_t		span_w;		/* footprint width  in cells, 1-2 (wrist anchors) */
+	int32_t		span_h;		/* footprint height in cells, 1-2 (wrist anchors) */
 	float		scale;		/* panel scale multiplier */
 } qc_hud_tile_t;
 
