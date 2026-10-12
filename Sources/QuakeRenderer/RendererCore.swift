@@ -1074,6 +1074,114 @@ final class RendererCore {
         }
     }
 
+    // MARK: - HUD editor workbench labels (Task 4)
+
+    /// Swift-side mirror of `QR_EmitText` (qr_bridge.c) for the workbench's
+    /// zone/Done/Cancel labels, which have no engine-side glyph data of
+    /// their own -- the HUD editor session never touches `QC_*` (it is
+    /// render-only UI state, see `ImmersiveRenderer.workbenchFurniture`'s
+    /// doc comment), so there is nothing in `frame.text_verts` to reuse for
+    /// them. The conchars atlas layout is a stable Quake format (128x128,
+    /// 16x16 grid of 8x8 cells, column = char & 15, row = char >> 4 --
+    /// QR_EmitText's own doc comment), so this builds the SAME 9-float
+    /// (xyz, uv, rgba) triangle quads the engine's own text path emits,
+    /// without teaching the bridge a new string entry point. ASCII only
+    /// (conchars has no other glyphs); anything else falls back to '?'.
+    private static func textQuads(_ s: String, origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                                   cellSize: Float, color: SIMD4<Float>) -> [Float] {
+        let bytes = Array(s.utf8).map { $0 < 128 ? $0 : UInt8(ascii: "?") }
+        guard !bytes.isEmpty else { return [] }
+        let half = Float(bytes.count) * cellSize * 0.5
+        let top = cellSize * 0.5, bot = -cellSize * 0.5
+        func vert(_ p: SIMD3<Float>, _ u: Float, _ v: Float) -> [Float] {
+            [p.x, p.y, p.z, u, v, color.x, color.y, color.z, color.w]
+        }
+        var verts: [Float] = []
+        verts.reserveCapacity(bytes.count * 54)
+        for (i, byte) in bytes.enumerated() {
+            if byte == UInt8(ascii: " ") { continue }   // blank cell, no wasted verts
+            let cxi = Float(Int(byte) & 15), cyi = Float(Int(byte) >> 4)
+            let u0 = cxi / 16, u1 = u0 + 1 / 16
+            let v0 = cyi / 16, v1 = v0 + 1 / 16
+            let x0 = -half + Float(i) * cellSize, x1 = x0 + cellSize
+            let tl = origin + right * x0 + up * top
+            let tr = origin + right * x1 + up * top
+            let bl = origin + right * x0 + up * bot
+            let br = origin + right * x1 + up * bot
+            verts += vert(tl, u0, v0) + vert(tr, u1, v0) + vert(bl, u0, v1)
+            verts += vert(tr, u1, v0) + vert(br, u1, v1) + vert(bl, u0, v1)
+        }
+        return verts
+    }
+
+    /// A solid-tinted quad in world space -- verts carry their own
+    /// position, no model matrix, same convention `drawHandDebug`/
+    /// `drawVirtualHand` use for the hand overlays -- 9-float layout so it
+    /// draws through the SAME `pipelines.text` + white-texel path
+    /// `drawHudTiles`'s opaque tile backing already uses.
+    private static func workbenchPanelQuad(origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                                            width: Float, height: Float, color: SIMD4<Float>) -> [Float] {
+        let r = right * (width * 0.5)
+        let u = up * (height * 0.5)
+        let tl = origin - r + u, tr = origin + r + u, bl = origin - r - u, br = origin + r - u
+        func vert(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] {
+            [p.x, p.y, p.z, uu, vv, color.x, color.y, color.z, color.w]
+        }
+        return vert(tl, 0, 0) + vert(tr, 1, 0) + vert(bl, 0, 1)
+             + vert(tr, 1, 0) + vert(br, 1, 1) + vert(bl, 0, 1)
+    }
+
+    /// Draws one workbench proxy (HUD live editor, Task 4): a solid tinted
+    /// backing and, when `text` is non-nil, a centred label above it.
+    /// `text == nil` draws the backing alone -- the grabbed-tile highlight,
+    /// which has no label of its own. Both passes are world-space quads (no
+    /// model matrix needed; `origin`/`right`/`up` already place them) drawn
+    /// through `pipelines.text`, exactly like `drawHudTiles`'s opaque tile
+    /// backing and the engine's own billboarded text -- a missing
+    /// `pipelines.text` build (labels off) silently drops this instead of
+    /// crashing, same contract as every other optional-pipeline draw here.
+    func drawWorkbenchLabel(text: String?, origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                            panelWidth: Float, panelHeight: Float, cellSize: Float,
+                            panelColor: SIMD4<Float>, textColor: SIMD4<Float>,
+                            conchars: UInt32,
+                            viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                            pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard let pipeline = pipelines.text else { return }
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        var uniforms = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
+
+        if let solidTex = ensureHudSolidTexture() {
+            let quad = Self.workbenchPanelQuad(origin: origin, right: right, up: up,
+                                               width: panelWidth, height: panelHeight, color: panelColor)
+            if let buf = device.makeBuffer(bytes: quad, length: quad.count * MemoryLayout<Float>.size,
+                                           options: .storageModeShared) {
+                encoder.setRenderPipelineState(pipeline)
+                withUnsafeBytes(of: &uniforms) { raw in
+                    encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
+                }
+                encoder.setVertexBuffer(buf, offset: 0, index: 0)
+                encoder.setFragmentTexture(solidTex, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: quad.count / 9)
+            }
+        }
+
+        guard let text, let atlas = textures[conchars] else { return }
+        let labelOrigin = origin + up * (panelHeight * 0.5 + cellSize * 0.6)
+        let textVerts = Self.textQuads(text, origin: labelOrigin, right: right, up: up,
+                                       cellSize: cellSize, color: textColor)
+        guard !textVerts.isEmpty,
+              let textBuf = device.makeBuffer(bytes: textVerts, length: textVerts.count * MemoryLayout<Float>.size,
+                                              options: .storageModeShared)
+        else { return }
+        encoder.setRenderPipelineState(pipeline)
+        withUnsafeBytes(of: &uniforms) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
+        }
+        encoder.setVertexBuffer(textBuf, offset: 0, index: 0)
+        encoder.setFragmentTexture(atlas, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: textVerts.count / 9)
+    }
+
     /// The immersive HUD panel's model matrix: maps a `sourceWidth` x
     /// `sourceHeight` top-left-origin plane (+y down, z always 0 — pure 2D
     /// quads) onto a flat `widthMeters` x `heightMeters` rectangle centred
