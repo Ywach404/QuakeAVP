@@ -319,7 +319,7 @@ cvar_t	vr_hud_face_span_h        = {"vr_hud_face_span_h", "1", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_off_x         = {"vr_hud_face_off_x", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_off_y         = {"vr_hud_face_off_y", "0.035", CVAR_ARCHIVE};	/* up: above the wrist */
 cvar_t	vr_hud_face_off_z         = {"vr_hud_face_off_z", "0", CVAR_ARCHIVE};
-cvar_t	vr_hud_face_scale         = {"vr_hud_face_scale", "1.6", CVAR_ARCHIVE};
+cvar_t	vr_hud_face_scale         = {"vr_hud_face_scale", "1.0", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_show          = {"vr_hud_face_show", "1", CVAR_ARCHIVE};
 
 cvar_t	vr_hud_healtharmor_anchor = {"vr_hud_healtharmor_anchor", "0", CVAR_ARCHIVE};	/* off-hand wrist */
@@ -329,7 +329,7 @@ cvar_t	vr_hud_healtharmor_span_h = {"vr_hud_healtharmor_span_h", "1", CVAR_ARCHI
 cvar_t	vr_hud_healtharmor_off_x  = {"vr_hud_healtharmor_off_x", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_off_y  = {"vr_hud_healtharmor_off_y", "-0.035", CVAR_ARCHIVE};	/* down: below the wrist */
 cvar_t	vr_hud_healtharmor_off_z  = {"vr_hud_healtharmor_off_z", "0", CVAR_ARCHIVE};
-cvar_t	vr_hud_healtharmor_scale  = {"vr_hud_healtharmor_scale", "1.6", CVAR_ARCHIVE};
+cvar_t	vr_hud_healtharmor_scale  = {"vr_hud_healtharmor_scale", "1.0", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_show   = {"vr_hud_healtharmor_show", "1", CVAR_ARCHIVE};
 cvar_t	scr_conwidth = {"scr_conwidth", "0", CVAR_ARCHIVE};
 cvar_t	scr_conscale = {"scr_conscale", "1", CVAR_ARCHIVE};
