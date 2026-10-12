@@ -71,9 +71,11 @@ extension HudEditor {
                                     scale: 1.6, show: true, slot: 0, spanW: 1, spanH: 1),
                 count: Int(QC_HUD_TILE_COUNT)
             )
-            tiles[Int(QC_HUD_TILE_AMMO)].anchor = Int(QC_HUD_ANCHOR_GUN)       // free, by the gun
+            tiles[Int(QC_HUD_TILE_AMMO)].anchor = Int(QC_HUD_ANCHOR_GUN)       // free, by the gun, 1.6x
             tiles[Int(QC_HUD_TILE_FACE)].slot = 0                             // off wrist, top-left
+            tiles[Int(QC_HUD_TILE_FACE)].scale = 1.0                          // fit the cell (not 1.6x)
             tiles[Int(QC_HUD_TILE_HEALTHARMOR)].slot = 3                      // off wrist, bottom-left
+            tiles[Int(QC_HUD_TILE_HEALTHARMOR)].scale = 1.0                   // fit the cell (not 1.6x)
             return tiles
         }
 
@@ -165,22 +167,27 @@ extension HudEditor {
             engine.send("vr_hud_\(cvar)_span_h \(edit.spanH)")
         }
 
-        /// Reset every tile's SIZE -- uniform scale back to the 1.6 default and
-        /// the wrist footprint back to a single cell -- while leaving each
-        /// tile's anchor/slot/offset/show (its position) untouched. Writes the
-        /// three size cvars live so it works whether or not the editor is open,
-        /// and mirrors them into `working` so an open edit shows it at once (and
-        /// Cancel still reverts it with the rest of the session's edits).
-        func resetSizes() {
+        /// Reset ONE tile's SIZE -- its uniform scale back to the tile's default
+        /// (ammo 1.6x on the gun, the wrist tiles 1.0 to fit their cell) and its
+        /// wrist footprint back to a single cell -- while leaving its position
+        /// (anchor/slot/offset/show) untouched. Per-tile so the off-wrist
+        /// health/face can be restored without disturbing a tuned ammo tile.
+        /// Writes the three size cvars live so it works whether or not the
+        /// editor is open, and mirrors them into `working` so an open edit shows
+        /// it at once (and Cancel still reverts it with the session's edits).
+        func resetSize(tileIndex: Int) {
+            guard tileIndex >= 0, tileIndex < working.count else { return }
+            let cvar = Session.tileCvarNames[tileIndex]
+            // Ammo rides the gun at 1.6x (pixel-scaled); the wrist tiles fit
+            // their cell at 1.0 (contain-fit). Matches r_null.c's defaults.
+            let sc: Float = tileIndex == Int(QC_HUD_TILE_AMMO) ? 1.6 : 1.0
+            working[tileIndex].scale = sc
+            working[tileIndex].spanW = 1
+            working[tileIndex].spanH = 1
             let engine = QuakeEngineViewModel.shared
-            for (index, cvar) in Session.tileCvarNames.enumerated() {
-                working[index].scale = 1.6
-                working[index].spanW = 1
-                working[index].spanH = 1
-                engine.send("vr_hud_\(cvar)_scale 1.6")
-                engine.send("vr_hud_\(cvar)_span_w 1")
-                engine.send("vr_hud_\(cvar)_span_h 1")
-            }
+            engine.send("vr_hud_\(cvar)_scale \(sc)")
+            engine.send("vr_hud_\(cvar)_span_w 1")
+            engine.send("vr_hud_\(cvar)_span_h 1")
         }
 
         /// Done: commits every tile's working edit to the engine, restores

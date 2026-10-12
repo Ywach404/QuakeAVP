@@ -584,13 +584,20 @@ struct ContentView: View {
                     } else {
                         Button("Edit HUD Layout") { enterHudLayoutEdit() }
                     }
-                    // Restores every tile's size -- scale back to default and the
-                    // wrist footprint back to one cell -- without moving anything.
-                    // Lives here, outside the `.disabled` tiles block, so it's
-                    // reachable while the editor is open (where it's most useful
-                    // after a resize that wasn't wanted).
-                    Button("Reset tile sizes") { HudEditor.shared.resetSizes() }
-                        .font(.caption)
+                    // Per-tile size reset -- scale back to the tile's default and
+                    // the wrist footprint back to one cell, without moving it.
+                    // Per-tile (not one "reset all") so the off-wrist health/face
+                    // can be restored without disturbing a tuned ammo tile.
+                    // Outside the `.disabled` tiles block above, so it's reachable
+                    // while the editor is open (where it's most useful).
+                    HStack(spacing: 8) {
+                        Text("Reset size:").font(.caption).foregroundStyle(.secondary)
+                        Button("Ammo") { HudEditor.shared.resetSize(tileIndex: Int(QC_HUD_TILE_AMMO)) }
+                        Button("Face") { HudEditor.shared.resetSize(tileIndex: Int(QC_HUD_TILE_FACE)) }
+                        Button("Health") { HudEditor.shared.resetSize(tileIndex: Int(QC_HUD_TILE_HEALTHARMOR)) }
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
