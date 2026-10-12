@@ -162,10 +162,20 @@ final class HudEditorInput: @unchecked Sendable {
     }
 
     private func run() async {
+        let budget = 1.0 / 90.0
         while !Task.isCancelled {
             if WorkbenchGeometry.shared.snapshot().active {
+                // Rate-compensate: sleep only the REMAINDER of the 90 Hz budget
+                // after the tick's own work (two main-actor hops), so the loop
+                // holds a true 90 Hz instead of 90 Hz PLUS the tick duration --
+                // which had quietly dropped the effective grab rate and added
+                // input->grid latency.
+                let start = CACurrentMediaTime()
                 await tick()
-                try? await Task.sleep(nanoseconds: 1_000_000_000 / 90)
+                let remaining = budget - (CACurrentMediaTime() - start)
+                if remaining > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
             } else {
                 // Editor closed: nothing to drive. Poll slowly rather than
                 // spin, and drop any stale source bookkeeping so a later
