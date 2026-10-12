@@ -63,7 +63,7 @@ enum HudEditor {
 
     /// Projects `point - origin` onto the frame's own axes, i.e. the inverse
     /// of `origin + right*offset.x + up*offset.y + forward*offset.z` -- the
-    /// same construction `RendererCore.hudTileModel` uses to place a tile
+    /// same construction the renderer's tile placement uses to place a tile
     /// from its stored offset, run backwards to recover that offset from a
     /// world point (a grab/drop hit).
     static func offsetInFrame(point: SIMD3<Float>, origin: SIMD3<Float>,
