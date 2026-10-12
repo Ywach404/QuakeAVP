@@ -655,17 +655,25 @@ final class ImmersiveRenderer {
         else { return [] }
 
         // Resolved once per frame rather than per tile: every OFFWRIST tile
-        // shares one wrist-or-float frame, every GUN tile shares one
-        // gun-or-nothing frame.
+        // shares one wrist-or-nothing frame, every GUN tile shares one
+        // gun-or-nothing frame, every FLOAT tile shares one
+        // float-ahead-of-head-or-nothing frame.
         let offwrist = offWristAnchorFrame(originFromDevice: originFromDevice,
                                            headPoseAvailable: headPoseAvailable)
         let gun = gunAnchorFrame()
+        let float_ = floatAnchorFrame(originFromDevice: originFromDevice,
+                                      headPoseAvailable: headPoseAvailable)
 
         var models: [simd_float4x4?] = []
         for i in 0..<Int(packet.num_hud_tiles) {
             let tile = tiles[i]
             guard tile.vert_count > 0 else { models.append(nil); continue }
-            let anchor = (tile.anchor == QC_HUD_ANCHOR_GUN) ? gun : offwrist
+            let anchor: RendererCore.HudAnchorFrame?
+            switch tile.anchor {
+            case QC_HUD_ANCHOR_GUN: anchor = gun
+            case QC_HUD_ANCHOR_FLOAT: anchor = float_
+            default: anchor = offwrist
+            }
             guard let anchor else { models.append(nil); continue }
             models.append(RendererCore.hudTileModel(tile: tile, anchor: anchor,
                                                      pixelScale: Self.hudTilePixelScale))
@@ -690,6 +698,28 @@ final class ImmersiveRenderer {
         let origin = wrist + basis.up * Self.wristLift
         return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
                                            forward: toward)
+    }
+
+    /// FLOAT anchor frame for modular tiles: ahead of the head, yaw+level
+    /// only — no pitch — same maths as `hudPanelModel`'s float branch above,
+    /// reused here as its own anchor rather than a wrist fallback. nil when
+    /// the head pose is unavailable: there is nothing sane left to anchor to
+    /// (Review Focus #3).
+    private func floatAnchorFrame(originFromDevice: simd_float4x4,
+                                  headPoseAvailable: Bool) -> RendererCore.HudAnchorFrame? {
+        guard headPoseAvailable else { return nil }
+        let headPos = originFromDevice.columns.3
+        let headForward4 = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
+        let flatForward = SIMD3(headForward4.x, 0, headForward4.z)
+        let forward = simd_length(flatForward) > 1e-4 ? simd_normalize(flatForward) : SIMD3<Float>(0, 0, -1)
+        let origin = SIMD3(headPos.x, headPos.y, headPos.z)
+            + forward * Self.floatDistance
+            - SIMD3<Float>(0, Self.floatLowerOffset, 0)
+        // toward is horizontal by construction, so billboardBasis's "up"
+        // comes out as world-up exactly -- level, no pitch, no roll.
+        let basis = RendererCore.billboardBasis(toward: -forward)
+        return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
+                                           forward: -forward)
     }
 
     /// GUN anchor frame for modular tiles: the dominant hand's controller
