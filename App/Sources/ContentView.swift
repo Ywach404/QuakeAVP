@@ -584,6 +584,13 @@ struct ContentView: View {
                     } else {
                         Button("Edit HUD Layout") { enterHudLayoutEdit() }
                     }
+                    // Restores every tile's size -- scale back to default and the
+                    // wrist footprint back to one cell -- without moving anything.
+                    // Lives here, outside the `.disabled` tiles block, so it's
+                    // reachable while the editor is open (where it's most useful
+                    // after a resize that wasn't wanted).
+                    Button("Reset tile sizes") { HudEditor.shared.resetSizes() }
+                        .font(.caption)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)

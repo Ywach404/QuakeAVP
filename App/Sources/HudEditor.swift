@@ -165,6 +165,24 @@ extension HudEditor {
             engine.send("vr_hud_\(cvar)_span_h \(edit.spanH)")
         }
 
+        /// Reset every tile's SIZE -- uniform scale back to the 1.6 default and
+        /// the wrist footprint back to a single cell -- while leaving each
+        /// tile's anchor/slot/offset/show (its position) untouched. Writes the
+        /// three size cvars live so it works whether or not the editor is open,
+        /// and mirrors them into `working` so an open edit shows it at once (and
+        /// Cancel still reverts it with the rest of the session's edits).
+        func resetSizes() {
+            let engine = QuakeEngineViewModel.shared
+            for (index, cvar) in Session.tileCvarNames.enumerated() {
+                working[index].scale = 1.6
+                working[index].spanW = 1
+                working[index].spanH = 1
+                engine.send("vr_hud_\(cvar)_scale 1.6")
+                engine.send("vr_hud_\(cvar)_span_w 1")
+                engine.send("vr_hud_\(cvar)_span_h 1")
+            }
+        }
+
         /// Done: commits every tile's working edit to the engine, restores
         /// whatever `vr_hud` mode was active before `enter()`, and closes
         /// the workbench. Returns the committed anchor/show per tile so
