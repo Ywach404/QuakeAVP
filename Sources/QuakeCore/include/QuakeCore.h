@@ -233,6 +233,7 @@ typedef struct qc_overlay_batch_s {
 /* Modular HUD: anchors a tile may be pinned to. */
 #define QC_HUD_ANCHOR_OFFWRIST	0
 #define QC_HUD_ANCHOR_GUN	1
+#define QC_HUD_ANCHOR_FLOAT	2
 
 /* Modular HUD: the fixed set of tiles the authentic status bar splits into. */
 #define QC_HUD_TILE_AMMO		0
