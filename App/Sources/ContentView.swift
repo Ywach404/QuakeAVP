@@ -1626,7 +1626,10 @@ struct ContentView: View {
                     Text("Gun").tag(Int(QC_HUD_ANCHOR_GUN))
                     Text("Float").tag(Int(QC_HUD_ANCHOR_FLOAT))
                 }
-                .pickerStyle(.segmented)
+                // Menu, not segmented: four anchor labels won't fit this row as
+                // tabs (they truncated to "..."); a menu collapses to the
+                // current choice and opens the full list on tap.
+                .pickerStyle(.menu)
                 .labelsHidden()
                 Toggle("Show", isOn: Binding(
                     get: { shown.wrappedValue },
