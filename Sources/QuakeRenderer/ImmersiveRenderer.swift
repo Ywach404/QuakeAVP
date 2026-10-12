@@ -54,6 +54,13 @@ final class ImmersiveRenderer {
     private var recenterSeen: UInt32 = 0
     private var zeroedInitialPose = false
 
+    // Last valid wrist-grid frames, held through hand occlusion while the HUD
+    // editor is open: reaching a hand over a wrist hides it from the cameras,
+    // so without this the grid would vanish the instant you reach to grab a
+    // tile. Render-thread only. See wristFrames().
+    private var lastOffWristFrame: HudEditor.WristFrame?
+    private var lastGunWristFrame: HudEditor.WristFrame?
+
     // Frame timing stats, logged every `statsWindow` frames.
     private let statsWindow = 300
     private var statFrames = 0
@@ -708,8 +715,33 @@ final class ImmersiveRenderer {
     /// false` (never NaN), with NO float fallback -- a wrist tile simply
     /// hides when its hand drops out of view rather than jumping to the face.
     private func wristFrames() -> (off: HudEditor.WristFrame, gun: HudEditor.WristFrame) {
-        (off: wristFrame(anchor: Int(QC_HUD_ANCHOR_WRIST_OFF), position: offHandWristPosition()),
-         gun: wristFrame(anchor: Int(QC_HUD_ANCHOR_WRIST_GUN), position: gunPosition()))
+        let editing = HudEditor.Session.renderSnapshot().active
+        // Between edit sessions the held frames go stale; drop them so a new
+        // session re-latches from a freshly seen wrist rather than an old pose.
+        if !editing { lastOffWristFrame = nil; lastGunWristFrame = nil }
+        let off = latchedWristFrame(
+            live: wristFrame(anchor: Int(QC_HUD_ANCHOR_WRIST_OFF), position: offHandWristPosition()),
+            held: &lastOffWristFrame, editing: editing)
+        let gun = latchedWristFrame(
+            live: wristFrame(anchor: Int(QC_HUD_ANCHOR_WRIST_GUN), position: gunPosition()),
+            held: &lastGunWristFrame, editing: editing)
+        return (off, gun)
+    }
+
+    /// Caches a valid live frame; while the editor is open, substitutes the
+    /// last valid one when the live frame drops to invalid (the wrist got
+    /// occluded by the reaching hand), so the grid stays a stable, grabbable
+    /// target. Outside the editor an invalid wrist still hides the HUD -- it's
+    /// been lowered out of view, which is the right behaviour there.
+    private func latchedWristFrame(live: HudEditor.WristFrame,
+                                   held: inout HudEditor.WristFrame?,
+                                   editing: Bool) -> HudEditor.WristFrame {
+        if live.valid {
+            held = live
+            return live
+        }
+        if editing, let held { return held }
+        return live
     }
 
     /// One wrist-grid frame from a wrist world position (corrected tracking
