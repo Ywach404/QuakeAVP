@@ -556,6 +556,30 @@ struct ContentView: View {
                         hudTileControl("Health + Armor", anchor: $hudHealthArmorAnchor,
                                        shown: $hudHealthArmorShown, cvar: "healtharmor")
                     }
+                    // The workbench owns anchor/show while it's open -- a
+                    // Phase 1 picker edit here would race `working` without
+                    // either side ever seeing the other's change.
+                    .disabled(HudEditor.shared.active)
+                }
+                // Opens the immersive workbench (forces `vr_hud 3` so its
+                // frozen tile row has tiles to show, whatever mode is
+                // picked above; restored on Done/Cancel). Available from
+                // any status-bar mode, not just Modular, since arranging
+                // tiles doesn't require already being in that mode.
+                VStack(alignment: .leading, spacing: 6) {
+                    if HudEditor.shared.active {
+                        Text("Arranging in the headset — grab a tile to move it, "
+                             + "pinch-drag to resize, drop it on a zone to re-anchor.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        HStack {
+                            Button("Cancel", role: .cancel) { cancelHudLayoutEdit() }
+                            Spacer()
+                            Button("Done") { commitHudLayoutEdit() }
+                                .buttonStyle(.borderedProminent)
+                        }
+                    } else {
+                        Button("Edit HUD Layout") { enterHudLayoutEdit() }
+                    }
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
@@ -1604,6 +1628,41 @@ struct ContentView: View {
                     .fixedSize()
             }
         }
+    }
+
+    /// "Edit HUD Layout": opens the live workbench. Seeds anchor/show from
+    /// these Phase 1 mirrors (there is no live cvar read-back; see
+    /// `hudTileControl`'s doc comment) and passes the current status-bar
+    /// mode so `HudEditor.Session.enter` can force `vr_hud 3` for the
+    /// workbench's frozen tile row and restore this mode on Done/Cancel.
+    private func enterHudLayoutEdit() {
+        HudEditor.shared.enter(
+            ammoAnchor: hudAmmoAnchor, ammoShown: hudAmmoShown,
+            faceAnchor: hudFaceAnchor, faceShown: hudFaceShown,
+            healthArmorAnchor: hudHealthArmorAnchor, healthArmorShown: hudHealthArmorShown,
+            currentHudMode: hudPanelMode)
+    }
+
+    /// Done: commits the workbench's edits to the `vr_hud_<tile>_*` cvars
+    /// (persists -- they're all `CVAR_ARCHIVE`) and pulls the committed
+    /// anchor/show back into these Phase 1 mirrors, so the pickers above
+    /// read right immediately and the next `enterHudLayoutEdit()` seeds
+    /// from the layout that's actually live.
+    private func commitHudLayoutEdit() {
+        let committed = HudEditor.shared.commit()
+        hudAmmoAnchor = committed[Int(QC_HUD_TILE_AMMO)].anchor
+        hudAmmoShown = committed[Int(QC_HUD_TILE_AMMO)].show
+        hudFaceAnchor = committed[Int(QC_HUD_TILE_FACE)].anchor
+        hudFaceShown = committed[Int(QC_HUD_TILE_FACE)].show
+        hudHealthArmorAnchor = committed[Int(QC_HUD_TILE_HEALTHARMOR)].anchor
+        hudHealthArmorShown = committed[Int(QC_HUD_TILE_HEALTHARMOR)].show
+    }
+
+    /// Cancel: discards every edit made since `enterHudLayoutEdit()`. The
+    /// Phase 1 mirrors above were never touched by the workbench (only
+    /// `HudEditor.shared.working` was), so there's nothing to revert here.
+    private func cancelHudLayoutEdit() {
+        HudEditor.shared.cancel()
     }
 
     @State private var phaseLevel = 0.0

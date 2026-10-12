@@ -49,15 +49,30 @@ extension HudEditor {
 
         private var entrySnapshot: [TileEdit]?
 
+        /// The `vr_hud` mode in effect before `enter()` forced mode 3, so
+        /// `commit()`/`cancel()` can restore it. `nil` while inactive.
+        private var priorHudMode: Int?
+
         private init() {
             publishRenderSnapshot()
         }
 
+        /// `QC_HUD_TILE_*`-indexed, matching the shipped default layout A
+        /// in r_null.c byte-for-byte (anchor, offset, scale) -- ammo on the
+        /// gun, face/health+armor on the wrist, all shown, 1.6x scale. This
+        /// is also what a `Session` reads before any `enter()`, and what
+        /// `enter()` leaves offset/scale at on the very first call of a
+        /// process's lifetime (see `enter()`'s doc comment on why offset/
+        /// scale aren't re-seeded on every call the way anchor/show are).
         nonisolated private static var defaultWorking: [TileEdit] {
-            Array(
-                repeating: TileEdit(anchor: Int(QC_HUD_ANCHOR_OFFWRIST), offset: .zero, scale: 1, show: true),
+            var tiles = Array(
+                repeating: TileEdit(anchor: Int(QC_HUD_ANCHOR_OFFWRIST), offset: .zero, scale: 1.6, show: true),
                 count: Int(QC_HUD_TILE_COUNT)
             )
+            tiles[Int(QC_HUD_TILE_AMMO)].anchor = Int(QC_HUD_ANCHOR_GUN)
+            tiles[Int(QC_HUD_TILE_FACE)].offset = SIMD3(0, 0.035, 0)
+            tiles[Int(QC_HUD_TILE_HEALTHARMOR)].offset = SIMD3(0, -0.035, 0)
+            return tiles
         }
 
         /// Captures `working` so `restore()` can undo everything a session
@@ -74,6 +89,103 @@ extension HudEditor {
         func restore() {
             guard let entrySnapshot else { return }
             working = entrySnapshot
+        }
+
+        // MARK: - Enter / Done / Cancel (Task 6)
+
+        /// Enters the workbench from the "Edit HUD Layout" button.
+        ///
+        /// Refreshes `working`'s anchor/show from the Phase 1 mirrors
+        /// ContentView passes in -- those pickers/toggles are the only
+        /// live source of "current" anchor/show ContentView has (there is
+        /// no cvar read-back; see `hudTileControl`'s doc comment), so this
+        /// keeps the workbench honest about anything the Phase 1 UI set
+        /// since the last time the workbench ran. Offset/scale have no
+        /// Phase 1 mirror at all -- nothing before this feature could set
+        /// them -- so they are left exactly as `working` already holds
+        /// them: the shipped engine defaults on the first `enter()` of a
+        /// process's lifetime, or whatever the last `commit()`/`cancel()`
+        /// in this process left behind otherwise. (A relaunch resets this
+        /// `Session` to the shipped defaults even if the archived cvars
+        /// hold a previously customized scale/offset -- the same read-back
+        /// gap Phase 1 already accepts for anchor/show, just not yet hit
+        /// in practice because Phase 1 never offered offset/scale controls.)
+        ///
+        /// Takes the Cancel snapshot, opens the workbench, and forces
+        /// `vr_hud 3` so the workbench's frozen tile row has something to
+        /// draw -- the row only renders while the engine is emitting
+        /// modular tiles (Review Focus #4) -- recording `currentHudMode`
+        /// so `commit()`/`cancel()` can restore it.
+        func enter(ammoAnchor: Int, ammoShown: Bool,
+                   faceAnchor: Int, faceShown: Bool,
+                   healthArmorAnchor: Int, healthArmorShown: Bool,
+                   currentHudMode: Int) {
+            working[Int(QC_HUD_TILE_AMMO)].anchor = ammoAnchor
+            working[Int(QC_HUD_TILE_AMMO)].show = ammoShown
+            working[Int(QC_HUD_TILE_FACE)].anchor = faceAnchor
+            working[Int(QC_HUD_TILE_FACE)].show = faceShown
+            working[Int(QC_HUD_TILE_HEALTHARMOR)].anchor = healthArmorAnchor
+            working[Int(QC_HUD_TILE_HEALTHARMOR)].show = healthArmorShown
+            snapshot()
+            priorHudMode = currentHudMode
+            active = true
+            QuakeEngineViewModel.shared.send("vr_hud 3")
+        }
+
+        /// `vr_hud_<tile>_*` cvar name for each `QC_HUD_TILE_*` index, in
+        /// index order -- the one place that mapping is spelled out.
+        private static let tileCvarNames = ["ammo", "face", "healtharmor"]
+
+        /// Writes one `TileEdit` out to its tile's six `vr_hud_<tile>_*`
+        /// cvars (all `CVAR_ARCHIVE` -- this is what persists the layout
+        /// across a relaunch; there is no separate profile store for it).
+        private func sendTileCvars(_ edit: TileEdit, cvar: String) {
+            let engine = QuakeEngineViewModel.shared
+            engine.send("vr_hud_\(cvar)_anchor \(edit.anchor)")
+            engine.send("vr_hud_\(cvar)_off_x \(edit.offset.x)")
+            engine.send("vr_hud_\(cvar)_off_y \(edit.offset.y)")
+            engine.send("vr_hud_\(cvar)_off_z \(edit.offset.z)")
+            engine.send("vr_hud_\(cvar)_scale \(edit.scale)")
+            engine.send("vr_hud_\(cvar)_show \(edit.show ? 1 : 0)")
+        }
+
+        /// Done: commits every tile's working edit to the engine, restores
+        /// whatever `vr_hud` mode was active before `enter()`, and closes
+        /// the workbench. Returns the committed anchor/show per tile so
+        /// ContentView can keep its Phase 1 mirrors in sync.
+        @discardableResult
+        func commit() -> [TileEdit] {
+            for (index, cvar) in Session.tileCvarNames.enumerated() {
+                sendTileCvars(working[index], cvar: cvar)
+            }
+            let committed = working
+            exit()
+            return committed
+        }
+
+        /// Cancel: discards every edit made since `enter()`, re-sends the
+        /// entry snapshot's cvars so the engine matches exactly what the
+        /// (now-reverted) `working` shows -- nothing touches the live
+        /// cvars while the workbench is open, so this is normally a no-op,
+        /// but it is cheap and keeps the engine from ever disagreeing with
+        /// `working` by construction rather than by assumption -- restores
+        /// the prior `vr_hud` mode, and closes the workbench.
+        func cancel() {
+            restore()
+            for (index, cvar) in Session.tileCvarNames.enumerated() {
+                sendTileCvars(working[index], cvar: cvar)
+            }
+            exit()
+        }
+
+        /// Shared tail of `commit()`/`cancel()`: restore the mode `enter()`
+        /// recorded and close the workbench.
+        private func exit() {
+            if let priorHudMode {
+                QuakeEngineViewModel.shared.send("vr_hud \(priorHudMode)")
+            }
+            priorHudMode = nil
+            active = false
         }
 
         // MARK: - Render-thread snapshot
