@@ -33,14 +33,17 @@ struct ContentView: View {
     /// vr_hud: 0 off, 1 wrist (default), 2 float, 3 modular. Mirrors the cvar's
     /// own default since there is no live cvar read-back; matches r_null.c.
     @State private var hudPanelMode: Int = 1
-    /// Per-tile vr_hud_<tile>_anchor/_show seeds (0 wrist, 1 gun). Mirrors the
-    /// shipped default layout A in r_null.c: ammo on the gun, face and
-    /// health/armor on the wrist, all three shown.
-    @State private var hudAmmoAnchor: Int = 1
+    /// Per-tile vr_hud_<tile>_anchor/_show seeds. Anchors are the four
+    /// QC_HUD_ANCHOR_* values (WRIST_OFF 0, WRIST_GUN 1, GUN 2, FLOAT 3).
+    /// Mirrors the shipped default layout A in r_null.c: ammo rides the gun
+    /// (GUN), face and health/armor sit on the off-hand wrist (WRIST_OFF),
+    /// all three shown. There is no live cvar read-back, so these seed the
+    /// pickers below until a workbench commit pulls the live values in.
+    @State private var hudAmmoAnchor = Int(QC_HUD_ANCHOR_GUN)
     @State private var hudAmmoShown = true
-    @State private var hudFaceAnchor: Int = 0
+    @State private var hudFaceAnchor = Int(QC_HUD_ANCHOR_WRIST_OFF)
     @State private var hudFaceShown = true
-    @State private var hudHealthArmorAnchor: Int = 0
+    @State private var hudHealthArmorAnchor = Int(QC_HUD_ANCHOR_WRIST_OFF)
     @State private var hudHealthArmorShown = true
     /// vr_hud_bg seed: the dark panel drawn behind each modular tile.
     /// Mirrors the cvar's own default (on) since there is no live read-back.
@@ -1604,8 +1607,9 @@ struct ContentView: View {
         }
     }
 
-    /// One row of the modular HUD panel (vr_hud 3): an anchor segmented
-    /// control (Wrist/Gun) plus a visibility toggle for one tile, sending
+    /// One row of the modular HUD panel (vr_hud 3): a four-way anchor
+    /// segmented control (Off Wrist / Gun Wrist / Gun / Float, the four
+    /// QC_HUD_ANCHOR_* values) plus a visibility toggle for one tile, sending
     /// `vr_hud_<cvar>_anchor` / `vr_hud_<cvar>_show` straight to the engine.
     /// No live cvar read-back exists, so the bindings seed from the shipped
     /// default layout A (see hudAmmoAnchor etc.) rather than reading back.
@@ -1617,8 +1621,10 @@ struct ContentView: View {
                 Picker(label, selection: Binding(
                     get: { anchor.wrappedValue },
                     set: { anchor.wrappedValue = $0; engine.send("vr_hud_\(cvar)_anchor \($0)") })) {
-                    Text("Wrist").tag(0)
-                    Text("Gun").tag(1)
+                    Text("Off Wrist").tag(Int(QC_HUD_ANCHOR_WRIST_OFF))
+                    Text("Gun Wrist").tag(Int(QC_HUD_ANCHOR_WRIST_GUN))
+                    Text("Gun").tag(Int(QC_HUD_ANCHOR_GUN))
+                    Text("Float").tag(Int(QC_HUD_ANCHOR_FLOAT))
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
