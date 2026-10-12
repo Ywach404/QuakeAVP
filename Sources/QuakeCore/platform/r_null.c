@@ -323,7 +323,7 @@ cvar_t	vr_hud_face_scale         = {"vr_hud_face_scale", "1.6", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_show          = {"vr_hud_face_show", "1", CVAR_ARCHIVE};
 
 cvar_t	vr_hud_healtharmor_anchor = {"vr_hud_healtharmor_anchor", "0", CVAR_ARCHIVE};	/* off-hand wrist */
-cvar_t	vr_hud_healtharmor_slot   = {"vr_hud_healtharmor_slot", "2", CVAR_ARCHIVE};	/* bottom-left */
+cvar_t	vr_hud_healtharmor_slot   = {"vr_hud_healtharmor_slot", "3", CVAR_ARCHIVE};	/* bottom-left */
 cvar_t	vr_hud_healtharmor_span_w = {"vr_hud_healtharmor_span_w", "1", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_span_h = {"vr_hud_healtharmor_span_h", "1", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_off_x  = {"vr_hud_healtharmor_off_x", "0", CVAR_ARCHIVE};

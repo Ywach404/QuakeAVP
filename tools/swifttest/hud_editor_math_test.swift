@@ -145,40 +145,47 @@ func runResolveDropTests() {
 // MARK: - Wrist grid (Task 2)
 
 func runGridTests() {
-    // spannedCells: a 2x1 at slot 0 covers the top row {0,1}
+    // spannedCells on the 3x2 grid: 0 1 2 / 3 4 5
     assertEqual(HudEditor.spannedCells(slot: 0, spanW: 2, spanH: 1), [0, 1], "span 2x1 top row")
-    assertEqual(HudEditor.spannedCells(slot: 0, spanW: 2, spanH: 2), [0, 1, 2, 3], "span 2x2 all cells")
-    assertEqual(HudEditor.spannedCells(slot: 3, spanW: 1, spanH: 1), [3], "1x1 BR")
+    assertEqual(HudEditor.spannedCells(slot: 0, spanW: 2, spanH: 2), [0, 1, 3, 4], "span 2x2 at TL (not the old 2x2-grid {0,1,2,3})")
+    assertEqual(HudEditor.spannedCells(slot: 0, spanW: 3, spanH: 2), [0, 1, 2, 3, 4, 5], "span 3x2 covers the whole grid")
+    assertEqual(HudEditor.spannedCells(slot: 5, spanW: 1, spanH: 1), [5], "1x1 BR (slot 5)")
 
-    // clampFootprint: BR (slot 3) cannot grow right or down
-    assert(HudEditor.clampFootprint(slot: 3, spanW: 2, spanH: 2) == (1, 1), "slot 3 clamps to 1x1")
-    assert(HudEditor.clampFootprint(slot: 1, spanW: 2, spanH: 1) == (1, 1), "TR cannot grow right")
+    // clampFootprint: BR is now slot 5, and TR (slot 2) can't grow right
+    assert(HudEditor.clampFootprint(slot: 5, spanW: 2, spanH: 2) == (1, 1), "slot 5 (BR) clamps to 1x1")
+    assert(HudEditor.clampFootprint(slot: 2, spanW: 2, spanH: 1) == (1, 1), "TR (slot 2) cannot grow right")
     assert(HudEditor.clampFootprint(slot: 0, spanW: 2, spanH: 2) == (2, 2), "TL keeps 2x2")
+    assert(HudEditor.clampFootprint(slot: 0, spanW: 3, spanH: 2) == (3, 2), "TL keeps the full 3x2 footprint")
 
-    // wristCellOffset: a 1x1 at TL sits up-left; 2x2 centres at origin
+    // wristCellOffset: a 1x1 at TL sits up-left; the middle column centres on
+    // x; the full 3x2 footprint centres at the origin.
     let tl = HudEditor.wristCellOffset(slot: 0, spanW: 1, spanH: 1)
     assert(tl.offset.x < 0 && tl.offset.y > 0, "TL is up-left of centre")
-    let full = HudEditor.wristCellOffset(slot: 0, spanW: 2, spanH: 2)
-    assert(abs(full.offset.x) < 1e-5 && abs(full.offset.y) < 1e-5, "2x2 centred")
-    assert(full.size.x > tl.size.x, "2x2 wider than 1x1")
+    let topMid = HudEditor.wristCellOffset(slot: 1, spanW: 1, spanH: 1)
+    assert(abs(topMid.offset.x) < 1e-5, "slot 1 (top-middle) centres on x")
+    let full = HudEditor.wristCellOffset(slot: 0, spanW: 3, spanH: 2)
+    assert(abs(full.offset.x) < 1e-5 && abs(full.offset.y) < 1e-5, "3x2 (full grid) centred")
+    assert(full.size.x > tl.size.x, "3x2 wider than 1x1")
 
-    // cellUnderPoint: a point just up-left of a wrist centre hits slot 0
+    // cellUnderPoint: identity wrist frame, origin at the grid centre
     let wf = HudEditor.WristFrame(anchor: 0, origin: .zero,
                                   right: SIMD3(1,0,0), up: SIMD3(0,1,0),
                                   forward: SIMD3(0,0,1), valid: true)
-    let pTL = SIMD3<Float>(-HudEditor.cellPitch * 0.5, HudEditor.cellPitch * 0.5, 0)
-    assert(HudEditor.cellUnderPoint(pTL, frame: wf) == 0, "up-left -> slot 0")
-    let pBR = SIMD3<Float>(HudEditor.cellPitch * 0.5, -HudEditor.cellPitch * 0.5, 0)
-    assert(HudEditor.cellUnderPoint(pBR, frame: wf) == 3, "down-right -> slot 3")
+    let pTL = SIMD3<Float>(-HudEditor.cellPitch, HudEditor.cellPitch * 0.5, 0)
+    assert(HudEditor.cellUnderPoint(pTL, frame: wf) == 0, "left column, top row -> slot 0")
+    let pTopMid = SIMD3<Float>(0, HudEditor.cellPitch * 0.5, 0)
+    assert(HudEditor.cellUnderPoint(pTopMid, frame: wf) == 1, "middle column, top row -> slot 1")
+    let pBR = SIMD3<Float>(HudEditor.cellPitch, -HudEditor.cellPitch * 0.5, 0)
+    assert(HudEditor.cellUnderPoint(pBR, frame: wf) == 5, "right column, bottom row -> slot 5 (BR)")
     let miss = SIMD3<Float>(1, 1, 0)
     assert(HudEditor.cellUnderPoint(miss, frame: wf) == nil, "far point misses grid")
     // A point dead-centre on cell 0 in x/y but well off the wrist PLANE in z
     // is not "over" the grid -- without a depth bound it would read as slot 0.
-    let deepMiss = SIMD3<Float>(-HudEditor.cellPitch * 0.5, HudEditor.cellPitch * 0.5, 0.5)
+    let deepMiss = SIMD3<Float>(-HudEditor.cellPitch, HudEditor.cellPitch * 0.5, 0.5)
     assert(HudEditor.cellUnderPoint(deepMiss, frame: wf) == nil, "a point far off the wrist plane in z misses")
     // A point a hair off the plane (well within the depth tolerance) still
     // registers -- the bound must not reject normal reaching.
-    let shallowHit = SIMD3<Float>(-HudEditor.cellPitch * 0.5, HudEditor.cellPitch * 0.5, 0.01)
+    let shallowHit = SIMD3<Float>(-HudEditor.cellPitch, HudEditor.cellPitch * 0.5, 0.01)
     assert(HudEditor.cellUnderPoint(shallowHit, frame: wf) == 0, "a point just off the plane still hits slot 0")
 
     // occupied: a 2x1 at slot 0 blocks a 1x1 drop at slot 1
@@ -191,10 +198,10 @@ func runGridTests() {
     assert(!HudEditor.occupied([blocker], anchor: 0, cells: [1], excluding: 0),
            "excluding the blocker itself frees the cell")
 
-    // footprintFromCells: diagonal corners -> full span
-    assert(HudEditor.footprintFromCells(0, 3) == (0, 2, 2), "0..3 -> 2x2 at slot 0")
-    assert(HudEditor.footprintFromCells(1, 2) == (0, 2, 2), "1..2 -> 2x2 at slot 0")
-    assert(HudEditor.footprintFromCells(2, 3) == (2, 2, 1), "bottom row -> 2x1 at slot 2")
+    // footprintFromCells on the 3x2 grid
+    assert(HudEditor.footprintFromCells(0, 5) == (0, 3, 2), "0..5 -> the full 3x2 grid at slot 0")
+    assert(HudEditor.footprintFromCells(0, 4) == (0, 2, 2), "0..4 -> 2x2 at slot 0")
+    assert(HudEditor.footprintFromCells(3, 5) == (3, 3, 1), "bottom row -> 3x1 at slot 3")
 
     print("grid tests ok")
 }

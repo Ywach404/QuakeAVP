@@ -36,25 +36,33 @@ int main (void)
 	CHECK (t[QC_HUD_TILE_AMMO].scale > 0.01f, "scale 0 clamps to a positive floor");
 
 	/* wrist-grid footprint clamp: span_w/span_h must not run the tile off
-	   the 2x2 grid from its slot's origin cell. */
+	   the 3x2 grid from its slot's origin cell. */
 	{
 		extern cvar_t vr_hud_ammo_slot, vr_hud_ammo_span_w, vr_hud_ammo_span_h;
 
-		/* slot 3 (bottom-right) has no room to grow right or down */
-		vr_hud_ammo_slot.value = 3;
+		/* slot 5 (bottom-right) has no room to grow right or down */
+		vr_hud_ammo_slot.value = 5;
 		vr_hud_ammo_span_w.value = 2;
 		vr_hud_ammo_span_h.value = 2;
 		QR_ResolveHudLayout (t);
 		CHECK (t[QC_HUD_TILE_AMMO].span_w == 1 && t[QC_HUD_TILE_AMMO].span_h == 1,
-		       "slot 3 (BR) clamps span_w/span_h to 1x1");
+		       "slot 5 (BR) clamps span_w/span_h to 1x1");
 
-		/* slot 0 (top-left) has the full grid available */
+		/* slot 0 (top-left) has room for a 2x2 footprint */
 		vr_hud_ammo_slot.value = 0;
 		vr_hud_ammo_span_w.value = 2;
 		vr_hud_ammo_span_h.value = 2;
 		QR_ResolveHudLayout (t);
 		CHECK (t[QC_HUD_TILE_AMMO].span_w == 2 && t[QC_HUD_TILE_AMMO].span_h == 2,
 		       "slot 0 (TL) keeps a 2x2 footprint");
+
+		/* slot 0 (top-left) has the full grid available */
+		vr_hud_ammo_slot.value = 0;
+		vr_hud_ammo_span_w.value = 3;
+		vr_hud_ammo_span_h.value = 2;
+		QR_ResolveHudLayout (t);
+		CHECK (t[QC_HUD_TILE_AMMO].span_w == 3 && t[QC_HUD_TILE_AMMO].span_h == 2,
+		       "slot 0 (TL) keeps the full 3x2 footprint");
 	}
 
 	/* Task 2: the compact tile emitters, driven through the real

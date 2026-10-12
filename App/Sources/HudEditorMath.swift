@@ -3,7 +3,7 @@
 //
 //  The HUD live editor's pure placement math: projecting a world point onto
 //  a frame's own axes, testing whether a hit lands inside a tile's bbox,
-//  snapping a drop onto the off-hand/gun wrist 2x2 grids (`resolveWristDrop`,
+//  snapping a drop onto the off-hand/gun wrist 3x2 grids (`resolveWristDrop`,
 //  with GUN/FLOAT handled by `resolveDrop`'s zone fallback), and the
 //  grab/move/scale state machine itself, `updateGrab`. Everything here is a
 //  static value function over
@@ -33,7 +33,7 @@ enum HudEditor {
         var offset: SIMD3<Float>
         var scale: Float
         var show: Bool
-        /// Which of the 4 wrist-grid cells (row-major, 0 top-left..3
+        /// Which of the 6 wrist-grid cells (row-major, 0 top-left..5
         /// bottom-right) this tile's footprint originates at, and how many
         /// columns/rows it spans from there. Meaningless off a wrist anchor
         /// (GUN/FLOAT tiles keep the defaults); see `spannedCells`.
@@ -280,7 +280,14 @@ enum HudEditor {
     static let cellSize: Float = 0.045     // metres, one cell edge
     static let cellGap: Float = 0.008      // metres between cells
     static let cellPitch: Float = cellSize + cellGap
-    static let gridHalf: Float = cellSize + 0.5 * cellGap   // half the 2-cell extent
+    /// Grid dimensions -- 3 columns x 2 rows. Every formula below is
+    /// expressed in terms of these two constants, so changing the grid
+    /// shape is a one-line edit here (plus the mirrored C clamp in
+    /// qr_bridge.c's QR_ResolveHudLayout).
+    static let gridCols = 3
+    static let gridRows = 2
+    static let gridHalfX: Float = (Float(gridCols) * cellSize + Float(gridCols - 1) * cellGap) * 0.5
+    static let gridHalfY: Float = (Float(gridRows) * cellSize + Float(gridRows - 1) * cellGap) * 0.5
 
     /// A wrist grid's plane: origin at the grid centre, right/up in metres.
     struct WristFrame {
@@ -302,29 +309,29 @@ enum HudEditor {
                                         up: .zero, forward: .zero, valid: false)
     }
 
-    /// The row-major 2x2 cell indices (0 TL, 1 TR, 2 BL, 3 BR) a footprint
+    /// The row-major cell indices (0 TL .. gridCols*gridRows-1 BR) a footprint
     /// rooted at `slot` covers, clipped to the grid -- NOT clamped first, so
     /// a caller that passes an already-oversized span (e.g. skips
     /// `clampFootprint`) still gets a safe, in-bounds set rather than an
     /// out-of-range index.
     static func spannedCells(slot: Int, spanW: Int, spanH: Int) -> Set<Int> {
-        let row = slot / 2, col = slot % 2
+        let row = slot / gridCols, col = slot % gridCols
         var cells = Set<Int>()
-        for r in row ..< min(row + spanH, 2) {
-            for c in col ..< min(col + spanW, 2) {
-                cells.insert(r * 2 + c)
+        for r in row ..< min(row + spanH, gridRows) {
+            for c in col ..< min(col + spanW, gridCols) {
+                cells.insert(r * gridCols + c)
             }
         }
         return cells
     }
 
     /// Shrinks a footprint so it never grows past the grid's right/bottom
-    /// edge from `slot` -- the only clamp a 2x2 grid needs, since every slot
+    /// edge from `slot` -- the only clamp this grid needs, since every slot
     /// is already a valid top-left corner.
     static func clampFootprint(slot: Int, spanW: Int, spanH: Int) -> (Int, Int) {
-        let row = slot / 2, col = slot % 2
-        let w = max(1, min(spanW, 2 - col))
-        let h = max(1, min(spanH, 2 - row))
+        let row = slot / gridCols, col = slot % gridCols
+        let w = max(1, min(spanW, gridCols - col))
+        let h = max(1, min(spanH, gridRows - row))
         return (w, h)
     }
 
@@ -334,9 +341,9 @@ enum HudEditor {
     static func wristCellOffset(slot: Int, spanW: Int, spanH: Int)
         -> (offset: SIMD2<Float>, size: SIMD2<Float>) {
         let (w, h) = clampFootprint(slot: slot, spanW: spanW, spanH: spanH)
-        let row = Float(slot / 2), col = Float(slot % 2)
-        let cx = (col + Float(w - 1) * 0.5 - 0.5) * cellPitch
-        let cy = (0.5 - row - Float(h - 1) * 0.5) * cellPitch
+        let row = Float(slot / gridCols), col = Float(slot % gridCols)
+        let cx = (col + Float(w - 1) * 0.5 - Float(gridCols - 1) * 0.5) * cellPitch
+        let cy = (Float(gridRows - 1) * 0.5 - row - Float(h - 1) * 0.5) * cellPitch
         let sw = Float(w) * cellSize + Float(w - 1) * cellGap
         let sh = Float(h) * cellSize + Float(h - 1) * cellGap
         return (SIMD2(cx, cy), SIMD2(sw, sh))
@@ -348,18 +355,18 @@ enum HudEditor {
     /// cell, because it only tested the in-plane x/y extent.
     static let cellDepth: Float = cellPitch
 
-    /// Which of the 4 cells `p` lands in, in `frame`'s own plane -- `nil`
-    /// when the frame isn't valid, the point falls outside the 2x2 grid's
-    /// extent (`gridHalf` on each in-plane axis), or the point sits further
-    /// than `cellDepth` off the wrist plane along `forward`.
+    /// Which cell `p` lands in, in `frame`'s own plane -- `nil`
+    /// when the frame isn't valid, the point falls outside the grid's
+    /// extent (`gridHalfX`/`gridHalfY` on each in-plane axis), or the point
+    /// sits further than `cellDepth` off the wrist plane along `forward`.
     static func cellUnderPoint(_ p: SIMD3<Float>, frame: WristFrame) -> Int? {
         guard frame.valid else { return nil }
         let local = offsetInFrame(point: p, origin: frame.origin,
                                   right: frame.right, up: frame.up, forward: frame.forward)
-        guard abs(local.x) <= gridHalf, abs(local.y) <= gridHalf, abs(local.z) <= cellDepth else { return nil }
-        let col = local.x < 0 ? 0 : 1
-        let row = local.y > 0 ? 0 : 1    // +up is the top row
-        return row * 2 + col
+        guard abs(local.x) <= gridHalfX, abs(local.y) <= gridHalfY, abs(local.z) <= cellDepth else { return nil }
+        let col = min(max(Int((local.x / cellPitch + Float(gridCols - 1) * 0.5).rounded()), 0), gridCols - 1)
+        let row = min(max(Int((Float(gridRows - 1) * 0.5 - local.y / cellPitch).rounded()), 0), gridRows - 1)
+        return row * gridCols + col
     }
 
     /// Whether any OTHER tile on `anchor` already spans one of `cells` --
@@ -377,12 +384,12 @@ enum HudEditor {
         return false
     }
 
-    /// Footprint bounding the two cells a two-hand gesture points at (both 0-3).
+    /// Footprint bounding the two cells a two-hand gesture points at (both 0..gridCols*gridRows-1).
     static func footprintFromCells(_ a: Int, _ b: Int) -> (slot: Int, spanW: Int, spanH: Int) {
-        let ra = a / 2, ca = a % 2, rb = b / 2, cb = b % 2
+        let ra = a / gridCols, ca = a % gridCols, rb = b / gridCols, cb = b % gridCols
         let minR = min(ra, rb), maxR = max(ra, rb)
         let minC = min(ca, cb), maxC = max(ca, cb)
-        return (minR * 2 + minC, maxC - minC + 1, maxR - minR + 1)
+        return (minR * gridCols + minC, maxC - minC + 1, maxR - minR + 1)
     }
 
     /// Snap a dropped tile onto whichever wrist its point is over.

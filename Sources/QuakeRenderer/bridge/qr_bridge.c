@@ -5757,9 +5757,9 @@ void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 			int	sw   = (int) m[i].sw->value;
 			int	sh   = (int) m[i].sh2->value;
 			int	col, row;
-			if (slot < 0) slot = 0; else if (slot > 3) slot = 3;
-			col = slot % 2; row = slot / 2;
-			if (sw < 1) sw = 1; if (sw > 2 - col) sw = 2 - col;
+			if (slot < 0) slot = 0; else if (slot > 5) slot = 5;
+			col = slot % 3; row = slot / 3;
+			if (sw < 1) sw = 1; if (sw > 3 - col) sw = 3 - col;
 			if (sh < 1) sh = 1; if (sh > 2 - row) sh = 2 - row;
 			t[i].slot = slot;
 			t[i].span_w = sw;

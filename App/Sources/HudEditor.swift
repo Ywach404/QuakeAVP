@@ -73,7 +73,7 @@ extension HudEditor {
             )
             tiles[Int(QC_HUD_TILE_AMMO)].anchor = Int(QC_HUD_ANCHOR_GUN)       // free, by the gun
             tiles[Int(QC_HUD_TILE_FACE)].slot = 0                             // off wrist, top-left
-            tiles[Int(QC_HUD_TILE_HEALTHARMOR)].slot = 2                      // off wrist, bottom-left
+            tiles[Int(QC_HUD_TILE_HEALTHARMOR)].slot = 3                      // off wrist, bottom-left
             return tiles
         }
 

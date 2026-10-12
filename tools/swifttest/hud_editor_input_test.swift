@@ -391,26 +391,27 @@ func runWristGrabTests() {
                                     right: SIMD3(1,0,0), up: SIMD3(0,1,0),
                                     halfW: 0.05, halfH: 0.05)
 
-    // Release over the off-wrist bottom-right cell snaps the tile to slot 3.
+    // Release over the off-wrist bottom-right cell snaps the tile to slot 5.
     let grab = HudEditor.GrabState(tileID: 0,
-        lastPoint: SIMD3(HudEditor.cellPitch*0.5, -HudEditor.cellPitch*0.5, 0),
+        lastPoint: SIMD3(HudEditor.cellPitch, -HudEditor.cellPitch*0.5, 0),
         secondPinch: nil)
     let release = HudEditor.GrabInput(primaryActive: false,
-        primaryPoint: SIMD3(HudEditor.cellPitch*0.5, -HudEditor.cellPitch*0.5, 0))
+        primaryPoint: SIMD3(HudEditor.cellPitch, -HudEditor.cellPitch*0.5, 0))
     let r = HudEditor.updateGrab(grab: grab, input: release, working: working,
                                  tiles: [frame], zones: [], off: off, gun: gun, dt: 0.011)
-    assert(r.working[0].slot == 3 && r.working[0].anchor == 0, "snaps to off-wrist slot 3")
+    assert(r.working[0].slot == 5 && r.working[0].anchor == 0, "snaps to off-wrist slot 5")
     assert(r.grab == nil, "released")
 
-    // A two-hand hold across the off-wrist diagonal makes a 2x2 footprint.
+    // A two-hand hold across the off-wrist diagonal (TL -> BR) makes a 3x2
+    // footprint -- the whole grid, not just a 2x2 corner.
     let twoHand = HudEditor.GrabInput(primaryActive: true,
-        primaryPoint: SIMD3(-HudEditor.cellPitch*0.5, HudEditor.cellPitch*0.5, 0),  // TL
+        primaryPoint: SIMD3(-HudEditor.cellPitch, HudEditor.cellPitch*0.5, 0),  // TL
         secondaryActive: true,
-        secondaryPoint: SIMD3(HudEditor.cellPitch*0.5, -HudEditor.cellPitch*0.5, 0)) // BR
+        secondaryPoint: SIMD3(HudEditor.cellPitch, -HudEditor.cellPitch*0.5, 0)) // BR
     let held = HudEditor.GrabState(tileID: 0, lastPoint: twoHand.primaryPoint!, secondPinch: twoHand.secondaryPoint)
     let r2 = HudEditor.updateGrab(grab: held, input: twoHand, working: working,
                                   tiles: [frame], zones: [], off: off, gun: gun, dt: 0.011)
-    assert(r2.working[0].spanW == 2 && r2.working[0].spanH == 2, "diagonal two-hand -> 2x2")
+    assert(r2.working[0].spanW == 3 && r2.working[0].spanH == 2, "diagonal two-hand -> 3x2 (full grid)")
 
     // Invalid wrist mid-grab must not write NaN and must not crash.
     let bad = HudEditor.WristFrame(anchor: 0, origin: SIMD3(.nan,.nan,.nan),
@@ -427,28 +428,29 @@ func runWristGrabTests() {
 // MARK: - two-hand stretch over an occupied cell (final-review Important 2)
 
 // The default layout has FACE at off-wrist slot 0 (top-left) and HEALTHARMOR
-// at off-wrist slot 2 (bottom-left), both shown. Grabbing FACE and stretching
-// it DOWN toward HEALTHARMOR's cell with a two-hand hold used to grow FACE's
-// footprint live to 1x2 (cells {0,2}) with no occupancy check, and the
-// occupied-drop "reject" path then returned that already-grown entry -- so
-// FACE ended up spanning HEALTHARMOR's reserved cell 2. After the fix the
-// stretch into an occupied cell is refused (clamped live and restored on
-// reject), so FACE never covers cell 2.
+// at off-wrist slot 3 (bottom-left, directly below FACE in the 3-col grid),
+// both shown. Grabbing FACE and stretching it DOWN toward HEALTHARMOR's cell
+// with a two-hand hold used to grow FACE's footprint live to 1x2 (cells
+// {0,3}) with no occupancy check, and the occupied-drop "reject" path then
+// returned that already-grown entry -- so FACE ended up spanning
+// HEALTHARMOR's reserved cell 3. After the fix the stretch into an occupied
+// cell is refused (clamped live and restored on reject), so FACE never
+// covers cell 3.
 func runWristStretchOccupancyTests() {
     let off = HudEditor.WristFrame(anchor: 0, origin: .zero,
                                    right: SIMD3(1,0,0), up: SIMD3(0,1,0),
                                    forward: SIMD3(0,0,1), valid: true)
     let gun = HudEditor.WristFrame.invalid
 
-    // index 0 = FACE (off-wrist, slot 0, 1x1); index 1 = HEALTHARMOR (off-wrist, slot 2, 1x1).
+    // index 0 = FACE (off-wrist, slot 0, 1x1); index 1 = HEALTHARMOR (off-wrist, slot 3, 1x1).
     var working = [
         HudEditor.TileEdit(anchor: 0, offset: .zero, scale: 1, show: true, slot: 0, spanW: 1, spanH: 1),
-        HudEditor.TileEdit(anchor: 0, offset: .zero, scale: 1, show: true, slot: 2, spanW: 1, spanH: 1),
+        HudEditor.TileEdit(anchor: 0, offset: .zero, scale: 1, show: true, slot: 3, spanW: 1, spanH: 1),
     ]
 
     // FACE's hit-test frame, drawn at its top-left cell centre.
-    let tlCentre = SIMD3<Float>(-HudEditor.cellPitch * 0.5, HudEditor.cellPitch * 0.5, 0)
-    let blCentre = SIMD3<Float>(-HudEditor.cellPitch * 0.5, -HudEditor.cellPitch * 0.5, 0)   // cell 2
+    let tlCentre = SIMD3<Float>(-HudEditor.cellPitch, HudEditor.cellPitch * 0.5, 0)
+    let blCentre = SIMD3<Float>(-HudEditor.cellPitch, -HudEditor.cellPitch * 0.5, 0)   // cell 3
     let faceFrame = HudEditor.TileFrame(tileID: 0, origin: tlCentre,
                                         right: SIMD3(1,0,0), up: SIMD3(0,1,0),
                                         halfW: 0.02, halfH: 0.02)
@@ -459,9 +461,9 @@ func runWristStretchOccupancyTests() {
         working: working, tiles: [faceFrame], zones: [], off: off, gun: gun, dt: 0.011)
     check(start.grab?.tileID == 0, "stretch test: FACE grabbed from its top-left cell")
 
-    // Two-hand stretch DOWN: primary stays on cell 0, secondary reaches cell 2
+    // Two-hand stretch DOWN: primary stays on cell 0, secondary reaches cell 3
     // (HEALTHARMOR's). The previewed 1x2 footprint would cover the occupied
-    // cell 2 -- it must not be applied.
+    // cell 3 -- it must not be applied.
     let stretch = HudEditor.GrabInput(primaryActive: true, primaryPoint: tlCentre,
                                       secondaryActive: true, secondaryPoint: blCentre)
     let dragging = HudEditor.updateGrab(grab: start.grab, input: stretch,
@@ -469,10 +471,10 @@ func runWristStretchOccupancyTests() {
     let previewCells = HudEditor.spannedCells(slot: dragging.working[0].slot,
                                               spanW: dragging.working[0].spanW,
                                               spanH: dragging.working[0].spanH)
-    check(!previewCells.contains(2),
-          "a live two-hand stretch never previews FACE over HEALTHARMOR's reserved cell 2")
+    check(!previewCells.contains(3),
+          "a live two-hand stretch never previews FACE over HEALTHARMOR's reserved cell 3")
 
-    // Release: the occupied drop must leave FACE off cell 2 (snapped back /
+    // Release: the occupied drop must leave FACE off cell 3 (snapped back /
     // clamped to a legal footprint), and must not disturb HEALTHARMOR.
     let release = HudEditor.updateGrab(grab: dragging.grab,
         input: HudEditor.GrabInput(primaryActive: false, primaryPoint: nil),
@@ -481,9 +483,9 @@ func runWristStretchOccupancyTests() {
                                            spanW: release.working[0].spanW,
                                            spanH: release.working[0].spanH)
     check(release.grab == nil, "stretch test: released")
-    check(!faceCells.contains(2),
-          "after a rejected stretch+release FACE does NOT span HEALTHARMOR's cell 2")
-    check(release.working[1].slot == 2 && release.working[1].spanW == 1 && release.working[1].spanH == 1,
+    check(!faceCells.contains(3),
+          "after a rejected stretch+release FACE does NOT span HEALTHARMOR's cell 3")
+    check(release.working[1].slot == 3 && release.working[1].spanW == 1 && release.working[1].spanH == 1,
           "HEALTHARMOR's own footprint is untouched by FACE's rejected stretch")
 
     print("wrist stretch occupancy tests ok")
