@@ -163,6 +163,7 @@ final class HandInput: @unchecked Sendable {
             VirtualHand.shared.publish([])
             OffHandWrist.shared.invalidate()
             GunHand.shared.invalidate()
+            EditorHandInput.shared.invalidate()
         }
     }
 
@@ -247,6 +248,7 @@ final class HandInput: @unchecked Sendable {
         VirtualHand.shared.publish([])   // hands gone: no stand-in to draw
         OffHandWrist.shared.invalidate()
         GunHand.shared.invalidate()
+        EditorHandInput.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
         tpRingWas = false
     }
@@ -255,6 +257,15 @@ final class HandInput: @unchecked Sendable {
 
     private func emit(left: inout HandState, right: inout HandState) {
         var slice = PadAggregator.Slice()
+
+        // HUD live editor grab input (Task 5): published every update,
+        // ahead of every gate/suppression below -- the editor's own grab
+        // state machine (HudEditorInput.swift) needs a fresh per-hand
+        // pinch+point regardless of whether the wheel is open or a
+        // gameplay gesture fired this frame. See EditorHandInput's doc
+        // comment for why `point` is generic (not move/aim-labelled) and
+        // nil exactly when that hand's pinch geometry isn't tracked.
+        EditorHandInput.shared.publish(left: Self.editorSignal(left), right: Self.editorSignal(right))
 
         // Handedness: the OFF (non-gun) hand moves, jumps, crouches; the
         // DOMINANT (gun) hand aims and fires.
@@ -927,6 +938,22 @@ final class HandInput: @unchecked Sendable {
         }
     }
 
+    /// This hand's pinch point for the HUD editor, in corrected tracking
+    /// space -- the midpoint of thumb and index tips, same convention as
+    /// every other tracked-joint consumer here (`TrackingSpace.correction`).
+    /// `nil` when either tip isn't tracked, which is deliberately also true
+    /// whenever `indexPinched` already reads false for the same reason (a
+    /// lost thumb disables the pinch) -- there is no case where `pinched`
+    /// is true but `point` is nil.
+    private static func editorSignal(_ hand: HandState) -> EditorHandSignal {
+        guard let thumb = hand.thumbTipPos, let index = hand.indexTipPos else {
+            return EditorHandSignal(pinched: false, point: nil)
+        }
+        let mid = (thumb + index) * 0.5
+        let corr = TrackingSpace.correction * SIMD4(mid, 1)
+        return EditorHandSignal(pinched: hand.indexPinched, point: SIMD3(corr.x, corr.y, corr.z))
+    }
+
     private static let pulse = 0.12
     private static func stick(_ metres: Float) -> Float {
         let deadzone: Float = 0.02, full: Float = 0.12
@@ -973,6 +1000,14 @@ private struct HandState {
     var aimOrigin: SIMD3<Float>?      // wrist, room frame
     var aimDir: SIMD3<Float>?         // blended aim, room frame
     var aimBaseDir: SIMD3<Float>?     // raw forearm bone, unsmoothed (debug figure)
+    // Raw pinch geometry, room frame -- retained (not just local to ingest)
+    // so emit() can publish this hand's pinch point for the HUD live
+    // editor's grab input (EditorHandInput, HudEditorInput.swift). nil
+    // exactly when that tip isn't tracked -- the editor's "hand lost"
+    // signal (plan Review Focus #1) reads straight off this, same as every
+    // other consumer of a tracked joint here.
+    var indexTipPos: SIMD3<Float>?
+    var thumbTipPos: SIMD3<Float>?
     // Teleport pointing ray (room frame): wrist -> middle knuckle, which DOES
     // follow wrist flex, so pointing the hand down aims at the floor. Uses the
     // inferred pose so it's stable through the ring pinch that arms teleport.
@@ -1072,6 +1107,7 @@ private struct HandState {
         // disables the pinch -- it must NOT drop the whole hand. The aim, the
         // virtual hand and the other gestures all survive without it.
         let thumb = tip(.thumbTip)
+        thumbTipPos = thumb
 
         // One knob (Comfort > Pinch distance) sets the close threshold; release
         // is +1.5 cm so the pair can't be set to chatter. Sampled once per
@@ -1086,6 +1122,7 @@ private struct HandState {
         }
 
         let index = tip(.indexFingerTip)
+        indexTipPos = index
         if let thumb, let index { indexPinchDist = simd_distance(thumb, index) } else { indexPinchDist = 0.08 }
         let wasIndex = indexPinched
         indexPinched = pinch(index, indexPinched)

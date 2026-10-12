@@ -4,13 +4,15 @@
 //  The HUD live editor's @Observable shell: the single source of truth for
 //  an edit session, per the HUD Live Editor (Modular HUD Phase 2) design.
 //  Owns which tiles are being arranged, the entry snapshot Cancel restores,
-//  and the live grab state a later task's input code drives. The pure
-//  placement math this shell will be driven through -- `offsetInFrame`/
-//  `pointInTile`/`resolveDrop`, plus the `Zone`/`TileEdit` value types --
-//  lives in HudEditorMath.swift as the `HudEditor` enum this file extends,
-//  kept free of Observation/ARKit/Metal so tools/check-swift-math.sh can
-//  compile and run it alone on the host. This file is built only as part of
-//  the app (`make device`), never by that harness.
+//  and the live grab state the input layer (HudEditorInput.swift, Task 5)
+//  drives through the pure `updateGrab` state machine. The pure placement
+//  math this shell is driven through -- `offsetInFrame`/`pointInTile`/
+//  `resolveDrop`/`updateGrab`, plus the `Zone`/`TileEdit`/`GrabState` value
+//  types -- lives in HudEditorMath.swift as the `HudEditor` enum this file
+//  extends, kept free of Observation/ARKit/Metal so tools/check-swift-math.sh
+//  and tools/check-swift-input.sh can compile and run it alone on the host.
+//  This file is built only as part of the app (`make device`), never by
+//  either harness.
 //
 
 import Foundation
@@ -18,21 +20,6 @@ import Observation
 import simd
 
 extension HudEditor {
-
-    /// Which tile is currently grabbed, and where it last was. The grab
-    /// input task owns updating this every frame; this file owns only the
-    /// storage slot and the "no stale grab" contract a lost hand/controller
-    /// must honour -- release at `lastPoint`, never jump to the origin
-    /// (plan Review Focus #1).
-    struct GrabState {
-        var tileID: Int
-        var lastPoint: SIMD3<Float>
-        /// The other hand's pinch point, when a two-hand scale is live.
-        /// `nil` whenever only one hand/controller is tracked -- a missing
-        /// second pinch must leave scale untouched rather than apply a
-        /// garbage value (plan Review Focus #5).
-        var secondPinch: SIMD3<Float>?
-    }
 
     /// The editor's live state while the workbench is open. `@MainActor`
     /// because everything here is UI-touching state, hit-tested from the
