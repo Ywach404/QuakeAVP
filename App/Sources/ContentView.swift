@@ -563,13 +563,13 @@ struct ContentView: View {
                     // Phase 1 picker edit here would race `working` without
                     // either side ever seeing the other's change.
                     .disabled(HudEditor.shared.active)
-                }
-                // Opens the immersive workbench (forces `vr_hud 3` so its
-                // frozen tile row has tiles to show, whatever mode is
-                // picked above; restored on Done/Cancel). Available from
-                // any status-bar mode, not just Modular, since arranging
-                // tiles doesn't require already being in that mode.
-                VStack(alignment: .leading, spacing: 6) {
+
+                    // The HUD layout editor arranges the modular tiles, so it
+                    // only appears in Modular mode -- it lives inside this
+                    // `hudPanelMode == 3` block, as a sibling of the tiles above
+                    // (NOT inside their `.disabled`, so its controls stay live
+                    // while an edit session is open).
+                    VStack(alignment: .leading, spacing: 6) {
                     if HudEditor.shared.active {
                         Text("Arranging on your wrists — grab a tile and drop it in a "
                              + "slot; use two hands to span cells. Gun and float stay "
@@ -599,6 +599,7 @@ struct ContentView: View {
                     .font(.caption)
                     .buttonStyle(.bordered)
                 }
+                }   // end: if hudPanelMode == 3 (Modular) -- editor is Modular-only
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
                     Picker("Wheel select hand", selection: Binding(
