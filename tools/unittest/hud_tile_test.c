@@ -91,6 +91,21 @@ int main (void)
 		CHECK (FEQ(bw,24) && FEQ(bh,24), "face bbox stays fixed 24x24 even with nothing drawn");
 	}
 
+	/* Finding 1 fix: QC_CvarValue is the enter()-time cvar read-back that
+	   closes the relaunch re-commit-clobber gap. A registered cvar returns
+	   its live value; an unknown name returns 0 rather than crashing.
+	   Cvar_RegisterVariable is idempotent (it no-ops with a console print
+	   if already registered), so calling it here is safe regardless of
+	   whether r_null.c's own VID_Init-time registration ran in this
+	   host-check binary. */
+	{
+		extern float QC_CvarValue (const char *name);
+		Cvar_RegisterVariable (&vr_hud_ammo_anchor);
+		vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_GUN;	/* registered default, "1" */
+		CHECK (FEQ (QC_CvarValue ("vr_hud_ammo_anchor"), 1.f), "QC_CvarValue reads the registered default");
+		CHECK (FEQ (QC_CvarValue ("vr_hud_does_not_exist"), 0.f), "QC_CvarValue on an unknown name returns 0");
+	}
+
 	printf ("\n%s (%d failures)\n", failures?"FAILED":"PASSED", failures);
 	return failures?1:0;
 }

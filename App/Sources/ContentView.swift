@@ -1630,17 +1630,14 @@ struct ContentView: View {
         }
     }
 
-    /// "Edit HUD Layout": opens the live workbench. Seeds anchor/show from
-    /// these Phase 1 mirrors (there is no live cvar read-back; see
-    /// `hudTileControl`'s doc comment) and passes the current status-bar
-    /// mode so `HudEditor.Session.enter` can force `vr_hud 3` for the
-    /// workbench's frozen tile row and restore this mode on Done/Cancel.
+    /// "Edit HUD Layout": opens the live workbench. `HudEditor.Session.enter`
+    /// now reads every tile's anchor/offset/scale/show straight off the live
+    /// `vr_hud_<tile>_*` cvars itself (via `QC_CvarValue`), so there are no
+    /// Phase 1 mirrors to pass in here -- only the current status-bar mode,
+    /// so `enter` can force `vr_hud 3` for the workbench's frozen tile row
+    /// and restore this mode on Done/Cancel.
     private func enterHudLayoutEdit() {
-        HudEditor.shared.enter(
-            ammoAnchor: hudAmmoAnchor, ammoShown: hudAmmoShown,
-            faceAnchor: hudFaceAnchor, faceShown: hudFaceShown,
-            healthArmorAnchor: hudHealthArmorAnchor, healthArmorShown: hudHealthArmorShown,
-            currentHudMode: hudPanelMode)
+        HudEditor.shared.enter(currentHudMode: hudPanelMode)
     }
 
     /// Done: commits the workbench's edits to the `vr_hud_<tile>_*` cvars
