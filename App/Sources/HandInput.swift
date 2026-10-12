@@ -237,7 +237,10 @@ final class HandInput: @unchecked Sendable {
             // shotgun with no hand reads oddly, so allow modelling just the off
             // hand (like the PSVR controllers do). Default: on -- a bare gun
             // with no hand on it reads better than two hands clipping the model.
-            if VRSettings.shared.offHandModelOnly {
+            // In the HUD editor, force BOTH hand models on (the gun is hidden
+            // via r_drawviewmodel) so you can see both hands to grab and the
+            // weapon doesn't block the tiles. Otherwise honour offHandModelOnly.
+            if VRSettings.shared.offHandModelOnly && !HudEditor.Session.renderSnapshot().active {
                 let off = VRSettings.shared.rightHanded ? left : right
                 VirtualHand.shared.publish(off.virtualVerts)
             } else {

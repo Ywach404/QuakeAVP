@@ -53,6 +53,12 @@ extension HudEditor {
         /// `commit()`/`cancel()` can restore it. `nil` while inactive.
         private var priorHudMode: Int?
 
+        /// `r_drawviewmodel` before `enter()` hid the view weapon (set 0),
+        /// restored on exit. The gun is hidden while editing so it doesn't
+        /// block the wrist tiles; both hand models are forced on in HandInput
+        /// for the same reason (see its VirtualHand publish).
+        private var priorDrawViewModel: Float?
+
         private init() {
             publishRenderSnapshot()
         }
@@ -141,8 +147,12 @@ extension HudEditor {
             }
             snapshot()
             priorHudMode = currentHudMode
+            priorDrawViewModel = QC_CvarValue("r_drawviewmodel")
             active = true
             QuakeEngineViewModel.shared.send("vr_hud 3")
+            // Hide the view weapon while arranging so it doesn't obscure the
+            // wrist tiles (both hand models come on in HandInput).
+            QuakeEngineViewModel.shared.send("r_drawviewmodel 0")
         }
 
         /// `vr_hud_<tile>_*` cvar name for each `QC_HUD_TILE_*` index, in
@@ -225,7 +235,11 @@ extension HudEditor {
             if let priorHudMode {
                 QuakeEngineViewModel.shared.send("vr_hud \(priorHudMode)")
             }
+            if let priorDrawViewModel {
+                QuakeEngineViewModel.shared.send("r_drawviewmodel \(priorDrawViewModel)")
+            }
             priorHudMode = nil
+            priorDrawViewModel = nil
             active = false
         }
 
