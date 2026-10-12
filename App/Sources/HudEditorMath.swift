@@ -188,6 +188,64 @@ enum HudEditor {
         }
     }
 
+    /// Which physical source is driving a live grab. Recorded (by the
+    /// plumbing layer, in a small instance field -- not in `GrabState`
+    /// itself, since it never affects `updateGrab`'s own logic) the tick a
+    /// grab starts, and kept fixed until release: see `grabInput`'s doc
+    /// comment for why re-picking this every tick is the bug a controller
+    /// disconnect mid-grab hit.
+    enum GrabSource: Equatable {
+        case controller
+        case handLeft
+        case handRight
+    }
+
+    /// One physical source's raw signal this tick: active (pinched/
+    /// triggered) + point (nil when untracked), before it's been sorted
+    /// into a `GrabInput`'s primary/secondary slots.
+    struct SourceSignal {
+        var active: Bool
+        var point: SIMD3<Float>?
+    }
+
+    /// Builds the `GrabInput` for a grab already bound to `source`, from
+    /// this tick's three raw signals -- ALWAYS from that exact source,
+    /// never re-picked from whichever source happens to be live.
+    ///
+    /// This is the fix for a real bug: the plumbing layer used to decide
+    /// "controller or hands" every tick by live tracking state alone, with
+    /// no memory of which source actually started the current grab. A
+    /// controller that stopped tracking mid-grab (disconnected, or just
+    /// walked out of range) fell through to the HANDS branch on the very
+    /// next tick -- and if a hand happened to be pinched for an unrelated
+    /// reason, that hand's point silently took over the grab instead of
+    /// the controller's own dropped signal firing `updateGrab`'s already-
+    /// tested release-at-lastPoint path. Binding to `source` here and
+    /// reporting ONLY that source's `active`/`point` -- false/nil when it's
+    /// the one that went away, no matter what else is live -- means the
+    /// SAME release path fires exactly as it does for a controller that's
+    /// never been replaced by anything.
+    ///
+    /// A controller-bound grab never populates the two-point scale fields
+    /// (controllers scale from `stickScaleAxis` instead); a hand-bound grab
+    /// never populates `stickScaleAxis` and uses the OTHER hand as its
+    /// two-point secondary, exactly as `updateGrab` already expects.
+    static func grabInput(for source: GrabSource, controller: SourceSignal,
+                          handLeft: SourceSignal, handRight: SourceSignal,
+                          stickScaleAxis: Float?) -> GrabInput {
+        switch source {
+        case .controller:
+            return GrabInput(primaryActive: controller.active, primaryPoint: controller.point,
+                             stickScaleAxis: stickScaleAxis)
+        case .handLeft:
+            return GrabInput(primaryActive: handLeft.active, primaryPoint: handLeft.point,
+                             secondaryActive: handRight.active, secondaryPoint: handRight.point)
+        case .handRight:
+            return GrabInput(primaryActive: handRight.active, primaryPoint: handRight.point,
+                             secondaryActive: handLeft.active, secondaryPoint: handLeft.point)
+        }
+    }
+
     /// Tile scale is clamped to this range -- `RendererCore.hudPanelModel`'s
     /// own `tile.scale > 0 ? tile.scale : 1` guard only protects against
     /// zero/negative; these are the editor's own sane working bounds so a

@@ -12,7 +12,10 @@
 //  the origin) and #5 (two-hand scale with only ONE hand tracked is a
 //  no-op, never a garbage scale), plus the tray-recall confirmation (a
 //  release always re-resolves through `resolveDrop`, even out of the hidden
-//  tray).
+//  tray), plus a review fix: a grab stays bound to its ORIGINATING source
+//  (`HudEditor.grabInput(for:...)`) even when a different source is also
+//  live -- a controller that goes inactive mid-grab must release, never
+//  hand off to a hand that happens to be pinching.
 //
 
 import Foundation
@@ -37,6 +40,7 @@ struct HudEditorInputTest {
         runOneHandScaleNoOpTests()      // Review Focus #5
         runStickScaleTests()
         runTrayRecallTests()            // tray-recall confirmation
+        runSourceStickinessTests()      // review fix: bound source, never re-picked mid-grab
         print("PASSED (hud_editor_input_test.swift)")
     }
 }
@@ -295,4 +299,65 @@ func runTrayRecallTests() {
                                                   right: gunZone.right, up: gunZone.up, forward: gunZone.forward)
     check(simd_distance(released.working[0].offset, expectedOffset) < 1e-5,
           "the offset is FRESH, relative to the new zone's own frame -- no leftover tray offset")
+}
+
+// MARK: - review fix: a grab stays bound to its originating source
+
+func runSourceStickinessTests() {
+    // A grab is bound to the CONTROLLER source. The controller then goes
+    // INACTIVE (disconnected / out of range) while a HAND is actively
+    // pinched elsewhere -- the exact scenario the fix addresses. The grab
+    // must release at the controller's own last point, never silently
+    // hand off to the hand that happens to be live this tick.
+    let lastGood = SIMD3<Float>(0.2, 0, 0)
+    let zones = [zone(3, SIMD3<Float>(0, 0, 0))]
+    var working = defaultWorking()
+    working[0].anchor = 0
+
+    let grab = HudEditor.GrabState(tileID: 0, lastPoint: lastGood, secondPinch: nil)
+    let controllerGone = HudEditor.SourceSignal(active: false, point: nil)
+    let handLeftLive = HudEditor.SourceSignal(active: true, point: SIMD3<Float>(5, 5, 5))
+    let handRightIdle = HudEditor.SourceSignal(active: false, point: nil)
+
+    let input = HudEditor.grabInput(for: .controller, controller: controllerGone,
+                                    handLeft: handLeftLive, handRight: handRightIdle,
+                                    stickScaleAxis: nil)
+    check(input.primaryActive == false,
+          "a grab bound to the controller reports the CONTROLLER's own (inactive) signal")
+    check(input.primaryPoint == nil,
+          "...never a live hand's point, even though a hand is actively pinching elsewhere")
+
+    let r = HudEditor.updateGrab(grab: grab, input: input, working: working,
+                                 tiles: [], zones: zones, dt: 1.0 / 90.0)
+    check(r.grab == nil, "the grab releases instead of silently switching to the hand that's live")
+    check(r.working[0].anchor == 3,
+          "the release resolves against the CONTROLLER's lastPoint, not a hand's position")
+
+    // Symmetric sanity: a grab bound to a HAND keeps using that hand's own
+    // signal (and the OTHER hand as its two-point scale secondary) even
+    // while a controller is tracking and active -- the hand doesn't lose
+    // its own grab to the controller either.
+    do {
+        let controllerLive = HudEditor.SourceSignal(active: true, point: SIMD3<Float>(9, 9, 9))
+        let handLeftNow = HudEditor.SourceSignal(active: true, point: SIMD3<Float>(0.01, 0, 0))
+        let handRightNow = HudEditor.SourceSignal(active: true, point: SIMD3<Float>(0.3, 0, 0))
+        let input2 = HudEditor.grabInput(for: .handLeft, controller: controllerLive,
+                                         handLeft: handLeftNow, handRight: handRightNow, stickScaleAxis: nil)
+        check(input2.primaryPoint == handLeftNow.point, "a grab bound to the LEFT hand keeps using the left hand's point")
+        check(input2.secondaryPoint == handRightNow.point, "...and the RIGHT hand as its two-hand-scale secondary")
+        check(input2.stickScaleAxis == nil, "...never a controller stick axis, even though a controller is tracking")
+    }
+
+    // A grab bound to the controller carries its stick-scale axis through
+    // untouched, ignoring both hands entirely (no two-point secondary).
+    do {
+        let controllerLive = HudEditor.SourceSignal(active: true, point: SIMD3<Float>(1, 0, 0))
+        let input3 = HudEditor.grabInput(for: .controller, controller: controllerLive,
+                                         handLeft: HudEditor.SourceSignal(active: true, point: SIMD3<Float>(9, 9, 9)),
+                                         handRight: HudEditor.SourceSignal(active: true, point: SIMD3<Float>(8, 8, 8)),
+                                         stickScaleAxis: 0.5)
+        check(input3.primaryPoint == controllerLive.point, "a grab bound to the controller uses the controller's point")
+        check(input3.secondaryActive == false, "...and never a two-hand secondary (controllers scale from the stick)")
+        check(input3.stickScaleAxis == 0.5, "...the stick axis passes through")
+    }
 }
