@@ -59,11 +59,12 @@ extension HudEditor {
 
         /// `QC_HUD_TILE_*`-indexed, matching the shipped default layout A
         /// in r_null.c byte-for-byte (anchor, offset, scale) -- ammo on the
-        /// gun, face/health+armor on the wrist, all shown, 1.6x scale. This
-        /// is also what a `Session` reads before any `enter()`, and what
-        /// `enter()` leaves offset/scale at on the very first call of a
-        /// process's lifetime (see `enter()`'s doc comment on why offset/
-        /// scale aren't re-seeded on every call the way anchor/show are).
+        /// gun, face/health+armor on the wrist, all shown, 1.6x scale. Only
+        /// a placeholder now: `enter()` always re-seeds every field from the
+        /// live `vr_hud_<tile>_*` cvars via `QC_CvarValue`, so this is just
+        /// what a `Session` reads before any `enter()` has run at all (e.g.
+        /// the render thread's very first `renderSnapshot()`), kept in sync
+        /// with r_null.c's registered defaults rather than read from them.
         nonisolated private static var defaultWorking: [TileEdit] {
             var tiles = Array(
                 repeating: TileEdit(anchor: Int(QC_HUD_ANCHOR_OFFWRIST), offset: .zero, scale: 1.6, show: true),
@@ -95,37 +96,43 @@ extension HudEditor {
 
         /// Enters the workbench from the "Edit HUD Layout" button.
         ///
-        /// Refreshes `working`'s anchor/show from the Phase 1 mirrors
-        /// ContentView passes in -- those pickers/toggles are the only
-        /// live source of "current" anchor/show ContentView has (there is
-        /// no cvar read-back; see `hudTileControl`'s doc comment), so this
-        /// keeps the workbench honest about anything the Phase 1 UI set
-        /// since the last time the workbench ran. Offset/scale have no
-        /// Phase 1 mirror at all -- nothing before this feature could set
-        /// them -- so they are left exactly as `working` already holds
-        /// them: the shipped engine defaults on the first `enter()` of a
-        /// process's lifetime, or whatever the last `commit()`/`cancel()`
-        /// in this process left behind otherwise. (A relaunch resets this
-        /// `Session` to the shipped defaults even if the archived cvars
-        /// hold a previously customized scale/offset -- the same read-back
-        /// gap Phase 1 already accepts for anchor/show, just not yet hit
-        /// in practice because Phase 1 never offered offset/scale controls.)
+        /// Seeds every tile's `working` edit straight from the live
+        /// `vr_hud_<tile>_*` cvars via `QC_CvarValue`, closing the
+        /// relaunch read-back gap: previously `working` started from
+        /// `defaultWorking` (a hardcoded mirror of r_null.c's shipped
+        /// defaults) and `commit()` wrote all six cvars per tile
+        /// unconditionally, so re-opening the editor after a relaunch --
+        /// where the archived `CVAR_ARCHIVE` cvars hold a customized
+        /// layout but this in-process `Session` starts at the hardcoded
+        /// defaults -- and hitting Done silently clobbered the saved
+        /// layout with those stale defaults. Reading back here instead
+        /// means the workbench always starts from whatever is actually
+        /// live, on the very first `enter()` of a process's lifetime
+        /// (freshly registered cvars) exactly as much as any later one.
+        ///
+        /// Also clears a leftover `grab` from an aborted prior session
+        /// before anything else can touch `working`, defensively -- there
+        /// should be no live grab across an `enter()`, but a stale one
+        /// carrying over would otherwise still answer `updateGrab` calls
+        /// against a tile index from the previous session.
         ///
         /// Takes the Cancel snapshot, opens the workbench, and forces
         /// `vr_hud 3` so the workbench's frozen tile row has something to
         /// draw -- the row only renders while the engine is emitting
         /// modular tiles (Review Focus #4) -- recording `currentHudMode`
         /// so `commit()`/`cancel()` can restore it.
-        func enter(ammoAnchor: Int, ammoShown: Bool,
-                   faceAnchor: Int, faceShown: Bool,
-                   healthArmorAnchor: Int, healthArmorShown: Bool,
-                   currentHudMode: Int) {
-            working[Int(QC_HUD_TILE_AMMO)].anchor = ammoAnchor
-            working[Int(QC_HUD_TILE_AMMO)].show = ammoShown
-            working[Int(QC_HUD_TILE_FACE)].anchor = faceAnchor
-            working[Int(QC_HUD_TILE_FACE)].show = faceShown
-            working[Int(QC_HUD_TILE_HEALTHARMOR)].anchor = healthArmorAnchor
-            working[Int(QC_HUD_TILE_HEALTHARMOR)].show = healthArmorShown
+        func enter(currentHudMode: Int) {
+            grab = nil
+            for (index, cvar) in Session.tileCvarNames.enumerated() {
+                working[index] = TileEdit(
+                    anchor: Int(QC_CvarValue("vr_hud_\(cvar)_anchor")),
+                    offset: SIMD3(
+                        QC_CvarValue("vr_hud_\(cvar)_off_x"),
+                        QC_CvarValue("vr_hud_\(cvar)_off_y"),
+                        QC_CvarValue("vr_hud_\(cvar)_off_z")),
+                    scale: QC_CvarValue("vr_hud_\(cvar)_scale"),
+                    show: QC_CvarValue("vr_hud_\(cvar)_show") != 0)
+            }
             snapshot()
             priorHudMode = currentHudMode
             active = true

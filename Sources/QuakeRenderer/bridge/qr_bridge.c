@@ -325,6 +325,16 @@ void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg)
 	pthread_mutex_unlock (&qr_cullfov_lock);
 }
 
+/* Read-back for the HUD workbench's enter(): the cvar list is static past
+   Host_Init, so an unlocked lookup is fine for this one-shot read. Unknown
+   name (typo, or asked before the engine registers it) returns 0 rather
+   than crashing the caller. */
+float QC_CvarValue (const char *name)
+{
+	cvar_t *v = Cvar_FindVar (name);
+	return v ? v->value : 0.f;
+}
+
 qboolean QR_ConsumePendingDrawableSize (int *width, int *height)
 {
 	qboolean dirty;

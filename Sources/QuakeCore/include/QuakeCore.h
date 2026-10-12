@@ -461,6 +461,12 @@ void QC_RendererReleaseFrame (void);
    picks it up at the next frame and recalculates the refdef. */
 void QC_RendererSetDrawableSize (int width, int height);
 
+/* Read back a registered cvar's float value by name, or 0 if no cvar by
+   that name exists. Callable from any thread for a one-shot read (the
+   cvar list is static past Host_Init); not a substitute for the per-frame
+   packet state above. */
+float QC_CvarValue (const char *name);
+
 /* Report the field of view the consumer actually renders, in degrees --
    for the immersive path this is the merged binocular frustum of both eyes.
    The engine widens its culling frustum to cover it (plus a margin for one
