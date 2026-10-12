@@ -5691,7 +5691,9 @@ static int qr_hud_tile_visible[QC_HUD_TILE_COUNT];
 static int32_t clamp_anchor (float v)
 {
 	int	a = (int) v;
-	return (a == QC_HUD_ANCHOR_GUN) ? QC_HUD_ANCHOR_GUN : QC_HUD_ANCHOR_OFFWRIST;
+	if (a == QC_HUD_ANCHOR_GUN || a == QC_HUD_ANCHOR_FLOAT)
+		return a;
+	return QC_HUD_ANCHOR_OFFWRIST;
 }
 
 /*

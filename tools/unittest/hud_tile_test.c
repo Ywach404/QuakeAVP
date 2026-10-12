@@ -24,6 +24,11 @@ int main (void)
 	QR_ResolveHudLayout (t);
 	CHECK (t[QC_HUD_TILE_AMMO].anchor == QC_HUD_ANCHOR_OFFWRIST, "anchor 7 clamps to wrist");
 
+	/* FLOAT anchor resolves without clamping */
+	vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_FLOAT;   /* 2 */
+	QR_ResolveHudLayout (t);
+	CHECK (t[QC_HUD_TILE_AMMO].anchor == QC_HUD_ANCHOR_FLOAT, "anchor 2 resolves to FLOAT, not clamped to wrist");
+
 	/* scale floor: a zero/negative scale cvar resolves to a sane positive */
 	extern cvar_t vr_hud_ammo_scale;
 	vr_hud_ammo_scale.value = 0.f;
