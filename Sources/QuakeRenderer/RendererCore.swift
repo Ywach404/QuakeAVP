@@ -1079,7 +1079,7 @@ final class RendererCore {
     /// Swift-side mirror of `QR_EmitText` (qr_bridge.c) for the workbench's
     /// zone/Done/Cancel labels, which have no engine-side glyph data of
     /// their own -- the HUD editor session never touches `QC_*` (it is
-    /// render-only UI state, see `ImmersiveRenderer.workbenchFurniture`'s
+    /// render-only UI state, see `ImmersiveRenderer.wristGridFurniture`'s
     /// doc comment), so there is nothing in `frame.text_verts` to reuse for
     /// them. The conchars atlas layout is a stable Quake format (128x128,
     /// 16x16 grid of 8x8 cells, column = char & 15, row = char >> 4 --
