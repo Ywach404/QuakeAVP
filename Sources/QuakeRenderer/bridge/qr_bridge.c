@@ -59,9 +59,9 @@ extern double qr_centertime_until;	/* realtime (wall-clock) expiry for the promp
 extern cvar_t vr_hud;			/* status bar placement: 0 off, 1 wrist, 2 float */
 extern cvar_t vr_hud_bg;		/* background box behind modular tiles, drawn consumer-side */
 /* Modular HUD (Phase 1) per-tile layout cvars; defined+registered in r_null.c */
-extern cvar_t vr_hud_ammo_anchor, vr_hud_ammo_off_x, vr_hud_ammo_off_y, vr_hud_ammo_off_z, vr_hud_ammo_scale, vr_hud_ammo_show;
-extern cvar_t vr_hud_face_anchor, vr_hud_face_off_x, vr_hud_face_off_y, vr_hud_face_off_z, vr_hud_face_scale, vr_hud_face_show;
-extern cvar_t vr_hud_healtharmor_anchor, vr_hud_healtharmor_off_x, vr_hud_healtharmor_off_y, vr_hud_healtharmor_off_z, vr_hud_healtharmor_scale, vr_hud_healtharmor_show;
+extern cvar_t vr_hud_ammo_anchor, vr_hud_ammo_slot, vr_hud_ammo_span_w, vr_hud_ammo_span_h, vr_hud_ammo_off_x, vr_hud_ammo_off_y, vr_hud_ammo_off_z, vr_hud_ammo_scale, vr_hud_ammo_show;
+extern cvar_t vr_hud_face_anchor, vr_hud_face_slot, vr_hud_face_span_w, vr_hud_face_span_h, vr_hud_face_off_x, vr_hud_face_off_y, vr_hud_face_off_z, vr_hud_face_scale, vr_hud_face_show;
+extern cvar_t vr_hud_healtharmor_anchor, vr_hud_healtharmor_slot, vr_hud_healtharmor_span_w, vr_hud_healtharmor_span_h, vr_hud_healtharmor_off_x, vr_hud_healtharmor_off_y, vr_hud_healtharmor_off_z, vr_hud_healtharmor_scale, vr_hud_healtharmor_show;
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
@@ -5701,31 +5701,36 @@ static int qr_hud_tile_visible[QC_HUD_TILE_COUNT];
 static int32_t clamp_anchor (float v)
 {
 	int	a = (int) v;
-	if (a == QC_HUD_ANCHOR_GUN || a == QC_HUD_ANCHOR_FLOAT)
+	if (a >= QC_HUD_ANCHOR_WRIST_OFF && a <= QC_HUD_ANCHOR_FLOAT)
 		return a;
-	return QC_HUD_ANCHOR_OFFWRIST;
+	return QC_HUD_ANCHOR_WRIST_OFF;
 }
 
 /*
 ================
 QR_ResolveHudLayout -- turn the vr_hud_<tile>_* cvars into per-tile
 placement. Pure except for the cvar reads. Out-of-range anchors clamp to
-OFFWRIST; a non-positive scale clamps to a sane floor rather than
-disappearing or inverting. first_vert/vert_count/bbox_w/bbox_h are left at
-0 here; the emitter fills those from the overlay range it actually wrote.
+WRIST_OFF; a non-positive scale clamps to a sane floor rather than
+disappearing or inverting. slot/span_w/span_h are clamped to stay on the
+2x2 wrist grid regardless of anchor. first_vert/vert_count/bbox_w/bbox_h
+are left at 0 here; the emitter fills those from the overlay range it
+actually wrote.
 ================
 */
 void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 {
 	struct {
 		int	id;
-		cvar_t	*an, *ox, *oy, *oz, *sc, *sh;
+		cvar_t	*an, *sl, *sw, *sh2, *ox, *oy, *oz, *sc, *sh;
 	} m[] = {
-		{ QC_HUD_TILE_AMMO, &vr_hud_ammo_anchor, &vr_hud_ammo_off_x, &vr_hud_ammo_off_y,
+		{ QC_HUD_TILE_AMMO, &vr_hud_ammo_anchor, &vr_hud_ammo_slot, &vr_hud_ammo_span_w,
+		  &vr_hud_ammo_span_h, &vr_hud_ammo_off_x, &vr_hud_ammo_off_y,
 		  &vr_hud_ammo_off_z, &vr_hud_ammo_scale, &vr_hud_ammo_show },
-		{ QC_HUD_TILE_FACE, &vr_hud_face_anchor, &vr_hud_face_off_x, &vr_hud_face_off_y,
+		{ QC_HUD_TILE_FACE, &vr_hud_face_anchor, &vr_hud_face_slot, &vr_hud_face_span_w,
+		  &vr_hud_face_span_h, &vr_hud_face_off_x, &vr_hud_face_off_y,
 		  &vr_hud_face_off_z, &vr_hud_face_scale, &vr_hud_face_show },
-		{ QC_HUD_TILE_HEALTHARMOR, &vr_hud_healtharmor_anchor, &vr_hud_healtharmor_off_x,
+		{ QC_HUD_TILE_HEALTHARMOR, &vr_hud_healtharmor_anchor, &vr_hud_healtharmor_slot,
+		  &vr_hud_healtharmor_span_w, &vr_hud_healtharmor_span_h, &vr_hud_healtharmor_off_x,
 		  &vr_hud_healtharmor_off_y, &vr_hud_healtharmor_off_z, &vr_hud_healtharmor_scale,
 		  &vr_hud_healtharmor_show },
 	};
@@ -5746,6 +5751,20 @@ void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 		t[i].scale = (m[i].sc->value > 0.01f) ? m[i].sc->value : 1.f;
 
 		qr_hud_tile_visible[i] = (m[i].sh->value != 0.f);
+
+		{
+			int	slot = (int) m[i].sl->value;
+			int	sw   = (int) m[i].sw->value;
+			int	sh   = (int) m[i].sh2->value;
+			int	col, row;
+			if (slot < 0) slot = 0; else if (slot > 3) slot = 3;
+			col = slot % 2; row = slot / 2;
+			if (sw < 1) sw = 1; if (sw > 2 - col) sw = 2 - col;
+			if (sh < 1) sh = 1; if (sh > 2 - row) sh = 2 - row;
+			t[i].slot = slot;
+			t[i].span_w = sw;
+			t[i].span_h = sh;
+		}
 
 		t[i].first_vert = t[i].vert_count = 0;
 		t[i].bbox_w = t[i].bbox_h = 0.f;

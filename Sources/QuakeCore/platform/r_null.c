@@ -291,29 +291,41 @@ cvar_t	vr_hud_bg = {"vr_hud_bg", "1", CVAR_ARCHIVE};	/* dark panel behind each m
 
 /* Modular HUD (Phase 1): per-tile placement. Default layout A --
    ammo pins to the gun, face and health/armor pin to the off-hand wrist.
-   anchor: QC_HUD_ANCHOR_OFFWRIST (0) or QC_HUD_ANCHOR_GUN (1). off_x/y/z are
-   metres in the anchor frame; scale is a panel scale multiplier; show is a
-   bool gate independent of anchor.
+   anchor: QC_HUD_ANCHOR_WRIST_OFF (0), QC_HUD_ANCHOR_WRIST_GUN (1),
+   QC_HUD_ANCHOR_GUN (2), or QC_HUD_ANCHOR_FLOAT (3). slot/span_w/span_h
+   place the tile on a wrist anchor's 2x2 grid (slot is the origin cell,
+   span_w/span_h the footprint in cells); off_x/y/z are metres in the
+   anchor frame; scale is a panel scale multiplier; show is a bool gate
+   independent of anchor.
    The off_y/scale defaults below are device-tuned first guesses (M.
    reported tiles clumped on the wrist and read too small over the world):
    face sits above the wrist, health/armor below it, so the two wrist tiles
    don't overlap each other or the hand; all three tiles are scaled up for
    readability. Expect these to move once tried on device again. */
-cvar_t	vr_hud_ammo_anchor        = {"vr_hud_ammo_anchor", "1", CVAR_ARCHIVE};	/* gun */
+cvar_t	vr_hud_ammo_anchor        = {"vr_hud_ammo_anchor", "2", CVAR_ARCHIVE};	/* gun */
+cvar_t	vr_hud_ammo_slot          = {"vr_hud_ammo_slot", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_ammo_span_w        = {"vr_hud_ammo_span_w", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_ammo_span_h        = {"vr_hud_ammo_span_h", "1", CVAR_ARCHIVE};
 cvar_t	vr_hud_ammo_off_x         = {"vr_hud_ammo_off_x", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_ammo_off_y         = {"vr_hud_ammo_off_y", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_ammo_off_z         = {"vr_hud_ammo_off_z", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_ammo_scale         = {"vr_hud_ammo_scale", "1.6", CVAR_ARCHIVE};
 cvar_t	vr_hud_ammo_show          = {"vr_hud_ammo_show", "1", CVAR_ARCHIVE};
 
-cvar_t	vr_hud_face_anchor        = {"vr_hud_face_anchor", "0", CVAR_ARCHIVE};	/* wrist */
+cvar_t	vr_hud_face_anchor        = {"vr_hud_face_anchor", "0", CVAR_ARCHIVE};	/* off-hand wrist */
+cvar_t	vr_hud_face_slot          = {"vr_hud_face_slot", "0", CVAR_ARCHIVE};	/* top-left */
+cvar_t	vr_hud_face_span_w        = {"vr_hud_face_span_w", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_face_span_h        = {"vr_hud_face_span_h", "1", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_off_x         = {"vr_hud_face_off_x", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_off_y         = {"vr_hud_face_off_y", "0.035", CVAR_ARCHIVE};	/* up: above the wrist */
 cvar_t	vr_hud_face_off_z         = {"vr_hud_face_off_z", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_scale         = {"vr_hud_face_scale", "1.6", CVAR_ARCHIVE};
 cvar_t	vr_hud_face_show          = {"vr_hud_face_show", "1", CVAR_ARCHIVE};
 
-cvar_t	vr_hud_healtharmor_anchor = {"vr_hud_healtharmor_anchor", "0", CVAR_ARCHIVE};	/* wrist */
+cvar_t	vr_hud_healtharmor_anchor = {"vr_hud_healtharmor_anchor", "0", CVAR_ARCHIVE};	/* off-hand wrist */
+cvar_t	vr_hud_healtharmor_slot   = {"vr_hud_healtharmor_slot", "2", CVAR_ARCHIVE};	/* bottom-left */
+cvar_t	vr_hud_healtharmor_span_w = {"vr_hud_healtharmor_span_w", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_healtharmor_span_h = {"vr_hud_healtharmor_span_h", "1", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_off_x  = {"vr_hud_healtharmor_off_x", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_off_y  = {"vr_hud_healtharmor_off_y", "-0.035", CVAR_ARCHIVE};	/* down: below the wrist */
 cvar_t	vr_hud_healtharmor_off_z  = {"vr_hud_healtharmor_off_z", "0", CVAR_ARCHIVE};
@@ -442,18 +454,27 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&vr_hud);
 	Cvar_RegisterVariable (&vr_hud_bg);
 	Cvar_RegisterVariable (&vr_hud_ammo_anchor);
+	Cvar_RegisterVariable (&vr_hud_ammo_slot);
+	Cvar_RegisterVariable (&vr_hud_ammo_span_w);
+	Cvar_RegisterVariable (&vr_hud_ammo_span_h);
 	Cvar_RegisterVariable (&vr_hud_ammo_off_x);
 	Cvar_RegisterVariable (&vr_hud_ammo_off_y);
 	Cvar_RegisterVariable (&vr_hud_ammo_off_z);
 	Cvar_RegisterVariable (&vr_hud_ammo_scale);
 	Cvar_RegisterVariable (&vr_hud_ammo_show);
 	Cvar_RegisterVariable (&vr_hud_face_anchor);
+	Cvar_RegisterVariable (&vr_hud_face_slot);
+	Cvar_RegisterVariable (&vr_hud_face_span_w);
+	Cvar_RegisterVariable (&vr_hud_face_span_h);
 	Cvar_RegisterVariable (&vr_hud_face_off_x);
 	Cvar_RegisterVariable (&vr_hud_face_off_y);
 	Cvar_RegisterVariable (&vr_hud_face_off_z);
 	Cvar_RegisterVariable (&vr_hud_face_scale);
 	Cvar_RegisterVariable (&vr_hud_face_show);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_anchor);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_slot);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_span_w);
+	Cvar_RegisterVariable (&vr_hud_healtharmor_span_h);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_off_x);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_off_y);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_off_z);
