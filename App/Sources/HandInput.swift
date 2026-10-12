@@ -910,8 +910,15 @@ final class HandInput: @unchecked Sendable {
             GunHand.shared.invalidate()
         }
 
-        WheelState.shared.setHold(offHand.palmUp, source: .hands)
-        guard offHand.palmUp else { return }
+        // The weapon wheel is suppressed while the HUD layout editor is open:
+        // the Face/Health tiles live ON the off-hand wrist, so presenting that
+        // wrist to grab a tile IS the palm-up gesture that opens the wheel --
+        // the ring then renders over the grid and slows time right where you're
+        // arranging. Standing the wheel down in edit mode keeps the forearm
+        // clear for grabbing. renderSnapshot() is a lock-protected any-thread read.
+        let editing = HudEditor.Session.renderSnapshot().active
+        WheelState.shared.setHold(offHand.palmUp && !editing, source: .hands)
+        guard offHand.palmUp, !editing else { return }
 
         let correction = TrackingSpace.correction
         // The ring is ALWAYS anchored to the off hand -- it stays locked to that
