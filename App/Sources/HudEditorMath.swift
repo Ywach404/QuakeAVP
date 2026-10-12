@@ -32,6 +32,13 @@ enum HudEditor {
         var offset: SIMD3<Float>
         var scale: Float
         var show: Bool
+        /// Which of the 4 wrist-grid cells (row-major, 0 top-left..3
+        /// bottom-right) this tile's footprint originates at, and how many
+        /// columns/rows it spans from there. Meaningless off a wrist anchor
+        /// (GUN/FLOAT tiles keep the defaults); see `spannedCells`.
+        var slot: Int = 0
+        var spanW: Int = 1
+        var spanH: Int = 1
     }
 
     /// A drop-zone proxy in the workbench scene: wrist, gun, float, or the
@@ -255,6 +262,124 @@ enum HudEditor {
     static let scaleMax: Float = 4.0
     /// Scale change per second of a full-deflection thumbstick hold.
     static let stickScaleRate: Float = 0.8
+
+    // MARK: - Wrist grid (Task 2)
+
+    static let cellSize: Float = 0.045     // metres, one cell edge
+    static let cellGap: Float = 0.008      // metres between cells
+    static let cellPitch: Float = cellSize + cellGap
+    static let gridHalf: Float = cellSize + 0.5 * cellGap   // half the 2-cell extent
+
+    /// A wrist grid's plane: origin at the grid centre, right/up in metres.
+    struct WristFrame {
+        var anchor: Int                    // WRIST_OFF or WRIST_GUN
+        var origin: SIMD3<Float>
+        var right: SIMD3<Float>
+        var up: SIMD3<Float>
+        var forward: SIMD3<Float>
+        var valid: Bool
+    }
+
+    /// The row-major 2x2 cell indices (0 TL, 1 TR, 2 BL, 3 BR) a footprint
+    /// rooted at `slot` covers, clipped to the grid -- NOT clamped first, so
+    /// a caller that passes an already-oversized span (e.g. skips
+    /// `clampFootprint`) still gets a safe, in-bounds set rather than an
+    /// out-of-range index.
+    static func spannedCells(slot: Int, spanW: Int, spanH: Int) -> Set<Int> {
+        let row = slot / 2, col = slot % 2
+        var cells = Set<Int>()
+        for r in row ..< min(row + spanH, 2) {
+            for c in col ..< min(col + spanW, 2) {
+                cells.insert(r * 2 + c)
+            }
+        }
+        return cells
+    }
+
+    /// Shrinks a footprint so it never grows past the grid's right/bottom
+    /// edge from `slot` -- the only clamp a 2x2 grid needs, since every slot
+    /// is already a valid top-left corner.
+    static func clampFootprint(slot: Int, spanW: Int, spanH: Int) -> (Int, Int) {
+        let row = slot / 2, col = slot % 2
+        let w = max(1, min(spanW, 2 - col))
+        let h = max(1, min(spanH, 2 - row))
+        return (w, h)
+    }
+
+    /// A footprint's centre offset and size in the wrist frame's own
+    /// right/up plane (metres), for placing a tile at `slot` with a
+    /// (clamped) `spanW`x`spanH`.
+    static func wristCellOffset(slot: Int, spanW: Int, spanH: Int)
+        -> (offset: SIMD2<Float>, size: SIMD2<Float>) {
+        let (w, h) = clampFootprint(slot: slot, spanW: spanW, spanH: spanH)
+        let row = Float(slot / 2), col = Float(slot % 2)
+        let cx = (col + Float(w - 1) * 0.5 - 0.5) * cellPitch
+        let cy = (0.5 - row - Float(h - 1) * 0.5) * cellPitch
+        let sw = Float(w) * cellSize + Float(w - 1) * cellGap
+        let sh = Float(h) * cellSize + Float(h - 1) * cellGap
+        return (SIMD2(cx, cy), SIMD2(sw, sh))
+    }
+
+    /// Which of the 4 cells `p` lands in, in `frame`'s own plane -- `nil`
+    /// when the frame isn't valid or the point falls outside the 2x2 grid's
+    /// extent (`gridHalf` on each axis).
+    static func cellUnderPoint(_ p: SIMD3<Float>, frame: WristFrame) -> Int? {
+        guard frame.valid else { return nil }
+        let local = offsetInFrame(point: p, origin: frame.origin,
+                                  right: frame.right, up: frame.up, forward: frame.forward)
+        guard abs(local.x) <= gridHalf, abs(local.y) <= gridHalf else { return nil }
+        let col = local.x < 0 ? 0 : 1
+        let row = local.y > 0 ? 0 : 1    // +up is the top row
+        return row * 2 + col
+    }
+
+    /// Whether any OTHER tile on `anchor` already spans one of `cells` --
+    /// `excluding` is the tile index to skip (the tile being moved itself),
+    /// so re-dropping onto its own cells never reads as a collision.
+    static func occupied(_ working: [TileEdit], anchor: Int,
+                         cells: Set<Int>, excluding: Int) -> Bool {
+        for (i, t) in working.enumerated() {
+            if i == excluding { continue }
+            if t.anchor != anchor || !t.show { continue }
+            if !spannedCells(slot: t.slot, spanW: t.spanW, spanH: t.spanH).isDisjoint(with: cells) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Footprint bounding the two cells a two-hand gesture points at (both 0-3).
+    static func footprintFromCells(_ a: Int, _ b: Int) -> (slot: Int, spanW: Int, spanH: Int) {
+        let ra = a / 2, ca = a % 2, rb = b / 2, cb = b % 2
+        let minR = min(ra, rb), maxR = max(ra, rb)
+        let minC = min(ca, cb), maxC = max(ca, cb)
+        return (minR * 2 + minC, maxC - minC + 1, maxR - minR + 1)
+    }
+
+    /// Snap a dropped tile onto whichever wrist its point is over.
+    /// Returns nil when the point is over neither wrist (caller falls back to GUN/FLOAT).
+    /// Returns the tile unchanged (reject) when the target cells are occupied.
+    static func resolveWristDrop(point: SIMD3<Float>, off: WristFrame, gun: WristFrame,
+                                 working: [TileEdit], tileIndex: Int) -> TileEdit? {
+        let current = working[tileIndex]
+        for frame in [off, gun] {
+            guard let slot = cellUnderPoint(point, frame: frame) else { continue }
+            let (w, h) = clampFootprint(slot: slot, spanW: current.spanW, spanH: current.spanH)
+            let cells = spannedCells(slot: slot, spanW: w, spanH: h)
+            if occupied(working, anchor: frame.anchor, cells: cells, excluding: tileIndex) {
+                return current   // reject: stay put
+            }
+            var next = current
+            next.anchor = frame.anchor
+            next.slot = slot
+            next.spanW = w
+            next.spanH = h
+            next.offset = .zero
+            next.show = true
+            return next
+        }
+        return nil
+    }
 
     /// The grab/move/scale state machine. Pure: every real-world input
     /// (hand pinch points, controller poses/triggers/thumbstick) is injected

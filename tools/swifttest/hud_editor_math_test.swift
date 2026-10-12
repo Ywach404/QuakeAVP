@@ -21,6 +21,21 @@ func check(_ condition: Bool, _ label: String) {
     }
 }
 
+// `swiftc -O` compiles the stdlib's `assert(_:_:)` to a no-op (it only fires
+// under `-Onone`), and check-swift-math.sh builds with `-O` -- so the grid
+// tests below, which use bare `assert(...)` per the brief, need their own
+// override of the exact same shape as `check` or they'd pass vacuously no
+// matter what the math does. This overload's concrete (non-autoclosure)
+// `Bool`/`String` parameters win over the stdlib's autoclosure version for
+// every call site here, so it's the one that actually runs.
+func assert(_ condition: Bool, _ label: String) {
+    check(condition, label)
+}
+
+func assertEqual(_ a: Set<Int>, _ b: Set<Int>, _ label: String) {
+    check(a == b, label)
+}
+
 // A `swiftc` multi-file compile only grants top-level executable statements
 // to a file literally named `main.swift`; this file keeps its own name (it
 // reads as a test, not an entry point) and wraps its body in `@main`
@@ -31,6 +46,7 @@ struct HudEditorMathTest {
         runOffsetInFrameTests()
         runPointInTileTests()
         runResolveDropTests()
+        runGridTests()
         print("PASSED (hud_editor_math_test.swift)")
     }
 }
@@ -124,4 +140,53 @@ func runResolveDropTests() {
         let d = HudEditor.resolveDrop(point: point, zones: [near, far], previousAnchor: 0)
         check(d.anchor == 1, "resolveDrop picks the nearest zone, not just the first in range")
     }
+}
+
+// MARK: - Wrist grid (Task 2)
+
+func runGridTests() {
+    // spannedCells: a 2x1 at slot 0 covers the top row {0,1}
+    assertEqual(HudEditor.spannedCells(slot: 0, spanW: 2, spanH: 1), [0, 1], "span 2x1 top row")
+    assertEqual(HudEditor.spannedCells(slot: 0, spanW: 2, spanH: 2), [0, 1, 2, 3], "span 2x2 all cells")
+    assertEqual(HudEditor.spannedCells(slot: 3, spanW: 1, spanH: 1), [3], "1x1 BR")
+
+    // clampFootprint: BR (slot 3) cannot grow right or down
+    assert(HudEditor.clampFootprint(slot: 3, spanW: 2, spanH: 2) == (1, 1), "slot 3 clamps to 1x1")
+    assert(HudEditor.clampFootprint(slot: 1, spanW: 2, spanH: 1) == (1, 1), "TR cannot grow right")
+    assert(HudEditor.clampFootprint(slot: 0, spanW: 2, spanH: 2) == (2, 2), "TL keeps 2x2")
+
+    // wristCellOffset: a 1x1 at TL sits up-left; 2x2 centres at origin
+    let tl = HudEditor.wristCellOffset(slot: 0, spanW: 1, spanH: 1)
+    assert(tl.offset.x < 0 && tl.offset.y > 0, "TL is up-left of centre")
+    let full = HudEditor.wristCellOffset(slot: 0, spanW: 2, spanH: 2)
+    assert(abs(full.offset.x) < 1e-5 && abs(full.offset.y) < 1e-5, "2x2 centred")
+    assert(full.size.x > tl.size.x, "2x2 wider than 1x1")
+
+    // cellUnderPoint: a point just up-left of a wrist centre hits slot 0
+    let wf = HudEditor.WristFrame(anchor: 0, origin: .zero,
+                                  right: SIMD3(1,0,0), up: SIMD3(0,1,0),
+                                  forward: SIMD3(0,0,1), valid: true)
+    let pTL = SIMD3<Float>(-HudEditor.cellPitch * 0.5, HudEditor.cellPitch * 0.5, 0)
+    assert(HudEditor.cellUnderPoint(pTL, frame: wf) == 0, "up-left -> slot 0")
+    let pBR = SIMD3<Float>(HudEditor.cellPitch * 0.5, -HudEditor.cellPitch * 0.5, 0)
+    assert(HudEditor.cellUnderPoint(pBR, frame: wf) == 3, "down-right -> slot 3")
+    let miss = SIMD3<Float>(1, 1, 0)
+    assert(HudEditor.cellUnderPoint(miss, frame: wf) == nil, "far point misses grid")
+
+    // occupied: a 2x1 at slot 0 blocks a 1x1 drop at slot 1
+    let blocker = HudEditor.TileEdit(anchor: 0, offset: .zero, scale: 1, show: true,
+                                     slot: 0, spanW: 2, spanH: 1)
+    assert(HudEditor.occupied([blocker], anchor: 0, cells: [1], excluding: 99),
+           "slot 1 blocked by 2x1 at slot 0")
+    assert(!HudEditor.occupied([blocker], anchor: 0, cells: [2], excluding: 99),
+           "slot 2 free")
+    assert(!HudEditor.occupied([blocker], anchor: 0, cells: [1], excluding: 0),
+           "excluding the blocker itself frees the cell")
+
+    // footprintFromCells: diagonal corners -> full span
+    assert(HudEditor.footprintFromCells(0, 3) == (0, 2, 2), "0..3 -> 2x2 at slot 0")
+    assert(HudEditor.footprintFromCells(1, 2) == (0, 2, 2), "1..2 -> 2x2 at slot 0")
+    assert(HudEditor.footprintFromCells(2, 3) == (2, 2, 1), "bottom row -> 2x1 at slot 2")
+
+    print("grid tests ok")
 }
