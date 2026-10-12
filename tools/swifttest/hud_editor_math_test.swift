@@ -172,6 +172,14 @@ func runGridTests() {
     assert(HudEditor.cellUnderPoint(pBR, frame: wf) == 3, "down-right -> slot 3")
     let miss = SIMD3<Float>(1, 1, 0)
     assert(HudEditor.cellUnderPoint(miss, frame: wf) == nil, "far point misses grid")
+    // A point dead-centre on cell 0 in x/y but well off the wrist PLANE in z
+    // is not "over" the grid -- without a depth bound it would read as slot 0.
+    let deepMiss = SIMD3<Float>(-HudEditor.cellPitch * 0.5, HudEditor.cellPitch * 0.5, 0.5)
+    assert(HudEditor.cellUnderPoint(deepMiss, frame: wf) == nil, "a point far off the wrist plane in z misses")
+    // A point a hair off the plane (well within the depth tolerance) still
+    // registers -- the bound must not reject normal reaching.
+    let shallowHit = SIMD3<Float>(-HudEditor.cellPitch * 0.5, HudEditor.cellPitch * 0.5, 0.01)
+    assert(HudEditor.cellUnderPoint(shallowHit, frame: wf) == 0, "a point just off the plane still hits slot 0")
 
     // occupied: a 2x1 at slot 0 blocks a 1x1 drop at slot 1
     let blocker = HudEditor.TileEdit(anchor: 0, offset: .zero, scale: 1, show: true,

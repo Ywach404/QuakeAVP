@@ -147,9 +147,11 @@ extension HudEditor {
         /// index order -- the one place that mapping is spelled out.
         private static let tileCvarNames = ["ammo", "face", "healtharmor"]
 
-        /// Writes one `TileEdit` out to its tile's six `vr_hud_<tile>_*`
-        /// cvars (all `CVAR_ARCHIVE` -- this is what persists the layout
-        /// across a relaunch; there is no separate profile store for it).
+        /// Writes one `TileEdit` out to its tile's nine `vr_hud_<tile>_*`
+        /// cvars -- anchor, the three offset components, scale, show, and the
+        /// wrist-grid slot/span_w/span_h (all `CVAR_ARCHIVE`, so this is what
+        /// persists the layout across a relaunch; there is no separate
+        /// profile store for it).
         private func sendTileCvars(_ edit: TileEdit, cvar: String) {
             let engine = QuakeEngineViewModel.shared
             engine.send("vr_hud_\(cvar)_anchor \(edit.anchor)")

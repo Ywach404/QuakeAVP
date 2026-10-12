@@ -3,9 +3,10 @@
 //
 //  The HUD live editor's pure placement math: projecting a world point onto
 //  a frame's own axes, testing whether a hit lands inside a tile's bbox,
-//  resolving a drop against the four zone proxies (wrist/gun/float/hidden
-//  tray), and (Task 5) the grab/move/scale state machine itself,
-//  `updateGrab`. Everything here is a static value function over
+//  snapping a drop onto the off-hand/gun wrist 2x2 grids (`resolveWristDrop`,
+//  with GUN/FLOAT handled by `resolveDrop`'s zone fallback), and the
+//  grab/move/scale state machine itself, `updateGrab`. Everything here is a
+//  static value function over
 //  SIMD3<Float> -- no app types, no ARKit, no @MainActor, no Observation --
 //  so tools/check-swift-math.sh and tools/check-swift-input.sh can compile
 //  and run it alone, against tools/swifttest/hud_editor_math_test.swift and
@@ -41,16 +42,18 @@ enum HudEditor {
         var spanH: Int = 1
     }
 
-    /// A drop-zone proxy in the workbench scene: wrist, gun, float, or the
-    /// hidden tray. `origin`/`right`/`up`/`forward` must be unit and
-    /// mutually orthogonal, same contract as `RendererCore.HudAnchorFrame`
-    /// -- this type is deliberately its own plain struct (not that one) so
-    /// this file stays free of the Metal-importing renderer module.
+    /// A drop-zone proxy in the workbench scene, used by `resolveDrop` for
+    /// the non-wrist anchors (GUN/FLOAT) and the keep-previous fallback.
+    /// `origin`/`right`/`up`/`forward` must be unit and mutually orthogonal,
+    /// same contract as `RendererCore.HudAnchorFrame` -- this type is
+    /// deliberately its own plain struct (not that one) so this file stays
+    /// free of the Metal-importing renderer module. (The wrist grids are not
+    /// zones; a wrist drop goes through `resolveWristDrop`/`WristFrame`.)
     ///
     /// `anchor` is the `QC_HUD_ANCHOR_*` value a drop here assigns -- except
-    /// for the hidden tray, where it is ignored: the tray hides a tile
-    /// (`show = false`) without touching its anchor, per the design (the
-    /// tray parks a tile, it does not un-anchor it).
+    /// when `isHiddenTray`, where it is ignored: a tray drop hides a tile
+    /// (`show = false`) without touching its anchor (it parks a tile, it does
+    /// not un-anchor it).
     struct Zone {
         var anchor: Int
         var origin: SIMD3<Float>
@@ -144,6 +147,15 @@ enum HudEditor {
         /// second pinch must leave scale untouched rather than apply a
         /// garbage value (plan Review Focus #5).
         var secondPinch: SIMD3<Float>?
+        /// The tile's footprint (`slot`/`spanW`/`spanH`) at the instant the
+        /// grab started. A live two-hand stretch grows the footprint tick by
+        /// tick; if the drop is then rejected (the target cells are occupied)
+        /// the footprint is restored from this snapshot, so a stretch that
+        /// reached into another tile's reserved cells never persists. Carried
+        /// forward unchanged across every move tick of the same grab.
+        var preSlot: Int = 0
+        var preSpanW: Int = 1
+        var preSpanH: Int = 1
     }
 
     /// A tile's current hit-test frame, for grab-start only: `pointInTile`
@@ -330,14 +342,21 @@ enum HudEditor {
         return (SIMD2(cx, cy), SIMD2(sw, sh))
     }
 
+    /// How far off the wrist plane (metres, along `forward`) a point may sit
+    /// and still count as "over" the grid. Without it `cellUnderPoint` reads
+    /// a point arbitrarily far in front of or behind the wrist as hitting a
+    /// cell, because it only tested the in-plane x/y extent.
+    static let cellDepth: Float = cellPitch
+
     /// Which of the 4 cells `p` lands in, in `frame`'s own plane -- `nil`
-    /// when the frame isn't valid or the point falls outside the 2x2 grid's
-    /// extent (`gridHalf` on each axis).
+    /// when the frame isn't valid, the point falls outside the 2x2 grid's
+    /// extent (`gridHalf` on each in-plane axis), or the point sits further
+    /// than `cellDepth` off the wrist plane along `forward`.
     static func cellUnderPoint(_ p: SIMD3<Float>, frame: WristFrame) -> Int? {
         guard frame.valid else { return nil }
         let local = offsetInFrame(point: p, origin: frame.origin,
                                   right: frame.right, up: frame.up, forward: frame.forward)
-        guard abs(local.x) <= gridHalf, abs(local.y) <= gridHalf else { return nil }
+        guard abs(local.x) <= gridHalf, abs(local.y) <= gridHalf, abs(local.z) <= cellDepth else { return nil }
         let col = local.x < 0 ? 0 : 1
         let row = local.y > 0 ? 0 : 1    // +up is the top row
         return row * 2 + col
@@ -368,16 +387,24 @@ enum HudEditor {
 
     /// Snap a dropped tile onto whichever wrist its point is over.
     /// Returns nil when the point is over neither wrist (caller falls back to GUN/FLOAT).
-    /// Returns the tile unchanged (reject) when the target cells are occupied.
+    /// On an occupied target (reject) the tile stays put, with its footprint
+    /// restored to the pre-grab `preSlot`/`preSpanW`/`preSpanH` -- never the
+    /// footprint a live two-hand stretch may have grown into the occupied
+    /// cells, which is what `working[tileIndex]` already holds by release.
     static func resolveWristDrop(point: SIMD3<Float>, off: WristFrame, gun: WristFrame,
-                                 working: [TileEdit], tileIndex: Int) -> TileEdit? {
+                                 working: [TileEdit], tileIndex: Int,
+                                 preSlot: Int = 0, preSpanW: Int = 1, preSpanH: Int = 1) -> TileEdit? {
         let current = working[tileIndex]
         for frame in [off, gun] {
             guard let slot = cellUnderPoint(point, frame: frame) else { continue }
             let (w, h) = clampFootprint(slot: slot, spanW: current.spanW, spanH: current.spanH)
             let cells = spannedCells(slot: slot, spanW: w, spanH: h)
             if occupied(working, anchor: frame.anchor, cells: cells, excluding: tileIndex) {
-                return current   // reject: stay put
+                var restored = current   // reject: stay put, drop the grown footprint
+                restored.slot = preSlot
+                restored.spanW = preSpanW
+                restored.spanH = preSpanH
+                return restored
             }
             var next = current
             next.anchor = frame.anchor
@@ -459,7 +486,12 @@ enum HudEditor {
                 pointInTile(hit: point, tileOrigin: $0.origin, right: $0.right, up: $0.up,
                             halfW: $0.halfW, halfH: $0.halfH)
             }) else { return (nil, working) }
-            return (GrabState(tileID: hit.tileID, lastPoint: point, secondPinch: nil), working)
+            // Snapshot the grabbed tile's footprint so a later rejected wrist
+            // drop can restore it (see resolveWristDrop / GrabState.preSlot).
+            let pre = (hit.tileID >= 0 && hit.tileID < working.count)
+                ? working[hit.tileID] : TileEdit(anchor: 0, offset: .zero, scale: 1, show: true)
+            return (GrabState(tileID: hit.tileID, lastPoint: point, secondPinch: nil,
+                              preSlot: pre.slot, preSpanW: pre.spanW, preSpanH: pre.spanH), working)
         }
 
         guard input.primaryActive, let point = input.primaryPoint else {
@@ -476,7 +508,9 @@ enum HudEditor {
             // tray-recall confirmation).
             if current.tileID >= 0, current.tileID < working.count {
                 if let snapped = resolveWristDrop(point: current.lastPoint, off: off, gun: gun,
-                                                   working: working, tileIndex: current.tileID) {
+                                                   working: working, tileIndex: current.tileID,
+                                                   preSlot: current.preSlot, preSpanW: current.preSpanW,
+                                                   preSpanH: current.preSpanH) {
                     working[current.tileID] = snapped
                 } else {
                     let result = resolveDrop(point: current.lastPoint, zones: zones,
@@ -515,9 +549,19 @@ enum HudEditor {
                     guard let cellA = cellUnderPoint(point, frame: frame),
                           let cellB = cellUnderPoint(secondPoint, frame: frame) else { continue }
                     let footprint = footprintFromCells(cellA, cellB)
-                    working[tileID].slot = footprint.slot
-                    working[tileID].spanW = footprint.spanW
-                    working[tileID].spanH = footprint.spanH
+                    // Clamp the live preview against the grid AND against the
+                    // cells another visible tile on this wrist already
+                    // reserves -- a stretch that would cover an occupied cell
+                    // is refused outright, so the footprint never previews (or
+                    // persists) over its neighbour (spec Edit-mode step 3).
+                    let (w, h) = clampFootprint(slot: footprint.slot, spanW: footprint.spanW,
+                                                spanH: footprint.spanH)
+                    let cells = spannedCells(slot: footprint.slot, spanW: w, spanH: h)
+                    if !occupied(working, anchor: frame.anchor, cells: cells, excluding: tileID) {
+                        working[tileID].slot = footprint.slot
+                        working[tileID].spanW = w
+                        working[tileID].spanH = h
+                    }
                     break
                 }
             }
@@ -527,6 +571,8 @@ enum HudEditor {
             working[tileID].scale = min(scaleMax, max(scaleMin, working[tileID].scale + axis * stickScaleRate * dt))
         }
 
-        return (GrabState(tileID: tileID, lastPoint: point, secondPinch: newSecondPinch), working)
+        return (GrabState(tileID: tileID, lastPoint: point, secondPinch: newSecondPinch,
+                          preSlot: current.preSlot, preSpanW: current.preSpanW,
+                          preSpanH: current.preSpanH), working)
     }
 }
