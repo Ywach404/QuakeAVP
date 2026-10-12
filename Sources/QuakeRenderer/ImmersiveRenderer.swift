@@ -990,7 +990,7 @@ final class ImmersiveRenderer {
                 }
             }
 
-            for slot in 0..<4 {
+            for slot in 0 ..< (HudEditor.gridCols * HudEditor.gridRows) {
                 let cell = HudEditor.wristCellOffset(slot: slot, spanW: 1, spanH: 1)
                 let origin = frame.origin + frame.right * cell.offset.x + frame.up * cell.offset.y
                 let color: SIMD4<Float>
