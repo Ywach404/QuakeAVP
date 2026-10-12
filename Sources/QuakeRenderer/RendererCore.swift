@@ -1193,10 +1193,9 @@ final class RendererCore {
     /// viewer standing where `billboardBasis` was told to face.
     ///
     /// `sourceWidth`/`sourceHeight` default to the whole-panel presets'
-    /// fixed 320x200 virtual screen; the modular HUD tile path
-    /// (`hudTileModel`) passes a tile's own `bbox_w`/`bbox_h` instead,
-    /// since a tile's verts span only its own local extent, not the full
-    /// screen.
+    /// fixed 320x200 virtual screen; the modular HUD tile path passes a
+    /// tile's own `bbox_w`/`bbox_h` instead, since a tile's verts span only
+    /// its own local extent, not the full screen.
     static func hudPanelModel(origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
                               widthMeters: Float, heightMeters: Float,
                               sourceWidth: Float = 320, sourceHeight: Float = 200) -> simd_float4x4 {
@@ -1221,31 +1220,6 @@ final class RendererCore {
         var right: SIMD3<Float>
         var up: SIMD3<Float>
         var forward: SIMD3<Float>
-    }
-
-    /// One modular HUD tile's model matrix (vr_hud 3): `tile.offset`
-    /// (metres, in the anchor frame per `qc_hud_tile_t`'s doc comment)
-    /// translates from `anchor.origin` along the anchor's own right/up/
-    /// forward axes, then the tile's fixed `bbox_w` x `bbox_h` (tile-local
-    /// units — the vert sub-range's own extent, NOT the 320x200 virtual
-    /// screen) maps onto a `scale`d physical rectangle via `hudPanelModel`,
-    /// same math class as the whole-panel presets, just sourced from the
-    /// tile's own extent instead of the fixed screen. `pixelScale` is
-    /// metres per tile-local unit — pass the same per-pixel ratio the
-    /// wrist/float panels use for a consistent physical size, or 1 for a
-    /// screen-space pixel anchor (the window's fixed layout).
-    static func hudTileModel(tile: qc_hud_tile_t, anchor: HudAnchorFrame,
-                             pixelScale: Float) -> simd_float4x4 {
-        let scale = tile.scale > 0 ? tile.scale : 1
-        let origin = anchor.origin
-            + anchor.right * tile.offset.0
-            + anchor.up * tile.offset.1
-            + anchor.forward * tile.offset.2
-        let widthMeters = tile.bbox_w * pixelScale * scale
-        let heightMeters = tile.bbox_h * pixelScale * scale
-        return hudPanelModel(origin: origin, right: anchor.right, up: anchor.up,
-                             widthMeters: widthMeters, heightMeters: heightMeters,
-                             sourceWidth: tile.bbox_w, sourceHeight: tile.bbox_h)
     }
 
     /// Billboard basis for a panel whose face normal points along `toward`
