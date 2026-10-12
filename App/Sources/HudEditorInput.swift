@@ -93,15 +93,22 @@ final class WorkbenchGeometry: @unchecked Sendable {
 
     struct Snapshot {
         var active: Bool
-        var zones: [HudEditor.Zone]
+        /// The two wrist-grid frames this frame -- the off-hand and gun-hand
+        /// forearm planes the render thread resolved (origin/right/up/forward
+        /// in corrected tracking space, `valid == false` for an untracked
+        /// wrist). The input layer (Task 5) hit-tests a wrist drop against
+        /// these instead of the old free-floating zone proxies.
+        var off: HudEditor.WristFrame
+        var gun: HudEditor.WristFrame
         var tiles: [HudEditor.TileFrame]
-        /// tileIDs currently parked in the hidden tray (`show == false`).
-        /// The render path draws every parked tile at the single HIDDEN
-        /// zone spot (no distinct tray slots yet), so a pinch/trigger
-        /// landing there is treated as reaching for one of these.
+        /// tileIDs currently hidden (`show == false`). Carried for the input
+        /// layer's recall path; the render thread draws nothing for them.
         var hiddenTileIDs: [Int]
 
-        static let inactive = Snapshot(active: false, zones: [], tiles: [], hiddenTileIDs: [])
+        private static let noWrist = HudEditor.WristFrame(anchor: 0, origin: .zero, right: .zero,
+                                                          up: .zero, forward: .zero, valid: false)
+        static let inactive = Snapshot(active: false, off: noWrist, gun: noWrist,
+                                       tiles: [], hiddenTileIDs: [])
     }
 
     private let lock = NSLock()
@@ -177,18 +184,14 @@ final class HudEditorInput: @unchecked Sendable {
         let geometry = WorkbenchGeometry.shared.snapshot()
         guard geometry.active else { boundSource = nil; return }
 
-        // Grab-start hit targets: every currently VISIBLE tile, plus one
-        // synthetic frame at the HIDDEN zone for whichever tile is parked
-        // there (see `WorkbenchGeometry.Snapshot.hiddenTileIDs`'s doc
-        // comment) -- a pinch/trigger landing on that zone recalls it.
-        var tiles = geometry.tiles
-        if let tray = geometry.zones.first(where: { $0.isHiddenTray }),
-           let firstHidden = geometry.hiddenTileIDs.first {
-            tiles.append(HudEditor.TileFrame(tileID: firstHidden, origin: tray.origin,
-                                             right: tray.right, up: tray.up,
-                                             halfW: tray.radius, halfH: tray.radius))
-        }
-        let zones = geometry.zones
+        // Grab-start hit targets: every currently VISIBLE tile at its wrist
+        // cell (`geometry.tiles`). Wrist-drop resolution against the two
+        // wrist frames (`geometry.off`/`geometry.gun`) and hidden-tile recall
+        // are wired by the input task (Task 5); until then a release resolves
+        // through `updateGrab`'s empty-`zones` path, which keeps the tile's
+        // anchor and zeroes its offset rather than un-anchoring it.
+        let tiles = geometry.tiles
+        let zones: [HudEditor.Zone] = []
 
         let (grab, working) = await MainActor.run { (HudEditor.shared.grab, HudEditor.shared.working) }
 

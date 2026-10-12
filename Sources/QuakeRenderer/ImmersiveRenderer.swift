@@ -433,43 +433,47 @@ final class ImmersiveRenderer {
                          headPoseAvailable: deviceAnchor != nil)
         }
 
+        // The two wrist-grid frames + the free gun/float anchors, resolved
+        // ONCE this frame and shared by the live tiles, the edit-mode grid,
+        // and the published hit-test geometry, so all three agree on where a
+        // wrist sits. An untracked wrist comes back invalid, not NaN.
+        let wristFramePair = wristFrames()
+        let gunFreeAnchor = gunAnchorFrame()
+        let floatAnchor = floatAnchorFrame(originFromDevice: originFromDevice,
+                                           headPoseAvailable: deviceAnchor != nil)
+
         // Modular HUD tiles (vr_hud 3): per-tile model matrices in the SAME
         // corrected tracking space as hudModel above, resolved once and
         // shared by both eyes/branches below. Empty whenever hud_mode != 3
         // (hudTileModels itself guards that), so drawHudTiles is always
         // safe to call unconditionally -- it no-ops for modes 0/1/2. While
-        // the editor is active, the three tiles freeze at the fixed
-        // workbench spot (`workbenchTileModels`) instead of following
-        // their live wrist/gun/float anchors -- same `[simd_float4x4?]`
-        // shape, so it drops into the same `drawHudTiles` call below.
+        // the editor is active the tiles ride their EDITED wrist cells (a
+        // grabbed tile follows the grab point) via `wristGridTileModels`;
+        // otherwise the live path places each tile at its packet anchor/cell.
         let tileModels: [simd_float4x4?] = packet.map {
             editorSnapshot.active
-                ? workbenchTileModels(packet: $0, originFromDevice: originFromDevice,
-                                     headPoseAvailable: deviceAnchor != nil, snapshot: editorSnapshot)
-                : hudTileModels(packet: $0, originFromDevice: originFromDevice,
-                               headPoseAvailable: deviceAnchor != nil)
+                ? wristGridTileModels(packet: $0, wrists: wristFramePair, gunFree: gunFreeAnchor,
+                                     float_: floatAnchor, snapshot: editorSnapshot)
+                : hudTileModels(packet: $0, wrists: wristFramePair, gunFree: gunFreeAnchor,
+                               float_: floatAnchor)
         } ?? []
 
-        // The workbench's furniture -- the grabbed-tile highlight, the
-        // four zone proxies (wrist/gun/float/hidden), and the Done/Cancel
-        // panel -- built from the same fixed `floatAnchorFrame` the tile
-        // row above anchors to. Empty while the editor is inactive.
-        let workbenchQuads: [WorkbenchQuad] = editorSnapshot.active
-            ? (packet.map {
-                workbenchFurniture(packet: $0, originFromDevice: originFromDevice,
-                                   headPoseAvailable: deviceAnchor != nil, snapshot: editorSnapshot)
-              } ?? [])
+        // The edit-mode grid: four filled 2x2 cell backings on each tracked
+        // forearm, the cell under the grab point and the grabbed tile's drop
+        // footprint tinted brighter. Empty while the editor is inactive.
+        let gridQuads: [GridCellQuad] = editorSnapshot.active
+            ? wristGridFurniture(wrists: wristFramePair, snapshot: editorSnapshot)
             : []
 
-        // The SAME workbench geometry, published for the grab/drop input
-        // layer (Task 5, HudEditorInput.swift) -- it runs its own ARKit
-        // hand/controller loop, with no independent way to reconstruct a
-        // head-pose-anchored frame (this render thread is the only place
-        // `originFromDevice`/`deviceAnchor` exist), so it reads this
-        // snapshot instead of recomputing it. See `WorkbenchGeometry`'s own
-        // doc comment for the cross-loop publish pattern.
-        publishWorkbenchGeometry(packet: packet, originFromDevice: originFromDevice,
-                                 headPoseAvailable: deviceAnchor != nil, snapshot: editorSnapshot)
+        // The two wrist frames + each visible tile's cell quad, published for
+        // the grab/drop input layer (Task 5, HudEditorInput.swift) -- it runs
+        // its own ARKit hand/controller loop, with no independent way to
+        // reconstruct a head/wrist-anchored frame (this render thread is the
+        // only place `originFromDevice`/`deviceAnchor`/the wrist poses exist),
+        // so it reads this snapshot instead of recomputing it. See
+        // `WorkbenchGeometry`'s own doc comment for the cross-loop pattern.
+        publishWorkbenchGeometry(packet: packet, wrists: wristFramePair, gunFree: gunFreeAnchor,
+                                 float_: floatAnchor, snapshot: editorSnapshot)
 
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
@@ -495,14 +499,16 @@ final class ImmersiveRenderer {
                                      viewproj1: handViewproj[1] * hudModel,
                                      pipelines: pipelines, encoder: encoder)
                 }
+                // Grid cells first (translucent, behind): the tiles draw an
+                // opaque backing, so a cell drawn over a tile would wash it.
+                if !gridQuads.isEmpty {
+                    drawWristGrid(gridQuads, conchars: packet.conchars_texnum,
+                                  viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                  pipelines: pipelines, encoder: encoder)
+                }
                 core.drawHudTiles(frame: packet, tileModels: tileModels,
                                   viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                   pipelines: pipelines, encoder: encoder)
-                if !workbenchQuads.isEmpty {
-                    drawWorkbenchFurniture(workbenchQuads, conchars: packet.conchars_texnum,
-                                          viewproj0: handViewproj[0], viewproj1: handViewproj[1],
-                                          pipelines: pipelines, encoder: encoder)
-                }
             }
             encoder.endEncoding()
         } else {
@@ -535,14 +541,15 @@ final class ImmersiveRenderer {
                         core.drawOverlay(frame: packet, viewproj0: hv, viewproj1: hv,
                                          pipelines: pipelines, encoder: encoder)
                     }
+                    // Grid cells first (translucent, behind the opaque tiles).
+                    if !gridQuads.isEmpty {
+                        drawWristGrid(gridQuads, conchars: packet.conchars_texnum,
+                                      viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                      pipelines: pipelines, encoder: encoder)
+                    }
                     core.drawHudTiles(frame: packet, tileModels: tileModels,
                                       viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                       pipelines: pipelines, encoder: encoder)
-                    if !workbenchQuads.isEmpty {
-                        drawWorkbenchFurniture(workbenchQuads, conchars: packet.conchars_texnum,
-                                              viewproj0: handViewproj[index], viewproj1: handViewproj[index],
-                                              pipelines: pipelines, encoder: encoder)
-                    }
                 }
                 encoder.endEncoding()
             }
@@ -693,61 +700,124 @@ final class ImmersiveRenderer {
 
     // MARK: - Modular HUD tile placement (vr_hud 3)
 
-    /// This frame's per-tile model matrices for the modular HUD, one entry
-    /// per `packet.hud_tiles[i]` (fixed order AMMO/FACE/HEALTHARMOR — see
-    /// `qc_frame_t`'s doc comment), nil where that tile drew nothing this
-    /// frame (`vert_count == 0`) or its anchor has no live pose right now.
-    /// Resolved once per frame, shared by both eyes, exactly like the
-    /// whole-panel `hudPanelModel(packet:...)` above.
-    private func hudTileModels(packet: qc_frame_t, originFromDevice: simd_float4x4,
-                               headPoseAvailable: Bool) -> [simd_float4x4?] {
-        guard packet.hud_mode == 3, packet.num_hud_tiles > 0, let tiles = packet.hud_tiles
-        else { return [] }
-
-        // Resolved once per frame rather than per tile: every OFFWRIST tile
-        // shares one wrist-or-nothing frame, every GUN tile shares one
-        // gun-or-nothing frame, every FLOAT tile shares one
-        // float-ahead-of-head-or-nothing frame.
-        let offwrist = offWristAnchorFrame(originFromDevice: originFromDevice,
-                                           headPoseAvailable: headPoseAvailable)
-        let gun = gunAnchorFrame()
-        let float_ = floatAnchorFrame(originFromDevice: originFromDevice,
-                                      headPoseAvailable: headPoseAvailable)
-
-        var models: [simd_float4x4?] = []
-        for i in 0..<Int(packet.num_hud_tiles) {
-            let tile = tiles[i]
-            guard tile.vert_count > 0 else { models.append(nil); continue }
-            let anchor: RendererCore.HudAnchorFrame?
-            switch tile.anchor {
-            case QC_HUD_ANCHOR_GUN: anchor = gun
-            case QC_HUD_ANCHOR_FLOAT: anchor = float_
-            default: anchor = offwrist
-            }
-            guard let anchor else { models.append(nil); continue }
-            models.append(RendererCore.hudTileModel(tile: tile, anchor: anchor,
-                                                     pixelScale: Self.hudTilePixelScale))
-        }
-        return models
+    /// The two wrist-grid frames this frame: the off-hand and gun-hand
+    /// forearm planes, each billboarded toward the eye and lifted by
+    /// `wristLift`. Resolved once per frame and shared by the live tiles, the
+    /// edit-mode grid draw, and the published hit-test geometry, so all three
+    /// agree on where a wrist sits. An untracked wrist comes back `valid ==
+    /// false` (never NaN), with NO float fallback -- a wrist tile simply
+    /// hides when its hand drops out of view rather than jumping to the face.
+    private func wristFrames() -> (off: HudEditor.WristFrame, gun: HudEditor.WristFrame) {
+        (off: wristFrame(anchor: Int(QC_HUD_ANCHOR_WRIST_OFF), position: offHandWristPosition()),
+         gun: wristFrame(anchor: Int(QC_HUD_ANCHOR_WRIST_GUN), position: gunPosition()))
     }
 
-    /// OFFWRIST anchor frame for modular tiles: the off-hand wrist,
-    /// billboarded toward the eye. Returns nil (hide the tile) the instant
-    /// the off-hand isn't tracked — deliberately NO float-to-face fallback:
-    /// a wrist tile jumping to a panel in front of your face when your hand
-    /// drops out of view reads as ugly and unwanted (if you want a
-    /// head-fixed readout, anchor the tile to FLOAT or use the face HUD).
-    /// The `_` params are kept for call-site symmetry with the gun frame.
-    private func offWristAnchorFrame(originFromDevice _: simd_float4x4,
-                                     headPoseAvailable _: Bool) -> RendererCore.HudAnchorFrame? {
-        guard let wrist = offHandWristPosition() else { return nil }
+    /// One wrist-grid frame from a wrist world position (corrected tracking
+    /// space), billboarded toward the eye and lifted along the billboard up.
+    /// `nil` position -> an invalid frame (that wrist isn't tracked).
+    private func wristFrame(anchor: Int, position: SIMD3<Float>?) -> HudEditor.WristFrame {
+        guard let wrist = position else {
+            return HudEditor.WristFrame(anchor: anchor, origin: .zero, right: .zero,
+                                        up: .zero, forward: .zero, valid: false)
+        }
         let eye = ViewerPose.shared.eye
         let toEye = eye - wrist
         let toward = simd_length(toEye) > 1e-4 ? simd_normalize(toEye) : SIMD3<Float>(0, 0, 1)
         let basis = RendererCore.billboardBasis(toward: toward)
         let origin = wrist + basis.up * Self.wristLift
-        return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
-                                           forward: toward)
+        return HudEditor.WristFrame(anchor: anchor, origin: origin, right: basis.right,
+                                    up: basis.up, forward: toward, valid: true)
+    }
+
+    /// One tile's resolved world placement: the quad centre + its own
+    /// right/up plane and the physical size its source `bbox` maps onto.
+    private struct TilePlacement {
+        var origin: SIMD3<Float>
+        var right: SIMD3<Float>
+        var up: SIMD3<Float>
+        var width: Float
+        var height: Float
+        var sourceWidth: Float
+        var sourceHeight: Float
+    }
+
+    /// Resolves one tile's placement from its anchor + placement fields,
+    /// shared by the live path, the edit-mode draw, and the published
+    /// hit-test geometry so they never disagree. WRIST_OFF/WRIST_GUN tiles
+    /// sit in their 2x2 grid cell (origin + `wristCellOffset`, sized to the
+    /// cell footprint); GUN/FLOAT tiles keep the free-offset path (offset
+    /// along the anchor's own axes, sized by `hudTilePixelScale`).
+    /// `originOverride` pins the quad centre to a world point (a grabbed tile
+    /// riding `grab.lastPoint`) while keeping the anchor frame's orientation
+    /// and size. Returns nil when the needed anchor has no live frame.
+    private func tilePlacement(tile: qc_hud_tile_t, anchor: Int, slot: Int, spanW: Int, spanH: Int,
+                               scale: Float, offset: SIMD3<Float>, originOverride: SIMD3<Float>?,
+                               wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
+                               gunFree: RendererCore.HudAnchorFrame?,
+                               float_: RendererCore.HudAnchorFrame?) -> TilePlacement? {
+        let s = scale > 0 ? scale : 1
+        switch anchor {
+        case Int(QC_HUD_ANCHOR_WRIST_OFF), Int(QC_HUD_ANCHOR_WRIST_GUN):
+            let frame = anchor == Int(QC_HUD_ANCHOR_WRIST_GUN) ? wrists.gun : wrists.off
+            guard frame.valid else { return nil }
+            let cell = HudEditor.wristCellOffset(slot: slot, spanW: spanW, spanH: spanH)
+            let origin = originOverride
+                ?? (frame.origin + frame.right * cell.offset.x + frame.up * cell.offset.y)
+            return TilePlacement(origin: origin, right: frame.right, up: frame.up,
+                                 width: cell.size.x * s, height: cell.size.y * s,
+                                 sourceWidth: tile.bbox_w, sourceHeight: tile.bbox_h)
+        case Int(QC_HUD_ANCHOR_GUN):
+            guard let frame = gunFree else { return nil }
+            let origin = originOverride
+                ?? (frame.origin + frame.right * offset.x + frame.up * offset.y + frame.forward * offset.z)
+            return TilePlacement(origin: origin, right: frame.right, up: frame.up,
+                                 width: tile.bbox_w * Self.hudTilePixelScale * s,
+                                 height: tile.bbox_h * Self.hudTilePixelScale * s,
+                                 sourceWidth: tile.bbox_w, sourceHeight: tile.bbox_h)
+        default:   // QC_HUD_ANCHOR_FLOAT
+            guard let frame = float_ else { return nil }
+            let origin = originOverride
+                ?? (frame.origin + frame.right * offset.x + frame.up * offset.y + frame.forward * offset.z)
+            return TilePlacement(origin: origin, right: frame.right, up: frame.up,
+                                 width: tile.bbox_w * Self.hudTilePixelScale * s,
+                                 height: tile.bbox_h * Self.hudTilePixelScale * s,
+                                 sourceWidth: tile.bbox_w, sourceHeight: tile.bbox_h)
+        }
+    }
+
+    private func model(from placement: TilePlacement) -> simd_float4x4 {
+        RendererCore.hudPanelModel(origin: placement.origin, right: placement.right, up: placement.up,
+                                   widthMeters: placement.width, heightMeters: placement.height,
+                                   sourceWidth: placement.sourceWidth, sourceHeight: placement.sourceHeight)
+    }
+
+    /// This frame's per-tile model matrices for the LIVE modular HUD, one
+    /// entry per `packet.hud_tiles[i]` (fixed order AMMO/FACE/HEALTHARMOR —
+    /// see `qc_frame_t`'s doc comment), nil where that tile drew nothing this
+    /// frame (`vert_count == 0`) or its anchor has no live pose right now.
+    /// Placement comes straight from the packet's own anchor/slot/span/scale
+    /// via `tilePlacement`; the wrist frames + free anchors are resolved once
+    /// per frame by the caller and threaded in.
+    private func hudTileModels(packet: qc_frame_t,
+                               wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
+                               gunFree: RendererCore.HudAnchorFrame?,
+                               float_: RendererCore.HudAnchorFrame?) -> [simd_float4x4?] {
+        guard packet.hud_mode == 3, packet.num_hud_tiles > 0, let tiles = packet.hud_tiles
+        else { return [] }
+
+        var models: [simd_float4x4?] = []
+        for i in 0..<Int(packet.num_hud_tiles) {
+            let tile = tiles[i]
+            guard tile.vert_count > 0 else { models.append(nil); continue }
+            let placement = tilePlacement(tile: tile, anchor: Int(tile.anchor), slot: Int(tile.slot),
+                                          spanW: Int(tile.span_w), spanH: Int(tile.span_h),
+                                          scale: tile.scale,
+                                          offset: SIMD3(tile.offset.0, tile.offset.1, tile.offset.2),
+                                          originOverride: nil,
+                                          wrists: wrists, gunFree: gunFree, float_: float_)
+            models.append(placement.map { model(from: $0) })
+        }
+        return models
     }
 
     /// FLOAT anchor frame for modular tiles: ahead of the head, yaw+level
@@ -807,263 +877,187 @@ final class ImmersiveRenderer {
         return snap.valid ? snap.position : nil
     }
 
-    // MARK: - HUD live editor workbench (vr_hud 3, edit mode)
+    // MARK: - HUD live editor: in-place wrist grids (vr_hud 3, edit mode)
 
-    /// Spacing between workbench slot centres (metres) -- tile row and zone
-    /// row alike -- generous next to even HEALTHARMOR's widest bbox
-    /// (~0.1m at `hudTilePixelScale`), so neighbours never touch. The drop
-    /// distances stack the tile row, the zone row, and the Done/Cancel row
-    /// going DOWN from the fixed float spot, along the workbench frame's
-    /// own "up" (level, since `floatAnchorFrame` is yaw+level only).
-    private static let workbenchSlotSpacing: Float = 0.28
-    private static let workbenchZoneDrop: Float = 0.30
-    private static let workbenchPanelDrop: Float = 0.52
-    private static let workbenchZoneSize: Float = 0.20
-    private static let workbenchZoneRadius: Float = 0.14
-    private static let workbenchPanelWidth: Float = 0.16
-    private static let workbenchPanelHeight: Float = 0.09
-    private static let workbenchPanelSpacing: Float = 0.11
-    /// Metres per glyph cell for workbench labels -- bigger than the
-    /// wrist-tile text (`hudTilePixelScale`) since these sit at float
-    /// distance, not worn on the wrist. Device-tunable like the other HUD
-    /// placement constants above.
-    private static let workbenchLabelCell: Float = 0.045
+    /// Tint for an idle 2x2 grid cell backing -- a dim translucent fill, so
+    /// the four cells read as a faint grid worn on the forearm without
+    /// occluding what is behind them.
+    private static let gridCellDim = SIMD4<Float>(0.6, 0.65, 0.75, 0.35)
+    /// Tint for a cell inside the grabbed tile's drop footprint (where it
+    /// would land this frame) -- brighter than idle, dimmer than the single
+    /// hovered cell.
+    private static let gridCellPreview = SIMD4<Float>(1.0, 0.85, 0.35, 0.4)
+    /// Tint for the exact cell under the grab point -- the brightest, so the
+    /// drop target is unmistakable.
+    private static let gridCellHot = SIMD4<Float>(1.0, 0.85, 0.35, 0.85)
+    /// Grid cells carry no label, but `drawWorkbenchLabel` still takes a text
+    /// colour + cell size; these are inert placeholders for the `text == nil`
+    /// backing-only path.
+    private static let gridLabelTextColor = SIMD4<Float>(1, 1, 1, 1)
+    private static let gridLabelCell: Float = 0.016
 
-    private static let workbenchZoneDim = SIMD4<Float>(0.6, 0.65, 0.75, 0.55)
-    private static let workbenchZoneHot = SIMD4<Float>(1.0, 0.85, 0.35, 0.85)
-    private static let workbenchDoneColor = SIMD4<Float>(0.20, 0.85, 0.45, 0.6)
-    private static let workbenchCancelColor = SIMD4<Float>(0.95, 0.20, 0.20, 0.6)
-    private static let workbenchLabelTextColor = SIMD4<Float>(1, 1, 1, 1)
-    private static let workbenchGrabHighlight = SIMD4<Float>(1.0, 0.85, 0.35, 0.4)
-
-    /// One labeled quad in the workbench scene -- a zone proxy, the
-    /// Done/Cancel panel, or (with `text == nil`) the grabbed-tile
-    /// highlight. Carries its own `right`/`up` (always the workbench
-    /// frame's, same plane throughout) so `drawWorkbenchFurniture` needs no
-    /// extra context to draw it.
-    private struct WorkbenchQuad {
-        var text: String?
+    /// One filled grid-cell backing quad: its centre, the wrist frame's own
+    /// right/up plane, its footprint size (metres), and its tint. Drawn
+    /// through `drawWorkbenchLabel` with no text (`RendererCore`'s solid
+    /// tinted quad path).
+    private struct GridCellQuad {
         var origin: SIMD3<Float>
         var right: SIMD3<Float>
         var up: SIMD3<Float>
-        var panelWidth: Float
-        var panelHeight: Float
-        var panelColor: SIMD4<Float>
+        var width: Float
+        var height: Float
+        var color: SIMD4<Float>
     }
 
-    /// This frame's workbench tile matrices (HUD live editor, Task 4): the
-    /// three tiles frozen in a row ahead of the head -- `floatAnchorFrame`'s
-    /// basis, offset per tile index so they don't overlap -- instead of
-    /// their live wrist/gun/float anchors, so editing never depends on a
-    /// hand or controller being tracked right now. Same `[simd_float4x4?]`
-    /// shape as `hudTileModels`, so it drops into the same `drawHudTiles`
-    /// call. A tile the working copy currently hides (`show == false`), or
-    /// one the packet emitted nothing for this frame (`vert_count == 0`),
-    /// draws as nil -- same convention `hudTileModels` uses. The grabbed
-    /// tile (if any) follows `snapshot.grab.lastPoint` instead of its home
-    /// slot; that is the one thing that can move it off the row.
-    private func workbenchTileModels(packet: qc_frame_t, originFromDevice: simd_float4x4,
-                                     headPoseAvailable: Bool,
+    /// The working edit for tile `i` -- the in-progress placement the editor
+    /// mutates -- falling back to the packet's own fields when the working
+    /// copy has no entry for it (it always should, but never trust an index).
+    private func tileEdit(at i: Int, snapshot: HudEditor.Session.RenderSnapshot,
+                          tile: qc_hud_tile_t) -> HudEditor.TileEdit {
+        if i < snapshot.working.count { return snapshot.working[i] }
+        return HudEditor.TileEdit(anchor: Int(tile.anchor),
+                                  offset: SIMD3(tile.offset.0, tile.offset.1, tile.offset.2),
+                                  scale: tile.scale, show: true,
+                                  slot: Int(tile.slot), spanW: Int(tile.span_w), spanH: Int(tile.span_h))
+    }
+
+    /// This frame's tile matrices while the editor is ACTIVE: each tile rides
+    /// its edited wrist cell (or free GUN/FLOAT offset) exactly as the live
+    /// path would, but placed from the in-progress working copy rather than
+    /// the packet, so edits show immediately. The grabbed tile (if any)
+    /// follows `snapshot.grab.lastPoint` instead of its cell. Same
+    /// `[simd_float4x4?]` shape as `hudTileModels`, so it drops into the same
+    /// `drawHudTiles` call; a hidden (`show == false`) or empty
+    /// (`vert_count == 0`) tile draws as nil, and a wrist tile whose forearm
+    /// isn't tracked draws as nil too (its frame is invalid).
+    private func wristGridTileModels(packet: qc_frame_t,
+                                     wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
+                                     gunFree: RendererCore.HudAnchorFrame?,
+                                     float_: RendererCore.HudAnchorFrame?,
                                      snapshot: HudEditor.Session.RenderSnapshot) -> [simd_float4x4?] {
         guard packet.num_hud_tiles > 0, let tiles = packet.hud_tiles else { return [] }
-        let tileCount = Int(packet.num_hud_tiles)
-        guard let base = floatAnchorFrame(originFromDevice: originFromDevice,
-                                          headPoseAvailable: headPoseAvailable)
-        else { return Array(repeating: nil, count: tileCount) }
-
-        let startX = -Self.workbenchSlotSpacing * Float(tileCount - 1) * 0.5
         var models: [simd_float4x4?] = []
-        for i in 0..<tileCount {
+        for i in 0..<Int(packet.num_hud_tiles) {
             let tile = tiles[i]
             guard tile.vert_count > 0 else { models.append(nil); continue }
-            let edit: HudEditor.TileEdit? = i < snapshot.working.count ? snapshot.working[i] : nil
-            guard edit?.show ?? true else { models.append(nil); continue }
-
-            let origin: SIMD3<Float>
-            if let grab = snapshot.grab, grab.tileID == i {
-                origin = grab.lastPoint
-            } else {
-                origin = base.origin + base.right * (startX + Float(i) * Self.workbenchSlotSpacing)
-            }
-            let scale = (edit?.scale ?? 1) > 0 ? (edit?.scale ?? 1) : 1
-            let widthMeters = tile.bbox_w * Self.hudTilePixelScale * scale
-            let heightMeters = tile.bbox_h * Self.hudTilePixelScale * scale
-            models.append(RendererCore.hudPanelModel(origin: origin, right: base.right, up: base.up,
-                                                     widthMeters: widthMeters, heightMeters: heightMeters,
-                                                     sourceWidth: tile.bbox_w, sourceHeight: tile.bbox_h))
+            let edit = tileEdit(at: i, snapshot: snapshot, tile: tile)
+            guard edit.show else { models.append(nil); continue }
+            let pinnedOrigin = (snapshot.grab?.tileID == i) ? snapshot.grab?.lastPoint : nil
+            let placement = tilePlacement(tile: tile, anchor: edit.anchor, slot: edit.slot,
+                                          spanW: edit.spanW, spanH: edit.spanH, scale: edit.scale,
+                                          offset: edit.offset, originOverride: pinnedOrigin,
+                                          wrists: wrists, gunFree: gunFree, float_: float_)
+            models.append(placement.map { model(from: $0) })
         }
         return models
     }
 
-    /// The workbench's non-tile furniture this frame: a highlight quad
-    /// behind the grabbed tile (if any), the four zone proxies -- WRIST,
-    /// GUN, FLOAT, HIDDEN -- and the Done/Cancel panel, all laid out below
-    /// the tile row from the same fixed `floatAnchorFrame`, so everything
-    /// sits in one stable plane ahead of the head. HIDDEN has no
-    /// `QC_HUD_ANCHOR_*` of its own -- a drop there parks the tile
-    /// (`show = false`) without touching its anchor, the same
-    /// `isHiddenTray` contract `HudEditorMath.resolveDrop` documents; this
-    /// function only draws the zone, it never calls `resolveDrop` itself
-    /// (that belongs to the grab/drop input task). Returns `[]` when the
-    /// head pose isn't available -- nothing sane to anchor to, same
-    /// contract `floatAnchorFrame` itself follows.
-    private func workbenchFurniture(packet: qc_frame_t, originFromDevice: simd_float4x4,
-                                    headPoseAvailable: Bool,
-                                    snapshot: HudEditor.Session.RenderSnapshot) -> [WorkbenchQuad] {
-        guard let base = floatAnchorFrame(originFromDevice: originFromDevice,
-                                          headPoseAvailable: headPoseAvailable)
-        else { return [] }
+    /// The edit-mode grid this frame: four filled 2x2 cell backings on each
+    /// TRACKED forearm (an untracked wrist draws nothing -- never a NaN
+    /// quad). The single cell under the grab point reads brightest
+    /// (`gridCellHot`); every cell inside the grabbed tile's drop footprint
+    /// reads bright (`gridCellPreview`); the rest are dim (`gridCellDim`).
+    /// Purely visual -- the drop itself (`HudEditorMath.resolveWristDrop`)
+    /// runs on release, owned by the grab/drop input task, not this path.
+    /// The DONE/CANCEL buttons live in SwiftUI (ContentView), not here.
+    private func wristGridFurniture(wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
+                                    snapshot: HudEditor.Session.RenderSnapshot) -> [GridCellQuad] {
+        var quads: [GridCellQuad] = []
+        for frame in [wrists.off, wrists.gun] {
+            guard frame.valid else { continue }
 
-        var quads: [WorkbenchQuad] = []
-
-        // Grabbed-tile highlight: a bright backing slightly larger than the
-        // tile itself, at the exact point `workbenchTileModels` placed it,
-        // drawn before the tile content so it reads as a glow behind it.
-        if let grab = snapshot.grab, let tiles = packet.hud_tiles,
-           grab.tileID >= 0, grab.tileID < Int(packet.num_hud_tiles) {
-            let tile = tiles[grab.tileID]
-            let edit: HudEditor.TileEdit? = grab.tileID < snapshot.working.count
-                ? snapshot.working[grab.tileID] : nil
-            let scale = (edit?.scale ?? 1) > 0 ? (edit?.scale ?? 1) : 1
-            let pad: Float = 0.015
-            quads.append(WorkbenchQuad(
-                text: nil, origin: grab.lastPoint, right: base.right, up: base.up,
-                panelWidth: tile.bbox_w * Self.hudTilePixelScale * scale + pad,
-                panelHeight: tile.bbox_h * Self.hudTilePixelScale * scale + pad,
-                panelColor: Self.workbenchGrabHighlight))
-        }
-
-        // Four zone proxies in a row below the tiles.
-        let zoneNames = ["WRIST", "GUN", "FLOAT", "HIDDEN"]
-        let zoneCount = zoneNames.count
-        let zoneStartX = -Self.workbenchSlotSpacing * Float(zoneCount - 1) * 0.5
-        let zoneRowOrigin = base.origin - base.up * Self.workbenchZoneDrop
-        let zoneOrigins = (0..<zoneCount).map {
-            zoneRowOrigin + base.right * (zoneStartX + Float($0) * Self.workbenchSlotSpacing)
-        }
-
-        // Hovered zone: the nearest zone within its own radius of the
-        // grabbed tile's current point -- visual only. The actual drop
-        // resolution (`HudEditorMath.resolveDrop`) runs on commit/release,
-        // owned by the grab/drop input task, not this draw path.
-        var hoveredZone: Int?
-        if let grab = snapshot.grab {
-            var bestDistance = Self.workbenchZoneRadius
-            for (i, origin) in zoneOrigins.enumerated() {
-                let d = simd_length(grab.lastPoint - origin)
-                if d <= bestDistance {
-                    bestDistance = d
-                    hoveredZone = i
+            // The cell under the grab point, and the footprint the grabbed
+            // tile would drop into rooted there (clamped to the grid). Only
+            // when a grab is live and its point is over THIS forearm.
+            var hoveredCell: Int?
+            var previewCells: Set<Int> = []
+            if let grab = snapshot.grab,
+               let cell = HudEditor.cellUnderPoint(grab.lastPoint, frame: frame) {
+                hoveredCell = cell
+                if grab.tileID >= 0, grab.tileID < snapshot.working.count {
+                    let edit = snapshot.working[grab.tileID]
+                    let (w, h) = HudEditor.clampFootprint(slot: cell, spanW: edit.spanW, spanH: edit.spanH)
+                    previewCells = HudEditor.spannedCells(slot: cell, spanW: w, spanH: h)
+                } else {
+                    previewCells = [cell]
                 }
             }
+
+            for slot in 0..<4 {
+                let cell = HudEditor.wristCellOffset(slot: slot, spanW: 1, spanH: 1)
+                let origin = frame.origin + frame.right * cell.offset.x + frame.up * cell.offset.y
+                let color: SIMD4<Float>
+                if hoveredCell == slot {
+                    color = Self.gridCellHot
+                } else if previewCells.contains(slot) {
+                    color = Self.gridCellPreview
+                } else {
+                    color = Self.gridCellDim
+                }
+                quads.append(GridCellQuad(origin: origin, right: frame.right, up: frame.up,
+                                          width: cell.size.x, height: cell.size.y, color: color))
+            }
         }
-
-        for i in 0..<zoneCount {
-            quads.append(WorkbenchQuad(
-                text: zoneNames[i], origin: zoneOrigins[i], right: base.right, up: base.up,
-                panelWidth: Self.workbenchZoneSize, panelHeight: Self.workbenchZoneSize,
-                panelColor: hoveredZone == i ? Self.workbenchZoneHot : Self.workbenchZoneDim))
-        }
-
-        // Done/Cancel, one more row down.
-        let panelRowOrigin = base.origin - base.up * Self.workbenchPanelDrop
-        quads.append(WorkbenchQuad(
-            text: "DONE", origin: panelRowOrigin - base.right * Self.workbenchPanelSpacing,
-            right: base.right, up: base.up,
-            panelWidth: Self.workbenchPanelWidth, panelHeight: Self.workbenchPanelHeight,
-            panelColor: Self.workbenchDoneColor))
-        quads.append(WorkbenchQuad(
-            text: "CANCEL", origin: panelRowOrigin + base.right * Self.workbenchPanelSpacing,
-            right: base.right, up: base.up,
-            panelWidth: Self.workbenchPanelWidth, panelHeight: Self.workbenchPanelHeight,
-            panelColor: Self.workbenchCancelColor))
-
         return quads
     }
 
-    /// This frame's workbench HIT-TEST geometry for the grab/drop input
-    /// layer (Task 5): the same zone origins/radius `workbenchFurniture`
-    /// draws, and the same tile-row frames `workbenchTileModels` places,
-    /// turned into the plain `HudEditor.Zone`/`TileFrame` shapes
-    /// `HudEditor.updateGrab`/`resolveDrop` take -- published through
-    /// `WorkbenchGeometry` (HudEditorInput.swift) rather than recomputed
-    /// there, since the head pose this is anchored to belongs to this
-    /// render thread alone. `nil`/inactive geometry (editor closed, or no
-    /// head pose) publishes `.inactive`, so the input layer's own
-    /// `updateGrab` calls simply find nothing to hit -- never stale
-    /// geometry from a previous session.
-    ///
-    /// Zone anchors follow `hudTileModels`' own switch: OFFWRIST/GUN/FLOAT
-    /// map to their real `QC_HUD_ANCHOR_*` ints; HIDDEN's anchor is unused
-    /// (`isHiddenTray: true`, same contract `resolveDrop` documents) so it
-    /// is given the sentinel -1. A hidden (`show == false`) tile has no
-    /// tile-row frame of its own -- Task 4 draws every parked tile at the
-    /// one HIDDEN zone spot, not distinct tray slots -- so its tileID is
-    /// reported through `hiddenTileIDs` instead, and the input layer treats
-    /// a pinch/trigger landing on the HIDDEN zone as reaching for one of
-    /// those.
-    private func publishWorkbenchGeometry(packet: qc_frame_t?, originFromDevice: simd_float4x4,
-                                          headPoseAvailable: Bool,
+    /// This frame's HIT-TEST geometry for the grab/drop input layer (Task 5):
+    /// the two wrist frames (`wrists.off`/`wrists.gun`, the planes the input
+    /// layer resolves a wrist drop against) and each VISIBLE tile's world
+    /// quad at the exact cell/offset it is drawn at -- turned into the plain
+    /// `HudEditor.WristFrame`/`TileFrame` shapes and published through
+    /// `WorkbenchGeometry` (HudEditorInput.swift), since the head/wrist poses
+    /// this is anchored to belong to this render thread alone. An inactive
+    /// editor (or no packet) publishes `.inactive`, so the input layer finds
+    /// nothing to hit -- never stale geometry from a previous session. A
+    /// hidden (`show == false`) tile has no quad of its own; its tileID rides
+    /// `hiddenTileIDs` for the input layer's recall path instead.
+    private func publishWorkbenchGeometry(packet: qc_frame_t?,
+                                          wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
+                                          gunFree: RendererCore.HudAnchorFrame?,
+                                          float_: RendererCore.HudAnchorFrame?,
                                           snapshot: HudEditor.Session.RenderSnapshot) {
-        guard snapshot.active, let packet, packet.num_hud_tiles > 0, let tiles = packet.hud_tiles,
-              let base = floatAnchorFrame(originFromDevice: originFromDevice, headPoseAvailable: headPoseAvailable)
+        guard snapshot.active, let packet, packet.num_hud_tiles > 0, let tiles = packet.hud_tiles
         else {
             WorkbenchGeometry.shared.publish(.inactive)
             return
         }
 
-        let tileCount = Int(packet.num_hud_tiles)
-        let startX = -Self.workbenchSlotSpacing * Float(tileCount - 1) * 0.5
         var tileFrames: [HudEditor.TileFrame] = []
         var hiddenTileIDs: [Int] = []
-        for i in 0..<tileCount {
+        for i in 0..<Int(packet.num_hud_tiles) {
             let tile = tiles[i]
             guard tile.vert_count > 0 else { continue }
-            let edit: HudEditor.TileEdit? = i < snapshot.working.count ? snapshot.working[i] : nil
-            guard edit?.show ?? true else { hiddenTileIDs.append(i); continue }
-            let scale = (edit?.scale ?? 1) > 0 ? (edit?.scale ?? 1) : 1
-            let origin: SIMD3<Float>
-            if let grab = snapshot.grab, grab.tileID == i {
-                origin = grab.lastPoint
-            } else {
-                origin = base.origin + base.right * (startX + Float(i) * Self.workbenchSlotSpacing)
-            }
+            let edit = tileEdit(at: i, snapshot: snapshot, tile: tile)
+            guard edit.show else { hiddenTileIDs.append(i); continue }
+            let pinnedOrigin = (snapshot.grab?.tileID == i) ? snapshot.grab?.lastPoint : nil
+            guard let placement = tilePlacement(tile: tile, anchor: edit.anchor, slot: edit.slot,
+                                                spanW: edit.spanW, spanH: edit.spanH, scale: edit.scale,
+                                                offset: edit.offset, originOverride: pinnedOrigin,
+                                                wrists: wrists, gunFree: gunFree, float_: float_)
+            else { continue }
             tileFrames.append(HudEditor.TileFrame(
-                tileID: i, origin: origin, right: base.right, up: base.up,
-                halfW: tile.bbox_w * Self.hudTilePixelScale * scale * 0.5,
-                halfH: tile.bbox_h * Self.hudTilePixelScale * scale * 0.5))
+                tileID: i, origin: placement.origin, right: placement.right, up: placement.up,
+                halfW: placement.width * 0.5, halfH: placement.height * 0.5))
         }
 
-        let zoneAnchors = [Int(QC_HUD_ANCHOR_OFFWRIST), Int(QC_HUD_ANCHOR_GUN), Int(QC_HUD_ANCHOR_FLOAT), -1]
-        let zoneIsTray = [false, false, false, true]
-        let zoneCount = zoneAnchors.count
-        let zoneStartX = -Self.workbenchSlotSpacing * Float(zoneCount - 1) * 0.5
-        let zoneRowOrigin = base.origin - base.up * Self.workbenchZoneDrop
-        var zones: [HudEditor.Zone] = []
-        for i in 0..<zoneCount {
-            let origin = zoneRowOrigin + base.right * (zoneStartX + Float(i) * Self.workbenchSlotSpacing)
-            zones.append(HudEditor.Zone(anchor: zoneAnchors[i], origin: origin,
-                                        right: base.right, up: base.up, forward: base.forward,
-                                        radius: Self.workbenchZoneRadius, isHiddenTray: zoneIsTray[i]))
-        }
-
-        WorkbenchGeometry.shared.publish(.init(active: true, zones: zones, tiles: tileFrames,
-                                               hiddenTileIDs: hiddenTileIDs))
+        WorkbenchGeometry.shared.publish(.init(active: true, off: wrists.off, gun: wrists.gun,
+                                               tiles: tileFrames, hiddenTileIDs: hiddenTileIDs))
     }
 
-    /// Draws every quad `workbenchFurniture` built this frame through
-    /// `RendererCore.drawWorkbenchLabel` -- one call per proxy, same
-    /// `viewproj0`/`viewproj1` the tile row drew with just above, so the
-    /// whole workbench sits in one consistent plane.
-    private func drawWorkbenchFurniture(_ quads: [WorkbenchQuad], conchars: UInt32,
-                                        viewproj0: simd_float4x4, viewproj1: simd_float4x4,
-                                        pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+    /// Draws every grid cell `wristGridFurniture` built this frame as a solid
+    /// tinted quad through `RendererCore.drawWorkbenchLabel` (its `text ==
+    /// nil` backing-only path) -- same `viewproj0`/`viewproj1` the tiles drew
+    /// with just above, so the cells sit in the wrist plane beneath them.
+    private func drawWristGrid(_ quads: [GridCellQuad], conchars: UInt32,
+                               viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                               pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
         for quad in quads {
-            core.drawWorkbenchLabel(text: quad.text, origin: quad.origin,
+            core.drawWorkbenchLabel(text: nil, origin: quad.origin,
                                     right: quad.right, up: quad.up,
-                                    panelWidth: quad.panelWidth, panelHeight: quad.panelHeight,
-                                    cellSize: Self.workbenchLabelCell,
-                                    panelColor: quad.panelColor, textColor: Self.workbenchLabelTextColor,
+                                    panelWidth: quad.width, panelHeight: quad.height,
+                                    cellSize: Self.gridLabelCell,
+                                    panelColor: quad.color, textColor: Self.gridLabelTextColor,
                                     conchars: conchars,
                                     viewproj0: viewproj0, viewproj1: viewproj1,
                                     pipelines: pipelines, encoder: encoder)
