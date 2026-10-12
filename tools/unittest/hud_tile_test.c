@@ -10,30 +10,52 @@ int main (void)
 {
 	qc_hud_tile_t t[3];
 
-	/* defaults (layout A): ammo->gun, face+healtharmor->offwrist */
+	/* defaults (layout A): ammo->gun, face+healtharmor->off-hand wrist */
 	extern cvar_t vr_hud_ammo_anchor, vr_hud_face_anchor, vr_hud_healtharmor_anchor;
 	vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_GUN;
-	vr_hud_face_anchor.value = QC_HUD_ANCHOR_OFFWRIST;
-	vr_hud_healtharmor_anchor.value = QC_HUD_ANCHOR_OFFWRIST;
+	vr_hud_face_anchor.value = QC_HUD_ANCHOR_WRIST_OFF;
+	vr_hud_healtharmor_anchor.value = QC_HUD_ANCHOR_WRIST_OFF;
 	QR_ResolveHudLayout (t);
 	CHECK (t[QC_HUD_TILE_AMMO].anchor == QC_HUD_ANCHOR_GUN, "ammo default anchor = gun");
-	CHECK (t[QC_HUD_TILE_FACE].anchor == QC_HUD_ANCHOR_OFFWRIST, "face default anchor = wrist");
+	CHECK (t[QC_HUD_TILE_FACE].anchor == QC_HUD_ANCHOR_WRIST_OFF, "face default anchor = wrist");
 
-	/* out-of-range anchor clamps to OFFWRIST, not a wild value */
+	/* out-of-range anchor clamps to WRIST_OFF, not a wild value */
 	vr_hud_ammo_anchor.value = 7;
 	QR_ResolveHudLayout (t);
-	CHECK (t[QC_HUD_TILE_AMMO].anchor == QC_HUD_ANCHOR_OFFWRIST, "anchor 7 clamps to wrist");
+	CHECK (t[QC_HUD_TILE_AMMO].anchor == QC_HUD_ANCHOR_WRIST_OFF, "anchor 7 clamps to wrist");
 
 	/* FLOAT anchor resolves without clamping */
-	vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_FLOAT;   /* 2 */
+	vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_FLOAT;   /* 3 */
 	QR_ResolveHudLayout (t);
-	CHECK (t[QC_HUD_TILE_AMMO].anchor == QC_HUD_ANCHOR_FLOAT, "anchor 2 resolves to FLOAT, not clamped to wrist");
+	CHECK (t[QC_HUD_TILE_AMMO].anchor == QC_HUD_ANCHOR_FLOAT, "anchor 3 resolves to FLOAT, not clamped to wrist");
 
 	/* scale floor: a zero/negative scale cvar resolves to a sane positive */
 	extern cvar_t vr_hud_ammo_scale;
 	vr_hud_ammo_scale.value = 0.f;
 	QR_ResolveHudLayout (t);
 	CHECK (t[QC_HUD_TILE_AMMO].scale > 0.01f, "scale 0 clamps to a positive floor");
+
+	/* wrist-grid footprint clamp: span_w/span_h must not run the tile off
+	   the 2x2 grid from its slot's origin cell. */
+	{
+		extern cvar_t vr_hud_ammo_slot, vr_hud_ammo_span_w, vr_hud_ammo_span_h;
+
+		/* slot 3 (bottom-right) has no room to grow right or down */
+		vr_hud_ammo_slot.value = 3;
+		vr_hud_ammo_span_w.value = 2;
+		vr_hud_ammo_span_h.value = 2;
+		QR_ResolveHudLayout (t);
+		CHECK (t[QC_HUD_TILE_AMMO].span_w == 1 && t[QC_HUD_TILE_AMMO].span_h == 1,
+		       "slot 3 (BR) clamps span_w/span_h to 1x1");
+
+		/* slot 0 (top-left) has the full grid available */
+		vr_hud_ammo_slot.value = 0;
+		vr_hud_ammo_span_w.value = 2;
+		vr_hud_ammo_span_h.value = 2;
+		QR_ResolveHudLayout (t);
+		CHECK (t[QC_HUD_TILE_AMMO].span_w == 2 && t[QC_HUD_TILE_AMMO].span_h == 2,
+		       "slot 0 (TL) keeps a 2x2 footprint");
+	}
 
 	/* Task 2: the compact tile emitters, driven through the real
 	   Draw_PicFromWad -> QR_TexMgr_LoadImage path (see QR_TestEnsureFixtures
@@ -101,8 +123,8 @@ int main (void)
 	{
 		extern float QC_CvarValue (const char *name);
 		Cvar_RegisterVariable (&vr_hud_ammo_anchor);
-		vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_GUN;	/* registered default, "1" */
-		CHECK (FEQ (QC_CvarValue ("vr_hud_ammo_anchor"), 1.f), "QC_CvarValue reads the registered default");
+		vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_GUN;	/* registered default, "2" */
+		CHECK (FEQ (QC_CvarValue ("vr_hud_ammo_anchor"), (float) QC_HUD_ANCHOR_GUN), "QC_CvarValue reads the registered default");
 		CHECK (FEQ (QC_CvarValue ("vr_hud_does_not_exist"), 0.f), "QC_CvarValue on an unknown name returns 0");
 	}
 
