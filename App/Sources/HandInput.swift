@@ -267,6 +267,19 @@ final class HandInput: @unchecked Sendable {
         // nil exactly when that hand's pinch geometry isn't tracked.
         EditorHandInput.shared.publish(left: Self.editorSignal(left), right: Self.editorSignal(right))
 
+        // While the HUD layout editor is open, the hands drive ONLY the grab
+        // (published just above). Every gameplay gesture -- fire, move, turn,
+        // jump -- is suppressed, exactly as under an open weapon wheel, so
+        // reaching across with the gun hand to adjust an off-wrist tile can't
+        // also fire the gun or walk the player off its anchor. The wrist
+        // positions the grid rides are still published in `wheel()`, which runs
+        // regardless. renderSnapshot() is a lock-protected any-thread read.
+        if HudEditor.Session.renderSnapshot().active {
+            aggregator.update(.hands, slice)   // zeroed
+            turnGaugeVerts = []
+            return
+        }
+
         // Handedness: the OFF (non-gun) hand moves, jumps, crouches; the
         // DOMINANT (gun) hand aims and fires.
         let rightHanded = VRSettings.shared.rightHanded
@@ -796,6 +809,15 @@ final class HandInput: @unchecked Sendable {
     /// the aim. The forearm ray is used (not the fingers): it survives the pinch
     /// that arms the teleport, where a finger ray would collapse.
     private func teleport(left: HandState, right: HandState) {
+        // No locomotion while the HUD editor is open: an off-hand ring pinch is
+        // a grab/footprint gesture there, not a teleport commit. Drop any armed
+        // teleport and reset the edge detector so leaving the editor can't fire
+        // a stale blink the next frame.
+        if HudEditor.Session.renderSnapshot().active {
+            if tpRingWas { QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0) }
+            tpRingWas = false
+            return
+        }
         // The GUN reticle aims the teleport (engine side), so this ONLY needs
         // to detect the off-hand ring pinch and fire the commit. It must NOT
         // gate on the off-hand forearm ray -- that gate (a leftover from when
