@@ -568,8 +568,9 @@ struct ContentView: View {
                 // tiles doesn't require already being in that mode.
                 VStack(alignment: .leading, spacing: 6) {
                     if HudEditor.shared.active {
-                        Text("Arranging in the headset — grab a tile to move it, "
-                             + "pinch-drag to resize, drop it on a zone to re-anchor.")
+                        Text("Arranging on your wrists — grab a tile and drop it in a "
+                             + "slot; use two hands to span cells. Gun and float stay "
+                             + "as options.")
                             .font(.caption2).foregroundStyle(.secondary)
                         HStack {
                             Button("Cancel", role: .cancel) { cancelHudLayoutEdit() }
