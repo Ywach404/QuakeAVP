@@ -185,12 +185,15 @@ final class HudEditorInput: @unchecked Sendable {
         guard geometry.active else { boundSource = nil; return }
 
         // Grab-start hit targets: every currently VISIBLE tile at its wrist
-        // cell (`geometry.tiles`). Wrist-drop resolution against the two
-        // wrist frames (`geometry.off`/`geometry.gun`) and hidden-tile recall
-        // are wired by the input task (Task 5); until then a release resolves
-        // through `updateGrab`'s empty-`zones` path, which keeps the tile's
-        // anchor and zeroes its offset rather than un-anchoring it.
+        // cell (`geometry.tiles`). `off`/`gun` are this frame's two wrist-
+        // grid frames (Task 5) -- `updateGrab` snaps a release onto whichever
+        // one the point lands over (`resolveWristDrop`) and sets a two-hand
+        // footprint while dragging; `zones` stays empty, so a release that
+        // misses both wrists falls through to `resolveDrop`'s keep-previous
+        // path rather than a free-floating GUN/FLOAT proxy.
         let tiles = geometry.tiles
+        let off = geometry.off
+        let gun = geometry.gun
         let zones: [HudEditor.Zone] = []
 
         let (grab, working) = await MainActor.run { (HudEditor.shared.grab, HudEditor.shared.working) }
@@ -243,7 +246,7 @@ final class HudEditorInput: @unchecked Sendable {
             // arbitrary tie-break if both land on a tile the same tick.
             let leftTry = HudEditor.GrabInput(primaryActive: handLeft.active, primaryPoint: handLeft.point)
             let dry = HudEditor.updateGrab(grab: nil, input: leftTry, working: working,
-                                           tiles: tiles, zones: zones, dt: dt)
+                                           tiles: tiles, zones: zones, off: off, gun: gun, dt: dt)
             if dry.grab != nil {
                 source = .handLeft
                 input = leftTry
@@ -254,7 +257,7 @@ final class HudEditorInput: @unchecked Sendable {
         }
 
         let result = HudEditor.updateGrab(grab: grab, input: input, working: working,
-                                          tiles: tiles, zones: zones, dt: dt)
+                                          tiles: tiles, zones: zones, off: off, gun: gun, dt: dt)
         boundSource = result.grab == nil ? nil : source
 
         await MainActor.run {
