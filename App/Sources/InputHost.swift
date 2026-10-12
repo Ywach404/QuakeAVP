@@ -58,6 +58,12 @@ final class InputHost {
             self?.refreshActive()
         }
         gamepad.start()
+        // The HUD live editor's own grab/move/scale input loop (Task 5):
+        // idle-polls cheaply while the editor is closed, so starting it
+        // once here (same lifecycle as `gamepad.start()` above) is enough
+        // -- the "Edit HUD Layout" entry point only ever needs to flip
+        // `HudEditor.shared.active`, never to remember to start this.
+        HudEditorInput.shared.start()
         refreshActive()
     }
 

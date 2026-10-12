@@ -461,6 +461,16 @@ final class ImmersiveRenderer {
               } ?? [])
             : []
 
+        // The SAME workbench geometry, published for the grab/drop input
+        // layer (Task 5, HudEditorInput.swift) -- it runs its own ARKit
+        // hand/controller loop, with no independent way to reconstruct a
+        // head-pose-anchored frame (this render thread is the only place
+        // `originFromDevice`/`deviceAnchor` exist), so it reads this
+        // snapshot instead of recomputing it. See `WorkbenchGeometry`'s own
+        // doc comment for the cross-loop publish pattern.
+        publishWorkbenchGeometry(packet: packet, originFromDevice: originFromDevice,
+                                 headPoseAvailable: deviceAnchor != nil, snapshot: editorSnapshot)
+
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
                 for: drawable, textureIndex: 0, slice: nil, clear: clear)
@@ -969,6 +979,76 @@ final class ImmersiveRenderer {
             panelColor: Self.workbenchCancelColor))
 
         return quads
+    }
+
+    /// This frame's workbench HIT-TEST geometry for the grab/drop input
+    /// layer (Task 5): the same zone origins/radius `workbenchFurniture`
+    /// draws, and the same tile-row frames `workbenchTileModels` places,
+    /// turned into the plain `HudEditor.Zone`/`TileFrame` shapes
+    /// `HudEditor.updateGrab`/`resolveDrop` take -- published through
+    /// `WorkbenchGeometry` (HudEditorInput.swift) rather than recomputed
+    /// there, since the head pose this is anchored to belongs to this
+    /// render thread alone. `nil`/inactive geometry (editor closed, or no
+    /// head pose) publishes `.inactive`, so the input layer's own
+    /// `updateGrab` calls simply find nothing to hit -- never stale
+    /// geometry from a previous session.
+    ///
+    /// Zone anchors follow `hudTileModels`' own switch: OFFWRIST/GUN/FLOAT
+    /// map to their real `QC_HUD_ANCHOR_*` ints; HIDDEN's anchor is unused
+    /// (`isHiddenTray: true`, same contract `resolveDrop` documents) so it
+    /// is given the sentinel -1. A hidden (`show == false`) tile has no
+    /// tile-row frame of its own -- Task 4 draws every parked tile at the
+    /// one HIDDEN zone spot, not distinct tray slots -- so its tileID is
+    /// reported through `hiddenTileIDs` instead, and the input layer treats
+    /// a pinch/trigger landing on the HIDDEN zone as reaching for one of
+    /// those.
+    private func publishWorkbenchGeometry(packet: qc_frame_t?, originFromDevice: simd_float4x4,
+                                          headPoseAvailable: Bool,
+                                          snapshot: HudEditor.Session.RenderSnapshot) {
+        guard snapshot.active, let packet, packet.num_hud_tiles > 0, let tiles = packet.hud_tiles,
+              let base = floatAnchorFrame(originFromDevice: originFromDevice, headPoseAvailable: headPoseAvailable)
+        else {
+            WorkbenchGeometry.shared.publish(.inactive)
+            return
+        }
+
+        let tileCount = Int(packet.num_hud_tiles)
+        let startX = -Self.workbenchSlotSpacing * Float(tileCount - 1) * 0.5
+        var tileFrames: [HudEditor.TileFrame] = []
+        var hiddenTileIDs: [Int] = []
+        for i in 0..<tileCount {
+            let tile = tiles[i]
+            guard tile.vert_count > 0 else { continue }
+            let edit: HudEditor.TileEdit? = i < snapshot.working.count ? snapshot.working[i] : nil
+            guard edit?.show ?? true else { hiddenTileIDs.append(i); continue }
+            let scale = (edit?.scale ?? 1) > 0 ? (edit?.scale ?? 1) : 1
+            let origin: SIMD3<Float>
+            if let grab = snapshot.grab, grab.tileID == i {
+                origin = grab.lastPoint
+            } else {
+                origin = base.origin + base.right * (startX + Float(i) * Self.workbenchSlotSpacing)
+            }
+            tileFrames.append(HudEditor.TileFrame(
+                tileID: i, origin: origin, right: base.right, up: base.up,
+                halfW: tile.bbox_w * Self.hudTilePixelScale * scale * 0.5,
+                halfH: tile.bbox_h * Self.hudTilePixelScale * scale * 0.5))
+        }
+
+        let zoneAnchors = [Int(QC_HUD_ANCHOR_OFFWRIST), Int(QC_HUD_ANCHOR_GUN), Int(QC_HUD_ANCHOR_FLOAT), -1]
+        let zoneIsTray = [false, false, false, true]
+        let zoneCount = zoneAnchors.count
+        let zoneStartX = -Self.workbenchSlotSpacing * Float(zoneCount - 1) * 0.5
+        let zoneRowOrigin = base.origin - base.up * Self.workbenchZoneDrop
+        var zones: [HudEditor.Zone] = []
+        for i in 0..<zoneCount {
+            let origin = zoneRowOrigin + base.right * (zoneStartX + Float(i) * Self.workbenchSlotSpacing)
+            zones.append(HudEditor.Zone(anchor: zoneAnchors[i], origin: origin,
+                                        right: base.right, up: base.up, forward: base.forward,
+                                        radius: Self.workbenchZoneRadius, isHiddenTray: zoneIsTray[i]))
+        }
+
+        WorkbenchGeometry.shared.publish(.init(active: true, zones: zones, tiles: tileFrames,
+                                               hiddenTileIDs: hiddenTileIDs))
     }
 
     /// Draws every quad `workbenchFurniture` built this frame through
