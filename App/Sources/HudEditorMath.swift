@@ -278,6 +278,16 @@ enum HudEditor {
         var up: SIMD3<Float>
         var forward: SIMD3<Float>
         var valid: Bool
+
+        /// An absent/untracked wrist -- `updateGrab`'s default for callers
+        /// that don't care about wrist snapping (every pre-Task-5 test in
+        /// hud_editor_input_test.swift keeps calling it with no `off`/`gun`
+        /// at all). `valid: false` means `cellUnderPoint` and
+        /// `resolveWristDrop` skip it outright before touching `origin`/
+        /// `right`/`up`/`forward`, so this default is safe to pass through
+        /// unexamined -- never a NaN/garbage read.
+        static let invalid = WristFrame(anchor: -1, origin: .zero, right: .zero,
+                                        up: .zero, forward: .zero, valid: false)
     }
 
     /// The row-major 2x2 cell indices (0 TL, 1 TR, 2 BL, 3 BR) a footprint
@@ -419,8 +429,28 @@ enum HudEditor {
     ///   - a stick axis (controllers): scale changes by `axis * stickScaleRate
     ///     * dt` directly, independent of the two-point mechanism (which
     ///     controllers never populate).
+    ///
+    /// `off`/`gun` (Task 5) are this frame's two wrist-grid frames, default
+    /// `.invalid` for callers that don't care about wrist snapping at all.
+    /// Two extra behaviours ride on them, both reading `off`/`gun` only
+    /// through `cellUnderPoint`/`resolveWristDrop`, which check `valid`
+    /// before touching a frame's `origin`/axes -- an untracked wrist is
+    /// skipped outright, never a NaN local coordinate:
+    /// - **while dragging, both points over the SAME wrist** -> the tile's
+    ///   footprint (`slot`/`spanW`/`spanH`) snaps live to the two cells
+    ///   under the primary/secondary points (`footprintFromCells`), so the
+    ///   footprint previews as the two-hand hold moves, before release.
+    ///   Primary and secondary landing on different wrists (or either one
+    ///   missing the grid) sets no footprint from that mismatched pair.
+    /// - **on release** -> `resolveWristDrop` gets first try at the drop
+    ///   (snap to the cell under `lastPoint`, reject if occupied); only
+    ///   when it returns `nil` (the point is over neither wrist) does the
+    ///   release fall through to the existing `resolveDrop(zones:)` path
+    ///   for GUN/FLOAT/keep-previous.
     static func updateGrab(grab: GrabState?, input: GrabInput, working: [TileEdit],
-                           tiles: [TileFrame], zones: [Zone], dt: Float) -> (grab: GrabState?, working: [TileEdit]) {
+                           tiles: [TileFrame], zones: [Zone],
+                           off: WristFrame = .invalid, gun: WristFrame = .invalid,
+                           dt: Float) -> (grab: GrabState?, working: [TileEdit]) {
         var working = working
 
         guard let current = grab else {
@@ -434,16 +464,27 @@ enum HudEditor {
 
         guard input.primaryActive, let point = input.primaryPoint else {
             // Lost tracking or a deliberate release -- either way, resolve
-            // the drop at the LAST point we actually held, through the same
-            // resolveDrop every release goes through (so a recall out of
-            // the hidden tray always gets a fresh anchor+offset, never a
-            // leftover tray offset -- the tray-recall confirmation).
+            // the drop at the LAST point we actually held. `resolveWristDrop`
+            // gets first try (snap to the cell under lastPoint, reject if
+            // occupied); it returns `nil` when the point is over neither
+            // wrist -- including when both frames are simply untracked,
+            // since it checks `valid` itself before reading either one's
+            // origin/axes -- and that falls through to the same
+            // `resolveDrop` every non-wrist release already went through
+            // (so a recall out of the hidden tray still always gets a
+            // fresh anchor+offset, never a leftover tray offset -- the
+            // tray-recall confirmation).
             if current.tileID >= 0, current.tileID < working.count {
-                let result = resolveDrop(point: current.lastPoint, zones: zones,
-                                          previousAnchor: working[current.tileID].anchor)
-                working[current.tileID].anchor = result.anchor
-                working[current.tileID].show = result.show
-                working[current.tileID].offset = result.offset
+                if let snapped = resolveWristDrop(point: current.lastPoint, off: off, gun: gun,
+                                                   working: working, tileIndex: current.tileID) {
+                    working[current.tileID] = snapped
+                } else {
+                    let result = resolveDrop(point: current.lastPoint, zones: zones,
+                                              previousAnchor: working[current.tileID].anchor)
+                    working[current.tileID].anchor = result.anchor
+                    working[current.tileID].show = result.show
+                    working[current.tileID].offset = result.offset
+                }
             }
             return (nil, working)
         }
@@ -460,6 +501,26 @@ enum HudEditor {
                 }
             }
             newSecondPinch = secondPoint
+
+            // Both points over the SAME wrist grid live-previews the
+            // footprint those two cells bound. `cellUnderPoint` already
+            // returns `nil` for an invalid frame before reading its
+            // origin/axes, so an untracked wrist just fails this `if let`
+            // rather than feeding garbage into the span math; a primary/
+            // secondary split across the two different wrists never
+            // matches the same `frame` in this loop, so that mismatched
+            // pair sets no footprint either.
+            if tileID >= 0, tileID < working.count {
+                for frame in [off, gun] {
+                    guard let cellA = cellUnderPoint(point, frame: frame),
+                          let cellB = cellUnderPoint(secondPoint, frame: frame) else { continue }
+                    let footprint = footprintFromCells(cellA, cellB)
+                    working[tileID].slot = footprint.slot
+                    working[tileID].spanW = footprint.spanW
+                    working[tileID].spanH = footprint.spanH
+                    break
+                }
+            }
         }
 
         if let axis = input.stickScaleAxis, abs(axis) > 0.0001, tileID >= 0, tileID < working.count {

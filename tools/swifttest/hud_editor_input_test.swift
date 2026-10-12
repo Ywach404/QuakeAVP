@@ -30,6 +30,18 @@ func check(_ condition: Bool, _ label: String) {
     }
 }
 
+// `swiftc -O` compiles the stdlib's `assert(_:_:)` to a no-op (it only fires
+// under `-Onone`), and check-swift-input.sh builds with `-O` -- so
+// runWristGrabTests, which uses bare `assert(...)` per the brief, needs its
+// own override of the exact same shape as `check` or it would pass
+// vacuously no matter what the math does. This overload's concrete
+// (non-autoclosure) `Bool`/`String` parameters win over the stdlib's
+// autoclosure version for every call site here, so it's the one that
+// actually runs. (Same fix as hud_editor_math_test.swift's own override.)
+func assert(_ condition: Bool, _ label: String) {
+    check(condition, label)
+}
+
 @main
 struct HudEditorInputTest {
     static func main() {
@@ -41,6 +53,7 @@ struct HudEditorInputTest {
         runStickScaleTests()
         runTrayRecallTests()            // tray-recall confirmation
         runSourceStickinessTests()      // review fix: bound source, never re-picked mid-grab
+        runWristGrabTests()             // Task 5: wrist snap + footprint gestures
         print("PASSED (hud_editor_input_test.swift)")
     }
 }
@@ -360,4 +373,52 @@ func runSourceStickinessTests() {
         check(input3.secondaryActive == false, "...and never a two-hand secondary (controllers scale from the stick)")
         check(input3.stickScaleAxis == 0.5, "...the stick axis passes through")
     }
+}
+
+// MARK: - wrist grid snap + footprint gestures (Task 5)
+
+func runWristGrabTests() {
+    let off = HudEditor.WristFrame(anchor: 0, origin: .zero,
+                                   right: SIMD3(1,0,0), up: SIMD3(0,1,0),
+                                   forward: SIMD3(0,0,1), valid: true)
+    let gun = HudEditor.WristFrame(anchor: 1, origin: SIMD3(1,0,0),
+                                   right: SIMD3(1,0,0), up: SIMD3(0,1,0),
+                                   forward: SIMD3(0,0,1), valid: true)
+    var working = [HudEditor.TileEdit(anchor: 0, offset: .zero, scale: 1, show: true,
+                                      slot: 0, spanW: 1, spanH: 1)]
+    let frame = HudEditor.TileFrame(tileID: 0, origin: .zero,
+                                    right: SIMD3(1,0,0), up: SIMD3(0,1,0),
+                                    halfW: 0.05, halfH: 0.05)
+
+    // Release over the off-wrist bottom-right cell snaps the tile to slot 3.
+    let grab = HudEditor.GrabState(tileID: 0,
+        lastPoint: SIMD3(HudEditor.cellPitch*0.5, -HudEditor.cellPitch*0.5, 0),
+        secondPinch: nil)
+    let release = HudEditor.GrabInput(primaryActive: false,
+        primaryPoint: SIMD3(HudEditor.cellPitch*0.5, -HudEditor.cellPitch*0.5, 0))
+    let r = HudEditor.updateGrab(grab: grab, input: release, working: working,
+                                 tiles: [frame], zones: [], off: off, gun: gun, dt: 0.011)
+    assert(r.working[0].slot == 3 && r.working[0].anchor == 0, "snaps to off-wrist slot 3")
+    assert(r.grab == nil, "released")
+
+    // A two-hand hold across the off-wrist diagonal makes a 2x2 footprint.
+    let twoHand = HudEditor.GrabInput(primaryActive: true,
+        primaryPoint: SIMD3(-HudEditor.cellPitch*0.5, HudEditor.cellPitch*0.5, 0),  // TL
+        secondaryActive: true,
+        secondaryPoint: SIMD3(HudEditor.cellPitch*0.5, -HudEditor.cellPitch*0.5, 0)) // BR
+    let held = HudEditor.GrabState(tileID: 0, lastPoint: twoHand.primaryPoint!, secondPinch: twoHand.secondaryPoint)
+    let r2 = HudEditor.updateGrab(grab: held, input: twoHand, working: working,
+                                  tiles: [frame], zones: [], off: off, gun: gun, dt: 0.011)
+    assert(r2.working[0].spanW == 2 && r2.working[0].spanH == 2, "diagonal two-hand -> 2x2")
+
+    // Invalid wrist mid-grab must not write NaN and must not crash.
+    let bad = HudEditor.WristFrame(anchor: 0, origin: SIMD3(.nan,.nan,.nan),
+                                   right: SIMD3(1,0,0), up: SIMD3(0,1,0),
+                                   forward: SIMD3(0,0,1), valid: false)
+    let r3 = HudEditor.updateGrab(grab: grab, input: release, working: working,
+                                  tiles: [frame], zones: [], off: bad, gun: bad, dt: 0.011)
+    assert(r3.working[0].offset.x.isFinite && r3.working[0].offset.y.isFinite
+           && r3.working[0].offset.z.isFinite, "no NaN written with invalid wrists")
+
+    print("wrist grab tests ok")
 }
