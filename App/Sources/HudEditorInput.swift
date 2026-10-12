@@ -26,6 +26,15 @@
 //  ARKit hand session; that would be a second, redundant `HandTrackingProvider`
 //  fighting the one `HandInput` already owns.
 //
+//  Source binding: once a grab starts, `tick()` stays bound to whichever
+//  source started it (`boundSource`) and feeds ONLY that source's signal
+//  through `HudEditor.grabInput(for:...)` -- it does NOT re-decide
+//  "controller or hands" from live tracking state every tick. A controller
+//  that stops tracking (or a hand that stops pinching) mid-grab therefore
+//  reports its own `primaryActive == false` and releases through
+//  `updateGrab`'s existing path, rather than silently handing the grab off
+//  to a different source that happens to be live that tick.
+//
 
 import Foundation
 import GameController
@@ -122,12 +131,21 @@ final class HudEditorInput: @unchecked Sendable {
 
     private var runTask: Task<Void, Never>?
     private var lastTick = CACurrentMediaTime()
-    /// Which hand is holding the current hands-mode grab, once one starts.
-    /// `nil` exactly when no hand grab is live -- kept in sync with
+    /// Which physical source is holding the current grab, once one starts.
+    /// `nil` exactly when no grab is live -- kept in sync with
     /// `HudEditor.shared.grab` being nil, so a release always clears it.
     /// Touched only from this instance's own single sequential loop task,
     /// never concurrently.
-    private var grabbingIsLeft: Bool?
+    ///
+    /// Bound deliberately, not re-picked every tick: a controller that
+    /// stops tracking (or a hand that stops pinching) mid-grab must report
+    /// through its OWN now-inactive signal and release via `updateGrab`'s
+    /// existing path -- never fall through to a different source that
+    /// happens to be live and silently take over the hold. See
+    /// `HudEditor.grabInput(for:...)`'s doc comment for the bug this fixes
+    /// and the host test that covers it (`runSourceStickinessTests` in
+    /// hud_editor_input_test.swift).
+    private var boundSource: HudEditor.GrabSource?
 
     private static let stickDeadzone: Float = 0.15
 
@@ -143,9 +161,9 @@ final class HudEditorInput: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: 1_000_000_000 / 90)
             } else {
                 // Editor closed: nothing to drive. Poll slowly rather than
-                // spin, and drop any stale hand bookkeeping so a later
+                // spin, and drop any stale source bookkeeping so a later
                 // session starts clean.
-                grabbingIsLeft = nil
+                boundSource = nil
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
@@ -157,7 +175,7 @@ final class HudEditorInput: @unchecked Sendable {
         lastTick = now
 
         let geometry = WorkbenchGeometry.shared.snapshot()
-        guard geometry.active else { grabbingIsLeft = nil; return }
+        guard geometry.active else { boundSource = nil; return }
 
         // Grab-start hit targets: every currently VISIBLE tile, plus one
         // synthetic frame at the HIDDEN zone for whichever tile is parked
@@ -174,46 +192,67 @@ final class HudEditorInput: @unchecked Sendable {
 
         let (grab, working) = await MainActor.run { (HudEditor.shared.grab, HudEditor.shared.working) }
 
+        // This tick's raw signal from every physical source, gathered
+        // up front -- which of these actually DRIVES the grab is decided
+        // below, and (the fix) is NOT simply "whichever is live" once a
+        // grab already exists.
+        let controllerTracking = SpatialControllerTracker.shared.isTracking
+        let rightHanded = VRSettings.shared.rightHanded
+        let controllerRaw = controllerTracking
+            ? controllerSignal(left: !rightHanded) : (active: false, point: nil, stickAxis: nil)
+        let controller = HudEditor.SourceSignal(active: controllerRaw.active, point: controllerRaw.point)
+        let hands = EditorHandInput.shared.snapshot()
+        let handLeft = HudEditor.SourceSignal(active: hands.left.pinched, point: hands.left.point)
+        let handRight = HudEditor.SourceSignal(active: hands.right.pinched, point: hands.right.point)
+
         let input: HudEditor.GrabInput
-        if SpatialControllerTracker.shared.isTracking {
-            // Controllers own the grab while tracking -- no hand
-            // bookkeeping needed, and hardware wins over hands per the
-            // repo-wide rule (InputActivation.handsActive).
-            grabbingIsLeft = nil
-            let rightHanded = VRSettings.shared.rightHanded
-            let dominant = controllerSignal(left: !rightHanded)
-            input = HudEditor.GrabInput(primaryActive: dominant.active, primaryPoint: dominant.point,
-                                        stickScaleAxis: dominant.stickAxis)
+        let source: HudEditor.GrabSource
+
+        if grab != nil {
+            // A grab is already live: stay bound to whichever source
+            // started it (the fix) -- `grabInput` reports ONLY that
+            // source's own signal, so a controller that stops tracking
+            // (or a hand that stops pinching) surfaces as `primaryActive
+            // == false` and fires `updateGrab`'s existing release-at-
+            // lastPoint path, rather than a different source that
+            // happens to be live taking over. `boundSource` should
+            // already be set from the tick the grab started; the
+            // fallback is defensive only (it should never actually be
+            // reached in normal operation).
+            source = boundSource ?? .handLeft
+            input = HudEditor.grabInput(for: source, controller: controller,
+                                        handLeft: handLeft, handRight: handRight,
+                                        stickScaleAxis: controllerRaw.stickAxis)
+        } else if controllerTracking {
+            // Nobody's holding anything yet, and a controller is
+            // tracking: hardware wins over hands per the repo-wide rule
+            // (InputActivation.handsActive), so the controller is the
+            // only candidate -- even if its trigger isn't pressed this
+            // tick (then `updateGrab` simply finds no hit and starts
+            // nothing).
+            source = .controller
+            input = HudEditor.GrabInput(primaryActive: controller.active, primaryPoint: controller.point,
+                                        stickScaleAxis: controllerRaw.stickAxis)
         } else {
-            let hands = EditorHandInput.shared.snapshot()
-            if grab == nil {
-                // Nobody's holding anything yet: let whichever hand
-                // actually hits a tile become primary. A dry run (pure,
-                // no side effects) against the left hand first decides it
-                // -- an arbitrary tie-break if both land on a tile the
-                // same tick.
-                let leftTry = HudEditor.GrabInput(primaryActive: hands.left.pinched, primaryPoint: hands.left.point)
-                let dry = HudEditor.updateGrab(grab: nil, input: leftTry, working: working,
-                                               tiles: tiles, zones: zones, dt: dt)
-                if dry.grab != nil {
-                    grabbingIsLeft = true
-                    input = leftTry
-                } else {
-                    grabbingIsLeft = false
-                    input = HudEditor.GrabInput(primaryActive: hands.right.pinched, primaryPoint: hands.right.point)
-                }
+            // No controller tracking: let whichever hand actually hits a
+            // tile become the candidate. A dry run (pure, no side
+            // effects) against the left hand first decides it -- an
+            // arbitrary tie-break if both land on a tile the same tick.
+            let leftTry = HudEditor.GrabInput(primaryActive: handLeft.active, primaryPoint: handLeft.point)
+            let dry = HudEditor.updateGrab(grab: nil, input: leftTry, working: working,
+                                           tiles: tiles, zones: zones, dt: dt)
+            if dry.grab != nil {
+                source = .handLeft
+                input = leftTry
             } else {
-                let isLeft = grabbingIsLeft ?? true
-                let primary = isLeft ? hands.left : hands.right
-                let secondary = isLeft ? hands.right : hands.left
-                input = HudEditor.GrabInput(primaryActive: primary.pinched, primaryPoint: primary.point,
-                                            secondaryActive: secondary.pinched, secondaryPoint: secondary.point)
+                source = .handRight
+                input = HudEditor.GrabInput(primaryActive: handRight.active, primaryPoint: handRight.point)
             }
         }
 
         let result = HudEditor.updateGrab(grab: grab, input: input, working: working,
                                           tiles: tiles, zones: zones, dt: dt)
-        if result.grab == nil { grabbingIsLeft = nil }
+        boundSource = result.grab == nil ? nil : source
 
         await MainActor.run {
             HudEditor.shared.grab = result.grab
