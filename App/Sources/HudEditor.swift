@@ -13,6 +13,7 @@
 //  the app (`make device`), never by that harness.
 //
 
+import Foundation
 import Observation
 import simd
 
@@ -47,23 +48,25 @@ extension HudEditor {
         /// Whether the workbench is open. While `true`, the renderer swaps
         /// the live tile-placement path for the workbench one; while
         /// `false`, this type is otherwise inert.
-        var active = false
+        var active = false { didSet { publishRenderSnapshot() } }
 
         /// The working copy of all `QC_HUD_TILE_COUNT` tiles' `{anchor,
         /// offset, scale, show}`, indexed by `QC_HUD_TILE_*`. Edited live by
         /// grabs/drops; written out to the `vr_hud_<tile>_*` cvars only on
         /// Done. Starts at the engine's own defaults so a `Session` read
         /// before any `enter()`/`snapshot()` is still well-formed.
-        var working: [TileEdit] = Session.defaultWorking
+        var working: [TileEdit] = Session.defaultWorking { didSet { publishRenderSnapshot() } }
 
         /// The tile currently being grabbed, or `nil` between grabs.
-        var grab: GrabState?
+        var grab: GrabState? { didSet { publishRenderSnapshot() } }
 
         private var entrySnapshot: [TileEdit]?
 
-        private init() {}
+        private init() {
+            publishRenderSnapshot()
+        }
 
-        private static var defaultWorking: [TileEdit] {
+        nonisolated private static var defaultWorking: [TileEdit] {
             Array(
                 repeating: TileEdit(anchor: Int(QC_HUD_ANCHOR_OFFWRIST), offset: .zero, scale: 1, show: true),
                 count: Int(QC_HUD_TILE_COUNT)
@@ -84,6 +87,42 @@ extension HudEditor {
         func restore() {
             guard let entrySnapshot else { return }
             working = entrySnapshot
+        }
+
+        // MARK: - Render-thread snapshot
+
+        /// Plain-value mirror of this session's placement state, read by
+        /// `ImmersiveRenderer`'s workbench draw path (Task 4). That path
+        /// runs on a dedicated render thread, never the main actor, so it
+        /// cannot touch `active`/`working`/`grab` above directly -- the
+        /// same constraint `GunHand`/`OffHandWrist` solve in HandInput.swift
+        /// for the hand poses, mirrored here for the editor's placement
+        /// state instead of re-deriving it with a per-frame actor hop.
+        struct RenderSnapshot {
+            var active: Bool
+            var working: [TileEdit]
+            var grab: GrabState?
+        }
+
+        nonisolated(unsafe) private static let renderLock = NSLock()
+        nonisolated(unsafe) private static var _renderSnapshot =
+            RenderSnapshot(active: false, working: Session.defaultWorking, grab: nil)
+
+        /// Thread-safe from any thread, including the render thread -- the
+        /// one sanctioned way for `ImmersiveRenderer` to read this session.
+        /// Never touches the `@MainActor` storage above.
+        nonisolated static func renderSnapshot() -> RenderSnapshot {
+            renderLock.lock(); defer { renderLock.unlock() }
+            return _renderSnapshot
+        }
+
+        /// Republishes `renderSnapshot()` after every placement mutation
+        /// (`active`/`working`/`grab`'s `didSet`s, and `init`) so the render
+        /// thread never reads a stale generation.
+        private func publishRenderSnapshot() {
+            Session.renderLock.lock()
+            Session._renderSnapshot = RenderSnapshot(active: active, working: working, grab: grab)
+            Session.renderLock.unlock()
         }
     }
 
