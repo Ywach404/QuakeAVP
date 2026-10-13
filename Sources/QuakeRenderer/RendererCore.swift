@@ -1172,8 +1172,19 @@ final class RendererCore {
     /// (xyz, uv, rgba) triangle quads the engine's own text path emits,
     /// without teaching the bridge a new string entry point. ASCII only
     /// (conchars has no other glyphs); anything else falls back to '?'.
+    ///
+    /// `alternate` picks Quake's SECOND character set, the one the menus
+    /// draw with: conchars' 16x16 grid holds plain ASCII in rows 0-7 and a
+    /// red/bronze copy of the same glyphs in rows 8-15, so `char | 0x80`
+    /// is the red glyph for `char`. That is the engine's own indexing, not
+    /// an assumption: `QR_GlyphCell` (qr_bridge.c) is
+    /// `cx = ch & 15, cy = (ch >> 4) & 15` and `QR_DrawCharacter` hands it
+    /// `num & 255`, while `menu.c`'s `M_Print` adds 128 to every character
+    /// and `M_PrintWhite` does not -- the +128 set IS the coloured one.
+    /// Default false, so every existing caller keeps the white set.
     private static func textQuads(_ s: String, origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
-                                   cellSize: Float, color: SIMD4<Float>) -> [Float] {
+                                   cellSize: Float, color: SIMD4<Float>,
+                                   alternate: Bool = false) -> [Float] {
         let bytes = Array(s.utf8).map { $0 < 128 ? $0 : UInt8(ascii: "?") }
         guard !bytes.isEmpty else { return [] }
         let half = Float(bytes.count) * cellSize * 0.5
@@ -1185,7 +1196,8 @@ final class RendererCore {
         verts.reserveCapacity(bytes.count * 54)
         for (i, byte) in bytes.enumerated() {
             if byte == UInt8(ascii: " ") { continue }   // blank cell, no wasted verts
-            let cxi = Float(Int(byte) & 15), cyi = Float(Int(byte) >> 4)
+            let glyph = alternate ? Int(byte) | 0x80 : Int(byte)
+            let cxi = Float(glyph & 15), cyi = Float(glyph >> 4)
             let u0 = cxi / 16, u1 = u0 + 1 / 16
             let v0 = cyi / 16, v1 = v0 + 1 / 16
             let x0 = -half + Float(i) * cellSize, x1 = x0 + cellSize
@@ -1292,13 +1304,19 @@ final class RendererCore {
     /// wrist communicator (which draws its panels through
     /// `drawStonePanel`, not through the backing half above) passes the
     /// key centre straight in.
+    ///
+    /// `alternate` selects conchars' red/bronze character set (`char |
+    /// 0x80`, see `textQuads`). Off by default: the HUD editor's workbench
+    /// labels keep the white glyphs they have always drawn, and only the
+    /// communicator asks for the red ones.
     func drawPanelLabel(text: String, origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
                         cellSize: Float, color: SIMD4<Float>, conchars: UInt32,
+                        alternate: Bool = false,
                         viewproj0: simd_float4x4, viewproj1: simd_float4x4,
                         pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
         guard let pipeline = pipelines.text, let atlas = textures[conchars] else { return }
         let textVerts = Self.textQuads(text, origin: origin, right: right, up: up,
-                                       cellSize: cellSize, color: color)
+                                       cellSize: cellSize, color: color, alternate: alternate)
         guard !textVerts.isEmpty,
               let textBuf = device.makeBuffer(bytes: textVerts, length: textVerts.count * MemoryLayout<Float>.size,
                                               options: .storageModeShared)
