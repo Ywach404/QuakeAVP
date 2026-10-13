@@ -55,8 +55,19 @@ struct RotaryDial: View {
     /// the current finger angle alone.
     @State private var grabValue: Float = 0
     @State private var turned: Double = 0      // radians since the grab
-    @State private var lastAngle: Double = 0
-    @State private var grabbed = false
+    /// nil until the twist has latched OUTSIDE the hub dead zone -- atan2 is
+    /// meaningless near the centre, and a gaze-targeted pinch lands there by
+    /// default, so latching at the hub would turn the first few points of
+    /// hand travel into a quarter-to-half-range value jump.
+    @State private var lastAngle: Double?
+    /// The current gesture's startLocation. A NEW startLocation re-anchors
+    /// everything, which is also what recovers from a CANCELLED drag -- a
+    /// cancel never fires onEnded, so the anchor must not depend on it.
+    @State private var grabToken: CGPoint?
+
+    /// Live-grab styling flag, derived from the anchor token so the visuals
+    /// and the gesture can never disagree about whether a twist is underway.
+    private var grabbed: Bool { grabToken != nil }
 
     private var span: Float { max(range.upperBound - range.lowerBound, .leastNormalMagnitude) }
 
@@ -104,20 +115,34 @@ struct RotaryDial: View {
             // every small adjustment.
             DragGesture(minimumDistance: 0)
                 .onChanged { drag in
-                    let centre = CGPoint(x: diameter / 2, y: diameter / 2)
-                    let angle = atan2(Double(drag.location.y - centre.y),
-                                      Double(drag.location.x - centre.x))
-                    guard grabbed else {
-                        grabbed = true
+                    // A fresh gesture (new startLocation) re-anchors the grab.
+                    // This, not onEnded, is the authoritative reset: a drag the
+                    // system CANCELS never reaches onEnded, and a stale
+                    // lastAngle from it would fling the next grab.
+                    if grabToken != drag.startLocation {
+                        grabToken = drag.startLocation
                         grabValue = value
                         turned = 0
-                        lastAngle = angle
+                        lastAngle = nil
+                    }
+                    let centre = CGPoint(x: diameter / 2, y: diameter / 2)
+                    let dx = Double(drag.location.x - centre.x)
+                    let dy = Double(drag.location.y - centre.y)
+                    // Hub dead zone: atan2 is meaningless at the centre, and a
+                    // gaze-targeted pinch lands there by default -- without
+                    // this, 2-3 pt of hand travel from the hub reads as up to
+                    // a half-turn and jumps the value by half the range.
+                    // Samples inside the zone neither latch nor move the dial.
+                    guard (dx * dx + dy * dy).squareRoot() >= Double(diameter) * 0.15 else { return }
+                    let angle = atan2(dy, dx)
+                    guard let last = lastAngle else {
+                        lastAngle = angle   // latched outside the hub; twist begins here
                         return
                     }
                     // Unwrap across the atan2 branch cut, so a twist
                     // through the 9 o'clock mark is a small delta and not
                     // a full turn backwards.
-                    var delta = angle - lastAngle
+                    var delta = angle - last
                     if delta > .pi { delta -= 2 * .pi }
                     if delta < -.pi { delta += 2 * .pi }
                     lastAngle = angle
@@ -139,7 +164,7 @@ struct RotaryDial: View {
                     value = clamped
                     onChange(clamped)
                 }
-                .onEnded { _ in grabbed = false }
+                .onEnded { _ in grabToken = nil; lastAngle = nil }
         )
         // The gesture is the control; the shapes are decoration.
         .accessibilityRepresentation {
