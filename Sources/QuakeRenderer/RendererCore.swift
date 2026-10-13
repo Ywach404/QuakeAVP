@@ -1265,9 +1265,9 @@ final class RendererCore {
     /// nothing else -- the wrist communicator washes one of these over a
     /// stone card as its hover/press highlight.
     func drawFlatPanel(origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
-                               width: Float, height: Float, color: SIMD4<Float>,
-                               viewproj0: simd_float4x4, viewproj1: simd_float4x4,
-                               pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+                       width: Float, height: Float, color: SIMD4<Float>,
+                       viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                       pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
         guard let pipeline = pipelines.text, let solidTex = ensureHudSolidTexture() else { return }
         let quad = Self.workbenchPanelQuad(origin: origin, right: right, up: up,
                                            width: width, height: height, color: color)

@@ -257,6 +257,15 @@ final class WristCommFeedback: @unchecked Sendable {
         guard let time = _time else { return nil }
         return (_side, _cell, time)
     }
+
+    /// A fire's flash must not survive a stand-down. The renderer clears this
+    /// when the immersive layer parks or tears down and when the HUD editor
+    /// opens -- otherwise a press made just before the suppression (flash
+    /// window 0.25 s, fade-in crosses the draw floor in one 90 Hz frame)
+    /// comes back as a key already lit with no fingertip on it.
+    func invalidate() {
+        lock.lock(); _time = nil; lock.unlock()
+    }
 }
 
 /// Drives `HudEditor.updateGrab` every tick from real hand pinches
