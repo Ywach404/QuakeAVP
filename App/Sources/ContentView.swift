@@ -72,6 +72,14 @@ struct ContentView: View {
     @State private var commUpUI = VRSettings.shared.wristCommUp
     @State private var commNoTurn = VRSettings.shared.wristCommNoTurn
     @State private var commAlongArm = VRSettings.shared.wristCommAlongArm
+    // Gesture state for the wrist unit's own gyro disc (commDisc). A separate
+    // pair from gyroLast/gyroRollMode below -- those are already shared
+    // between the HUD dock dial and the weapon wheel dial, which is fine
+    // because only one of those two is ever on screen at a time, but the
+    // comm disc can be mid-drag in the same tab as neither of them, so it
+    // gets its own grab slot rather than risking a three-way collision.
+    @State private var commDiscLast: CGPoint?
+    @State private var commDiscRimMode = false
     @State private var offHandModelOnly = true
     @State private var laser = false
     @State private var reticle = false
@@ -671,27 +679,40 @@ struct ContentView: View {
                     Text("Re-seat the unit on your forearm. The renderer reads these every "
                          + "frame, so it moves as you drag.")
                         .font(.caption2).foregroundStyle(.secondary)
-                    commPlaceRow("Angle", $commTiltUI,
-                                 -VRSettings.commTiltLimit...VRSettings.commTiltLimit,
-                                 step: 1, unit: "°", display: 1) {
-                        VRSettings.shared.wristCommTilt = $0
-                    }
-                    Text("Positive angle leans the TOP of the panel toward you.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    commPlaceRow("Forward", $commFwdUI,
-                                 -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                 step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
-                        VRSettings.shared.wristCommFwd = $0
-                    }
-                    commPlaceRow("Side", $commSideUI,
-                                 -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                 step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
-                        VRSettings.shared.wristCommSide = $0
-                    }
-                    commPlaceRow("Height", $commUpUI,
-                                 -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                 step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
-                        VRSettings.shared.wristCommUp = $0
+                    HStack(alignment: .top, spacing: 14) {
+                        commDisc(side: $commSideUI, forward: $commFwdUI,
+                                 angle: $commTiltUI) { s, f, a in
+                            VRSettings.shared.wristCommSide = s
+                            VRSettings.shared.wristCommFwd = f
+                            VRSettings.shared.wristCommTilt = a
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Drag inside to slide the unit (side / forward); spin the "
+                                 + "rim to tilt it. Height is the slider below.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                            commPlaceRow("Angle", $commTiltUI,
+                                         -VRSettings.commTiltLimit...VRSettings.commTiltLimit,
+                                         step: 1, unit: "°", display: 1) {
+                                VRSettings.shared.wristCommTilt = $0
+                            }
+                            Text("Positive angle leans the TOP of the panel toward you.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                            commPlaceRow("Forward", $commFwdUI,
+                                         -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
+                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
+                                VRSettings.shared.wristCommFwd = $0
+                            }
+                            commPlaceRow("Side", $commSideUI,
+                                         -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
+                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
+                                VRSettings.shared.wristCommSide = $0
+                            }
+                            commPlaceRow("Height", $commUpUI,
+                                         -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
+                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
+                                VRSettings.shared.wristCommUp = $0
+                            }
+                        }
                     }
                     Button("Reset position") {
                         commTiltUI = 0; commFwdUI = 0; commSideUI = 0; commUpUI = 0
@@ -1516,25 +1537,42 @@ struct ContentView: View {
         }
     }
 
-    /// The gyro dial (inspector-style): drag INSIDE the rings to tumble the
-    /// HUD dock -- horizontal drag pans (Pan Y), vertical drag tilts (Tilt X)
-    /// -- and drag ON the outer ring band to spin Roll Z by the angle swept
-    /// around the centre. The fields beside it show the exact numbers live.
-    private func gyroDial(pitch: Binding<Float>, yaw: Binding<Float>,
-                          roll: Binding<Float>,
-                          apply: @escaping (Float, Float, Float) -> Void) -> some View {
+    /// The shared core of every gyro-style disc in this screen: a wireframe
+    /// globe you drag INSIDE for a free 2-axis adjustment, or drag on the
+    /// outer RIM band for a 1-axis spin by the angle physically swept around
+    /// the centre -- same drag grammar `RotaryDial` used for one axis, just
+    /// with a second axis available off the rim.
+    ///
+    /// The visual is the inspector-globe look: the SPHERE is the silhouette,
+    /// the vertical meridian narrows as `a` moves, the horizontal equator
+    /// flattens as `b` moves, and both turn with `spin`. Each axis reads on
+    /// its own ellipse, which is why it is legible at a glance where ticks
+    /// and a horizon line were not. `a`/`b` are read as degrees for the
+    /// foreshortening (an ellipse seen `deg` degrees off face-on is cos(deg)
+    /// as wide, so the minor axis IS the cosine -- at 85 the equator is
+    /// edge-on and draws as a line) -- callers whose values are not degrees
+    /// (the wrist unit's position pad) scale their value into a -90...90
+    /// equivalent before passing it in, purely for this foreshortening.
+    ///
+    /// `onInside` gets the per-point screen delta (`dx`/`dy`) AND the
+    /// position normalised to the disc radius (`nx`/`ny`, -1...1, raw screen
+    /// axes) every drag step, so a caller can go delta-based (the HUD dock
+    /// and weapon wheel tumble, which ignore nx/ny) or absolute-pad-based
+    /// (the wrist unit's Side/Forward pad, which ignores dx/dy) without the
+    /// core caring which. `onRim` gets the unwrapped angular delta in
+    /// degrees for that step; a caller scales it to whatever span one full
+    /// revolution should cover. `last`/`rimMode` are the CALLER's own gesture
+    /// slots -- two independent discs must not share one grab, which is why
+    /// `gyroDial` below keeps reusing `gyroLast`/`gyroRollMode` (its two call
+    /// sites are never both on screen at once) while the wrist unit's disc
+    /// gets its own pair.
+    private func gyroDisc(a: Float, b: Float, spin: Float,
+                          last: Binding<CGPoint?>, rimMode: Binding<Bool>,
+                          onInside: @escaping (_ dx: CGFloat, _ dy: CGFloat,
+                                                _ nx: CGFloat, _ ny: CGFloat) -> Void,
+                          onRim: @escaping (_ deltaDegrees: Float) -> Void) -> some View {
         let size: CGFloat = 96
-        let ringBand: CGFloat = 16                 // outer band width = roll grab zone
-        let degPerPt: Float = 0.6                  // tumble sensitivity
-        // A wireframe globe, the way every inspector draws this: the SPHERE is
-        // the silhouette, the vertical meridian narrows as you pan, the
-        // horizontal equator flattens as you tilt, and both turn with roll.
-        // Each ellipse reads one axis on its own, which is why it is legible at
-        // a glance where ticks and a horizon line were not.
-        //
-        // An ellipse seen `a` degrees off face-on is cos(a) as wide, so the
-        // minor axis IS the cosine -- at Tilt X 85 the equator is edge-on and
-        // draws as a line, which is exactly what you want it to look like.
+        let ringBand: CGFloat = 16                 // outer band width = rim grab zone
         func minor(_ deg: Float) -> CGFloat {
             max(1, CGFloat(abs(cos(deg * .pi / 180))) * (size - 2))
         }
@@ -1542,38 +1580,97 @@ struct ContentView: View {
             Circle().fill(Self.noctuaBrown.opacity(0.14))
             Circle().strokeBorder(Self.noctuaBrown.opacity(0.85), lineWidth: 1.2)
             Ellipse().stroke(Self.noctuaBrown.opacity(0.6), lineWidth: 1.2)
-                .frame(width: minor(yaw.wrappedValue), height: size - 2)
+                .frame(width: minor(a), height: size - 2)
             Ellipse().stroke(Self.noctuaBrown.opacity(0.6), lineWidth: 1.2)
-                .frame(width: size - 2, height: minor(pitch.wrappedValue))
+                .frame(width: size - 2, height: minor(b))
         }
-        .rotationEffect(.degrees(Double(roll.wrappedValue)))
+        .rotationEffect(.degrees(Double(spin)))
         .frame(width: size, height: size)
         .contentShape(Circle())
         .gesture(DragGesture(minimumDistance: 0)
             .onChanged { g in
                 let c = CGPoint(x: size / 2, y: size / 2)
-                if gyroLast == nil {
+                if last.wrappedValue == nil {
                     let r = hypot(g.startLocation.x - c.x, g.startLocation.y - c.y)
-                    gyroRollMode = r > size / 2 - ringBand
+                    rimMode.wrappedValue = r > size / 2 - ringBand
                 }
-                guard let last = gyroLast else { gyroLast = g.location; return }
+                guard let lastP = last.wrappedValue else { last.wrappedValue = g.location; return }
                 let p = g.location
-                gyroLast = p
-                if gyroRollMode {
-                    let a0 = atan2(last.y - c.y, last.x - c.x)
+                last.wrappedValue = p
+                if rimMode.wrappedValue {
+                    let a0 = atan2(lastP.y - c.y, lastP.x - c.x)
                     let a1 = atan2(p.y - c.y, p.x - c.x)
                     var d = Float(a1 - a0) * 180 / .pi
                     if d > 180 { d -= 360 } else if d < -180 { d += 360 }
-                    roll.wrappedValue = max(-180, min(180, roll.wrappedValue + d))
+                    onRim(d)
                 } else {
-                    yaw.wrappedValue = max(-180, min(180,
-                        yaw.wrappedValue + Float(p.x - last.x) * degPerPt))
-                    pitch.wrappedValue = max(-90, min(90,
-                        pitch.wrappedValue + Float(p.y - last.y) * degPerPt))
+                    let nx = (p.x - c.x) / (size / 2)
+                    let ny = (p.y - c.y) / (size / 2)
+                    onInside(p.x - lastP.x, p.y - lastP.y, nx, ny)
                 }
-                apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
             }
-            .onEnded { _ in gyroLast = nil })
+            .onEnded { _ in last.wrappedValue = nil })
+    }
+
+    /// The gyro dial (inspector-style): drag INSIDE the rings to tumble the
+    /// HUD dock -- horizontal drag pans (Pan Y), vertical drag tilts (Tilt X)
+    /// -- and drag ON the outer ring band to spin Roll Z by the angle swept
+    /// around the centre. The fields beside it show the exact numbers live.
+    /// A thin wrapper over `gyroDisc`: yaw/pitch ARE degrees already, so they
+    /// drive the foreshortening directly, and the inside drag stays
+    /// DELTA-based (`degPerPt`), exactly as before this was split out.
+    private func gyroDial(pitch: Binding<Float>, yaw: Binding<Float>,
+                          roll: Binding<Float>,
+                          apply: @escaping (Float, Float, Float) -> Void) -> some View {
+        let degPerPt: Float = 0.6                  // tumble sensitivity
+        return gyroDisc(a: yaw.wrappedValue, b: pitch.wrappedValue, spin: roll.wrappedValue,
+                        last: $gyroLast, rimMode: $gyroRollMode,
+                        onInside: { dx, dy, _, _ in
+                            yaw.wrappedValue = max(-180, min(180,
+                                yaw.wrappedValue + Float(dx) * degPerPt))
+                            pitch.wrappedValue = max(-90, min(90,
+                                pitch.wrappedValue + Float(dy) * degPerPt))
+                            apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
+                        },
+                        onRim: { d in
+                            roll.wrappedValue = max(-180, min(180, roll.wrappedValue + d))
+                            apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
+                        })
+    }
+
+    /// The wrist unit's gyro disc: the SAME drag grammar as `gyroDial` --
+    /// inside = free 2-axis, rim = 1-axis spin -- mapped onto the comm's
+    /// value shape, which is 1 rotation + 2 translations rather than 3
+    /// rotations. Drag INSIDE is a POSITION PAD, not a jog: disc-X maps
+    /// straight to Side and disc-Y (up on the disc, so screen Y is flipped)
+    /// to Forward, with the full disc radius covering the full
+    /// ±commOffsetLimit range in one sweep -- the pad covers the sweep, the
+    /// stepped sliders below do the fine work. Drag on the RIM spins Angle
+    /// with the same delta-unwrap `gyroDisc` always does, scaled so one
+    /// full revolution of physical twist covers the full ±commTiltLimit
+    /// span rather than 1:1 (the comm's angle range is a quarter of the
+    /// dial's roll range). Height has no disc axis -- it stays meters-only,
+    /// which the caption next to this says.
+    private func commDisc(side: Binding<Float>, forward: Binding<Float>,
+                          angle: Binding<Float>,
+                          apply: @escaping (Float, Float, Float) -> Void) -> some View {
+        let posRange = VRSettings.commOffsetLimit      // disc edge == this, either side
+        let angleSpan = VRSettings.commTiltLimit * 2    // one full revolution covers this much
+        return gyroDisc(a: side.wrappedValue / posRange * 90,
+                        b: forward.wrappedValue / posRange * 90,
+                        spin: angle.wrappedValue,
+                        last: $commDiscLast, rimMode: $commDiscRimMode,
+                        onInside: { _, _, nx, ny in
+                            side.wrappedValue = max(-posRange, min(posRange, Float(nx) * posRange))
+                            forward.wrappedValue = max(-posRange, min(posRange, Float(-ny) * posRange))
+                            apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
+                        },
+                        onRim: { d in
+                            let scaled = d * (angleSpan / 360)
+                            angle.wrappedValue = max(-VRSettings.commTiltLimit,
+                                min(VRSettings.commTiltLimit, angle.wrappedValue + scaled))
+                            apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
+                        })
     }
 
     /// A typed transform field (inspector-style): right-aligned label, numeric
@@ -1651,43 +1748,29 @@ struct ContentView: View {
         }
     }
 
-    /// One wrist-communicator placement row: a JOG WHEEL (`RotaryDial`)
-    /// over a STEPPED range -- the unit is dialled to a degree and half a
-    /// centimetre, not to float precision -- that pushes straight to
+    /// One wrist-communicator placement row: a STEPPED `Slider` -- the unit
+    /// is dialled to a degree and half a centimetre, not to float precision,
+    /// which is what `step:` buys for free (the dotted track IS the step,
+    /// no custom tick drawing needed) -- that pushes straight to
     /// `VRSettings`, which the render thread samples per frame, so the
     /// panel re-seats under the dragging thumb with no Apply and no engine
     /// round trip. `display` scales the readout only (metres shown as cm);
-    /// the stored value stays in the dial's own unit.
+    /// the stored value stays in the row's own unit.
     ///
-    /// The wheel REPLACED a stepped slider, at A.'s request after dialling
-    /// the unit on device: a slider a few centimetres long had to resolve
-    /// the whole range, so one step was a couple of millimetres of thumb
-    /// travel and the unit jumped past where he wanted it. A wheel's
-    /// precision is set by how far you twist, not by how wide the row is.
-    /// The +/- buttons stay beside it for the one thing a continuous twist
-    /// is bad at -- committing exactly one step, or returning to a value
-    /// you have just overshot.
+    /// These are the FINE adjust, meant to be used alongside `commDisc`
+    /// above them: the disc covers the whole range in one sweep, these
+    /// resolve the last millimetre or degree of it.
     private func commPlaceRow(_ label: String, _ value: Binding<Float>,
                               _ range: ClosedRange<Float>, step: Float,
                               unit: String, display: Float, fmt: String = "%.0f",
                               apply: @escaping (Float) -> Void) -> some View {
-        // One nudge, snapped and clamped the same way the wheel's own
-        // commits are, so the two affordances cannot disagree about what a
-        // legal value is.
-        func nudge(_ direction: Float) {
-            let raw = value.wrappedValue + direction * step
-            let snapped = (raw / step).rounded() * step
-            let clamped = min(max(snapped, range.lowerBound), range.upperBound)
-            guard clamped != value.wrappedValue else { return }
-            value.wrappedValue = clamped
-            apply(clamped)
-        }
-        return HStack(spacing: 8) {
+        HStack {
             Text(label).font(.caption).frame(width: 64, alignment: .leading)
-            RotaryDial(value: value, range: range, step: step, onChange: apply)
-            Button { nudge(-1) } label: { Image(systemName: "minus") }
-            Button { nudge(1) } label: { Image(systemName: "plus") }
-            Spacer(minLength: 0)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Double(step))
             // Normalise -0 to 0 first: `%f` prints the sign bit even though
             // -0.0 == 0.0, and a dial resting exactly at zero must never
             // flash a stray minus sign depending on which side it last
@@ -1696,7 +1779,6 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 48, alignment: .trailing)
         }
-        .buttonStyle(.bordered)
         .font(.caption)
     }
 
