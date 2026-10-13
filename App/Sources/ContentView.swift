@@ -61,6 +61,16 @@ struct ContentView: View {
     @State private var telefrag = true
     // Mirrors vr_wristcomm_off's own default (r_null.c registers it "1").
     @State private var wristCommEnabled = true
+    // The communicator's placement dials and its turn hold. Seeded from
+    // VRSettings (which persists them itself, in UserDefaults) rather than
+    // from a literal + syncFromProfile: they are a physical fit of the unit
+    // to the arm, not part of a swappable control profile, so the live store
+    // IS the source of truth for what the sliders should show.
+    @State private var commTiltUI = VRSettings.shared.wristCommTilt
+    @State private var commFwdUI = VRSettings.shared.wristCommFwd
+    @State private var commSideUI = VRSettings.shared.wristCommSide
+    @State private var commUpUI = VRSettings.shared.wristCommUp
+    @State private var commNoTurn = VRSettings.shared.wristCommNoTurn
     @State private var offHandModelOnly = true
     @State private var laser = false
     @State private var reticle = false
@@ -620,6 +630,47 @@ struct ContentView: View {
                     Text("Glance at your off wrist for the action grid; touch a cell to run its "
                          + "command. Rebind from the console: vr_wristcomm_off_cmd0…5.")
                         .font(.caption2).foregroundStyle(.secondary)
+                    Toggle("Hold turning while using the wrist menu", isOn: Binding(
+                        get: { commNoTurn },
+                        set: { commNoTurn = $0; VRSettings.shared.wristCommNoTurn = $0 }))
+                        .font(.caption)
+                    Text("Reaching across with the gun hand to press a key reads as that hand's "
+                         + "turn gesture. On, the view holds still while the panel is up; "
+                         + "moving and firing are untouched.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Wrist unit position").font(.caption).foregroundStyle(.secondary)
+                    Text("Re-seat the unit on your forearm. The renderer reads these every "
+                         + "frame, so it moves as you drag.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    commPlaceRow("Angle", $commTiltUI,
+                                 -VRSettings.commTiltLimit...VRSettings.commTiltLimit,
+                                 step: 1, unit: "°", display: 1) {
+                        VRSettings.shared.wristCommTilt = $0
+                    }
+                    commPlaceRow("Forward", $commFwdUI,
+                                 -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
+                                 step: 0.005, unit: "cm", display: 100) {
+                        VRSettings.shared.wristCommFwd = $0
+                    }
+                    commPlaceRow("Side", $commSideUI,
+                                 -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
+                                 step: 0.005, unit: "cm", display: 100) {
+                        VRSettings.shared.wristCommSide = $0
+                    }
+                    commPlaceRow("Height", $commUpUI,
+                                 -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
+                                 step: 0.005, unit: "cm", display: 100) {
+                        VRSettings.shared.wristCommUp = $0
+                    }
+                    Button("Reset position") {
+                        commTiltUI = 0; commFwdUI = 0; commSideUI = 0; commUpUI = 0
+                        let s = VRSettings.shared
+                        s.wristCommTilt = 0; s.wristCommFwd = 0
+                        s.wristCommSide = 0; s.wristCommUp = 0
+                    }
+                    .font(.caption)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
@@ -1570,6 +1621,29 @@ struct ContentView: View {
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    /// One wrist-communicator placement row: a STEPPED slider (the unit is
+    /// dialled to a degree and half a centimetre, not to float precision)
+    /// that pushes straight to `VRSettings`, which the render thread samples
+    /// per frame -- so the panel re-seats under the dragging thumb, with no
+    /// Apply and no engine round trip. `display` scales the readout only
+    /// (metres shown as cm); the stored value stays in the dial's own unit.
+    private func commPlaceRow(_ label: String, _ value: Binding<Float>,
+                              _ range: ClosedRange<Float>, step: Float,
+                              unit: String, display: Float,
+                              apply: @escaping (Float) -> Void) -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 64, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Double(step))
+            Text(String(format: "%.0f%@", value.wrappedValue * display, unit))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 48, alignment: .trailing)
         }
     }
 
