@@ -1140,8 +1140,18 @@ final class RendererCore {
     /// backing and the engine's own billboarded text -- a missing
     /// `pipelines.text` build (labels off) silently drops this instead of
     /// crashing, same contract as every other optional-pipeline draw here.
+    ///
+    /// `labelCentered` moves the label from ABOVE the backing (the default,
+    /// the workbench's captioned proxies) to inside it, centred on `origin`
+    /// -- what a BUTTON wants, where the text belongs on the key rather
+    /// than floating over it (the wrist communicator's action cells). It is
+    /// one placement flag rather than a second draw routine deliberately:
+    /// the quad builders (`workbenchPanelQuad`/`textQuads`) and this encode
+    /// path stay the single copy. Every colour is the CALLER's, alpha
+    /// included, so a faded panel just passes pre-multiplied-down alphas in.
     func drawWorkbenchLabel(text: String?, origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
                             panelWidth: Float, panelHeight: Float, cellSize: Float,
+                            labelCentered: Bool = false,
                             panelColor: SIMD4<Float>, textColor: SIMD4<Float>,
                             conchars: UInt32,
                             viewproj0: simd_float4x4, viewproj1: simd_float4x4,
@@ -1166,7 +1176,7 @@ final class RendererCore {
         }
 
         guard let text, let atlas = textures[conchars] else { return }
-        let labelOrigin = origin + up * (panelHeight * 0.5 + cellSize * 0.6)
+        let labelOrigin = labelCentered ? origin : origin + up * (panelHeight * 0.5 + cellSize * 0.6)
         let textVerts = Self.textQuads(text, origin: labelOrigin, right: right, up: up,
                                        cellSize: cellSize, color: textColor)
         guard !textVerts.isEmpty,
