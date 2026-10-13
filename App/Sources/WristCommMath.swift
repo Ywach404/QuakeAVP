@@ -61,12 +61,24 @@ enum WristComm {
     struct TouchState {
         var wasIn: [Int?] = [nil, nil]
         var cooldownUntil: [Double] = Array(repeating: 0, count: 6)
+        /// False until this state's first `updateTouch` call. A fresh state
+        /// arms wherever the fingers already happen to be (editor-close,
+        /// idle->active, startup) -- without this, a finger already resting
+        /// in a cell at that instant reads as a rising edge against `wasIn
+        /// == nil` and fires the bound command unintended. The first call
+        /// instead just RECORDS the current touches as the baseline.
+        var seeded: Bool = false
     }
 
     static func updateTouch(state: TouchState, touched: [Int?], now: Double,
                             revealed: Bool) -> (state: TouchState, fire: Int?) {
         var next = state
         if next.wasIn.count != touched.count { next.wasIn = Array(repeating: nil, count: touched.count) }
+        guard next.seeded else {
+            next.wasIn = touched
+            next.seeded = true
+            return (next, nil)
+        }
         var fire: Int? = nil
         for (i, cell) in touched.enumerated() {
             let was = i < state.wasIn.count ? state.wasIn[i] : nil

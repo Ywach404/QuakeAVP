@@ -15,10 +15,16 @@
 //
 //  Review Focus: while the HUD live editor is open
 //  (`HudEditor.Session.renderSnapshot().active`), this loop resets every
-//  side's touch state and skips the tick entirely -- a fingertip dragging a
-//  tile across the wrist must never also fire a communicator cell
-//  underneath it, and a stale `wasIn` left over from before the editor
-//  opened must not fire the instant it closes.
+//  side's touch state to a fresh, unseeded `WristComm.TouchState` and skips
+//  the tick entirely -- a fingertip dragging a tile across the wrist must
+//  never also fire a communicator cell underneath it. That reset alone does
+//  NOT prevent a fire on the close transition: `WristComm.updateTouch`'s
+//  own seeding step is what does, by absorbing whatever the fingers are
+//  already doing on a fresh state's first armed tick instead of reading it
+//  as a rising edge against `wasIn == nil`. The exact same reset-then-
+//  reseed happens on the idle->active transition (nothing revealed) and at
+//  startup -- one mechanism covers all three, because every reset path
+//  here constructs the same fresh `TouchState()`.
 //
 
 import Foundation

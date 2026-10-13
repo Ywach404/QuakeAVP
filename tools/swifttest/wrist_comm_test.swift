@@ -41,6 +41,7 @@ struct WristCommMathTest {
     static func main() {
         runCommGeometryTests()
         runTouchStateTests()
+        runSeedingTests()
         runRevealTests()
         runFireGateTests()
         print("PASSED (wrist_comm_test.swift)")
@@ -72,7 +73,13 @@ func runCommGeometryTests() {
 // MARK: - Touch fire state machine
 
 func runTouchStateTests() {
-    var s = WristComm.TouchState()
+    // A fresh TouchState must SEED on its first update rather than
+    // edge-fire -- a finger already resting in a cell when the panel
+    // arms (editor close, idle->active, startup) is "already in", not
+    // "just arrived". Seed with no touch first, matching every real
+    // reset path's actual first tick.
+    var s = WristComm.updateTouch(state: WristComm.TouchState(), touched: [nil, nil],
+                                  now: 9.9, revealed: true).state
     var r = WristComm.updateTouch(state: s, touched: [4, nil], now: 10.0, revealed: true)
     assert(r.fire == 4, "entering cell 4 fires it")
     s = r.state
@@ -89,6 +96,25 @@ func runTouchStateTests() {
     let r2 = WristComm.updateTouch(state: WristComm.TouchState(), touched: [0, nil], now: 1.0, revealed: false)
     assert(r2.fire == nil, "hidden communicator never fires")
     print("touch state ok")
+}
+
+// MARK: - Fresh-state seeding (absorb, don't edge-fire, a resting touch)
+
+func runSeedingTests() {
+    // A fresh TouchState seeing an already-present touch on its very
+    // first update absorbs it instead of firing -- the fix for the
+    // editor-close/idle->active/startup stale-edge bug.
+    let seedResult = WristComm.updateTouch(state: WristComm.TouchState(), touched: [4, nil],
+                                           now: 5.0, revealed: true)
+    assert(seedResult.fire == nil, "fresh state absorbs an already-resting touch, never fires")
+
+    // That same (now-seeded) state genuinely leaving and re-entering the
+    // cell still fires -- seeding only swallows the very first update.
+    let left = WristComm.updateTouch(state: seedResult.state, touched: [nil, nil],
+                                     now: 5.1, revealed: true).state
+    let reentry = WristComm.updateTouch(state: left, touched: [4, nil], now: 5.2, revealed: true)
+    assert(reentry.fire == 4, "a genuine new entry after seeding still fires")
+    print("seeding ok")
 }
 
 // MARK: - Reveal-on-glance hysteresis
