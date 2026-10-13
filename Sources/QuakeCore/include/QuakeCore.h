@@ -471,6 +471,13 @@ void QC_RendererSetDrawableSize (int width, int height);
    packet state above. */
 float QC_CvarValue (const char *name);
 
+/* Read back a registered cvar's string value by name, or "" if no cvar by
+   that name exists. Main-actor/engine-thread read only, never the render
+   thread -- unlike the float above, the pointer this returns can be
+   reallocated out from under a concurrent reader by a console/config
+   change, with no lock guarding it. */
+const char *QC_CvarString (const char *name);
+
 /* Report the field of view the consumer actually renders, in degrees --
    for the immersive path this is the merged binocular frustum of both eyes.
    The engine widens its culling frustum to cover it (plus a margin for one

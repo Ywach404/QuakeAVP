@@ -335,6 +335,18 @@ float QC_CvarValue (const char *name)
 	return v ? v->value : 0.f;
 }
 
+/* Same read-back as QC_CvarValue, but for string cvars (the wrist
+   communicator's per-cell command/label text). Main-actor/engine-thread
+   read only, never the render thread -- v->string is reallocated by
+   Cvar_Set on a console/config change, with no lock guarding it, so a
+   concurrent read from the render thread could race a free. Unknown
+   name returns "" rather than crashing the caller. */
+const char *QC_CvarString (const char *name)
+{
+	cvar_t *v = Cvar_FindVar (name);
+	return v ? v->string : "";
+}
+
 qboolean QR_ConsumePendingDrawableSize (int *width, int *height)
 {
 	qboolean dirty;
