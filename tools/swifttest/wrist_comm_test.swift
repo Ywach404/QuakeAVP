@@ -45,6 +45,7 @@ struct WristCommMathTest {
         runSeedingTests()
         runRevealTests()
         runFireGateTests()
+        runSideQualifiesTests()
         runAdjustedFrameTests()
         runHoverPickTests()
         print("PASSED (wrist_comm_test.swift)")
@@ -235,6 +236,15 @@ func runFireGateTests() {
     assert(!WristComm.shouldFire("   "), "whitespace-only command never fires")
     assert(WristComm.shouldFire("god"), "non-empty command fires")
     print("fire gate ok")
+}
+
+// MARK: - Panel-in-use predicate (WristComm.sideQualifies)
+
+func runSideQualifiesTests() {
+    assert(!WristComm.sideQualifies(enabled: false, opacity: 1), "disabled never qualifies, however opaque")
+    assert(WristComm.sideQualifies(enabled: true, opacity: WristComm.fireRevealFloor), "enabled at the floor qualifies")
+    assert(!WristComm.sideQualifies(enabled: true, opacity: WristComm.fireRevealFloor - 0.01), "enabled just under the floor does not")
+    print("side qualifies ok")
 }
 
 // MARK: - Placement dials (WristComm.adjustedFrame)
