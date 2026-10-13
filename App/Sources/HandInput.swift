@@ -267,6 +267,11 @@ final class HandInput: @unchecked Sendable {
     private func emit(left: inout HandState, right: inout HandState) {
         var slice = PadAggregator.Slice()
 
+        // Read once per emit -- renderSnapshot() takes a lock, and the gate
+        // below (which suppresses every hand-driven gesture while the editor
+        // is open) needs the exact same answer this turn-hold push does.
+        let editorActive = HudEditor.Session.renderSnapshot().active
+
         // UI turn hold (wrist communicator), pushed to the engine-side
         // edge turn (vr_edgeturn in in_null.c) on EVERY call, ahead of the
         // HUD-editor/prayer/wheel early-returns below -- those gates `return`
@@ -274,7 +279,14 @@ final class HandInput: @unchecked Sendable {
         // computed only there would strand the engine at 1 if one of them
         // fired while the panel was still up. Computed here once and reused
         // by the turning: block below. See QC_InputSetTurnHold's doc comment.
-        let turnHold = VRSettings.shared.wristCommNoTurn && Self.wristCommInUse()
+        //
+        // `editorActive` holds turning UNCONDITIONALLY -- deliberately not
+        // behind wristCommNoTurn. Reaching across to drag a HUD tile points
+        // the aim at the screen edge exactly like pressing a comm key does,
+        // and editing is a modal activity: nobody wants the view to turn
+        // while they're dragging tiles, whatever that toggle is set to.
+        let turnHold = editorActive
+            || (VRSettings.shared.wristCommNoTurn && Self.wristCommInUse())
         QC_InputSetTurnHold(turnHold ? 1 : 0)
 
         // HUD live editor grab input (Task 5): published every update,
@@ -306,8 +318,9 @@ final class HandInput: @unchecked Sendable {
         // reaching across with the gun hand to adjust an off-wrist tile can't
         // also fire the gun or walk the player off its anchor. The wrist
         // positions the grid rides are still published in `wheel()`, which runs
-        // regardless. renderSnapshot() is a lock-protected any-thread read.
-        if HudEditor.Session.renderSnapshot().active {
+        // regardless. Reuses the `editorActive` read taken once above, ahead of
+        // the turn-hold push.
+        if editorActive {
             aggregator.update(.hands, slice)   // zeroed
             turnGaugeVerts = []
             return
