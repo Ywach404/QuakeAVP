@@ -93,8 +93,18 @@ func runTouchStateTests() {
     s = WristComm.updateTouch(state: s, touched: [nil, nil], now: 11.0, revealed: true).state
     r = WristComm.updateTouch(state: s, touched: [4, nil], now: 11.1, revealed: true)
     assert(r.fire == 4, "fresh entry after the cooldown fires")
-    let r2 = WristComm.updateTouch(state: WristComm.TouchState(), touched: [0, nil], now: 1.0, revealed: false)
-    assert(r2.fire == nil, "hidden communicator never fires")
+    // The `revealed` gate, asserted so that the gate is demonstrably what
+    // blocks the fire. A FRESH state returns on the seeding branch before
+    // `guard revealed` is ever evaluated, so asserting against one proved
+    // nothing -- deleting `revealed,` from the guard left it green. Seed
+    // first (seeding ignores `revealed`), then run the SAME touch twice off
+    // that one seeded state: hidden must not fire, revealed must.
+    let gateSeed = WristComm.updateTouch(state: WristComm.TouchState(), touched: [nil, nil],
+                                         now: 1.0, revealed: false).state
+    let hidden = WristComm.updateTouch(state: gateSeed, touched: [0, nil], now: 1.1, revealed: false)
+    assert(hidden.fire == nil, "hidden communicator never fires")
+    let shown = WristComm.updateTouch(state: gateSeed, touched: [0, nil], now: 1.1, revealed: true)
+    assert(shown.fire == 0, "the identical touch fires once revealed -- the gate is what blocked it")
     print("touch state ok")
 }
 
