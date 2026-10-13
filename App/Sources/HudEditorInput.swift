@@ -195,7 +195,10 @@ final class WristCommGeometry: @unchecked Sendable {
         private static let idle = Side(enabled: false, frame: .invalid,
                                        commOrigin: .zero, opacity: 0)
         /// No communicator anywhere: what a reader sees before the immersive
-        /// render loop has published a frame, and after it stops.
+        /// render loop has published a frame, and after it stops -- the
+        /// render thread publishes this explicitly as it exits (see
+        /// `ImmersiveRenderer.run`'s teardown), rather than leaving the last
+        /// frame's snapshot frozen for the touch loop to fire off.
         static let inactive = Snapshot(sides: [idle, idle])
     }
 

@@ -77,6 +77,10 @@ final class ImmersiveRenderer {
     /// Whether the one-time bindings refresh has been requested yet (see
     /// `updateWristComm`, which documents why it has to happen at all).
     private var requestedCommBootstrap = false
+    /// When the last bindings refresh was requested, for the rising-edge
+    /// debounce in `requestCommRefresh` -- one timestamp shared by both
+    /// sides, since the refresh it gates re-reads every side's cvars anyway.
+    private var lastCommRefreshRequest: Double?
 
     // Frame timing stats, logged every `statsWindow` frames.
     private let statsWindow = 300
@@ -132,6 +136,13 @@ final class ImmersiveRenderer {
         QC_InputSetHeadPitch(0)   // level the aim for a later flat-window session
         // release the hand aim; body-anchored on the flat window
         TrackRecorder.shared.feedAim(valid: false, origin: .zero, yaw: 0, pitch: 0)
+        // Stand the communicator down. Nothing else publishes after this
+        // thread stops, so without it the LAST frame's snapshot stays
+        // frozen -- and a space dismissed mid-glance freezes it at
+        // `enabled: true, opacity ~ 1`, from which the touch loop can read
+        // one rising edge off an equally frozen fingertip and ghost-fire a
+        // bound command with nothing on screen.
+        WristCommGeometry.shared.publish(.inactive)
         print("[immersive] layer invalidated, render thread exiting")
         onStop()
     }
@@ -1172,6 +1183,9 @@ final class ImmersiveRenderer {
     /// so it is not built or drawn at all -- the draw-skip threshold, NOT a
     /// reveal threshold (the fade itself keeps easing through it).
     private static let commFadeFloor: Float = 0.02
+    /// Minimum gap between rising-edge bindings refreshes, seconds. See
+    /// `requestCommRefresh` for the flicker this exists to absorb.
+    private static let commRefreshDebounce: Double = 0.5
 
     /// One communicator quad: a bezel body or one action key, in the wrist
     /// frame's own right/up plane, with its legend (nil for the bezel) and
@@ -1208,6 +1222,22 @@ final class ImmersiveRenderer {
         return min(commGlyphCell, WristComm.cellSize * commLabelFill / count)
     }
 
+    /// Requests a bindings refresh on a reveal rising edge, no more often
+    /// than `commRefreshDebounce`. The edge is NOT rare outside an edit
+    /// session: the wrist latch only holds a pose while the HUD editor is
+    /// open, so ARKit wrist-tracking flicker alternates `frame.valid` and
+    /// drops the latch each time, re-arming the edge -- at frame rate that
+    /// is ~45 main-actor hops a second, each doing 26 cvar reads, and each
+    /// one more chance for the `QC_CvarString`-vs-`Cvar_Set` string race
+    /// `qr_bridge.c` documents. Half a second still picks up a console edit
+    /// well before the fade finishes. The one-shot bootstrap does not go
+    /// through here; it is unconditional.
+    private func requestCommRefresh(now: Double) {
+        if let last = lastCommRefreshRequest, now - last < Self.commRefreshDebounce { return }
+        lastCommRefreshRequest = now
+        WristCommStore.requestRefresh()
+    }
+
     /// Advances the wrist communicator's reveal state for this frame and
     /// returns the quads to draw (empty when nothing is revealed). Also
     /// publishes `WristCommGeometry` for the touch loop -- ALWAYS, for both
@@ -1228,6 +1258,8 @@ final class ImmersiveRenderer {
     private func updateWristComm(wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
                                  headPos: SIMD3<Float>, headForward: SIMD3<Float>,
                                  headPoseAvailable: Bool, engineLive: Bool) -> [CommQuad] {
+        let now = CACurrentMediaTime()
+
         // Bootstrap the bindings exactly once. The store's published
         // snapshot starts INERT -- both sides disabled, every label empty --
         // and only `refresh()` ever populates it. The reveal rising edge
@@ -1237,13 +1269,14 @@ final class ImmersiveRenderer {
         // Deferred until the packet stream is live because the cvars it
         // reads are registered during Host_Init, and `QC_CvarValue` answers
         // 0 for a name it cannot find yet (qr_bridge.c) -- which would burn
-        // the one bootstrap on an empty read.
+        // the one bootstrap on an empty read. Unconditional, not debounced:
+        // it is the one refresh that MUST land.
         if engineLive, !requestedCommBootstrap {
             requestedCommBootstrap = true
+            lastCommRefreshRequest = now
             WristCommStore.requestRefresh()
         }
 
-        let now = CACurrentMediaTime()
         // Same clamp the other dt consumers use (HudEditorInput.tick): a
         // first frame, a hitch, or a backgrounded space must not deliver a
         // dt that jumps the fade or inverts it.
@@ -1280,7 +1313,7 @@ final class ImmersiveRenderer {
                 // Rising edge: pick up any console/config edit to the
                 // bindings before the legends become readable, rather than
                 // re-reading cvars (a main-actor hop) every frame.
-                WristCommStore.requestRefresh()
+                requestCommRefresh(now: now)
             }
             commRevealed[side] = revealed
             commOpacity[side] = WristComm.smoothedOpacity(current: commOpacity[side],
