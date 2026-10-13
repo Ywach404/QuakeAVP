@@ -28,6 +28,15 @@ enum WristComm {
     static let revealOffCos: Float = 0.82  // ~35 deg: hide past this (hysteresis)
     static let fireRevealFloor: Float = 0.6
     static let revealRate: Float = 8       // opacity lerp rate, 1/s
+    /// How long a revealed side keeps using its last valid wrist frame after
+    /// the live one goes invalid, seconds. The arm reaching to press a cell
+    /// is exactly what hides that wrist from the cameras, and the editor's
+    /// own latch in `wristFrames()` does not apply outside an edit session --
+    /// so without this the panel fades out from under the fingertip. Bounded
+    /// (not a permanent latch) because a wrist that has genuinely been
+    /// lowered must still hide, and only ever applied while the side is above
+    /// `fireRevealFloor`: a stale frame plus a blind touch must not fire.
+    static let occlusionHold: Double = 0.25
 
     /// Cell N's centre in the comm's local right/up plane (row-major 2x3).
     static func cellCenter(_ index: Int) -> SIMD2<Float> {
@@ -58,6 +67,12 @@ enum WristComm {
     /// fingertip this tick (nil = none). A cell fires on a fingertip's rising
     /// edge into it, only while revealed; its cooldown then blocks re-fires,
     /// and holding never repeats.
+    ///
+    /// At most ONE cell fires per tick, deliberately: two fingertips entering
+    /// two different cells within the same 90 Hz tick is not an interaction a
+    /// hand can aim, and one command per tick keeps a fire unambiguously
+    /// attributable to a single touch (the second entry is still recorded in
+    /// `wasIn`, so it is consumed rather than deferred into a later tick).
     struct TouchState {
         var wasIn: [Int?] = [nil, nil]
         var cooldownUntil: [Double] = Array(repeating: 0, count: 6)

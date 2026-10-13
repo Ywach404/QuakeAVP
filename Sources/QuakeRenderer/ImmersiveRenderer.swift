@@ -69,6 +69,12 @@ final class ImmersiveRenderer {
     // like the wrist latch above.
     private var commOpacity: [Float] = [0, 0]
     private var commRevealed: [Bool] = [false, false]
+    /// Per-side last valid wrist frame, and when it was last seen, for the
+    /// communicator's OWN bounded occlusion hold -- see `commWristFrame`,
+    /// which documents why the editor latch above cannot serve here.
+    /// Render-thread only, like the reveal state.
+    private var commHeldFrame: [HudEditor.WristFrame?] = [nil, nil]
+    private var commHeldSince: [Double] = [0, 0]
     /// Previous frame's timestamp for the reveal fade's dt. nil until the
     /// first communicator update; CACurrentMediaTime rather than the
     /// compositor clock because the fade is wall-time comfort easing, not
@@ -122,6 +128,17 @@ final class ImmersiveRenderer {
             case .invalidated:
                 break loop
             case .paused:
+                // Stand the communicator down BEFORE blocking. The touch
+                // loop keeps running at 90 Hz while this thread is parked,
+                // so a space paused mid-glance would leave
+                // `WristCommGeometry` frozen at `enabled: true, opacity ~
+                // 1`: fingertips going nil and returning inside a frozen
+                // cell read as a rising edge, and one bound command
+                // ghost-fires with nothing on screen. Same freeze the
+                // teardown below avoids, same fix. The per-side reveal
+                // state goes with it, so a resume re-earns the reveal from
+                // a fresh glance instead of resurrecting a stale one.
+                standDownWristComm()
                 layerRenderer.waitUntilRunning()
             case .running:
                 autoreleasepool { renderFrame() }
@@ -142,7 +159,7 @@ final class ImmersiveRenderer {
         // `enabled: true, opacity ~ 1`, from which the touch loop can read
         // one rising edge off an equally frozen fingertip and ghost-fire a
         // bound command with nothing on screen.
-        WristCommGeometry.shared.publish(.inactive)
+        standDownWristComm()
         print("[immersive] layer invalidated, render thread exiting")
         onStop()
     }
@@ -526,7 +543,8 @@ final class ImmersiveRenderer {
             headPos: SIMD3(eyeCol.x, eyeCol.y, eyeCol.z),
             headForward: SIMD3(commHeadForward.x, commHeadForward.y, commHeadForward.z),
             headPoseAvailable: deviceAnchor != nil,
-            engineLive: packet != nil)
+            engineLive: packet != nil,
+            editorActive: editorSnapshot.active)
 
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
@@ -1238,6 +1256,62 @@ final class ImmersiveRenderer {
         WristCommStore.requestRefresh()
     }
 
+    /// Publishes an inactive communicator and clears every per-side piece of
+    /// reveal state (fade, hysteresis latch, occlusion hold, fade clock), so
+    /// no reader sees a frozen panel and no resume inherits one. Render
+    /// thread; called when the layer parks and when it goes away.
+    private func standDownWristComm() {
+        commOpacity = [0, 0]
+        commRevealed = [false, false]
+        commHeldFrame = [nil, nil]
+        commHeldSince = [0, 0]
+        lastCommTick = nil
+        WristCommGeometry.shared.publish(.inactive)
+    }
+
+    /// The wrist frame the communicator uses for `side` this frame: the live
+    /// one whenever it is valid, and otherwise -- for at most
+    /// `WristComm.occlusionHold` seconds, and only while this side is
+    /// revealed past `WristComm.fireRevealFloor` -- the last valid one.
+    ///
+    /// This is the communicator's own hold, deliberately NOT
+    /// `latchedWristFrame`'s: that latch only holds while the HUD editor is
+    /// open and is explicitly dropped between edit sessions, which is the
+    /// communicator's entire operating mode. The arm reaching to press a
+    /// cell is exactly what hides that wrist from the cameras, so with no
+    /// hold of its own a sustained occlusion invalidates the frame, the
+    /// touched cell goes nil and the fade crosses below the fire floor
+    /// within a handful of frames: the panel vanishes from under the
+    /// fingertip, and after re-acquire the touch loop's idle reset and
+    /// seeding absorb the still-resting finger, so the press has to be
+    /// withdrawn and made again.
+    ///
+    /// Reveal-gated rather than unconditional: a stale frame plus a blind
+    /// touch must not fire. Below the fire floor there is nothing on screen
+    /// to aim at, so an invalid wrist behaves exactly as it did before --
+    /// fade out. Bounded for the same reason: a wrist genuinely lowered out
+    /// of view still hides, just a quarter-second later.
+    ///
+    /// The frame returned here feeds BOTH the drawn quads and the published
+    /// `WristCommGeometry` side, so the fingertip is hit-tested against the
+    /// panel the eye is looking at -- the same three-path discipline the HUD
+    /// keeps between its tiles, its editor grid and its hit-test geometry.
+    private func commWristFrame(side: Int, live: HudEditor.WristFrame,
+                                now: Double) -> HudEditor.WristFrame {
+        if live.valid {
+            commHeldFrame[side] = live
+            commHeldSince[side] = now
+            return live
+        }
+        guard commOpacity[side] > WristComm.fireRevealFloor,
+              let held = commHeldFrame[side],
+              now - commHeldSince[side] <= WristComm.occlusionHold else {
+            commHeldFrame[side] = nil
+            return live
+        }
+        return held
+    }
+
     /// Advances the wrist communicator's reveal state for this frame and
     /// returns the quads to draw (empty when nothing is revealed). Also
     /// publishes `WristCommGeometry` for the touch loop -- ALWAYS, for both
@@ -1252,12 +1326,20 @@ final class ImmersiveRenderer {
     /// decays what is already up -- never a hard cut, and never a reveal
     /// test against an identity (missing) head pose.
     ///
+    /// A wrist whose live frame drops out while its panel is up keeps its
+    /// last valid pose briefly -- see `commWristFrame`. While the HUD live
+    /// editor is open every side is treated as hidden: the comm sits 12 mm
+    /// under the grid being rearranged, where it is already inert (the touch
+    /// loop refuses to fire during an edit session) but would only clutter
+    /// the tile the hand is reaching for.
+    ///
     /// Thread: render thread. `WristCommStore.snapshot()` is the nonisolated
     /// lock-protected read and `requestRefresh()` hops to the main actor to
     /// do the cvar work; no `QC_*` call is made from here.
     private func updateWristComm(wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
                                  headPos: SIMD3<Float>, headForward: SIMD3<Float>,
-                                 headPoseAvailable: Bool, engineLive: Bool) -> [CommQuad] {
+                                 headPoseAvailable: Bool, engineLive: Bool,
+                                 editorActive: Bool) -> [CommQuad] {
         let now = CACurrentMediaTime()
 
         // Bootstrap the bindings exactly once. The store's published
@@ -1288,13 +1370,27 @@ final class ImmersiveRenderer {
         var sides: [WristCommGeometry.Side] = []
 
         for side in 0..<commOpacity.count {
-            let frame = side == 0 ? wrists.off : wrists.gun
+            let live = side == 0 ? wrists.off : wrists.gun
             let enabled = side < comm.sides.count && comm.sides[side].enabled
+            let frame: HudEditor.WristFrame
+            if editorActive {
+                // No hold while editing: the comm is suppressed below
+                // anyway, and `wristFrames()` is doing its own (editor-
+                // specific) latching for the grid. Dropping the held frame
+                // means a later reveal re-acquires from a freshly seen
+                // wrist rather than an edit-session pose.
+                commHeldFrame[side] = nil
+                frame = live
+            } else {
+                frame = commWristFrame(side: side, live: live, now: now)
+            }
 
-            guard enabled, frame.valid, headPoseAvailable else {
-                // Nothing to glance at: drop the latch (so returning to a
-                // tracked wrist is a fresh rising edge, bindings refreshed
-                // with it) and ease whatever is on screen out.
+            guard enabled, !editorActive, frame.valid, headPoseAvailable else {
+                // Nothing to glance at -- or nothing that should be on
+                // screen, with the editor open: drop the latch (so
+                // returning to a tracked, un-suppressed wrist is a fresh
+                // rising edge, bindings refreshed with it) and ease
+                // whatever is up out.
                 commRevealed[side] = false
                 commOpacity[side] = WristComm.smoothedOpacity(current: commOpacity[side],
                                                               target: 0, dt: dt)
