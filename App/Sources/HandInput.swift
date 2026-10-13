@@ -165,6 +165,7 @@ final class HandInput: @unchecked Sendable {
             GunHand.shared.invalidate()
             EditorHandInput.shared.invalidate()
             FingerTips.shared.invalidate()
+            FingerWire.shared.invalidate()
         }
     }
 
@@ -254,6 +255,7 @@ final class HandInput: @unchecked Sendable {
         GunHand.shared.invalidate()
         EditorHandInput.shared.invalidate()
         FingerTips.shared.invalidate()
+        FingerWire.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
         tpRingWas = false
     }
@@ -278,6 +280,13 @@ final class HandInput: @unchecked Sendable {
         // communicator's touch hit-test needs a fresh fingertip read
         // regardless of the editor/wheel/gameplay gates below.
         FingerTips.shared.publish(left: Self.fingertip(left), right: Self.fingertip(right))
+
+        // ...and each hand's index-finger wireframe, for the same consumer
+        // and published at the same point for the same reason. The renderer
+        // draws it only for the hand actually hovering or pressing a key, so
+        // publishing both every update costs nothing on the frames where
+        // neither hand is near the panel.
+        FingerWire.shared.publish(left: left.indexWireVerts, right: right.indexWireVerts)
 
         // While the HUD layout editor is open, the hands drive ONLY the grab
         // (published just above). Every gameplay gesture -- fire, move, turn,
@@ -409,8 +418,45 @@ final class HandInput: @unchecked Sendable {
         let dt = Float(max(0, min(0.1, now - lastTurnTime)))
         lastTurnTime = now
         _ = dt   // retained for the (now unused) accumulate path's signature
-        do {
+        turning: do {
             turnIntent = 0; stickNeutral = nil; clutchAnchor = nil
+
+            // TURNING ONLY is held while the wrist communicator is in use.
+            // Reaching across with the GUN hand to press a key is a sideways
+            // sweep of exactly the hand the whip and the pinch-drag watch, so
+            // every press came with a snap turn nobody asked for -- and once
+            // the view has turned, the panel has moved too.
+            //
+            // Movement, jump, crouch and fire are deliberately NOT suppressed
+            // (unlike the wheel/editor/prayer gates above, which zero the
+            // whole slice and return): the communicator is a six-key panel
+            // you glance at, not a modal menu, and being unable to back away
+            // while reading it would be worse than the turn. The slice built
+            // above is left exactly as it is; only the turn synthesis below
+            // is skipped, and the gauge cleared the way the other
+            // suppressions clear it.
+            //
+            // The gate is the SAME condition the touch loop fires on -- a
+            // published side that is enabled and revealed past
+            // `WristComm.fireRevealFloor` -- so turning is held exactly while
+            // a key could actually be pressed, never while the panel is
+            // merely fading. A lock-snapshot read, the same class as the
+            // publishers this method already touches.
+            //
+            // NB: this covers every turn path HandInput OWNS. The aim-hand
+            // edge turn is engine-side (`vr_edgeturn` in in_null.c, off the
+            // aim yaw the engine reads for itself), and the wheel/editor
+            // gates above cannot suppress it either; `vr_edgeturn 0` is its
+            // own switch until it has a gate of its own.
+            if VRSettings.shared.wristCommNoTurn, Self.wristCommInUse() {
+                turnGaugeVerts = []
+                // Drop any candidate whip run as well: a reach that began as
+                // a plausible whip must not fire the instant the panel fades.
+                flickCandFrames = 0
+                flickCandStart = nil
+                break turning
+            }
+
             // The held pinch-drag is checked first (it's the deliberate one); if
             // it isn't driving, a quick sideways whip fires.
             var turnedByPinch = false
@@ -523,6 +569,19 @@ final class HandInput: @unchecked Sendable {
         aggregator.update(.hands, slice)
     }
 
+
+    /// True while the wrist communicator is actually usable: any published
+    /// side enabled AND revealed at or past `WristComm.fireRevealFloor`, the
+    /// very floor the touch loop refuses to fire below. Reading the published
+    /// `WristCommGeometry` rather than the reveal state itself keeps one
+    /// definition of "the panel is up" shared by the draw, the touch gate and
+    /// this hold -- a second opinion here would hold turning on frames where
+    /// no key could be pressed, or free it on frames where one could.
+    private static func wristCommInUse() -> Bool {
+        WristCommGeometry.shared.snapshot().sides.contains {
+            $0.enabled && $0.opacity >= WristComm.fireRevealFloor
+        }
+    }
 
     /// Convert accumulated turn intent into discrete comfort snaps: one snap
     /// pulse per `snapStep` of intent, spaced by snapGap so the engine re-arms
@@ -1074,6 +1133,12 @@ private struct HandState {
     /// drawn by the render thread at opacity 1 - phase. See VirtualHand.
     var virtualVerts: [Float] = []
 
+    /// The INDEX FINGER alone as a wireframe, corrected-tracking space,
+    /// 7 floats/vertex (xyz + rgba), triangle list. Built every ingest and
+    /// published through `FingerWire`; drawn only while this hand is working
+    /// the wrist communicator. See `buildIndexWire`.
+    var indexWireVerts: [Float] = []
+
     /// Flips the palm-normal convention if the skeleton's winding turns
     /// out mirrored on hardware; calibrate on device, not by argument.
     private static let palmSign: Float = 1
@@ -1388,6 +1453,11 @@ private struct HandState {
         }
 
         buildDebug(tip: vtip)   // inferred, so the wireframe doesn't drop fingers either
+        // The index-finger wire for the wrist communicator. Also fed the
+        // INFERRED pose: the hand reaching across to a wrist panel is
+        // partly occluded by the forearm it is reaching for, which is
+        // precisely when a tracked-only chain drops joints out of the wire.
+        buildIndexWire(tip: vtip)
         // The DRAWN hand uses the INFERRED pose (vtip, defined above): ARKit
         // still reports a transform for an occluded joint, which is how
         // three.js/WebXR keeps every finger visible in a fist. Dropping
@@ -1469,6 +1539,68 @@ private struct HandState {
             }
         }
         virtualVerts = v
+    }
+
+    /// The INDEX FINGER alone as a wireframe: thin-quad bones down the
+    /// metacarpal->knuckle->base->tip chain with a small octahedral node at
+    /// each joint. The wrist communicator's renderer draws this on the one
+    /// hand that is hovering or has just pressed a key, so the finger doing
+    /// the pressing is visible against the stone unit.
+    ///
+    /// Index only, and no wrist bone: the whole point is to show WHERE the
+    /// pressing fingertip is, and a full hand rig over a 10 cm panel hides
+    /// the keys it is meant to be aiming at. Thin quads and octahedra for the
+    /// same reason `buildDebug` uses them -- foveation forbids line and point
+    /// primitives on device.
+    ///
+    /// Built unconditionally (no debug toggle), because its consumer is a
+    /// gameplay feature rather than a debug overlay; the colour here is a
+    /// neutral placeholder the renderer overwrites with the hover/press tint.
+    /// Corrected-tracking space, 7 floats/vertex (xyz + rgba).
+    private mutating func buildIndexWire(tip: (HandSkeleton.JointName) -> SIMD3<Float>?) {
+        let chain: [HandSkeleton.JointName] = [
+            .indexFingerMetacarpal, .indexFingerKnuckle,
+            .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip,
+        ]
+        let correction = TrackingSpace.correction
+        let placeholder = SIMD4<Float>(1, 1, 1, 1)
+        var v: [Float] = []
+        func corner(_ p: SIMD3<Float>) {
+            let q = correction * SIMD4(p, 1)
+            v += [q.x, q.y, q.z, placeholder.x, placeholder.y, placeholder.z, placeholder.w]
+        }
+        // Thin quad bone, perpendicular off world-up so a "line" shows from
+        // most angles (the same construction and ~2.5 mm half-thickness
+        // `buildDebug`'s bones use).
+        let up = SIMD3<Float>(0, 1, 0)
+        func bone(_ a: SIMD3<Float>, _ b: SIMD3<Float>) {
+            var perp = simd_cross(b - a, up)
+            if simd_length(perp) < 1e-5 { perp = simd_cross(b - a, SIMD3(1, 0, 0)) }
+            perp = simd_length(perp) > 0 ? simd_normalize(perp) * 0.0025 : SIMD3(0.0025, 0, 0)
+            let a0 = a - perp, a1 = a + perp, b0 = b - perp, b1 = b + perp
+            corner(a0); corner(a1); corner(b0)
+            corner(a1); corner(b1); corner(b0)
+        }
+        func node(_ p: SIMD3<Float>, _ r: Float) {
+            let px = p + SIMD3(r,0,0), nx = p - SIMD3(r,0,0)
+            let py = p + SIMD3(0,r,0), ny = p - SIMD3(0,r,0)
+            let pz = p + SIMD3(0,0,r), nz = p - SIMD3(0,0,r)
+            func f(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ d: SIMD3<Float>) {
+                corner(a); corner(b); corner(d)
+            }
+            f(px,py,pz); f(py,nx,pz); f(nx,ny,pz); f(ny,px,pz)
+            f(py,px,nz); f(nx,py,nz); f(ny,nx,nz); f(px,ny,nz)
+        }
+        var prev: SIMD3<Float>?
+        for (i, j) in chain.enumerated() {
+            guard let cur = tip(j) else { prev = nil; continue }
+            if let p = prev { bone(p, cur) }
+            // Tapered nodes, fat knuckle to small tip, so the fingertip
+            // itself is the smallest, most precise mark on the panel.
+            node(cur, 0.0055 - 0.0015 * Float(i) / Float(chain.count - 1))
+            prev = cur
+        }
+        indexWireVerts = v
     }
 
     /// A GREEN WIREFRAME skeleton: thin bones between joints and a small

@@ -115,6 +115,49 @@ final class FingerTips: @unchecked Sendable {
     }
 }
 
+/// Cross-loop publish of each hand's INDEX-FINGER wireframe, for the wrist
+/// communicator's touch feedback. Written by `HandInput.emit` every hand
+/// update, immediately alongside `FingerTips.shared.publish(...)` and ahead
+/// of every gate/suppression below it, for the same reason that publish
+/// gives: the communicator needs a fresh read whether or not a gameplay
+/// gesture or the HUD editor is active this frame.
+///
+/// Thin-quad TRIANGLE vertices, 7 floats each (xyz + rgba), in corrected
+/// tracking space -- the `GuideVertex` layout every hand overlay uses, and
+/// quads rather than lines because line primitives are illegal under the
+/// device's foveation rate map. Empty per hand exactly when that hand isn't
+/// tracked.
+///
+/// The published colour is a neutral placeholder: the renderer overwrites it
+/// per vertex (`ImmersiveRenderer.tintedFingerWire`) with the hover/press
+/// tint, because whether a hand is working a panel -- and which of the two
+/// panels -- is the renderer's knowledge, not this loop's. Same
+/// lock-protected plain-value pattern as `FingerTips`/`WristCommGeometry`.
+final class FingerWire: @unchecked Sendable {
+    static let shared = FingerWire()
+
+    private let lock = NSLock()
+    private var _left: [Float] = []
+    private var _right: [Float] = []
+
+    func publish(left: [Float], right: [Float]) {
+        lock.lock(); _left = left; _right = right; lock.unlock()
+    }
+
+    func snapshot() -> (left: [Float], right: [Float]) {
+        lock.lock(); defer { lock.unlock() }
+        return (_left, _right)
+    }
+
+    /// Hands stood down -- publish nothing to draw, the same stand-down
+    /// `FingerTips.invalidate()` answers for its own signal. Without it the
+    /// renderer would keep a frozen wire from the last tracked frame, which
+    /// a hover arriving later would then light up.
+    func invalidate() {
+        publish(left: [], right: [])
+    }
+}
+
 /// Cross-loop publish of this frame's workbench hit-test geometry. The
 /// render thread builds it (see `ImmersiveRenderer.publishWorkbenchGeometry`,
 /// which documents the zone/tile layout this mirrors) every frame the
