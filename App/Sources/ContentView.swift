@@ -1651,23 +1651,43 @@ struct ContentView: View {
         }
     }
 
-    /// One wrist-communicator placement row: a STEPPED slider (the unit is
-    /// dialled to a degree and half a centimetre, not to float precision)
-    /// that pushes straight to `VRSettings`, which the render thread samples
-    /// per frame -- so the panel re-seats under the dragging thumb, with no
-    /// Apply and no engine round trip. `display` scales the readout only
-    /// (metres shown as cm); the stored value stays in the dial's own unit.
+    /// One wrist-communicator placement row: a JOG WHEEL (`RotaryDial`)
+    /// over a STEPPED range -- the unit is dialled to a degree and half a
+    /// centimetre, not to float precision -- that pushes straight to
+    /// `VRSettings`, which the render thread samples per frame, so the
+    /// panel re-seats under the dragging thumb with no Apply and no engine
+    /// round trip. `display` scales the readout only (metres shown as cm);
+    /// the stored value stays in the dial's own unit.
+    ///
+    /// The wheel REPLACED a stepped slider, at A.'s request after dialling
+    /// the unit on device: a slider a few centimetres long had to resolve
+    /// the whole range, so one step was a couple of millimetres of thumb
+    /// travel and the unit jumped past where he wanted it. A wheel's
+    /// precision is set by how far you twist, not by how wide the row is.
+    /// The +/- buttons stay beside it for the one thing a continuous twist
+    /// is bad at -- committing exactly one step, or returning to a value
+    /// you have just overshot.
     private func commPlaceRow(_ label: String, _ value: Binding<Float>,
                               _ range: ClosedRange<Float>, step: Float,
                               unit: String, display: Float, fmt: String = "%.0f",
                               apply: @escaping (Float) -> Void) -> some View {
-        HStack {
+        // One nudge, snapped and clamped the same way the wheel's own
+        // commits are, so the two affordances cannot disagree about what a
+        // legal value is.
+        func nudge(_ direction: Float) {
+            let raw = value.wrappedValue + direction * step
+            let snapped = (raw / step).rounded() * step
+            let clamped = min(max(snapped, range.lowerBound), range.upperBound)
+            guard clamped != value.wrappedValue else { return }
+            value.wrappedValue = clamped
+            apply(clamped)
+        }
+        return HStack(spacing: 8) {
             Text(label).font(.caption).frame(width: 64, alignment: .leading)
-            Slider(value: Binding(
-                get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
-                in: Double(range.lowerBound)...Double(range.upperBound),
-                step: Double(step))
+            RotaryDial(value: value, range: range, step: step, onChange: apply)
+            Button { nudge(-1) } label: { Image(systemName: "minus") }
+            Button { nudge(1) } label: { Image(systemName: "plus") }
+            Spacer(minLength: 0)
             // Normalise -0 to 0 first: `%f` prints the sign bit even though
             // -0.0 == 0.0, and a dial resting exactly at zero must never
             // flash a stray minus sign depending on which side it last
@@ -1676,6 +1696,8 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 48, alignment: .trailing)
         }
+        .buttonStyle(.bordered)
+        .font(.caption)
     }
 
     private static func normalizedZero(_ v: Float) -> Float { v == 0 ? 0 : v }
