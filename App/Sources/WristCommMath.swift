@@ -83,19 +83,25 @@ enum WristComm {
     /// applies it in its ONE placement chain, between the occlusion-held
     /// wrist frame and the user's dials.
     ///
-    /// THE SIGN -- `right' = -up`, `up' = +right` -- is the one choice here
+    /// THE SIGN -- `right' = +up`, `up' = -right` -- is the one choice here
     /// a reader cannot derive, so: handedness forces the two halves to move
     /// together (`right' x up' == forward`, or every legend would come out
     /// mirrored), which leaves exactly two candidates, this and its
-    /// opposite. This one is chosen because `right` is both the axis
-    /// `RendererCore.textQuads` lays glyphs along and the axis the three
-    /// columns run along, so `right' = -up` makes the key run AND the
-    /// legends read from the wrist end down toward the elbow: cell 0 (cmd0,
-    /// the first binding) nearest the hand, the keys counting away from it,
-    /// the text running down the forearm the way a spine runs down a book.
-    /// The opposite pair is the same unit end-for-end -- cell 0 at the
-    /// elbow, legends reading back toward the hand. Flipping it is this one
-    /// expression plus the two signs pinned in `runOrientationTests`.
+    /// opposite. `right` is both the axis `RendererCore.textQuads` lays
+    /// glyphs along and the axis the three columns run along, so `right' =
+    /// +up` makes the key run AND the legends read from the ELBOW end back
+    /// up toward the wrist: cell 0 (cmd0, the first binding) furthest down
+    /// the forearm, the keys counting toward the hand, every legend the
+    /// right way up for a head looking down its own arm.
+    ///
+    /// The opposite pair (`-up`/`+right`) is the same unit end-for-end, and
+    /// it is what shipped first: the reasoning was that a legend should
+    /// read "down the forearm the way a spine runs down a book". On device
+    /// it read UPSIDE DOWN -- A. called it off a screenshot -- so this is a
+    /// DEVICE-DECIDED sign, not a derived one, and the only test it has is
+    /// the headset. Flipping it back is this one expression plus the two
+    /// signs and the cell-0/cell-5 semantics pinned in
+    /// `runOrientationTests`.
     ///
     /// Because the orientation lands BEFORE `adjustedFrame`, the user's
     /// dials then act in the turned unit's own axes: the tilt pitches about
@@ -109,8 +115,8 @@ enum WristComm {
     static func orientedFrame(_ frame: HudEditor.WristFrame, alongArm: Bool) -> HudEditor.WristFrame {
         guard alongArm, frame.valid else { return frame }
         var turned = frame
-        turned.right = -frame.up
-        turned.up = frame.right
+        turned.right = frame.up
+        turned.up = -frame.right
         return turned
     }
 
