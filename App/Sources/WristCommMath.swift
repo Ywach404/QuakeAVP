@@ -55,24 +55,40 @@ enum WristComm {
     /// plane -- `hudGap` clear of the grid above it, whichever way the unit
     /// is turned.
     ///
-    /// That last clause is the whole of `alongArm` here. The drop is the HUD's
-    /// own half-height, the gap, and then the unit's HALF-EXTENT ALONG THE
-    /// DROP -- and which half-extent that is depends on the orientation,
-    /// because `orientedFrame` turns the unit 90 deg in its own plane: across
-    /// the wrist the drop clears the two-row short half (`gridHalfY`), along
-    /// the forearm the three-key long half (`gridHalfX`), so the unit starts
-    /// under the HUD and runs further down the arm rather than overlapping
-    /// the grid by the difference. The flag is REQUIRED, not defaulted: a
-    /// caller that seats the unit without saying which way it is turned is
-    /// the bug this signature exists to make impossible.
-    static func commOrigin(wrist: HudEditor.WristFrame, alongArm: Bool) -> SIMD3<Float> {
-        wrist.origin - wrist.up * (HudEditor.gridHalfY + hudGap + (alongArm ? gridHalfX : gridHalfY))
+    /// That last clause is the whole of `rollDegrees` here. The drop is the
+    /// HUD's own half-height, the gap, and then the unit's HALF-EXTENT ALONG
+    /// THE DROP -- and that extent depends on how far `orientedFrame` has
+    /// turned the unit in its own plane. The panel's corners sit at
+    /// +-gridHalfX along the turned `right` and +-gridHalfY along the turned
+    /// `up`; projecting those four corners back onto the wrist's own `up`
+    /// and taking the largest gives
+    ///
+    ///     |sin t| * gridHalfX + |cos t| * gridHalfY
+    ///
+    /// -- the supporting half-width of the rotated rectangle in the drop
+    /// direction. At t = 0 that is the two-row short half (`gridHalfY`, the
+    /// across-wrist seating, unchanged); at t = +-90 the three-key long half
+    /// (`gridHalfX`, the along-arm seating, unchanged); in between it sweeps
+    /// smoothly, so the unit starts under the HUD at EVERY angle rather than
+    /// overlapping the grid part-way through a turn. The absolute values are
+    /// why -45 seats exactly like +45: an extent does not care which way the
+    /// panel was spun.
+    ///
+    /// The angle is REQUIRED, not defaulted: a caller that seats the unit
+    /// without saying which way it is turned is the bug this signature
+    /// exists to make impossible.
+    static func commOrigin(wrist: HudEditor.WristFrame, rollDegrees: Float) -> SIMD3<Float> {
+        let t = rollDegrees * .pi / 180
+        let extent = abs(sin(t)) * gridHalfX + abs(cos(t)) * gridHalfY
+        return wrist.origin - wrist.up * (HudEditor.gridHalfY + hudGap + extent)
     }
 
-    /// The communicator turned to lie ALONG the forearm: a 90 degree rotation
+    /// The communicator ROTATED IN ITS OWN PLANE by `rollDegrees`: a rotation
     /// of the panel's in-plane axes about its own normal (`forward`), so the
-    /// three-key long axis runs down the arm instead of across the wrist.
-    /// Identity when `alongArm` is false -- today's unit, untouched.
+    /// face keeps pointing at the eye and only the key run turns.
+    ///
+    ///     right' = right cos t + up sin t
+    ///     up'    = up cos t - right sin t
     ///
     /// It is a frame rotation and nothing else, which is what keeps the rest
     /// of this file out of it: `cellCenter`, `touchedCell`/`hoveredCell` and
@@ -83,40 +99,60 @@ enum WristComm {
     /// applies it in its ONE placement chain, between the occlusion-held
     /// wrist frame and the user's dials.
     ///
-    /// THE SIGN -- `right' = +up`, `up' = -right` -- is the one choice here
-    /// a reader cannot derive, so: handedness forces the two halves to move
-    /// together (`right' x up' == forward`, or every legend would come out
-    /// mirrored), which leaves exactly two candidates, this and its
-    /// opposite. `right` is both the axis `RendererCore.textQuads` lays
-    /// glyphs along and the axis the three columns run along, so `right' =
-    /// +up` makes the key run AND the legends read from the ELBOW end back
-    /// up toward the wrist: cell 0 (cmd0, the first binding) furthest down
-    /// the forearm, the keys counting toward the hand, every legend the
-    /// right way up for a head looking down its own arm.
+    /// ZERO IS A BIT-IDENTICAL EARLY RETURN, not a rotation by zero: the
+    /// across-wrist unit A. tuned on device is the 0 deg case, and
+    /// `simd_normalize` of a cos/sin combination at t = 0 is not guaranteed
+    /// to hand back the same floats it was given. The across view's default
+    /// is therefore literally today's frame.
     ///
-    /// The opposite pair (`-up`/`+right`) is the same unit end-for-end, and
-    /// it is what shipped first: the reasoning was that a legend should
-    /// read "down the forearm the way a spine runs down a book". On device
-    /// it read UPSIDE DOWN -- A. called it off a screenshot -- so this is a
-    /// DEVICE-DECIDED sign, not a derived one, and the only test it has is
-    /// the headset. Flipping it back is this one expression plus the two
-    /// signs and the cell-0/cell-5 semantics pinned in
-    /// `runOrientationTests`.
+    /// +90 IS THE OLD `alongArm: true` MAPPING, EXACTLY -- `right' = +up`,
+    /// `up' = -right` -- and it is the along view's persisted default, so
+    /// replacing the Bool with a dial moves nothing that was already tuned.
+    /// That sign is the one choice here a reader cannot derive, so:
+    /// handedness forces the two halves to move together (`right' x up' ==
+    /// forward`, or every legend would come out mirrored), which leaves
+    /// exactly two candidates, this and its opposite. `right` is both the
+    /// axis `RendererCore.textQuads` lays glyphs along and the axis the
+    /// three columns run along, so `right' = +up` makes the key run AND the
+    /// legends read from the ELBOW end back up toward the wrist: cell 0
+    /// (cmd0, the first binding) furthest down the forearm, the keys
+    /// counting toward the hand, every legend the right way up for a head
+    /// looking down its own arm.
     ///
-    /// Because the orientation lands BEFORE `adjustedFrame`, the user's
-    /// dials then act in the turned unit's own axes: the tilt pitches about
-    /// the new `right`, which is the arm's long axis (the natural handle for
-    /// a unit lying down the forearm), and the Side/Height offsets run down
-    /// and across the arm respectively. Deliberate, and stated in the
-    /// settings caption so the sliders cannot read as broken.
+    /// The opposite pair (`-up`/`+right`, i.e. -90) is the same unit
+    /// end-for-end, and it is what shipped first: the reasoning was that a
+    /// legend should read "down the forearm the way a spine runs down a
+    /// book". On device it read UPSIDE DOWN -- A. called it off a screenshot
+    /// -- so the sweep direction here is DEVICE-DECIDED, not derived. It is
+    /// now also recoverable without a code change: the dial reaches -90.
+    ///
+    /// Why a free angle rather than the two states: on device the along-arm
+    /// unit sat "at an angle that doesn't make sense" -- the forearm the
+    /// strap is on is not square to the wrist frame the panel is built in,
+    /// and the error is a few tens of degrees, not a quarter turn. A
+    /// quantised flip cannot express that; this can, and the seating in
+    /// `commOrigin` follows the angle so the unit stays clear of the HUD
+    /// all the way round.
+    ///
+    /// Because the rotation lands BEFORE `adjustedFrame`, the user's dials
+    /// then act in the turned unit's own axes: the tilt pitches about the
+    /// new `right`, and the Side/Height offsets run along the turned axes
+    /// too. Deliberate, and stated in the settings caption so the sliders
+    /// cannot read as broken.
     ///
     /// An invalid (untracked) frame passes through whole, the same contract
     /// `adjustedFrame` keeps: there is no plane to rotate.
-    static func orientedFrame(_ frame: HudEditor.WristFrame, alongArm: Bool) -> HudEditor.WristFrame {
-        guard alongArm, frame.valid else { return frame }
+    static func orientedFrame(_ frame: HudEditor.WristFrame,
+                              rollDegrees: Float) -> HudEditor.WristFrame {
+        guard frame.valid, rollDegrees != 0 else { return frame }
+        let t = rollDegrees * .pi / 180
+        let c = cos(t), s = sin(t)
         var turned = frame
-        turned.right = frame.up
-        turned.up = -frame.right
+        // Re-normalised because the hit-test projects onto these axes
+        // (`HudEditor.offsetInFrame` assumes unit length): a basis that
+        // drifted short would silently widen the grid's bounds.
+        turned.right = simd_normalize(frame.right * c + frame.up * s)
+        turned.up = simd_normalize(frame.up * c - frame.right * s)
         return turned
     }
 

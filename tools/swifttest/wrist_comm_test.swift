@@ -86,7 +86,7 @@ func runCommGeometryTests() {
 
     let wf = HudEditor.WristFrame(anchor: 0, origin: .zero, right: SIMD3(1,0,0),
                                   up: SIMD3(0,1,0), forward: SIMD3(0,0,1), valid: true)
-    let o = WristComm.commOrigin(wrist: wf, alongArm: false)
+    let o = WristComm.commOrigin(wrist: wf, rollDegrees: 0)
     assert(o.y < -HudEditor.gridHalfY, "comm origin clears the HUD half-height")
 
     let c4 = WristComm.cellCenter(4)
@@ -104,7 +104,7 @@ func runCommGeometryTests() {
 func runHoverTests() {
     let wf = HudEditor.WristFrame(anchor: 0, origin: .zero, right: SIMD3(1,0,0),
                                   up: SIMD3(0,1,0), forward: SIMD3(0,0,1), valid: true)
-    let o = WristComm.commOrigin(wrist: wf, alongArm: false)
+    let o = WristComm.commOrigin(wrist: wf, rollDegrees: 0)
 
     // The band is strictly wider than the touch depth, or "hovering" and
     // "touching" would be the same state and there would be nothing to
@@ -258,7 +258,7 @@ func runAdjustedFrameTests() {
     let oblique = testFrame(origin: SIMD3(0.2, 0.9, -0.35), toward: SIMD3(0.3, -0.5, 0.8))
 
     for (name, wf) in [("axis-aligned", axis), ("oblique", oblique)] {
-        let o = WristComm.commOrigin(wrist: wf, alongArm: false)
+        let o = WristComm.commOrigin(wrist: wf, rollDegrees: 0)
 
         // Zero adjustments must be the IDENTITY, bit-for-bit as far as these
         // tolerances see it. This is the "unchanged at zero" contract the
@@ -381,45 +381,61 @@ func runHoverPickTests() {
     print("hover pick ok")
 }
 
-// MARK: - Orientation: across the wrist vs along the forearm
+// MARK: - Orientation: the free in-plane Rotate dial
 
-/// `WristComm.orientedFrame` + the orientation-aware seating
-/// (`commOrigin(wrist:alongArm:)`), which together are the whole of the
-/// "Along arm" option -- the renderer applies them in its one placement
+/// Bit-identical component comparison, for the one claim a tolerance cannot
+/// make: `rotate = 0` must be the EARLY-RETURN identity, not a rotation by
+/// zero that happens to land within 1e-7. The across-wrist unit A. already
+/// tuned on device is that path, and it must be untouched to the last bit.
+func exact(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
+    a.x == b.x && a.y == b.y && a.z == b.z
+}
+
+/// `WristComm.orientedFrame(_:rollDegrees:)` + the rotation-aware seating
+/// (`commOrigin(wrist:rollDegrees:)`), which together are the whole of the
+/// per-view Rotate dial -- the renderer applies them in its one placement
 /// chain and everything else (cellCenter, touchedCell, the draw, the
 /// published geometry) is unchanged, so what is pinned here IS the feature.
+///
+/// This replaces the round-4/5 `alongArm: Bool` pair. The Bool's two states
+/// survive as the two DEFAULTS (across = 0 deg, along = +90 deg) and both
+/// are pinned below against the exact mappings those two states shipped
+/// with, so a continuous dial cannot quietly re-seat or re-orient the unit
+/// A. already tuned.
 func runOrientationTests() {
     let axis = testFrame(origin: SIMD3(0, 1.1, -0.4), toward: SIMD3(0, 0, 1))
     let oblique = testFrame(origin: SIMD3(0.2, 0.9, -0.35), toward: SIMD3(0.3, -0.5, 0.8))
 
     // The long axis IS the long one -- three columns against two rows. Every
     // claim below about "the long axis runs down the arm" rests on this, and
-    // a future grid that was 3x3 would make the whole option meaningless.
+    // a future grid that was 3x3 would make the whole dial meaningless.
     assert(WristComm.gridHalfX > WristComm.gridHalfY, "the 3-key axis is the longer one")
 
     for (name, wf) in [("axis-aligned", axis), ("oblique", oblique)] {
-        // ACROSS (the default) is the IDENTITY, to the tightest tolerance
-        // these helpers have: the unit A. already tuned on device must not
-        // move until the option is turned on.
-        let across = WristComm.orientedFrame(wf, alongArm: false)
-        assert(near(across.right, wf.right, 1e-7), "\(name): across leaves right alone")
-        assert(near(across.up, wf.up, 1e-7), "\(name): across leaves up alone")
-        assert(near(across.forward, wf.forward, 1e-7), "\(name): across leaves forward alone")
-        assert(near(across.origin, wf.origin, 1e-7), "\(name): across leaves the origin alone")
-        assert(across.valid, "\(name): across keeps validity")
-        assert(near(WristComm.commOrigin(wrist: wf, alongArm: false),
+
+        // MARK: 0 deg is the bit-identical identity
+
+        // The ACROSS default. Not "within tolerance" -- the same floats back:
+        // this is the unit already tuned on device, and the Rotate dial
+        // arriving must not move it by an ulp.
+        let across = WristComm.orientedFrame(wf, rollDegrees: 0)
+        assert(exact(across.right, wf.right), "\(name): 0 deg leaves right bit-identical")
+        assert(exact(across.up, wf.up), "\(name): 0 deg leaves up bit-identical")
+        assert(exact(across.forward, wf.forward), "\(name): 0 deg leaves forward bit-identical")
+        assert(exact(across.origin, wf.origin), "\(name): 0 deg leaves the origin bit-identical")
+        assert(across.valid, "\(name): 0 deg keeps validity")
+        assert(near(WristComm.commOrigin(wrist: wf, rollDegrees: 0),
                     wf.origin - wf.up * (HudEditor.gridHalfY + WristComm.hudGap + WristComm.gridHalfY),
                     1e-7),
-               "\(name): across seats at today's drop, unchanged")
+               "\(name): 0 deg seats at the old across drop, unchanged")
 
-        // ALONG THE ARM: a 90 deg turn about the panel NORMAL, so the face
-        // still points at the eye and only the in-plane axes move.
-        //
+        // MARK: +90 deg reproduces the old along-arm mapping EXACTLY
+
         // THE SIGN, which is the one thing in here a reader cannot derive:
-        // `right' = +up`, `up' = -right`. Both halves are forced together by
-        // handedness -- `right' x up' == forward` -- so the only other
-        // candidate is the opposite pair (`-up`/`+right`), and these are what
-        // choose between them:
+        // at +90, `right' = +up`, `up' = -right`. Both halves are forced
+        // together by handedness -- `right' x up' == forward` -- so the only
+        // other candidate is the opposite pair (`-up`/`+right`), and these
+        // are what choose between them:
         //
         //  * `right` is the axis `textQuads` lays glyphs along and the axis
         //    the three columns run along. With `right' = +up` the key run
@@ -433,17 +449,25 @@ func runOrientationTests() {
         //  * `up' = -right` then puts the glyph tops toward the wrist
         //    frame's own LEFT, which is what handedness forces once the
         //    glyph advance is pinned -- the pair cannot be mixed.
-        let along = WristComm.orientedFrame(wf, alongArm: true)
-        assert(near(along.right, wf.up, 1e-6), "\(name): along maps right -> +up")
-        assert(near(along.up, -wf.right, 1e-6), "\(name): along maps up -> -right")
-        assert(near(along.forward, wf.forward, 1e-7), "\(name): along leaves the panel normal alone")
+        //
+        // This is also the ALONG view's persisted default, so these two
+        // assertions are what guarantee the Bool-to-degrees change is a
+        // no-op for A.'s current along-arm tuning.
+        let along = WristComm.orientedFrame(wf, rollDegrees: 90)
+        assert(near(along.right, wf.up, 1e-6), "\(name): +90 maps right -> +up (the old along pair)")
+        assert(near(along.up, -wf.right, 1e-6), "\(name): +90 maps up -> -right (the old along pair)")
+        assert(near(along.forward, wf.forward, 1e-7), "\(name): +90 leaves the panel normal alone")
         assert(near(along.origin, wf.origin, 1e-7), "\(name): the rotation does not translate")
-        assert(along.valid, "\(name): along keeps validity")
+        assert(along.valid, "\(name): +90 keeps validity")
+        assert(near(WristComm.commOrigin(wrist: wf, rollDegrees: 90),
+                    wf.origin - wf.up * (HudEditor.gridHalfY + WristComm.hudGap + WristComm.gridHalfX),
+                    1e-6),
+               "\(name): +90 seats at the old along drop, unchanged")
 
-        // The long (3-key) axis runs ALONG the arm: the panel's own +x
-        // extent points along the wrist frame's +up, i.e. the glyph advance
-        // runs back up the forearm toward the hand.
-        assert(simd_dot(along.right, wf.up) > 0.999, "\(name): the long axis runs along the arm")
+        // The long (3-key) axis runs ALONG the arm at +90: the panel's own
+        // +x extent points along the wrist frame's +up, i.e. the glyph
+        // advance runs back up the forearm toward the hand.
+        assert(simd_dot(along.right, wf.up) > 0.999, "\(name): at +90 the long axis runs along the arm")
 
         // ...and cell 0 sits at the ELBOW end of it, not the wrist end --
         // the half of the sign choice the dot product above cannot see,
@@ -453,33 +477,55 @@ func runOrientationTests() {
         // toward the hand: cell 0 lowest, cell 5 nearest the wrist.
         let c0 = WristComm.cellCenter(0)
         let w0 = along.right * c0.x + along.up * c0.y
-        assert(simd_dot(w0, wf.up) < 0, "\(name): cell 0 sits at the elbow end")
+        assert(simd_dot(w0, wf.up) < 0, "\(name): at +90 cell 0 sits at the elbow end")
         let c5 = WristComm.cellCenter(5)
         let w5 = along.right * c5.x + along.up * c5.y
-        assert(simd_dot(w5, wf.up) > 0, "\(name): cell 5 sits at the wrist end")
+        assert(simd_dot(w5, wf.up) > 0, "\(name): at +90 cell 5 sits at the wrist end")
 
-        // Still a usable frame: the hit-test projects onto these axes
-        // (`HudEditor.offsetInFrame`), so a basis off unit length silently
-        // rescales the grid's bounds, and a LEFT-handed one would mirror
-        // every legend while all three dot products still read zero.
-        let r = along.right, a = along.up, fw = along.forward
-        assert(near(simd_length(r), 1), "\(name): along right stays unit")
-        assert(near(simd_length(a), 1), "\(name): along up stays unit")
-        assert(near(simd_length(fw), 1), "\(name): along forward stays unit")
-        assert(abs(simd_dot(r, a)) < 1e-5, "\(name): along right . up stays 0")
-        assert(abs(simd_dot(a, fw)) < 1e-5, "\(name): along up . forward stays 0")
-        assert(abs(simd_dot(r, fw)) < 1e-5, "\(name): along right . forward stays 0")
-        assert(near(simd_cross(r, a), fw, 1e-5), "\(name): along right x up stays forward")
+        // MARK: an orthonormal, right-handed frame at EVERY angle
 
-        // Seating follows the orientation, and this is the invariant that
-        // says WHY: whichever way the unit is turned, its top edge sits
-        // exactly `hudGap` below the HUD grid above it. The extent is read
-        // off the ROTATED frame's own corners rather than restated, so this
-        // fails if the drop and the rotation ever disagree -- which is
-        // exactly what a drop left at the short half-extent would be.
-        for alongArm in [false, true] {
-            let f = WristComm.orientedFrame(wf, alongArm: alongArm)
-            let o = WristComm.commOrigin(wrist: wf, alongArm: alongArm)
+        // The hit-test projects onto these axes (`HudEditor.offsetInFrame`),
+        // so a basis off unit length silently rescales the grid's bounds,
+        // and a LEFT-handed one would mirror every legend while all three
+        // dot products still read zero. A free dial means this must hold
+        // at the awkward angles too, not just the two the Bool had.
+        for deg in [Float(-180), -137, -90, -37, 0, 1, 30, 45, 90, 137, 180] {
+            let f = WristComm.orientedFrame(wf, rollDegrees: deg)
+            let r = f.right, a = f.up, fw = f.forward
+            assert(near(simd_length(r), 1), "\(name)/\(deg): right stays unit")
+            assert(near(simd_length(a), 1), "\(name)/\(deg): up stays unit")
+            assert(near(simd_length(fw), 1), "\(name)/\(deg): forward stays unit")
+            assert(abs(simd_dot(r, a)) < 1e-5, "\(name)/\(deg): right . up stays 0")
+            assert(abs(simd_dot(a, fw)) < 1e-5, "\(name)/\(deg): up . forward stays 0")
+            assert(abs(simd_dot(r, fw)) < 1e-5, "\(name)/\(deg): right . forward stays 0")
+            assert(near(simd_cross(r, a), fw, 1e-5), "\(name)/\(deg): right x up stays forward")
+            assert(near(f.forward, wf.forward, 1e-6), "\(name)/\(deg): the panel normal never moves")
+            assert(near(f.origin, wf.origin, 1e-7), "\(name)/\(deg): the rotation never translates")
+        }
+
+        // The rotation really is an in-plane rotation BY that angle, not a
+        // snap: the turned `right` makes exactly the dialled angle with the
+        // original one, swept toward `up`.
+        for deg in [Float(30), 137] {
+            let f = WristComm.orientedFrame(wf, rollDegrees: deg)
+            let rad = deg * .pi / 180
+            assert(near(simd_dot(f.right, wf.right), cos(rad), 1e-5),
+                   "\(name)/\(deg): right turns by cos(theta) onto the old right")
+            assert(near(simd_dot(f.right, wf.up), sin(rad), 1e-5),
+                   "\(name)/\(deg): ...and by sin(theta) onto up -- the sweep goes right -> up")
+        }
+
+        // MARK: rotation-aware seating
+
+        // Whichever way the unit is turned, its top edge sits exactly
+        // `hudGap` below the HUD grid above it. The extent is read off the
+        // ROTATED frame's OWN CORNERS rather than restated, so this fails if
+        // the drop and the rotation ever disagree -- which is exactly what a
+        // drop left at a fixed half-extent would be. This is the formula
+        // `|sin t|*gridHalfX + |cos t|*gridHalfY` pinned by its meaning.
+        for deg in [Float(-180), -137, -90, -45, 0, 30, 45, 60, 90, 137, 180] {
+            let f = WristComm.orientedFrame(wf, rollDegrees: deg)
+            let o = WristComm.commOrigin(wrist: wf, rollDegrees: deg)
             var top = -Float.greatestFiniteMagnitude
             for sx in [Float(-1), 1] {
                 for sy in [Float(-1), 1] {
@@ -488,65 +534,105 @@ func runOrientationTests() {
                     top = max(top, simd_dot(corner - wf.origin, wf.up))
                 }
             }
-            assert(near(top, -(HudEditor.gridHalfY + WristComm.hudGap)),
-                   "\(name)/along=\(alongArm): the unit's top edge sits hudGap below the HUD")
+            assert(near(top, -(HudEditor.gridHalfY + WristComm.hudGap), 2e-5),
+                   "\(name)/\(deg): the unit's top edge sits hudGap below the HUD")
         }
 
-        // The along-arm unit therefore seats FURTHER down the arm, by exactly
-        // the difference between the two half-extents.
-        let oAcross = WristComm.commOrigin(wrist: wf, alongArm: false)
-        let oAlong = WristComm.commOrigin(wrist: wf, alongArm: true)
-        assert(near(simd_length(oAlong - oAcross), WristComm.gridHalfX - WristComm.gridHalfY),
-               "\(name): the two drops differ by gridHalfX - gridHalfY")
-        assert(simd_dot(oAlong - oAcross, wf.up) < 0, "\(name): the along-arm unit seats lower")
+        // The two old states are reproduced exactly, and a half-turn is
+        // strictly OUTSIDE both of them: a dial that snapped to one state or
+        // the other (or ignored the angle) would fail this even though both
+        // endpoints above pass.
+        func drop(_ deg: Float) -> Float {
+            simd_dot(wf.origin - WristComm.commOrigin(wrist: wf, rollDegrees: deg), wf.up)
+        }
+        let d0 = drop(0), d45 = drop(45), d90 = drop(90)
+        assert(near(d0, HudEditor.gridHalfY + WristComm.hudGap + WristComm.gridHalfY, 1e-5),
+               "\(name): the 0 deg drop is the old across drop")
+        assert(near(d90, HudEditor.gridHalfY + WristComm.hudGap + WristComm.gridHalfX, 1e-5),
+               "\(name): the 90 deg drop is the old along drop")
+        // NOT between the two endpoints: at 45 deg it is the rotated
+        // rectangle's CORNER that reaches furthest down, and a corner is
+        // further out than either half-edge. This is precisely why the
+        // formula is a SUM of the two projected half-extents rather than a
+        // choice between them -- a `max(gridHalfX, gridHalfY)` or a
+        // nearest-state select would seat the unit too high here and let
+        // the turned corner overlap the HUD, which is the bug the corner
+        // sweep above catches and this one names.
+        let corner = sqrt(WristComm.gridHalfX * WristComm.gridHalfX
+                          + WristComm.gridHalfY * WristComm.gridHalfY)
+        assert(d45 > d90 + 1e-4, "\(name): the 45 deg drop is deeper than BOTH endpoints")
+        assert(near(d45 - d0 + WristComm.gridHalfY,
+                    (WristComm.gridHalfX + WristComm.gridHalfY) * (sqrt(Float(2)) / 2), 1e-5),
+               "\(name): the 45 deg extent is the two half-extents projected and summed")
+        assert(d45 - d0 + WristComm.gridHalfY < corner + 1e-5,
+               "\(name): ...and never beyond the unit's own corner radius")
+        // Symmetric in the sign of the angle -- the unit's extent does not
+        // care which way it was turned, which is what the two absolute
+        // values in the formula are for.
+        assert(near(drop(-45), d45, 1e-5), "\(name): the drop is symmetric about 0")
+        assert(near(drop(-90), d90, 1e-5), "\(name): ...and at the quarter turn too")
+        assert(near(drop(180), d0, 1e-5), "\(name): a half turn seats like no turn at all")
+
+        // MARK: the composed chain -- a key fires where it lights
 
         // The rotation lives ENTIRELY in the frame: `cellCenter` and
         // `touchedCell` stay panel-local and unchanged, so every key's world
-        // centre still hit-tests to its own index under a rotated frame --
-        // a key fires where it lights.
-        let fAlong = WristComm.orientedFrame(wf, alongArm: true)
-        for cell in 0 ..< (WristComm.cols * WristComm.rows) {
-            let c = WristComm.cellCenter(cell)
-            let p = oAlong + fAlong.right * c.x + fAlong.up * c.y
-            assert(WristComm.touchedCell(p, commOrigin: oAlong, frame: fAlong) == cell,
-                   "\(name): along-arm cell \(cell) hit-tests to itself")
-        }
+        // centre still hit-tests to its own index under a rotated frame.
+        // Run at a NON-RIGHT angle on purpose: 90 deg permutes the axes and
+        // would pass even if the hit-test secretly assumed an axis swap
+        // rather than a general basis.
+        for deg in [Float(37), 90] {
+            let f = WristComm.orientedFrame(wf, rollDegrees: deg)
+            let o = WristComm.commOrigin(wrist: wf, rollDegrees: deg)
+            for cell in 0 ..< (WristComm.cols * WristComm.rows) {
+                let c = WristComm.cellCenter(cell)
+                let p = o + f.right * c.x + f.up * c.y
+                assert(WristComm.touchedCell(p, commOrigin: o, frame: f) == cell,
+                       "\(name)/\(deg): cell \(cell) hit-tests to itself")
+            }
 
-        // ...and through the user's dials too, which is the FULL chain the
-        // renderer runs (oriented frame -> adjustedFrame). A dialled,
-        // rotated unit is still hit-tested where it is drawn.
-        let dialled = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 20,
-                                              fwd: 0.01, side: -0.02, up: 0.015)
-        for cell in 0 ..< (WristComm.cols * WristComm.rows) {
-            let c = WristComm.cellCenter(cell)
-            let p = dialled.origin + dialled.frame.right * c.x + dialled.frame.up * c.y
-            assert(WristComm.touchedCell(p, commOrigin: dialled.origin,
-                                         frame: dialled.frame) == cell,
-                   "\(name): dialled along-arm cell \(cell) hit-tests to itself")
+            // ...and through the user's dials too, which is the FULL chain
+            // the renderer runs (orientedFrame -> commOrigin -> adjustedFrame).
+            // A dialled, rotated unit is still hit-tested where it is drawn.
+            let dialled = WristComm.adjustedFrame(f, origin: o, tiltDegrees: 20,
+                                                  fwd: 0.01, side: -0.02, up: 0.015)
+            for cell in 0 ..< (WristComm.cols * WristComm.rows) {
+                let c = WristComm.cellCenter(cell)
+                let p = dialled.origin + dialled.frame.right * c.x + dialled.frame.up * c.y
+                assert(WristComm.touchedCell(p, commOrigin: dialled.origin,
+                                             frame: dialled.frame) == cell,
+                       "\(name)/\(deg): dialled cell \(cell) hit-tests to itself")
+            }
         }
 
         // The dials act in the ROTATED unit's own axes, deliberately (the
-        // orientation enters the chain BEFORE them): the tilt pitches about
-        // the new right, which is the arm's long axis, and the Side/Height
-        // offsets run down and across the arm respectively. Pinned so the
-        // settings caption that says so cannot drift from the code.
-        let side = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 0,
+        // rotation enters the chain BEFORE them): at +90 the tilt pitches
+        // about the new right, which is the arm's long axis, and the
+        // Side/Height offsets run down and across the arm respectively.
+        // Pinned so the settings caption that says so cannot drift.
+        let o90 = WristComm.commOrigin(wrist: wf, rollDegrees: 90)
+        let side = WristComm.adjustedFrame(along, origin: o90, tiltDegrees: 0,
                                            fwd: 0, side: 0.03, up: 0)
-        assert(near(side.origin, oAlong + wf.up * 0.03),
-               "\(name): +Side moves the along-arm unit up the arm toward the hand")
-        let height = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 0,
+        assert(near(side.origin, o90 + wf.up * 0.03),
+               "\(name): at +90 +Side moves the unit up the arm toward the hand")
+        let height = WristComm.adjustedFrame(along, origin: o90, tiltDegrees: 0,
                                              fwd: 0, side: 0, up: 0.03)
-        assert(near(height.origin, oAlong - wf.right * 0.03),
-               "\(name): +Height moves the along-arm unit across the arm")
+        assert(near(height.origin, o90 - wf.right * 0.03),
+               "\(name): at +90 +Height moves the unit across the arm")
 
-        // An untracked wrist passes through whole, same contract
-        // `adjustedFrame` keeps: there is no plane to rotate.
+        // MARK: an untracked wrist
+
+        // Passes through whole at any angle, same contract `adjustedFrame`
+        // keeps: there is no plane to rotate.
         var bad = wf
         bad.valid = false
-        let dead = WristComm.orientedFrame(bad, alongArm: true)
-        assert(!dead.valid, "\(name): an invalid frame stays invalid")
-        assert(near(dead.right, bad.right, 1e-7), "\(name): an invalid frame's right is untouched")
-        assert(near(dead.up, bad.up, 1e-7), "\(name): an invalid frame's up is untouched")
+        for deg in [Float(0), 37, 90] {
+            let dead = WristComm.orientedFrame(bad, rollDegrees: deg)
+            assert(!dead.valid, "\(name)/\(deg): an invalid frame stays invalid")
+            assert(exact(dead.right, bad.right), "\(name)/\(deg): an invalid frame's right is untouched")
+            assert(exact(dead.up, bad.up), "\(name)/\(deg): an invalid frame's up is untouched")
+            assert(exact(dead.forward, bad.forward), "\(name)/\(deg): an invalid frame's forward is untouched")
+        }
     }
     print("orientation ok")
 }

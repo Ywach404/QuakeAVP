@@ -1538,18 +1538,20 @@ final class ImmersiveRenderer {
         // `WristCommGeometry` publishes. One pose, three paths.
         let tips = FingerTips.shared.snapshot()
         let lastFire = WristCommFeedback.shared.snapshot()
-        // The player's placement dials, read ONCE for the frame and as a set
-        // (see `VRSettings.wristCommPlacement` for why they are not four
+        // The ACTIVE VIEW's placement dials, read ONCE for the frame and as a
+        // set (see `VRSettings.wristCommPlacement` for why they are not five
         // separate reads). Same class of nonisolated lock-protected read as
         // the two above -- and the same precedent as the `offHandPitch/Yaw/
         // Roll` reads this render thread already makes for the controller
         // hand pose.
+        //
+        // The across/along choice is INSIDE that one read now, not a second
+        // read beside it: it selects which of the two stored sets comes
+        // back, and `rot` (which both turns the frame and sets the seating
+        // drop) travels with the offsets it has to agree with. Both wrist
+        // sides are then built from this one value, so a toggle or a drag
+        // landing mid-frame can never turn one side and not the other.
         let dials = VRSettings.shared.wristCommPlacement
-        // ...and the orientation, read ONCE for the frame beside them: it is
-        // the same class of placement choice and the same lock-protected
-        // read, and both sides must be built from the one value (a flip
-        // landing between the two sides would turn one and not the other).
-        let alongArm = VRSettings.shared.wristCommAlongArm
         var quads: [CommQuad] = []
         var sides: [WristCommGeometry.Side] = []
         var finger: [Float] = []
@@ -1589,22 +1591,26 @@ final class ImmersiveRenderer {
             // is current, so re-dialling mid-hold moves the panel rather than
             // baking yesterday's dial into the held pose.
             //
-            // `orientedFrame` goes BEFORE the dials, which is what makes the
-            // "Along arm" option a placement rather than a second layout:
-            // the whole unit turns 90 deg in its own plane, and because the
-            // keys, the legends, the hover test and the published geometry
-            // are all panel-local multiples of this frame's right/up, they
-            // turn with it. The dials then act in the TURNED unit's axes --
-            // the tilt pitches about the arm's long axis, Side runs down the
-            // arm and Height across it (see `orientedFrame`; the settings
-            // caption says so too). The seating takes the flag as well,
-            // since the unit's extent along the drop is the long half once
-            // it is lying down the forearm.
-            let oriented = WristComm.orientedFrame(resolved, alongArm: alongArm)
+            // `orientedFrame` goes BEFORE the dials, which is what makes
+            // Rotate a placement rather than a second layout: the whole unit
+            // turns in its own plane, and because the keys, the legends, the
+            // hover test and the published geometry are all panel-local
+            // multiples of this frame's right/up, they turn with it. The
+            // dials then act in the TURNED unit's axes -- at the along
+            // view's +90 default the tilt pitches about the arm's long axis,
+            // Side runs down the arm and Height across it (see
+            // `orientedFrame`; the settings caption says so too).
+            //
+            // `rot` reaches the seating as well, because the unit's extent
+            // along the drop depends on how far it has been turned
+            // (`commOrigin` projects the rotated rectangle). The SAME
+            // `dials.rot` feeds both, out of the one atomic read above, so
+            // the frame and the drop can never be built from two angles.
+            let oriented = WristComm.orientedFrame(resolved, rollDegrees: dials.rot)
             let adjusted = WristComm.adjustedFrame(
                 oriented,
                 origin: resolved.valid ? WristComm.commOrigin(wrist: resolved,
-                                                              alongArm: alongArm) : .zero,
+                                                              rollDegrees: dials.rot) : .zero,
                 tiltDegrees: dials.tilt, fwd: dials.fwd, side: dials.side, up: dials.up)
             let frame = adjusted.frame
             let origin = adjusted.origin
