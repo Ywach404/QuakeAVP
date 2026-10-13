@@ -66,10 +66,21 @@ struct ContentView: View {
     // from a literal + syncFromProfile: they are a physical fit of the unit
     // to the arm, not part of a swappable control profile, so the live store
     // IS the source of truth for what the sliders should show.
+    // Two mirrors per dial, one per orientation view -- the store keeps the
+    // two sets apart (see `VRSettings.wristCommPlacement`) and so must the
+    // window, or flipping the picker would show the other view's numbers
+    // over this view's unit. `commMirror`/`commApply` below pick the live
+    // pair; both sets are loaded up front so a flip is instant and lossless.
     @State private var commTiltUI = VRSettings.shared.wristCommTilt
     @State private var commFwdUI = VRSettings.shared.wristCommFwd
     @State private var commSideUI = VRSettings.shared.wristCommSide
     @State private var commUpUI = VRSettings.shared.wristCommUp
+    @State private var commRotUI = VRSettings.shared.wristCommRot
+    @State private var commTiltAlongUI = VRSettings.shared.wristCommTiltAlong
+    @State private var commFwdAlongUI = VRSettings.shared.wristCommFwdAlong
+    @State private var commSideAlongUI = VRSettings.shared.wristCommSideAlong
+    @State private var commUpAlongUI = VRSettings.shared.wristCommUpAlong
+    @State private var commRotAlongUI = VRSettings.shared.wristCommRotAlong
     @State private var commNoTurn = VRSettings.shared.wristCommNoTurn
     @State private var commAlongArm = VRSettings.shared.wristCommAlongArm
     // Gesture state for the wrist unit's own gyro disc (commDisc). A separate
@@ -666,12 +677,16 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented).labelsHidden()
                     Text(commAlongArm
-                         ? "The unit is turned to lie DOWN the forearm: three keys long, two "
-                           + "across, legends reading from the elbow toward the wrist. The "
-                           + "position dials below then run with the unit -- Side moves it "
-                           + "along the arm toward your hand, Height across it, Angle rolls it."
+                         ? "The unit lies DOWN the forearm: three keys long, two across, "
+                           + "legends reading from the elbow toward the wrist. The position "
+                           + "dials below run with the unit -- Side moves it along the arm "
+                           + "toward your hand, Height across it, Angle rolls it."
                          : "The unit sits ACROSS the wrist: three keys wide, two deep, just "
                            + "below the HUD. Switch to Along arm to turn it down the forearm.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text("Each view keeps its own placement — switching here swaps the dials "
+                         + "below to that view's own values, and tuning one never moves the "
+                         + "other.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 3) {
@@ -680,42 +695,71 @@ struct ContentView: View {
                          + "frame, so it moves as you drag.")
                         .font(.caption2).foregroundStyle(.secondary)
                     HStack(alignment: .top, spacing: 14) {
-                        commDisc(side: $commSideUI, forward: $commFwdUI,
-                                 angle: $commTiltUI) { s, f, a in
-                            VRSettings.shared.wristCommSide = s
-                            VRSettings.shared.wristCommFwd = f
-                            VRSettings.shared.wristCommTilt = a
+                        commDisc(side: commMirror($commSideUI, $commSideAlongUI),
+                                 forward: commMirror($commFwdUI, $commFwdAlongUI),
+                                 angle: commMirror($commTiltUI, $commTiltAlongUI)) { s, f, a in
+                            commApply(\.wristCommSide, \.wristCommSideAlong)(s)
+                            commApply(\.wristCommFwd, \.wristCommFwdAlong)(f)
+                            commApply(\.wristCommTilt, \.wristCommTiltAlong)(a)
                         }
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Drag inside to slide the unit (side / forward); spin the "
-                                 + "rim to tilt it. Height is the slider below.")
+                                 + "rim to tilt it. Height and Rotate are sliders only.")
                                 .font(.caption2).foregroundStyle(.secondary)
-                            commPlaceRow("Angle", $commTiltUI,
+                            commPlaceRow("Angle", commMirror($commTiltUI, $commTiltAlongUI),
                                          -VRSettings.commTiltLimit...VRSettings.commTiltLimit,
-                                         step: 1, unit: "°", display: 1) {
-                                VRSettings.shared.wristCommTilt = $0
-                            }
+                                         step: 1, unit: "°", display: 1,
+                                         apply: commApply(\.wristCommTilt, \.wristCommTiltAlong))
                             Text("Positive angle leans the TOP of the panel toward you.")
                                 .font(.caption2).foregroundStyle(.secondary)
-                            commPlaceRow("Forward", $commFwdUI,
+                            commPlaceRow("Forward", commMirror($commFwdUI, $commFwdAlongUI),
                                          -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
-                                VRSettings.shared.wristCommFwd = $0
-                            }
-                            commPlaceRow("Side", $commSideUI,
+                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f",
+                                         apply: commApply(\.wristCommFwd, \.wristCommFwdAlong))
+                            commPlaceRow("Side", commMirror($commSideUI, $commSideAlongUI),
                                          -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
-                                VRSettings.shared.wristCommSide = $0
-                            }
-                            commPlaceRow("Height", $commUpUI,
+                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f",
+                                         apply: commApply(\.wristCommSide, \.wristCommSideAlong))
+                            commPlaceRow("Height", commMirror($commUpUI, $commUpAlongUI),
                                          -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
-                                VRSettings.shared.wristCommUp = $0
-                            }
+                                         step: 0.005, unit: "cm", display: 100, fmt: "%.1f",
+                                         apply: commApply(\.wristCommUp, \.wristCommUpAlong))
+                            // Spins the whole unit in its own plane -- the keys,
+                            // the legends, the hit-test and the seating all turn
+                            // together, because the renderer turns the FRAME they
+                            // are all built from. 0 is the panel square to the
+                            // wrist; the Along arm view defaults to 90, the
+                            // quarter turn that lays it down the forearm. It is a
+                            // slider and not a disc axis on purpose: the disc rim
+                            // is already Angle, and the two rotations would be
+                            // indistinguishable under a thumb.
+                            commPlaceRow("Rotate", commMirror($commRotUI, $commRotAlongUI),
+                                         -VRSettings.commRotLimit...VRSettings.commRotLimit,
+                                         step: 1, unit: "°", display: 1,
+                                         apply: commApply(\.wristCommRot, \.wristCommRotAlong))
+                            Text("Rotate spins the unit in its own plane — use it when the "
+                                 + "keys sit crooked on your forearm. The unit re-seats "
+                                 + "under the HUD as it turns.")
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
-                    Button("Reset position") {
-                        commTiltUI = 0; commFwdUI = 0; commSideUI = 0; commUpUI = 0
+                    Button(commAlongArm ? "Reset Along arm position"
+                                        : "Reset Across wrist position") {
+                        // Mirrors the ACTIVE view only, to that view's own
+                        // defaults -- `wristCommDefaults` is the one statement of
+                        // what those are, so the sliders cannot show something
+                        // the store did not write (along's rotation goes back to
+                        // 90, not 0).
+                        let d = VRSettings.wristCommDefaults(alongArm: commAlongArm)
+                        if commAlongArm {
+                            commTiltAlongUI = d.tilt; commFwdAlongUI = d.fwd
+                            commSideAlongUI = d.side; commUpAlongUI = d.up
+                            commRotAlongUI = d.rot
+                        } else {
+                            commTiltUI = d.tilt; commFwdUI = d.fwd
+                            commSideUI = d.side; commUpUI = d.up
+                            commRotUI = d.rot
+                        }
                         VRSettings.shared.resetWristCommPlacement()
                     }
                     .font(.caption)
@@ -1783,6 +1827,25 @@ struct ContentView: View {
     }
 
     private static func normalizedZero(_ v: Float) -> Float { v == 0 ? 0 : v }
+
+    /// Which of a dial's two `@State` mirrors the Across/Along picker is
+    /// showing. Every comm placement row and the disc go through this, so
+    /// there is exactly one place the picker's state selects a view -- a row
+    /// that reached for `$commUpUI` directly would edit the across unit
+    /// while the along one was on screen.
+    private func commMirror(_ across: Binding<Float>, _ along: Binding<Float>) -> Binding<Float> {
+        commAlongArm ? along : across
+    }
+
+    /// ...and the matching write into `VRSettings`, which is what the render
+    /// thread actually samples. Paired with `commMirror` at every call site
+    /// and selected by the same flag, so the slider's own readout and the
+    /// unit on the wrist can never end up describing different views.
+    private func commApply(_ acrossKey: ReferenceWritableKeyPath<VRSettings, Float>,
+                           _ alongKey: ReferenceWritableKeyPath<VRSettings, Float>) -> (Float) -> Void {
+        let key = commAlongArm ? alongKey : acrossKey
+        return { VRSettings.shared[keyPath: key] = $0 }
+    }
 
     /// Load the active profile's values into the slider mirrors, so the UI
     /// shows what was persisted (called on launch and on a profile switch).
