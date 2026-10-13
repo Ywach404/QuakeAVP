@@ -157,6 +157,61 @@ final class WorkbenchGeometry: @unchecked Sendable {
     }
 }
 
+/// Cross-loop publish of this frame's wrist-communicator geometry: for each
+/// side (0 = off wrist, 1 = gun wrist) the wrist plane the 2x3 action grid
+/// is seated on, the grid centre `WristComm.commOrigin` resolved from it,
+/// and how revealed the panel is right now. Written by the render thread
+/// (`ImmersiveRenderer.updateWristComm`, which documents the reveal
+/// hysteresis and the fade) every frame, because it alone holds the
+/// late-latched head pose and the latched wrist frames the grid is anchored
+/// to -- the exact same cross-loop reason `WorkbenchGeometry` above exists.
+/// Read by the communicator's touch loop (Task 5), which hit-tests a
+/// fingertip against `commOrigin`/`frame` rather than rebuilding them.
+///
+/// BOTH sides are published every frame whatever their state (disabled,
+/// untracked wrist, faded out), so the touch loop can gate itself on
+/// `enabled`/`opacity`/`frame.valid` from one snapshot instead of guessing
+/// what an absent entry meant. Same lock-protected plain-value pattern as
+/// `WorkbenchGeometry`/`EditorHandInput`/`FingerTips`.
+final class WristCommGeometry: @unchecked Sendable {
+    static let shared = WristCommGeometry()
+
+    /// One side's communicator geometry this frame. `frame.valid == false`
+    /// (and a zero `commOrigin`) is an untracked wrist -- nothing to touch;
+    /// `opacity` is the faded reveal the draw uses, which the touch loop
+    /// reads too so a cell can only fire while the panel is actually up.
+    struct Side {
+        var enabled: Bool
+        var frame: HudEditor.WristFrame
+        var commOrigin: SIMD3<Float>
+        var opacity: Float
+    }
+
+    struct Snapshot {
+        /// Index 0 = off wrist, 1 = gun wrist -- the same side order
+        /// `WristCommStore.Snapshot.sides` uses.
+        var sides: [Side]
+
+        private static let idle = Side(enabled: false, frame: .invalid,
+                                       commOrigin: .zero, opacity: 0)
+        /// No communicator anywhere: what a reader sees before the immersive
+        /// render loop has published a frame, and after it stops.
+        static let inactive = Snapshot(sides: [idle, idle])
+    }
+
+    private let lock = NSLock()
+    private var _snapshot = Snapshot.inactive
+
+    func publish(_ snapshot: Snapshot) {
+        lock.lock(); _snapshot = snapshot; lock.unlock()
+    }
+
+    func snapshot() -> Snapshot {
+        lock.lock(); defer { lock.unlock() }
+        return _snapshot
+    }
+}
+
 /// Drives `HudEditor.updateGrab` every tick from real hand pinches
 /// (`EditorHandInput`) or Sense controller triggers/poses/thumbsticks
 /// (`SpatialControllerTracker` + `GCController`), and applies the result to

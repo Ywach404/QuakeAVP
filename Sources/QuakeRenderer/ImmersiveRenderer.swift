@@ -61,6 +61,23 @@ final class ImmersiveRenderer {
     private var lastOffWristFrame: HudEditor.WristFrame?
     private var lastGunWristFrame: HudEditor.WristFrame?
 
+    // Wrist communicator reveal state, per side (index 0 = off wrist, 1 =
+    // gun wrist -- the side order WristCommStore.Snapshot.sides uses).
+    // `commRevealed` is the hysteresis latch WristComm.revealTarget needs to
+    // hold its decision inside the on/off cone band; `commOpacity` is the
+    // eased fade the draw and the touch gate both read. Render-thread only,
+    // like the wrist latch above.
+    private var commOpacity: [Float] = [0, 0]
+    private var commRevealed: [Bool] = [false, false]
+    /// Previous frame's timestamp for the reveal fade's dt. nil until the
+    /// first communicator update; CACurrentMediaTime rather than the
+    /// compositor clock because the fade is wall-time comfort easing, not
+    /// anything the presentation timeline needs to agree with.
+    private var lastCommTick: Double?
+    /// Whether the one-time bindings refresh has been requested yet (see
+    /// `updateWristComm`, which documents why it has to happen at all).
+    private var requestedCommBootstrap = false
+
     // Frame timing stats, logged every `statsWindow` frames.
     private let statsWindow = 300
     private var statFrames = 0
@@ -482,6 +499,24 @@ final class ImmersiveRenderer {
         publishWorkbenchGeometry(packet: packet, wrists: wristFramePair, gunFree: gunFreeAnchor,
                                  float_: floatAnchor, snapshot: editorSnapshot)
 
+        // Wrist communicator: the 2x3 action grid seated below the HUD tiles
+        // on each enabled wrist, revealed by a glance. Built from the SAME
+        // `wristFramePair` the tiles above sit on, so the comm can never
+        // drift off the plane it is supposed to hang under. Reveal needs the
+        // FULL head forward -- not the yaw-flattened one `floatAnchorFrame`
+        // uses, since you look DOWN at your wrist -- which in this
+        // convention is the device transform's third column negated (the
+        // same -Z the head-yaw/pitch feed above takes). `originFromDevice`
+        // is identity when the pose is missing, hence the explicit
+        // availability flag rather than trusting the matrix.
+        let commHeadForward = -originFromDevice.columns.2
+        let commFurniture = updateWristComm(
+            wrists: wristFramePair,
+            headPos: SIMD3(eyeCol.x, eyeCol.y, eyeCol.z),
+            headForward: SIMD3(commHeadForward.x, commHeadForward.y, commHeadForward.z),
+            headPoseAvailable: deviceAnchor != nil,
+            engineLive: packet != nil)
+
         if singlePassStereo, views.count == 2 {
             let descriptor = passDescriptor(
                 for: drawable, textureIndex: 0, slice: nil, clear: clear)
@@ -516,6 +551,12 @@ final class ImmersiveRenderer {
                 core.drawHudTiles(frame: packet, tileModels: tileModels,
                                   viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                   pipelines: pipelines, encoder: encoder)
+                // Communicator last: it is its own device, seated BELOW the
+                // tiles, and its bezel must read over whatever it overlaps
+                // rather than under it.
+                drawWristComm(commFurniture, conchars: packet.conchars_texnum,
+                              viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                              pipelines: pipelines, encoder: encoder)
             }
             encoder.endEncoding()
         } else {
@@ -557,6 +598,10 @@ final class ImmersiveRenderer {
                     core.drawHudTiles(frame: packet, tileModels: tileModels,
                                       viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                       pipelines: pipelines, encoder: encoder)
+                    // Communicator last, as in the single-pass branch above.
+                    drawWristComm(commFurniture, conchars: packet.conchars_texnum,
+                                  viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                  pipelines: pipelines, encoder: encoder)
                 }
                 encoder.endEncoding()
             }
@@ -1097,6 +1142,206 @@ final class ImmersiveRenderer {
                                     panelWidth: quad.width, panelHeight: quad.height,
                                     cellSize: Self.gridLabelCell,
                                     panelColor: quad.color, textColor: Self.gridLabelTextColor,
+                                    conchars: conchars,
+                                    viewproj0: viewproj0, viewproj1: viewproj1,
+                                    pipelines: pipelines, encoder: encoder)
+        }
+    }
+
+    // MARK: - Wrist communicator (vr_wristcomm_*)
+
+    /// The device bezel behind the action grid -- near-black and mostly
+    /// opaque, so the six cells read as keys on a physical unit strapped to
+    /// the forearm rather than six floating labels. Alpha is the FULL-reveal
+    /// alpha; every colour here is scaled by the live fade before it is
+    /// handed to the draw.
+    private static let commBezelColor = SIMD4<Float>(0.05, 0.05, 0.06, 0.8)
+    /// One action cell's key face -- a cool dark grey, lighter than the
+    /// bezel so each key's edge separates from the body around it.
+    private static let commCellColor = SIMD4<Float>(0.16, 0.19, 0.24, 0.92)
+    /// Key legend colour: near-white, cool, legible against the key face.
+    private static let commLabelColor = SIMD4<Float>(0.88, 0.94, 1.0, 1.0)
+    /// Largest glyph a key legend may use (metres per conchars cell). A
+    /// short label (GOD) would otherwise fill its key edge to edge; a long
+    /// one (NOCLIP) is shrunk below this to fit, see `commGlyphSize`.
+    private static let commGlyphCell: Float = 0.008
+    /// Fraction of the key width a legend may occupy, so the longest label
+    /// keeps a visible margin inside its key rather than touching the edge.
+    private static let commLabelFill: Float = 0.86
+    /// Below this opacity the panel contributes nothing a viewer can see,
+    /// so it is not built or drawn at all -- the draw-skip threshold, NOT a
+    /// reveal threshold (the fade itself keeps easing through it).
+    private static let commFadeFloor: Float = 0.02
+
+    /// One communicator quad: a bezel body or one action key, in the wrist
+    /// frame's own right/up plane, with its legend (nil for the bezel) and
+    /// the glyph size that legend fits at. Drawn through
+    /// `RendererCore.drawWorkbenchLabel`'s `labelCentered` path.
+    private struct CommQuad {
+        var origin: SIMD3<Float>
+        var right: SIMD3<Float>
+        var up: SIMD3<Float>
+        var width: Float
+        var height: Float
+        var color: SIMD4<Float>
+        var label: String?
+        var glyph: Float
+        /// This quad's live reveal fade, carried so the legend colour can be
+        /// faded by the same factor its key face was without reverse-
+        /// engineering it out of `color`'s alpha.
+        var opacity: Float
+    }
+
+    /// `color` faded by `opacity` -- alpha only, so a half-revealed panel
+    /// blends out instead of washing to grey (the `text` pipeline blends
+    /// straight-alpha; see the alpha contract in `encode`).
+    private static func faded(_ color: SIMD4<Float>, _ opacity: Float) -> SIMD4<Float> {
+        SIMD4(color.x, color.y, color.z, color.w * opacity)
+    }
+
+    /// The glyph size `label` fits in one key at: `commGlyphCell`, shrunk if
+    /// the string is too long to sit inside `commLabelFill` of the key.
+    /// `textQuads` lays glyphs out one `cellSize` apart, so the run is
+    /// exactly `count * cellSize` wide.
+    private static func commGlyphSize(for label: String) -> Float {
+        let count = Float(max(label.count, 1))
+        return min(commGlyphCell, WristComm.cellSize * commLabelFill / count)
+    }
+
+    /// Advances the wrist communicator's reveal state for this frame and
+    /// returns the quads to draw (empty when nothing is revealed). Also
+    /// publishes `WristCommGeometry` for the touch loop -- ALWAYS, for both
+    /// sides whatever their state, since that reader gates itself.
+    ///
+    /// Reveal is a glance: `WristComm.revealTarget` compares the head
+    /// forward against the direction to the grid centre, with an on/off cone
+    /// band so a panel on the edge of the gaze cannot flicker, and
+    /// `smoothedOpacity` eases the result so it fades rather than pops. A
+    /// side with no binding (`enabled == false`), an untracked wrist, or no
+    /// head pose to glance WITH takes no reveal decision at all and simply
+    /// decays what is already up -- never a hard cut, and never a reveal
+    /// test against an identity (missing) head pose.
+    ///
+    /// Thread: render thread. `WristCommStore.snapshot()` is the nonisolated
+    /// lock-protected read and `requestRefresh()` hops to the main actor to
+    /// do the cvar work; no `QC_*` call is made from here.
+    private func updateWristComm(wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
+                                 headPos: SIMD3<Float>, headForward: SIMD3<Float>,
+                                 headPoseAvailable: Bool, engineLive: Bool) -> [CommQuad] {
+        // Bootstrap the bindings exactly once. The store's published
+        // snapshot starts INERT -- both sides disabled, every label empty --
+        // and only `refresh()` ever populates it. The reveal rising edge
+        // below is the only other refresh trigger, and it is gated on this
+        // side being `enabled`, which reads false until a refresh has run:
+        // without this call the communicator could never appear at all.
+        // Deferred until the packet stream is live because the cvars it
+        // reads are registered during Host_Init, and `QC_CvarValue` answers
+        // 0 for a name it cannot find yet (qr_bridge.c) -- which would burn
+        // the one bootstrap on an empty read.
+        if engineLive, !requestedCommBootstrap {
+            requestedCommBootstrap = true
+            WristCommStore.requestRefresh()
+        }
+
+        let now = CACurrentMediaTime()
+        // Same clamp the other dt consumers use (HudEditorInput.tick): a
+        // first frame, a hitch, or a backgrounded space must not deliver a
+        // dt that jumps the fade or inverts it.
+        let dt = Float(max(1.0 / 240, min(0.1, now - (lastCommTick ?? now))))
+        lastCommTick = now
+
+        let comm = WristCommStore.snapshot()
+        var quads: [CommQuad] = []
+        var sides: [WristCommGeometry.Side] = []
+
+        for side in 0..<commOpacity.count {
+            let frame = side == 0 ? wrists.off : wrists.gun
+            let enabled = side < comm.sides.count && comm.sides[side].enabled
+
+            guard enabled, frame.valid, headPoseAvailable else {
+                // Nothing to glance at: drop the latch (so returning to a
+                // tracked wrist is a fresh rising edge, bindings refreshed
+                // with it) and ease whatever is on screen out.
+                commRevealed[side] = false
+                commOpacity[side] = WristComm.smoothedOpacity(current: commOpacity[side],
+                                                              target: 0, dt: dt)
+                sides.append(WristCommGeometry.Side(
+                    enabled: enabled, frame: frame,
+                    commOrigin: frame.valid ? WristComm.commOrigin(wrist: frame) : .zero,
+                    opacity: commOpacity[side]))
+                continue
+            }
+
+            let origin = WristComm.commOrigin(wrist: frame)
+            let revealed = WristComm.revealTarget(headPos: headPos, headForward: headForward,
+                                                  commOrigin: origin,
+                                                  wasRevealed: commRevealed[side])
+            if revealed, !commRevealed[side] {
+                // Rising edge: pick up any console/config edit to the
+                // bindings before the legends become readable, rather than
+                // re-reading cvars (a main-actor hop) every frame.
+                WristCommStore.requestRefresh()
+            }
+            commRevealed[side] = revealed
+            commOpacity[side] = WristComm.smoothedOpacity(current: commOpacity[side],
+                                                          target: revealed ? 1 : 0, dt: dt)
+            sides.append(WristCommGeometry.Side(enabled: true, frame: frame, commOrigin: origin,
+                                                opacity: commOpacity[side]))
+
+            guard commOpacity[side] > Self.commFadeFloor else { continue }
+            quads += commQuads(frame: frame, origin: origin,
+                               labels: side < comm.sides.count ? comm.sides[side].labels : [],
+                               opacity: commOpacity[side])
+        }
+
+        WristCommGeometry.shared.publish(WristCommGeometry.Snapshot(sides: sides))
+        return quads
+    }
+
+    /// One side's communicator geometry: the bezel body first, then the six
+    /// action keys over it at `WristComm.cellCenter`, all in the wrist
+    /// frame's plane and all faded by `opacity`. A key with an empty binding
+    /// label draws its face alone -- the unit keeps its full six-key shape
+    /// rather than growing holes, which is what the device would look like.
+    private func commQuads(frame: HudEditor.WristFrame, origin: SIMD3<Float>,
+                           labels: [String], opacity: Float) -> [CommQuad] {
+        var quads: [CommQuad] = []
+        quads.append(CommQuad(origin: origin, right: frame.right, up: frame.up,
+                              width: (WristComm.gridHalfX + WristComm.bezelPad) * 2,
+                              height: (WristComm.gridHalfY + WristComm.bezelPad) * 2,
+                              color: Self.faded(Self.commBezelColor, opacity),
+                              label: nil, glyph: 0, opacity: opacity))
+        for cell in 0 ..< (WristComm.cols * WristComm.rows) {
+            let centre = WristComm.cellCenter(cell)
+            let raw = cell < labels.count ? labels[cell] : ""
+            let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            quads.append(CommQuad(
+                origin: origin + frame.right * centre.x + frame.up * centre.y,
+                right: frame.right, up: frame.up,
+                width: WristComm.cellSize, height: WristComm.cellSize,
+                color: Self.faded(Self.commCellColor, opacity),
+                label: label.isEmpty ? nil : label,
+                glyph: Self.commGlyphSize(for: label), opacity: opacity))
+        }
+        return quads
+    }
+
+    /// Draws this frame's communicator quads through
+    /// `RendererCore.drawWorkbenchLabel` -- the same solid-quad + conchars
+    /// path the edit-mode grid uses, with `labelCentered` so a legend sits
+    /// ON its key, and with every colour already faded by the caller. Same
+    /// `viewproj0`/`viewproj1` the HUD tiles drew with, so the unit sits in
+    /// the wrist plane below them.
+    private func drawWristComm(_ quads: [CommQuad], conchars: UInt32,
+                               viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                               pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        for quad in quads {
+            core.drawWorkbenchLabel(text: quad.label, origin: quad.origin,
+                                    right: quad.right, up: quad.up,
+                                    panelWidth: quad.width, panelHeight: quad.height,
+                                    cellSize: quad.glyph, labelCentered: true,
+                                    panelColor: quad.color,
+                                    textColor: Self.faded(Self.commLabelColor, quad.opacity),
                                     conchars: conchars,
                                     viewproj0: viewproj0, viewproj1: viewproj1,
                                     pipelines: pipelines, encoder: encoder)
