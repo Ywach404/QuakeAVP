@@ -960,6 +960,102 @@ final class RendererCore {
         var aspect: Float
     }
 
+    /// Encodes ONE procedural-stone card. `quad` is a six-vertex, 9-float
+    /// (xyz, uv, rgba) run whose uv spans 0..1 across the panel, in
+    /// whatever space `viewproj0`/`viewproj1` already fold their model
+    /// matrix into; `aspect` is that panel's width/height, which
+    /// `hud_panel_fragment` needs to keep its rounded corners and its stone
+    /// noise isotropic on a non-square panel.
+    ///
+    /// The SINGLE copy of this encode. `drawHudTiles` (a modular HUD tile's
+    /// background, in tile-local space under the tile's own model matrix)
+    /// and `drawStonePanel` (a world-space rectangle, for the wrist
+    /// communicator) differ only in how they arrive at a quad and a matrix
+    /// -- the uniform layout, the `MemoryLayout.stride` bind and the draw
+    /// live here, so the two callers cannot drift into two stone looks.
+    private func encodeStonePanel(quad: [Float], aspect: Float,
+                                  viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                                  panelPipeline: MTLRenderPipelineState,
+                                  encoder: MTLRenderCommandEncoder) {
+        guard let bgBuf = device.makeBuffer(bytes: quad,
+                                            length: quad.count * MemoryLayout<Float>.size,
+                                            options: .storageModeShared)
+        else { return }
+        var panelUniforms = HudPanelUniforms(viewproj0: viewproj0, viewproj1: viewproj1,
+                                             aspect: aspect)
+        encoder.setRenderPipelineState(panelPipeline)
+        withUnsafeBytes(of: &panelUniforms) { raw in
+            encoder.setVertexBytes(raw.baseAddress!,
+                                   length: MemoryLayout<HudPanelUniforms>.stride, index: 1)
+        }
+        encoder.setVertexBuffer(bgBuf, offset: 0, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
+    /// How revealed a panel must be before its stone card is drawn at all.
+    ///
+    /// `hud_panel_fragment` takes its alpha from a shader constant
+    /// (`kPanelInteriorAlpha`) and has no uniform to scale it, so a stone
+    /// card cannot fade: drawn during a caller's fade-in it would sit at
+    /// full alpha and snap the panel on. Below this floor `drawStonePanel`
+    /// therefore draws its flat tinted layer alone -- which is exactly what
+    /// the panel looked like before the stone -- and above it the panel is
+    /// already near-opaque, so the card arriving changes coverage very
+    /// little. Raise it towards 1 to confine the stone further into the
+    /// glance; lower it only once the shader can fade.
+    private static let stoneRevealFloor: Float = 0.9
+
+    /// A world-space procedural-stone panel: the same card the modular HUD
+    /// tiles are backed with (`pipelines.hudPanel`), placed on an arbitrary
+    /// `origin`/`right`/`up` rectangle rather than under a tile's model
+    /// matrix. Built for the wrist communicator's bezel and keys, so the
+    /// unit reads as the same material as the HUD sitting above it.
+    ///
+    /// Two layers, in the same order and for the same reasons
+    /// `drawHudTiles` stacks its own two:
+    ///
+    /// 1. `tint` as a flat quad through `pipelines.text` and the white 1x1
+    ///    texel -- byte for byte `drawWorkbenchLabel`'s backing. This layer
+    ///    alone is what a communicator panel looked like before the stone,
+    ///    and it is the whole draw when `pipelines.hudPanel` did not build,
+    ///    so a caller's tint ladder and its fade (carried in `tint`'s
+    ///    alpha) still read with no stone pipeline at all.
+    /// 2. The stone card on top. `hud_panel_fragment` ignores the vertex
+    ///    colour entirely (it is carried for buffer-layout parity only), so
+    ///    `tint` shows THROUGH the card's interior alpha instead of
+    ///    multiplying it -- a tint ladder here is a subtle lift, and a
+    ///    caller that needs an unmistakable highlight should wash a second,
+    ///    inset flat quad over the card as well.
+    ///
+    /// The card is rounded and the flat layer is not, so the panel's
+    /// corners show flat tint outside the card's mask -- the HUD tiles look
+    /// exactly the same way, for exactly this reason.
+    func drawStonePanel(origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                        widthMeters: Float, heightMeters: Float,
+                        tint: SIMD4<Float>, stoneReveal: Float = 1,
+                        viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                        pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        drawFlatPanel(origin: origin, right: right, up: up,
+                      width: widthMeters, height: heightMeters, color: tint,
+                      viewproj0: viewproj0, viewproj1: viewproj1,
+                      pipelines: pipelines, encoder: encoder)
+
+        guard let panelPipeline = pipelines.hudPanel, stoneReveal >= Self.stoneRevealFloor,
+              widthMeters > 0, heightMeters > 0
+        else { return }
+        // A 1x1 source plane, so the quad's own local coordinates ARE its
+        // uv and `hudPanelModel` maps them straight onto the metres
+        // rectangle the flat layer just covered.
+        let model = Self.hudPanelModel(origin: origin, right: right, up: up,
+                                       widthMeters: widthMeters, heightMeters: heightMeters,
+                                       sourceWidth: 1, sourceHeight: 1)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        encodeStonePanel(quad: Self.hudBgQuad(bboxW: 1, bboxH: 1, pad: 0),
+                         aspect: widthMeters / heightMeters,
+                         viewproj0: viewproj0 * model, viewproj1: viewproj1 * model,
+                         panelPipeline: panelPipeline, encoder: encoder)
+    }
+
     func drawHudTiles(frame: qc_frame_t,
                       tileModels: [simd_float4x4?],
                       viewproj0: simd_float4x4, viewproj1: simd_float4x4,
@@ -1031,21 +1127,10 @@ final class RendererCore {
                 if let panelPipeline = pipelines.hudPanel {
                     let paddedW = tile.bbox_w + 2 * pad
                     let paddedH = tile.bbox_h + 2 * pad
-                    let quad = Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: pad)
-                    if let bgBuf = device.makeBuffer(bytes: quad,
-                                                     length: quad.count * MemoryLayout<Float>.size,
-                                                     options: .storageModeShared) {
-                        var panelUniforms = HudPanelUniforms(
-                            viewproj0: viewproj0 * model, viewproj1: viewproj1 * model,
-                            aspect: paddedH > 0 ? paddedW / paddedH : 1)
-                        encoder.setRenderPipelineState(panelPipeline)
-                        withUnsafeBytes(of: &panelUniforms) { raw in
-                            encoder.setVertexBytes(raw.baseAddress!,
-                                                   length: MemoryLayout<HudPanelUniforms>.stride, index: 1)
-                        }
-                        encoder.setVertexBuffer(bgBuf, offset: 0, index: 0)
-                        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
-                    }
+                    encodeStonePanel(quad: Self.hudBgQuad(bboxW: tile.bbox_w, bboxH: tile.bbox_h, pad: pad),
+                                     aspect: paddedH > 0 ? paddedW / paddedH : 1,
+                                     viewproj0: viewproj0 * model, viewproj1: viewproj1 * model,
+                                     panelPipeline: panelPipeline, encoder: encoder)
                 }
             }
 
@@ -1156,33 +1241,70 @@ final class RendererCore {
                             conchars: UInt32,
                             viewproj0: simd_float4x4, viewproj1: simd_float4x4,
                             pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
-        guard let pipeline = pipelines.text else { return }
+        drawFlatPanel(origin: origin, right: right, up: up,
+                      width: panelWidth, height: panelHeight, color: panelColor,
+                      viewproj0: viewproj0, viewproj1: viewproj1,
+                      pipelines: pipelines, encoder: encoder)
+        guard let text else { return }
+        drawPanelLabel(text: text,
+                       origin: labelCentered ? origin : origin + up * (panelHeight * 0.5 + cellSize * 0.6),
+                       right: right, up: up, cellSize: cellSize, color: textColor,
+                       conchars: conchars, viewproj0: viewproj0, viewproj1: viewproj1,
+                       pipelines: pipelines, encoder: encoder)
+    }
+
+    /// The backing half of `drawWorkbenchLabel`, on its own: one solid
+    /// `color` rectangle in world space, through `pipelines.text` and the
+    /// white 1x1 texel. Split out so `drawStonePanel` can use the very same
+    /// encode as its flat layer (and its no-stone-pipeline fallback)
+    /// instead of a second copy of it -- there is one flat-panel draw in
+    /// this file, and the communicator, the editor's wrist grid and the
+    /// stone panels all go through it.
+    ///
+    /// Public in its own right for a caller that wants a flat quad and
+    /// nothing else -- the wrist communicator washes one of these over a
+    /// stone card as its hover/press highlight.
+    func drawFlatPanel(origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                               width: Float, height: Float, color: SIMD4<Float>,
+                               viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                               pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard let pipeline = pipelines.text, let solidTex = ensureHudSolidTexture() else { return }
+        let quad = Self.workbenchPanelQuad(origin: origin, right: right, up: up,
+                                           width: width, height: height, color: color)
+        guard let buf = device.makeBuffer(bytes: quad, length: quad.count * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
         encoder.setDepthStencilState(pipelines.depthAlways)
         var uniforms = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
-
-        if let solidTex = ensureHudSolidTexture() {
-            let quad = Self.workbenchPanelQuad(origin: origin, right: right, up: up,
-                                               width: panelWidth, height: panelHeight, color: panelColor)
-            if let buf = device.makeBuffer(bytes: quad, length: quad.count * MemoryLayout<Float>.size,
-                                           options: .storageModeShared) {
-                encoder.setRenderPipelineState(pipeline)
-                withUnsafeBytes(of: &uniforms) { raw in
-                    encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
-                }
-                encoder.setVertexBuffer(buf, offset: 0, index: 0)
-                encoder.setFragmentTexture(solidTex, index: 0)
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: quad.count / 9)
-            }
+        encoder.setRenderPipelineState(pipeline)
+        withUnsafeBytes(of: &uniforms) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
         }
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
+        encoder.setFragmentTexture(solidTex, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: quad.count / 9)
+    }
 
-        guard let text, let atlas = textures[conchars] else { return }
-        let labelOrigin = labelCentered ? origin : origin + up * (panelHeight * 0.5 + cellSize * 0.6)
-        let textVerts = Self.textQuads(text, origin: labelOrigin, right: right, up: up,
-                                       cellSize: cellSize, color: textColor)
+    /// The label half of `drawWorkbenchLabel`, on its own: a conchars
+    /// string centred on `origin`. `origin` is the label's own placement,
+    /// already resolved by the caller -- `drawWorkbenchLabel` lifts it
+    /// above its backing or leaves it on it per `labelCentered`, and the
+    /// wrist communicator (which draws its panels through
+    /// `drawStonePanel`, not through the backing half above) passes the
+    /// key centre straight in.
+    func drawPanelLabel(text: String, origin: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                        cellSize: Float, color: SIMD4<Float>, conchars: UInt32,
+                        viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                        pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        guard let pipeline = pipelines.text, let atlas = textures[conchars] else { return }
+        let textVerts = Self.textQuads(text, origin: origin, right: right, up: up,
+                                       cellSize: cellSize, color: color)
         guard !textVerts.isEmpty,
               let textBuf = device.makeBuffer(bytes: textVerts, length: textVerts.count * MemoryLayout<Float>.size,
                                               options: .storageModeShared)
         else { return }
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        var uniforms = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
         encoder.setRenderPipelineState(pipeline)
         withUnsafeBytes(of: &uniforms) { raw in
             encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)

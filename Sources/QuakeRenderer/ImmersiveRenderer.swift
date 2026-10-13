@@ -1205,6 +1205,37 @@ final class ImmersiveRenderer {
     /// `requestCommRefresh` for the flicker this exists to absorb.
     private static let commRefreshDebounce: Double = 0.5
 
+    // Feedback ladder: base key < hovered key < pressed key. Two things
+    // carry each step, because `hud_panel_fragment` ignores the vertex
+    // colour (see `RendererCore.drawStonePanel`) and a stone panel's tint
+    // therefore only shows through the card's interior alpha:
+    //
+    //  * the key's own stone TINT, lifted towards the highlight colour by
+    //    `commTintLift` -- the subtle half, a change of cast across the
+    //    whole key;
+    //  * a WASH, a flat inset quad over the card -- the half that reads
+    //    from arm's length, and the only half that survives
+    //    `pipelines.hudPanel` failing to build.
+    //
+    // Every colour here is at FULL reveal; the live fade is applied to all
+    // of them (`faded`) before they reach the draw.
+
+    /// A hovered key's lit face: cool and bright enough to pick one key out
+    /// of six at a glance, without reading as "pressed".
+    private static let commHoverWash = SIMD4<Float>(0.38, 0.56, 0.90, 0.50)
+    /// A fired key's flash -- near-white, decaying to nothing across
+    /// `WristComm.pressFlash` so a press reads as a strike rather than a
+    /// state change.
+    private static let commPressWash = SIMD4<Float>(0.95, 0.98, 1.0, 0.90)
+    /// The lit face's size as a fraction of the key. Well inside
+    /// `hud_panel_fragment`'s rounded corner radius, so a highlight lights
+    /// the stone card it sits on rather than spilling past its mask and
+    /// squaring the key off.
+    private static let commWashInset: Float = 0.74
+    /// How much of a highlight's colour also lifts the key's own stone
+    /// tint, 0...1.
+    private static let commTintLift: Float = 0.8
+
     /// One communicator quad: a bezel body or one action key, in the wrist
     /// frame's own right/up plane, with its legend (nil for the bezel) and
     /// the glyph size that legend fits at. Drawn through
@@ -1220,8 +1251,14 @@ final class ImmersiveRenderer {
         var glyph: Float
         /// This quad's live reveal fade, carried so the legend colour can be
         /// faded by the same factor its key face was without reverse-
-        /// engineering it out of `color`'s alpha.
+        /// engineering it out of `color`'s alpha. Doubles as the
+        /// `stoneReveal` the stone card is gated on.
         var opacity: Float
+        /// The hover/press lit face drawn over this quad's stone card, or
+        /// nil for an idle key and for the bezel. Already faded. Drawn
+        /// between the card and the legend, so a flash lights the key
+        /// without ever washing out the label on it.
+        var wash: SIMD4<Float>?
     }
 
     /// `color` faded by `opacity` -- alpha only, so a half-revealed panel
@@ -1238,6 +1275,38 @@ final class ImmersiveRenderer {
     private static func commGlyphSize(for label: String) -> Float {
         let count = Float(max(label.count, 1))
         return min(commGlyphCell, WristComm.cellSize * commLabelFill / count)
+    }
+
+    /// One key's face this frame: its stone tint and the lit face washed
+    /// over it, both already faded by `opacity`.
+    ///
+    /// `press` is the fired-key flash's remaining strength (1 at the
+    /// instant of the fire, 0 once `WristComm.pressFlash` has elapsed, 0
+    /// for a key that did not fire). Pressed beats hovered beats base: a
+    /// key being pressed is necessarily also hovered (`touchDepth` is a
+    /// strict subset of `hoverDepth`), so without that order every flash
+    /// would be overwritten by the hover tint of the finger that caused it.
+    private static func commKeyFace(hovered: Bool, press: Float,
+                                    opacity: Float) -> (tint: SIMD4<Float>, wash: SIMD4<Float>?) {
+        let base = commCellColor
+        let highlight: SIMD4<Float>
+        let strength: Float
+        if press > 0 {
+            highlight = commPressWash
+            strength = min(press, 1)
+        } else if hovered {
+            highlight = commHoverWash
+            strength = 1
+        } else {
+            return (faded(base, opacity), nil)
+        }
+        let lift = strength * commTintLift
+        let tint = SIMD4<Float>(base.x + (highlight.x - base.x) * lift,
+                                base.y + (highlight.y - base.y) * lift,
+                                base.z + (highlight.z - base.z) * lift,
+                                base.w)
+        let wash = SIMD4<Float>(highlight.x, highlight.y, highlight.z, highlight.w * strength)
+        return (faded(tint, opacity), faded(wash, opacity))
     }
 
     /// Requests a bindings refresh on a reveal rising edge, no more often
@@ -1366,6 +1435,14 @@ final class ImmersiveRenderer {
         lastCommTick = now
 
         let comm = WristCommStore.snapshot()
+        // Feedback inputs, read ONCE for the frame. Both are the same class
+        // of nonisolated lock-protected read as `WristCommStore.snapshot()`
+        // above -- plain values, no actor, no `QC_*` -- and both are
+        // hit-tested/compared below against the SAME resolved frame and
+        // `commOrigin` that the quads are built from and that
+        // `WristCommGeometry` publishes. One pose, three paths.
+        let tips = FingerTips.shared.snapshot()
+        let lastFire = WristCommFeedback.shared.snapshot()
         var quads: [CommQuad] = []
         var sides: [WristCommGeometry.Side] = []
 
@@ -1418,9 +1495,37 @@ final class ImmersiveRenderer {
                                                 opacity: commOpacity[side]))
 
             guard commOpacity[side] > Self.commFadeFloor else { continue }
+
+            // Which key a fingertip is approaching, against this side's own
+            // resolved plane. `min()` only to be deterministic when both
+            // hands are over the grid at once -- an interaction nobody
+            // aims, but one that must not flicker between two keys frame
+            // to frame.
+            let hovered = [tips.left, tips.right].compactMap {
+                $0.flatMap { WristComm.hoveredCell($0, commOrigin: origin, frame: frame) }
+            }.min()
+
+            // Which key just fired, and how much of its flash is left. The
+            // touch loop timestamps a fire with `CACurrentMediaTime()`, the
+            // same clock `now` came from, so this is a straight window test
+            // -- no cross-clock conversion and nothing to tick down. The
+            // lower bound rejects a timestamp from the future, which a
+            // publish landing between this frame's `now` and the draw would
+            // otherwise turn into a flash stuck at full strength.
+            var press: Float = 0
+            var pressedCell = -1
+            if let fire = lastFire, fire.side == side {
+                let age = now - fire.time
+                if age >= 0, age <= WristComm.pressFlash {
+                    press = Float(1 - age / WristComm.pressFlash)
+                    pressedCell = fire.cell
+                }
+            }
+
             quads += commQuads(frame: frame, origin: origin,
                                labels: side < comm.sides.count ? comm.sides[side].labels : [],
-                               opacity: commOpacity[side])
+                               opacity: commOpacity[side],
+                               hovered: hovered, pressedCell: pressedCell, press: press)
         }
 
         WristCommGeometry.shared.publish(WristCommGeometry.Snapshot(sides: sides))
@@ -1433,47 +1538,79 @@ final class ImmersiveRenderer {
     /// label draws its face alone -- the unit keeps its full six-key shape
     /// rather than growing holes, which is what the device would look like.
     private func commQuads(frame: HudEditor.WristFrame, origin: SIMD3<Float>,
-                           labels: [String], opacity: Float) -> [CommQuad] {
+                           labels: [String], opacity: Float,
+                           hovered: Int?, pressedCell: Int, press: Float) -> [CommQuad] {
         var quads: [CommQuad] = []
         quads.append(CommQuad(origin: origin, right: frame.right, up: frame.up,
                               width: (WristComm.gridHalfX + WristComm.bezelPad) * 2,
                               height: (WristComm.gridHalfY + WristComm.bezelPad) * 2,
                               color: Self.faded(Self.commBezelColor, opacity),
-                              label: nil, glyph: 0, opacity: opacity))
+                              label: nil, glyph: 0, opacity: opacity, wash: nil))
         for cell in 0 ..< (WristComm.cols * WristComm.rows) {
             let centre = WristComm.cellCenter(cell)
             let raw = cell < labels.count ? labels[cell] : ""
             let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let face = Self.commKeyFace(hovered: hovered == cell,
+                                        press: cell == pressedCell ? press : 0,
+                                        opacity: opacity)
             quads.append(CommQuad(
                 origin: origin + frame.right * centre.x + frame.up * centre.y,
                 right: frame.right, up: frame.up,
                 width: WristComm.cellSize, height: WristComm.cellSize,
-                color: Self.faded(Self.commCellColor, opacity),
+                color: face.tint,
                 label: label.isEmpty ? nil : label,
-                glyph: Self.commGlyphSize(for: label), opacity: opacity))
+                glyph: Self.commGlyphSize(for: label), opacity: opacity,
+                wash: face.wash))
         }
         return quads
     }
 
-    /// Draws this frame's communicator quads through
-    /// `RendererCore.drawWorkbenchLabel` -- the same solid-quad + conchars
-    /// path the edit-mode grid uses, with `labelCentered` so a legend sits
-    /// ON its key, and with every colour already faded by the caller. Same
-    /// `viewproj0`/`viewproj1` the HUD tiles drew with, so the unit sits in
-    /// the wrist plane below them.
+    /// Draws this frame's communicator quads as PROCEDURAL STONE panels --
+    /// `RendererCore.drawStonePanel`, the same `pipelines.hudPanel` card
+    /// the modular HUD tiles above are backed with, so the unit reads as
+    /// the same material as the HUD rather than as six flat rectangles.
+    /// Same `viewproj0`/`viewproj1` the tiles drew with, so it still sits
+    /// in the wrist plane below them.
+    ///
+    /// Three layers per quad, in this order and for this reason:
+    ///
+    ///  1. the stone panel at the quad's tint (`drawStonePanel` itself
+    ///     falls back to that tint as a flat quad -- today's look -- when
+    ///     the stone pipeline did not build, or while the panel is still
+    ///     fading in and the card's fixed alpha would snap it on);
+    ///  2. the hover/press lit face, inset over the card;
+    ///  3. the conchars legend, LAST, so a near-white press flash lights
+    ///     the key underneath its label instead of swallowing it.
+    ///
+    /// Every colour arrives already faded by the caller.
     private func drawWristComm(_ quads: [CommQuad], conchars: UInt32,
                                viewproj0: simd_float4x4, viewproj1: simd_float4x4,
                                pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
         for quad in quads {
-            core.drawWorkbenchLabel(text: quad.label, origin: quad.origin,
+            core.drawStonePanel(origin: quad.origin, right: quad.right, up: quad.up,
+                                widthMeters: quad.width, heightMeters: quad.height,
+                                tint: quad.color, stoneReveal: quad.opacity,
+                                viewproj0: viewproj0, viewproj1: viewproj1,
+                                pipelines: pipelines, encoder: encoder)
+
+            if let wash = quad.wash {
+                core.drawFlatPanel(origin: quad.origin, right: quad.right, up: quad.up,
+                                   width: quad.width * Self.commWashInset,
+                                   height: quad.height * Self.commWashInset,
+                                   color: wash,
+                                   viewproj0: viewproj0, viewproj1: viewproj1,
+                                   pipelines: pipelines, encoder: encoder)
+            }
+
+            if let label = quad.label {
+                core.drawPanelLabel(text: label, origin: quad.origin,
                                     right: quad.right, up: quad.up,
-                                    panelWidth: quad.width, panelHeight: quad.height,
-                                    cellSize: quad.glyph, labelCentered: true,
-                                    panelColor: quad.color,
-                                    textColor: Self.faded(Self.commLabelColor, quad.opacity),
+                                    cellSize: quad.glyph,
+                                    color: Self.faded(Self.commLabelColor, quad.opacity),
                                     conchars: conchars,
                                     viewproj0: viewproj0, viewproj1: viewproj1,
                                     pipelines: pipelines, encoder: encoder)
+            }
         }
     }
 
