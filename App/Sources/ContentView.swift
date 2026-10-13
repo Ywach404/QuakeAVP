@@ -71,6 +71,7 @@ struct ContentView: View {
     @State private var commSideUI = VRSettings.shared.wristCommSide
     @State private var commUpUI = VRSettings.shared.wristCommUp
     @State private var commNoTurn = VRSettings.shared.wristCommNoTurn
+    @State private var commAlongArm = VRSettings.shared.wristCommAlongArm
     @State private var offHandModelOnly = true
     @State private var laser = false
     @State private var reticle = false
@@ -637,6 +638,24 @@ struct ContentView: View {
                     Text("Reaching across with the gun hand to press a key reads as that hand's "
                          + "turn gesture. On, the view holds still while the panel is up; "
                          + "moving and firing are untouched.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Wrist unit orientation").font(.caption).foregroundStyle(.secondary)
+                    Picker("Wrist unit orientation", selection: Binding(
+                        get: { commAlongArm },
+                        set: { commAlongArm = $0; VRSettings.shared.wristCommAlongArm = $0 })) {
+                        Text("Across wrist").tag(false)
+                        Text("Along arm").tag(true)
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                    Text(commAlongArm
+                         ? "The unit is turned to lie DOWN the forearm: three keys long, two "
+                           + "across, legends reading from the wrist toward the elbow. The "
+                           + "position dials below then run with the unit -- Side moves it "
+                           + "down the arm, Height across it, Angle rolls it."
+                         : "The unit sits ACROSS the wrist: three keys wide, two deep, just "
+                           + "below the HUD. Switch to Along arm to turn it down the forearm.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 3) {

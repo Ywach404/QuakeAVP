@@ -1509,6 +1509,11 @@ final class ImmersiveRenderer {
         // Roll` reads this render thread already makes for the controller
         // hand pose.
         let dials = VRSettings.shared.wristCommPlacement
+        // ...and the orientation, read ONCE for the frame beside them: it is
+        // the same class of placement choice and the same lock-protected
+        // read, and both sides must be built from the one value (a flip
+        // landing between the two sides would turn one and not the other).
+        let alongArm = VRSettings.shared.wristCommAlongArm
         var quads: [CommQuad] = []
         var sides: [WristCommGeometry.Side] = []
         var finger: [Float] = []
@@ -1533,7 +1538,8 @@ final class ImmersiveRenderer {
                 resolved = commWristFrame(side: side, live: live, now: now)
             }
 
-            // The player's dials, applied ONCE here, to the pair that
+            // The player's ORIENTATION, then the player's dials, applied
+            // ONCE here, to the pair that
             // everything below is derived from: the reveal decision, the
             // hover hit-test, the drawn quads AND the published
             // `WristCommGeometry` side all take `frame`/`origin` from this
@@ -1546,9 +1552,23 @@ final class ImmersiveRenderer {
             // on purpose: the dials are a placement on top of whatever pose
             // is current, so re-dialling mid-hold moves the panel rather than
             // baking yesterday's dial into the held pose.
+            //
+            // `orientedFrame` goes BEFORE the dials, which is what makes the
+            // "Along arm" option a placement rather than a second layout:
+            // the whole unit turns 90 deg in its own plane, and because the
+            // keys, the legends, the hover test and the published geometry
+            // are all panel-local multiples of this frame's right/up, they
+            // turn with it. The dials then act in the TURNED unit's axes --
+            // the tilt pitches about the arm's long axis, Side runs down the
+            // arm and Height across it (see `orientedFrame`; the settings
+            // caption says so too). The seating takes the flag as well,
+            // since the unit's extent along the drop is the long half once
+            // it is lying down the forearm.
+            let oriented = WristComm.orientedFrame(resolved, alongArm: alongArm)
             let adjusted = WristComm.adjustedFrame(
-                resolved,
-                origin: resolved.valid ? WristComm.commOrigin(wrist: resolved) : .zero,
+                oriented,
+                origin: resolved.valid ? WristComm.commOrigin(wrist: resolved,
+                                                              alongArm: alongArm) : .zero,
                 tiltDegrees: dials.tilt, fwd: dials.fwd, side: dials.side, up: dials.up)
             let frame = adjusted.frame
             let origin = adjusted.origin
@@ -1691,7 +1711,16 @@ final class ImmersiveRenderer {
 
     /// One side's communicator geometry: the bezel body first, then the six
     /// action keys over it at `WristComm.cellCenter`, all in the wrist
-    /// frame's plane and all faded by `opacity`. A key with an empty binding
+    /// frame's plane and all faded by `opacity`.
+    ///
+    /// Every extent here is PANEL-LOCAL -- `gridHalfX` along `frame.right`,
+    /// `gridHalfY` along `frame.up`, cell centres as right/up multiples --
+    /// which is what makes the "Along arm" orientation free: the caller
+    /// hands in an already-turned frame (`WristComm.orientedFrame`) and the
+    /// bezel, the keys and the legends all turn with it, in agreement with
+    /// the hover test and the published geometry built from the same frame.
+    /// Keep it that way; a world-axis extent here would wrap the rotated
+    /// unit in a bezel the wrong way round. A key with an empty binding
     /// label draws its face alone -- the unit keeps its full six-key shape
     /// rather than growing holes, which is what the device would look like.
     private func commQuads(frame: HudEditor.WristFrame, origin: SIMD3<Float>,

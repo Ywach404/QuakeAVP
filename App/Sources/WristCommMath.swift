@@ -51,9 +51,67 @@ enum WristComm {
                      (Float(rows - 1) * 0.5 - Float(row)) * cellPitch)
     }
 
-    /// The communicator's centre, seated below the HUD grid on the wrist plane.
-    static func commOrigin(wrist: HudEditor.WristFrame) -> SIMD3<Float> {
-        wrist.origin - wrist.up * (HudEditor.gridHalfY + hudGap + gridHalfY)
+    /// The communicator's centre, seated below the HUD grid on the wrist
+    /// plane -- `hudGap` clear of the grid above it, whichever way the unit
+    /// is turned.
+    ///
+    /// That last clause is the whole of `alongArm` here. The drop is the HUD's
+    /// own half-height, the gap, and then the unit's HALF-EXTENT ALONG THE
+    /// DROP -- and which half-extent that is depends on the orientation,
+    /// because `orientedFrame` turns the unit 90 deg in its own plane: across
+    /// the wrist the drop clears the two-row short half (`gridHalfY`), along
+    /// the forearm the three-key long half (`gridHalfX`), so the unit starts
+    /// under the HUD and runs further down the arm rather than overlapping
+    /// the grid by the difference. The flag is REQUIRED, not defaulted: a
+    /// caller that seats the unit without saying which way it is turned is
+    /// the bug this signature exists to make impossible.
+    static func commOrigin(wrist: HudEditor.WristFrame, alongArm: Bool) -> SIMD3<Float> {
+        wrist.origin - wrist.up * (HudEditor.gridHalfY + hudGap + (alongArm ? gridHalfX : gridHalfY))
+    }
+
+    /// The communicator turned to lie ALONG the forearm: a 90 degree rotation
+    /// of the panel's in-plane axes about its own normal (`forward`), so the
+    /// three-key long axis runs down the arm instead of across the wrist.
+    /// Identity when `alongArm` is false -- today's unit, untouched.
+    ///
+    /// It is a frame rotation and nothing else, which is what keeps the rest
+    /// of this file out of it: `cellCenter`, `touchedCell`/`hoveredCell` and
+    /// the renderer's quads are all PANEL-LOCAL (right/up multiples of a
+    /// cell), so turning the frame turns the drawn unit, the hover
+    /// highlight, the hit-test and the published `WristCommGeometry`
+    /// together, with no second opinion to keep in step. The renderer
+    /// applies it in its ONE placement chain, between the occlusion-held
+    /// wrist frame and the user's dials.
+    ///
+    /// THE SIGN -- `right' = -up`, `up' = +right` -- is the one choice here
+    /// a reader cannot derive, so: handedness forces the two halves to move
+    /// together (`right' x up' == forward`, or every legend would come out
+    /// mirrored), which leaves exactly two candidates, this and its
+    /// opposite. This one is chosen because `right` is both the axis
+    /// `RendererCore.textQuads` lays glyphs along and the axis the three
+    /// columns run along, so `right' = -up` makes the key run AND the
+    /// legends read from the wrist end down toward the elbow: cell 0 (cmd0,
+    /// the first binding) nearest the hand, the keys counting away from it,
+    /// the text running down the forearm the way a spine runs down a book.
+    /// The opposite pair is the same unit end-for-end -- cell 0 at the
+    /// elbow, legends reading back toward the hand. Flipping it is this one
+    /// expression plus the two signs pinned in `runOrientationTests`.
+    ///
+    /// Because the orientation lands BEFORE `adjustedFrame`, the user's
+    /// dials then act in the turned unit's own axes: the tilt pitches about
+    /// the new `right`, which is the arm's long axis (the natural handle for
+    /// a unit lying down the forearm), and the Side/Height offsets run down
+    /// and across the arm respectively. Deliberate, and stated in the
+    /// settings caption so the sliders cannot read as broken.
+    ///
+    /// An invalid (untracked) frame passes through whole, the same contract
+    /// `adjustedFrame` keeps: there is no plane to rotate.
+    static func orientedFrame(_ frame: HudEditor.WristFrame, alongArm: Bool) -> HudEditor.WristFrame {
+        guard alongArm, frame.valid else { return frame }
+        var turned = frame
+        turned.right = -frame.up
+        turned.up = frame.right
+        return turned
     }
 
     /// The communicator's player-adjusted placement: `origin` shifted along

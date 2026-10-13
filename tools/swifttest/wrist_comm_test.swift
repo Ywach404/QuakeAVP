@@ -48,6 +48,7 @@ struct WristCommMathTest {
         runSideQualifiesTests()
         runAdjustedFrameTests()
         runHoverPickTests()
+        runOrientationTests()
         print("PASSED (wrist_comm_test.swift)")
     }
 }
@@ -85,7 +86,7 @@ func runCommGeometryTests() {
 
     let wf = HudEditor.WristFrame(anchor: 0, origin: .zero, right: SIMD3(1,0,0),
                                   up: SIMD3(0,1,0), forward: SIMD3(0,0,1), valid: true)
-    let o = WristComm.commOrigin(wrist: wf)
+    let o = WristComm.commOrigin(wrist: wf, alongArm: false)
     assert(o.y < -HudEditor.gridHalfY, "comm origin clears the HUD half-height")
 
     let c4 = WristComm.cellCenter(4)
@@ -103,7 +104,7 @@ func runCommGeometryTests() {
 func runHoverTests() {
     let wf = HudEditor.WristFrame(anchor: 0, origin: .zero, right: SIMD3(1,0,0),
                                   up: SIMD3(0,1,0), forward: SIMD3(0,0,1), valid: true)
-    let o = WristComm.commOrigin(wrist: wf)
+    let o = WristComm.commOrigin(wrist: wf, alongArm: false)
 
     // The band is strictly wider than the touch depth, or "hovering" and
     // "touching" would be the same state and there would be nothing to
@@ -257,7 +258,7 @@ func runAdjustedFrameTests() {
     let oblique = testFrame(origin: SIMD3(0.2, 0.9, -0.35), toward: SIMD3(0.3, -0.5, 0.8))
 
     for (name, wf) in [("axis-aligned", axis), ("oblique", oblique)] {
-        let o = WristComm.commOrigin(wrist: wf)
+        let o = WristComm.commOrigin(wrist: wf, alongArm: false)
 
         // Zero adjustments must be the IDENTITY, bit-for-bit as far as these
         // tolerances see it. This is the "unchanged at zero" contract the
@@ -378,4 +379,169 @@ func runHoverPickTests() {
     let tie = WristComm.hoverPick([1, 1])
     assert(tie?.cell == 1 && tie?.tip == 0, "a tie on one cell breaks to the lower tip index")
     print("hover pick ok")
+}
+
+// MARK: - Orientation: across the wrist vs along the forearm
+
+/// `WristComm.orientedFrame` + the orientation-aware seating
+/// (`commOrigin(wrist:alongArm:)`), which together are the whole of the
+/// "Along arm" option -- the renderer applies them in its one placement
+/// chain and everything else (cellCenter, touchedCell, the draw, the
+/// published geometry) is unchanged, so what is pinned here IS the feature.
+func runOrientationTests() {
+    let axis = testFrame(origin: SIMD3(0, 1.1, -0.4), toward: SIMD3(0, 0, 1))
+    let oblique = testFrame(origin: SIMD3(0.2, 0.9, -0.35), toward: SIMD3(0.3, -0.5, 0.8))
+
+    // The long axis IS the long one -- three columns against two rows. Every
+    // claim below about "the long axis runs down the arm" rests on this, and
+    // a future grid that was 3x3 would make the whole option meaningless.
+    assert(WristComm.gridHalfX > WristComm.gridHalfY, "the 3-key axis is the longer one")
+
+    for (name, wf) in [("axis-aligned", axis), ("oblique", oblique)] {
+        // ACROSS (the default) is the IDENTITY, to the tightest tolerance
+        // these helpers have: the unit A. already tuned on device must not
+        // move until the option is turned on.
+        let across = WristComm.orientedFrame(wf, alongArm: false)
+        assert(near(across.right, wf.right, 1e-7), "\(name): across leaves right alone")
+        assert(near(across.up, wf.up, 1e-7), "\(name): across leaves up alone")
+        assert(near(across.forward, wf.forward, 1e-7), "\(name): across leaves forward alone")
+        assert(near(across.origin, wf.origin, 1e-7), "\(name): across leaves the origin alone")
+        assert(across.valid, "\(name): across keeps validity")
+        assert(near(WristComm.commOrigin(wrist: wf, alongArm: false),
+                    wf.origin - wf.up * (HudEditor.gridHalfY + WristComm.hudGap + WristComm.gridHalfY),
+                    1e-7),
+               "\(name): across seats at today's drop, unchanged")
+
+        // ALONG THE ARM: a 90 deg turn about the panel NORMAL, so the face
+        // still points at the eye and only the in-plane axes move.
+        //
+        // THE SIGN, which is the one thing in here a reader cannot derive:
+        // `right' = -up`, `up' = right`. Both halves are forced together by
+        // handedness -- `right' x up' == forward` -- so the only other
+        // candidate is the opposite pair (`+up`/`-right`), and these are what
+        // choose between them:
+        //
+        //  * `right` is the axis `textQuads` lays glyphs along and the axis
+        //    the three columns run along. With `right' = -up` the key run
+        //    and the legend both read from the WRIST end down toward the
+        //    elbow -- cell 0 (cmd0, the first binding) nearest the hand, the
+        //    keys counting away from it, which is the order the unit is read
+        //    in and the order the HUD above it already stacks in.
+        //  * `up' = right` then puts the glyph tops toward the wrist frame's
+        //    own right, i.e. the text runs down the forearm the way a book
+        //    spine runs down a shelf. The opposite pair gives the same unit
+        //    upside down end-to-end (cell 0 at the elbow, legends reading
+        //    toward the hand).
+        let along = WristComm.orientedFrame(wf, alongArm: true)
+        assert(near(along.right, -wf.up, 1e-6), "\(name): along maps right -> -up")
+        assert(near(along.up, wf.right, 1e-6), "\(name): along maps up -> +right")
+        assert(near(along.forward, wf.forward, 1e-7), "\(name): along leaves the panel normal alone")
+        assert(near(along.origin, wf.origin, 1e-7), "\(name): the rotation does not translate")
+        assert(along.valid, "\(name): along keeps validity")
+
+        // The long (3-key) axis now runs DOWN the arm: the panel's own +x
+        // extent points along the wrist frame's -up.
+        assert(simd_dot(along.right, wf.up) < -0.999, "\(name): the long axis runs down the arm")
+
+        // ...and cell 0 sits at the WRIST end of it, not the elbow end --
+        // the half of the sign choice the dot product above cannot see,
+        // since the panel's extents are symmetric either way.
+        let c0 = WristComm.cellCenter(0)
+        let w0 = along.right * c0.x + along.up * c0.y
+        assert(simd_dot(w0, wf.up) > 0, "\(name): cell 0 sits at the wrist end")
+        let c5 = WristComm.cellCenter(5)
+        let w5 = along.right * c5.x + along.up * c5.y
+        assert(simd_dot(w5, wf.up) < 0, "\(name): cell 5 sits at the elbow end")
+
+        // Still a usable frame: the hit-test projects onto these axes
+        // (`HudEditor.offsetInFrame`), so a basis off unit length silently
+        // rescales the grid's bounds, and a LEFT-handed one would mirror
+        // every legend while all three dot products still read zero.
+        let r = along.right, a = along.up, fw = along.forward
+        assert(near(simd_length(r), 1), "\(name): along right stays unit")
+        assert(near(simd_length(a), 1), "\(name): along up stays unit")
+        assert(near(simd_length(fw), 1), "\(name): along forward stays unit")
+        assert(abs(simd_dot(r, a)) < 1e-5, "\(name): along right . up stays 0")
+        assert(abs(simd_dot(a, fw)) < 1e-5, "\(name): along up . forward stays 0")
+        assert(abs(simd_dot(r, fw)) < 1e-5, "\(name): along right . forward stays 0")
+        assert(near(simd_cross(r, a), fw, 1e-5), "\(name): along right x up stays forward")
+
+        // Seating follows the orientation, and this is the invariant that
+        // says WHY: whichever way the unit is turned, its top edge sits
+        // exactly `hudGap` below the HUD grid above it. The extent is read
+        // off the ROTATED frame's own corners rather than restated, so this
+        // fails if the drop and the rotation ever disagree -- which is
+        // exactly what a drop left at the short half-extent would be.
+        for alongArm in [false, true] {
+            let f = WristComm.orientedFrame(wf, alongArm: alongArm)
+            let o = WristComm.commOrigin(wrist: wf, alongArm: alongArm)
+            var top = -Float.greatestFiniteMagnitude
+            for sx in [Float(-1), 1] {
+                for sy in [Float(-1), 1] {
+                    let corner = o + f.right * (sx * WristComm.gridHalfX)
+                                   + f.up * (sy * WristComm.gridHalfY)
+                    top = max(top, simd_dot(corner - wf.origin, wf.up))
+                }
+            }
+            assert(near(top, -(HudEditor.gridHalfY + WristComm.hudGap)),
+                   "\(name)/along=\(alongArm): the unit's top edge sits hudGap below the HUD")
+        }
+
+        // The along-arm unit therefore seats FURTHER down the arm, by exactly
+        // the difference between the two half-extents.
+        let oAcross = WristComm.commOrigin(wrist: wf, alongArm: false)
+        let oAlong = WristComm.commOrigin(wrist: wf, alongArm: true)
+        assert(near(simd_length(oAlong - oAcross), WristComm.gridHalfX - WristComm.gridHalfY),
+               "\(name): the two drops differ by gridHalfX - gridHalfY")
+        assert(simd_dot(oAlong - oAcross, wf.up) < 0, "\(name): the along-arm unit seats lower")
+
+        // The rotation lives ENTIRELY in the frame: `cellCenter` and
+        // `touchedCell` stay panel-local and unchanged, so every key's world
+        // centre still hit-tests to its own index under a rotated frame --
+        // a key fires where it lights.
+        let fAlong = WristComm.orientedFrame(wf, alongArm: true)
+        for cell in 0 ..< (WristComm.cols * WristComm.rows) {
+            let c = WristComm.cellCenter(cell)
+            let p = oAlong + fAlong.right * c.x + fAlong.up * c.y
+            assert(WristComm.touchedCell(p, commOrigin: oAlong, frame: fAlong) == cell,
+                   "\(name): along-arm cell \(cell) hit-tests to itself")
+        }
+
+        // ...and through the user's dials too, which is the FULL chain the
+        // renderer runs (oriented frame -> adjustedFrame). A dialled,
+        // rotated unit is still hit-tested where it is drawn.
+        let dialled = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 20,
+                                              fwd: 0.01, side: -0.02, up: 0.015)
+        for cell in 0 ..< (WristComm.cols * WristComm.rows) {
+            let c = WristComm.cellCenter(cell)
+            let p = dialled.origin + dialled.frame.right * c.x + dialled.frame.up * c.y
+            assert(WristComm.touchedCell(p, commOrigin: dialled.origin,
+                                         frame: dialled.frame) == cell,
+                   "\(name): dialled along-arm cell \(cell) hit-tests to itself")
+        }
+
+        // The dials act in the ROTATED unit's own axes, deliberately (the
+        // orientation enters the chain BEFORE them): the tilt pitches about
+        // the new right, which is the arm's long axis, and the Side/Height
+        // offsets run down and across the arm respectively. Pinned so the
+        // settings caption that says so cannot drift from the code.
+        let side = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 0,
+                                           fwd: 0, side: 0.03, up: 0)
+        assert(near(side.origin, oAlong - wf.up * 0.03),
+               "\(name): +Side moves the along-arm unit down the arm")
+        let height = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 0,
+                                             fwd: 0, side: 0, up: 0.03)
+        assert(near(height.origin, oAlong + wf.right * 0.03),
+               "\(name): +Height moves the along-arm unit across the arm")
+
+        // An untracked wrist passes through whole, same contract
+        // `adjustedFrame` keeps: there is no plane to rotate.
+        var bad = wf
+        bad.valid = false
+        let dead = WristComm.orientedFrame(bad, alongArm: true)
+        assert(!dead.valid, "\(name): an invalid frame stays invalid")
+        assert(near(dead.right, bad.right, 1e-7), "\(name): an invalid frame's right is untouched")
+        assert(near(dead.up, bad.up, 1e-7), "\(name): an invalid frame's up is untouched")
+    }
+    print("orientation ok")
 }
