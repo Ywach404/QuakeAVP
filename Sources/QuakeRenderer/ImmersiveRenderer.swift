@@ -1202,42 +1202,48 @@ final class ImmersiveRenderer {
     /// One action cell's key face -- a cool dark grey, lighter than the
     /// bezel so each key's edge separates from the body around it.
     private static let commCellColor = SIMD4<Float>(0.16, 0.19, 0.24, 0.92)
-    /// Key legend colour: a warm, high-contrast PARCHMENT. A DEVICE-TUNING
-    /// LEVER -- this is the one number to move if the legends are hard to
-    /// read in the headset.
+    /// Key legend TINT, multiplied into conchars' RED character set (see
+    /// `commLabelAlternate`). A DEVICE-TUNING LEVER -- this is the one
+    /// number to move if the legends are hard to read in the headset.
     ///
-    /// It was a cool near-white, which the procedural stone key face
-    /// swallowed: the card is itself light and cool, so white-on-stone had
-    /// almost no hue separation left once the panel was half revealed.
-    /// Parchment separates by hue as well as by value, which survives the
-    /// stone texture, the hover wash and the fade alike. Alpha is still
-    /// multiplied by the side's live opacity at the draw (`faded`).
-    /// Lifted again toward white after device feedback ("still really hard
-    /// to read the button titles"): conchars glyphs are a TEXTURED bronze
-    /// bitmap, so a tint alone cannot carry contrast against procedural
-    /// stone -- it changes the hue of ink that is still mid-value. Hue AND
-    /// value now, plus the shadow and strip below; those three together are
-    /// the legibility pass, and this is the first of them to move.
-    private static let commLabelColor = SIMD4<Float>(1.0, 0.97, 0.82, 1.0)
-    /// The legend's DROP SHADOW: the same string drawn first in near-black,
-    /// offset down-right in the panel plane, so every glyph has a dark edge
-    /// whatever the stone behind it happens to be doing. The two levers are
-    /// this colour and `commLabelShadowOffset` (metres, in-plane).
+    /// Near-neutral and a touch warm, deliberately: the colour the player
+    /// sees now lives in the TEXELS (the alternate charset's glyphs are
+    /// already red/bronze), so this only has to avoid dulling them. A
+    /// saturated tint on top of coloured texels multiplies to mud.
+    ///
+    /// Two earlier attempts are why it is a charset choice and not a tint
+    /// at all: a cool near-white, which the light cool stone card swallowed
+    /// for want of hue separation, and then a warm parchment, which A. still
+    /// could not read ("still really hard to read the button titles")
+    /// because a tint only shifts the hue of ink that is still mid-value.
+    /// Red ink with a black outline carries both; alpha is still multiplied
+    /// by the side's live opacity at the draw (`faded`).
+    private static let commLabelColor = SIMD4<Float>(1.0, 0.98, 0.94, 1.0)
+    /// Draw the legends with conchars' SECOND character set -- `char |
+    /// 0x80`, the red/bronze glyphs Quake's menus use. A. asked for "the
+    /// quake font red", and this is the engine's own red rather than a
+    /// tinted white: the glyph bitmaps differ, so the ink reads as Quake's
+    /// and not as a recolour.
+    private static let commLabelAlternate = true
+    /// The legend's BLACK OUTLINE: the same glyphs drawn four times in
+    /// near-black, offset +/- one `commLabelOutlineFrac` of the glyph cell
+    /// along the panel's own right and up, with the fill on top. Four
+    /// passes rather than one drop shadow because the outline has to work
+    /// in every direction the stone noise happens to go light -- a shadow
+    /// only darkens one side of each stroke, which is what the previous
+    /// round shipped (and it is replaced, not stacked: A. asked for "a
+    /// backing border around the text or shadow", and the border IS the
+    /// stronger of the two).
+    ///
+    /// Fraction of the glyph, not metres, so a legend shrunk to fit its key
+    /// (`commGlyphSize`) gets a proportionally thinner outline instead of a
+    /// fixed one that would close up NOCLIP's counters.
     ///
     /// Comm-only by construction: it lives in this draw loop rather than in
     /// `RendererCore.drawPanelLabel`, so the HUD editor's workbench labels
     /// (the other caller of that path) are untouched.
-    private static let commLabelShadowColor = SIMD4<Float>(0, 0, 0, 0.9)
-    private static let commLabelShadowOffset: Float = 0.0012
-    /// The slim DARK STRIP behind the text run -- drawn between the stone
-    /// key face and the legend, so the ink always sits on a consistent dark
-    /// band instead of on whatever the procedural noise put under it.
-    /// `commLabelStripHeight` is a multiple of the glyph cell,
-    /// `commLabelStripPad` a multiple of the run's own width (clamped to the
-    /// key, so the longest legend's band cannot spill past its key edge).
-    private static let commLabelStripColor = SIMD4<Float>(0.02, 0.02, 0.03, 0.5)
-    private static let commLabelStripHeight: Float = 1.4
-    private static let commLabelStripPad: Float = 1.12
+    private static let commLabelOutlineColor = SIMD4<Float>(0, 0, 0, 0.95)
+    private static let commLabelOutlineFrac: Float = 0.12
     /// Largest glyph a key legend may use (metres per conchars cell). A
     /// short label (GOD) would otherwise fill its key edge to edge; a long
     /// one (NOCLIP) is shrunk below this to fit, see `commGlyphSize`.
@@ -1349,16 +1355,6 @@ final class ImmersiveRenderer {
     private static func commGlyphSize(for label: String) -> Float {
         let count = Float(max(label.count, 1))
         return min(commGlyphCell, WristComm.cellSize * commLabelFill / count)
-    }
-
-    /// The dark strip behind one legend: the glyph run's own width
-    /// (`textQuads` lays glyphs exactly one `glyph` apart, so the run is
-    /// `count * glyph`) padded a little, and NEVER wider than the key --
-    /// a band that overhung its own key would square off the stone card's
-    /// rounded corners and read as a seam between the keys.
-    private static func commLabelStrip(for label: String, glyph: Float) -> (width: Float, height: Float) {
-        let run = Float(max(label.count, 1)) * glyph
-        return (min(run * commLabelStripPad, WristComm.cellSize), glyph * commLabelStripHeight)
     }
 
     /// One key's face this frame: its stone tint and the lit face washed
@@ -1807,10 +1803,13 @@ final class ImmersiveRenderer {
     ///  2. the hover/press lit face, inset over the card;
     ///  3. the conchars legend, LAST, so a near-white press flash lights
     ///     the key underneath its label instead of swallowing it -- itself
-    ///     three passes (dark strip, drop shadow, bright fill), which is
-    ///     the legibility pass and is COMM-ONLY: it lives here, not in
+    ///     five passes (a four-way black outline, then the red fill), which
+    ///     is the legibility pass and is COMM-ONLY: it lives here, not in
     ///     `RendererCore.drawPanelLabel`, so the HUD editor's workbench
-    ///     labels through that same path keep their single plain pass.
+    ///     labels through that same path keep their single plain white pass.
+    ///     A dark strip under the run went with it -- it gave the ink a
+    ///     constant backdrop and cost a visible band on the stone ("looks
+    ///     trashy"); the outline does the same job per stroke instead.
     ///
     /// Every colour arrives already faded by the caller.
     private func drawWristComm(_ quads: [CommQuad], conchars: UInt32,
@@ -1833,37 +1832,42 @@ final class ImmersiveRenderer {
             }
 
             if let label = quad.label {
-                // 3a. the dark strip the legend sits on, then 3b. a
-                // near-black copy of the string offset down-right, then 3c.
-                // the bright fill on top. Three passes for one legend
-                // because the ink is a BITMAP (conchars' textured bronze
-                // glyphs): colour alone cannot separate it from procedural
-                // stone, so the strip gives it a constant backdrop and the
-                // shadow gives every stroke an edge. All three are
-                // depth-always like the layers under them, so the painter
-                // order here IS the stacking order.
-                let strip = Self.commLabelStrip(for: label, glyph: quad.glyph)
-                core.drawFlatPanel(origin: quad.origin, right: quad.right, up: quad.up,
-                                   width: strip.width, height: strip.height,
-                                   color: Self.faded(Self.commLabelStripColor, quad.opacity),
-                                   viewproj0: viewproj0, viewproj1: viewproj1,
-                                   pipelines: pipelines, encoder: encoder)
-                // In-plane offset, so the shadow turns with the unit when it
-                // is lying along the forearm instead of across the wrist.
-                let drop = quad.right * Self.commLabelShadowOffset
-                         - quad.up * Self.commLabelShadowOffset
-                core.drawPanelLabel(text: label, origin: quad.origin + drop,
-                                    right: quad.right, up: quad.up,
-                                    cellSize: quad.glyph,
-                                    color: Self.faded(Self.commLabelShadowColor, quad.opacity),
-                                    conchars: conchars,
-                                    viewproj0: viewproj0, viewproj1: viewproj1,
-                                    pipelines: pipelines, encoder: encoder)
+                // FIVE passes for one legend: four near-black copies of the
+                // string, offset +/- one outline step along the panel's own
+                // right and up, then the red fill on top. The ink is a
+                // BITMAP (conchars' coloured glyphs), so colour alone cannot
+                // separate it from procedural stone -- the outline gives
+                // every stroke its own edge whichever way the noise under it
+                // happens to go light. Offsets are IN-PLANE, so the outline
+                // turns with the unit when it lies along the forearm instead
+                // of across the wrist. All five are depth-always like the
+                // layers under them, so the painter order here IS the
+                // stacking order.
+                //
+                // The outline passes use the SAME red charset as the fill:
+                // what an outline pass contributes is the glyph's
+                // SILHOUETTE, so the charset only has to agree with the
+                // fill's coverage shape -- a white-set outline would
+                // misfit the red glyph it is meant to edge.
+                let step = quad.glyph * Self.commLabelOutlineFrac
+                let outline = Self.faded(Self.commLabelOutlineColor, quad.opacity)
+                for offset in [quad.right * step, quad.right * -step,
+                               quad.up * step, quad.up * -step] {
+                    core.drawPanelLabel(text: label, origin: quad.origin + offset,
+                                        right: quad.right, up: quad.up,
+                                        cellSize: quad.glyph,
+                                        color: outline,
+                                        conchars: conchars,
+                                        alternate: Self.commLabelAlternate,
+                                        viewproj0: viewproj0, viewproj1: viewproj1,
+                                        pipelines: pipelines, encoder: encoder)
+                }
                 core.drawPanelLabel(text: label, origin: quad.origin,
                                     right: quad.right, up: quad.up,
                                     cellSize: quad.glyph,
                                     color: Self.faded(Self.commLabelColor, quad.opacity),
                                     conchars: conchars,
+                                    alternate: Self.commLabelAlternate,
                                     viewproj0: viewproj0, viewproj1: viewproj1,
                                     pipelines: pipelines, encoder: encoder)
             }
