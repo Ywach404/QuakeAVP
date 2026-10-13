@@ -651,9 +651,9 @@ struct ContentView: View {
                     .pickerStyle(.segmented).labelsHidden()
                     Text(commAlongArm
                          ? "The unit is turned to lie DOWN the forearm: three keys long, two "
-                           + "across, legends reading from the wrist toward the elbow. The "
+                           + "across, legends reading from the elbow toward the wrist. The "
                            + "position dials below then run with the unit -- Side moves it "
-                           + "down the arm, Height across it, Angle rolls it."
+                           + "along the arm toward your hand, Height across it, Angle rolls it."
                          : "The unit sits ACROSS the wrist: three keys wide, two deep, just "
                            + "below the HUD. Switch to Along arm to turn it down the forearm.")
                         .font(.caption2).foregroundStyle(.secondary)

@@ -416,42 +416,47 @@ func runOrientationTests() {
         // still points at the eye and only the in-plane axes move.
         //
         // THE SIGN, which is the one thing in here a reader cannot derive:
-        // `right' = -up`, `up' = right`. Both halves are forced together by
+        // `right' = +up`, `up' = -right`. Both halves are forced together by
         // handedness -- `right' x up' == forward` -- so the only other
-        // candidate is the opposite pair (`+up`/`-right`), and these are what
+        // candidate is the opposite pair (`-up`/`+right`), and these are what
         // choose between them:
         //
         //  * `right` is the axis `textQuads` lays glyphs along and the axis
-        //    the three columns run along. With `right' = -up` the key run
-        //    and the legend both read from the WRIST end down toward the
-        //    elbow -- cell 0 (cmd0, the first binding) nearest the hand, the
-        //    keys counting away from it, which is the order the unit is read
-        //    in and the order the HUD above it already stacks in.
-        //  * `up' = right` then puts the glyph tops toward the wrist frame's
-        //    own right, i.e. the text runs down the forearm the way a book
-        //    spine runs down a shelf. The opposite pair gives the same unit
-        //    upside down end-to-end (cell 0 at the elbow, legends reading
-        //    toward the hand).
+        //    the three columns run along. With `right' = +up` the key run
+        //    and the legend both read from the ELBOW end up toward the
+        //    wrist -- cell 0 (cmd0, the first binding) furthest down the
+        //    forearm, the keys counting toward the hand, and every legend
+        //    reading the way a head looking down its own forearm reads.
+        //    DEVICE-DECIDED: the opposite pair shipped first and A. read it
+        //    off a screenshot as upside down, which is the only test this
+        //    choice has.
+        //  * `up' = -right` then puts the glyph tops toward the wrist
+        //    frame's own LEFT, which is what handedness forces once the
+        //    glyph advance is pinned -- the pair cannot be mixed.
         let along = WristComm.orientedFrame(wf, alongArm: true)
-        assert(near(along.right, -wf.up, 1e-6), "\(name): along maps right -> -up")
-        assert(near(along.up, wf.right, 1e-6), "\(name): along maps up -> +right")
+        assert(near(along.right, wf.up, 1e-6), "\(name): along maps right -> +up")
+        assert(near(along.up, -wf.right, 1e-6), "\(name): along maps up -> -right")
         assert(near(along.forward, wf.forward, 1e-7), "\(name): along leaves the panel normal alone")
         assert(near(along.origin, wf.origin, 1e-7), "\(name): the rotation does not translate")
         assert(along.valid, "\(name): along keeps validity")
 
-        // The long (3-key) axis now runs DOWN the arm: the panel's own +x
-        // extent points along the wrist frame's -up.
-        assert(simd_dot(along.right, wf.up) < -0.999, "\(name): the long axis runs down the arm")
+        // The long (3-key) axis runs ALONG the arm: the panel's own +x
+        // extent points along the wrist frame's +up, i.e. the glyph advance
+        // runs back up the forearm toward the hand.
+        assert(simd_dot(along.right, wf.up) > 0.999, "\(name): the long axis runs along the arm")
 
-        // ...and cell 0 sits at the WRIST end of it, not the elbow end --
+        // ...and cell 0 sits at the ELBOW end of it, not the wrist end --
         // the half of the sign choice the dot product above cannot see,
-        // since the panel's extents are symmetric either way.
+        // since the panel's extents are symmetric either way. The unit is
+        // seated BELOW the wrist frame's origin (`commOrigin` subtracts
+        // along `up`), so -up is further down the forearm and +up is back
+        // toward the hand: cell 0 lowest, cell 5 nearest the wrist.
         let c0 = WristComm.cellCenter(0)
         let w0 = along.right * c0.x + along.up * c0.y
-        assert(simd_dot(w0, wf.up) > 0, "\(name): cell 0 sits at the wrist end")
+        assert(simd_dot(w0, wf.up) < 0, "\(name): cell 0 sits at the elbow end")
         let c5 = WristComm.cellCenter(5)
         let w5 = along.right * c5.x + along.up * c5.y
-        assert(simd_dot(w5, wf.up) < 0, "\(name): cell 5 sits at the elbow end")
+        assert(simd_dot(w5, wf.up) > 0, "\(name): cell 5 sits at the wrist end")
 
         // Still a usable frame: the hit-test projects onto these axes
         // (`HudEditor.offsetInFrame`), so a basis off unit length silently
@@ -527,11 +532,11 @@ func runOrientationTests() {
         // settings caption that says so cannot drift from the code.
         let side = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 0,
                                            fwd: 0, side: 0.03, up: 0)
-        assert(near(side.origin, oAlong - wf.up * 0.03),
-               "\(name): +Side moves the along-arm unit down the arm")
+        assert(near(side.origin, oAlong + wf.up * 0.03),
+               "\(name): +Side moves the along-arm unit up the arm toward the hand")
         let height = WristComm.adjustedFrame(fAlong, origin: oAlong, tiltDegrees: 0,
                                              fwd: 0, side: 0, up: 0.03)
-        assert(near(height.origin, oAlong + wf.right * 0.03),
+        assert(near(height.origin, oAlong - wf.right * 0.03),
                "\(name): +Height moves the along-arm unit across the arm")
 
         // An untracked wrist passes through whole, same contract
