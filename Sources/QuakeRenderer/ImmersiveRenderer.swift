@@ -591,10 +591,10 @@ final class ImmersiveRenderer {
                 drawWristComm(commFurniture.quads, conchars: packet.conchars_texnum,
                               viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                               pipelines: pipelines, encoder: encoder)
-                // The pressing finger's wireframe, after the unit: it is
-                // depth-always (drawHandDebug), so it reads over the key it
-                // is on rather than disappearing into the bezel.
-                core.drawHandDebug(commFurniture.fingerWire,
+                // The pressing finger, after the unit: it is depth-always
+                // (drawHandDebug), so it reads over the key it is on rather
+                // than disappearing into the bezel.
+                core.drawHandDebug(commFurniture.finger,
                                    viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                    pipelines: pipelines, encoder: encoder)
             }
@@ -642,7 +642,7 @@ final class ImmersiveRenderer {
                     drawWristComm(commFurniture.quads, conchars: packet.conchars_texnum,
                                   viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                   pipelines: pipelines, encoder: encoder)
-                    core.drawHandDebug(commFurniture.fingerWire,
+                    core.drawHandDebug(commFurniture.finger,
                                        viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                        pipelines: pipelines, encoder: encoder)
                 }
@@ -1250,13 +1250,27 @@ final class ImmersiveRenderer {
     /// `WristComm.pressFlash` so a press reads as a strike rather than a
     /// state change.
     private static let commPressWash = SIMD4<Float>(0.95, 0.98, 1.0, 0.90)
-    /// The index-finger wireframe's colour while its hand is HOVERING a key:
-    /// the legend parchment, so the finger reads as part of the same unit
-    /// rather than as a debug overlay that happens to be on the hand.
-    private static let commWireHover = SIMD4<Float>(1.0, 0.92, 0.58, 0.85)
+    /// The solid finger's tint while its hand is HOVERING a key: the legend
+    /// parchment, so the finger reads as part of the same unit rather than
+    /// as an overlay that happens to be on the hand. Alpha is deliberately
+    /// short of 1 -- the finger is drawn depth-always OVER the key it is on,
+    /// and an opaque fingertip hides the very key it is about to light.
+    private static let commFingerHover = SIMD4<Float>(1.0, 0.92, 0.58, 0.90)
     /// ...and while the key it pressed is still flashing: near-white, the
     /// `commPressWash` family, so the finger strikes with the key.
-    private static let commWirePress = SIMD4<Float>(0.97, 0.99, 1.0, 0.95)
+    private static let commFingerPress = SIMD4<Float>(0.97, 0.99, 1.0, 0.96)
+    /// How much of those tints is MIXED INTO the finger's own shaded skin,
+    /// 0...1 -- the two DEVICE-TUNING LEVERS for the finger's material.
+    ///
+    /// Not a full replace, which is what the wireframe this finger replaced
+    /// used: a solid shape flooded with one colour has no shading left and
+    /// reads as a glow stick in the shape of a finger. A wash keeps the
+    /// bead modelling (`HandState.buildIndexFinger` bakes a half-lambert
+    /// into the published vertices) and still carries the state -- warm
+    /// parchment-lit skin on hover, struck almost white on a press, which
+    /// is a bigger jump than the hover wash so the two never read alike.
+    private static let commFingerHoverWash: Float = 0.42
+    private static let commFingerPressWash: Float = 0.82
     /// The lit face's size as a fraction of the key. Well inside
     /// `hud_panel_fragment`'s rounded corner radius, so a highlight lights
     /// the stone card it sits on rather than spilling past its mask and
@@ -1421,8 +1435,8 @@ final class ImmersiveRenderer {
 
     /// Advances the wrist communicator's reveal state for this frame and
     /// returns the quads to draw (empty when nothing is revealed) plus the
-    /// finger wireframe that goes over them (empty unless a key is hovered
-    /// or flashing -- see the wire's own comment in the loop below). Also
+    /// solid finger that goes over them (empty unless a key is hovered
+    /// or flashing -- see the finger's own comment in the loop below). Also
     /// publishes `WristCommGeometry` for the touch loop -- ALWAYS, for both
     /// sides whatever their state, since that reader gates itself.
     ///
@@ -1448,7 +1462,7 @@ final class ImmersiveRenderer {
     private func updateWristComm(wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
                                  headPos: SIMD3<Float>, headForward: SIMD3<Float>,
                                  headPoseAvailable: Bool, engineLive: Bool,
-                                 editorActive: Bool) -> (quads: [CommQuad], fingerWire: [Float]) {
+                                 editorActive: Bool) -> (quads: [CommQuad], finger: [Float]) {
         let now = CACurrentMediaTime()
 
         // The editor suppresses the communicator; a press flash from just
@@ -1497,11 +1511,11 @@ final class ImmersiveRenderer {
         let dials = VRSettings.shared.wristCommPlacement
         var quads: [CommQuad] = []
         var sides: [WristCommGeometry.Side] = []
-        var fingerWire: [Float] = []
-        // The published finger wireframes, fetched lazily: nothing is hovered
+        var finger: [Float] = []
+        // The published finger models, fetched lazily: nothing is hovered
         // or flashing on most frames, and copying two vertex buffers out of a
         // lock to then discard them is pure waste at 90 Hz.
-        var wire: (left: [Float], right: [Float])?
+        var published: (left: [Float], right: [Float])?
 
         for side in 0..<commOpacity.count {
             let live = side == 0 ? wrists.off : wrists.gun
@@ -1615,7 +1629,7 @@ final class ImmersiveRenderer {
                                opacity: commOpacity[side],
                                hovered: hovered, pressedCell: pressedCell, press: press)
 
-            // The index-finger wireframe, on the ONE hand that is working
+            // The solid index finger, on the ONE hand that is working
             // this panel and only while it is working it. `WristCommFeedback`
             // records the side and cell of a fire but not the hand, so the
             // hovering hand is latched here and reused for the tail of the
@@ -1627,38 +1641,48 @@ final class ImmersiveRenderer {
             guard let hand = hover?.tip ?? (press > 0 ? commHoverHand[side] : nil) else {
                 continue
             }
-            let published = wire ?? FingerWire.shared.snapshot()
-            wire = published
-            fingerWire += Self.tintedFingerWire(
-                hand == 0 ? published.left : published.right,
-                color: press > 0 ? Self.commWirePress : Self.commWireHover,
+            let model = published ?? FingerModel.shared.snapshot()
+            published = model
+            finger += Self.tintedFinger(
+                hand == 0 ? model.left : model.right,
+                color: press > 0 ? Self.commFingerPress : Self.commFingerHover,
+                wash: press > 0 ? Self.commFingerPressWash : Self.commFingerHoverWash,
                 opacity: commOpacity[side])
         }
 
         WristCommGeometry.shared.publish(WristCommGeometry.Snapshot(sides: sides))
-        return (quads, fingerWire)
+        return (quads, finger)
     }
 
-    /// A published finger wireframe re-coloured for the communicator's
-    /// feedback state: the per-vertex rgba is OVERWRITTEN with `color`, its
-    /// alpha scaled by the side's live fade, so the wire appears and fades
-    /// with the panel it belongs to.
+    /// A published solid finger washed with the communicator's feedback
+    /// colour: each vertex's own shaded skin is mixed `wash` of the way
+    /// toward `color.rgb`, and its alpha REPLACED by `color.w` times the
+    /// side's live fade, so the finger appears and fades with the panel it
+    /// belongs to.
     ///
-    /// Re-coloured here rather than at the publisher because the state it
-    /// carries (hovering a key vs flashing one) is the renderer's to know --
+    /// A mix, not an overwrite. The publisher bakes a half-lambert shade
+    /// into the skin (`HandState.buildIndexFinger`) and `drawHandDebug` adds
+    /// no lighting of its own, so flooding every vertex with one colour --
+    /// which is what the wireframe this replaced wanted -- would flatten the
+    /// finger into a silhouette. Washing keeps the modelling and still
+    /// reads the state unambiguously at arm's length.
+    ///
+    /// Washed here rather than at the publisher because the state it carries
+    /// (hovering a key vs flashing one) is the renderer's to know --
     /// `HandInput` has no idea the hand is over a panel -- and the same
-    /// published buffer may be tinted differently for each side in one frame.
-    /// 7 floats per vertex (xyz + rgba), the `GuideVertex` layout every hand
-    /// overlay already uses.
-    private static func tintedFingerWire(_ verts: [Float], color: SIMD4<Float>,
-                                         opacity: Float) -> [Float] {
+    /// published buffer may be washed differently for each side in one
+    /// frame. 7 floats per vertex (xyz + rgba), the `GuideVertex` layout
+    /// every hand overlay already uses.
+    private static func tintedFinger(_ verts: [Float], color: SIMD4<Float>,
+                                     wash: Float, opacity: Float) -> [Float] {
         guard verts.count >= 21 else { return [] }
+        let w = min(max(wash, 0), 1)
         var out = verts
         var i = 3
         while i + 3 < out.count {
-            out[i] = color.x
-            out[i + 1] = color.y
-            out[i + 2] = color.z
+            out[i] += (color.x - out[i]) * w
+            out[i + 1] += (color.y - out[i + 1]) * w
+            out[i + 2] += (color.z - out[i + 2]) * w
             out[i + 3] = color.w * opacity
             i += 7
         }
