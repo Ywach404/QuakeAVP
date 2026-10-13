@@ -111,6 +111,21 @@ final class WristCommStore {
         QuakeEngineViewModel.shared.send(cmd)
     }
 
+    /// Flip one side's enable from the UI: send the cvar AND update the cached
+    /// snapshot's enabled bit directly, in that order. The send only ENQUEUES
+    /// the cvar write (drained on the engine thread a frame later), so a
+    /// re-derive via refresh() here would read the stale value and -- on the
+    /// re-enable path -- republish enabled=false with no later trigger to fix
+    /// it (the reveal-edge refresh is gated on enabled). Setting the bit
+    /// optimistically is correct by construction: once enabled, the next
+    /// reveal edge re-reads the (by-then landed) cvars for commands/labels.
+    func setEnabled(side: Int, _ on: Bool) {
+        guard side >= 0, side < Self.sideCvarNames.count else { return }
+        QuakeEngineViewModel.shared.send("vr_wristcomm_\(Self.sideCvarNames[side]) \(on ? 1 : 0)")
+        guard side < sides.count else { return }
+        sides[side].enabled = on
+    }
+
     // MARK: - Render-thread snapshot
 
     nonisolated private static let renderLock = NSLock()
