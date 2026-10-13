@@ -115,26 +115,29 @@ final class FingerTips: @unchecked Sendable {
     }
 }
 
-/// Cross-loop publish of each hand's INDEX-FINGER wireframe, for the wrist
+/// Cross-loop publish of each hand's SOLID INDEX FINGER, for the wrist
 /// communicator's touch feedback. Written by `HandInput.emit` every hand
 /// update, immediately alongside `FingerTips.shared.publish(...)` and ahead
 /// of every gate/suppression below it, for the same reason that publish
 /// gives: the communicator needs a fresh read whether or not a gameplay
 /// gesture or the HUD editor is active this frame.
 ///
-/// Thin-quad TRIANGLE vertices, 7 floats each (xyz + rgba), in corrected
-/// tracking space -- the `GuideVertex` layout every hand overlay uses, and
-/// quads rather than lines because line primitives are illegal under the
-/// device's foveation rate map. Empty per hand exactly when that hand isn't
-/// tracked.
+/// TRIANGLE vertices, 7 floats each (xyz + rgba), in corrected tracking
+/// space -- the `GuideVertex` layout every hand overlay uses. Capsule bone
+/// segments and round joint caps (`HandState.buildIndexFinger`), built from
+/// the same bead the virtual hand is; triangles throughout, since line and
+/// point primitives are illegal under the device's foveation rate map.
+/// Empty per hand exactly when that hand isn't tracked.
 ///
-/// The published colour is a neutral placeholder: the renderer overwrites it
-/// per vertex (`ImmersiveRenderer.tintedFingerWire`) with the hover/press
-/// tint, because whether a hand is working a panel -- and which of the two
-/// panels -- is the renderer's knowledge, not this loop's. Same
-/// lock-protected plain-value pattern as `FingerTips`/`WristCommGeometry`.
-final class FingerWire: @unchecked Sendable {
-    static let shared = FingerWire()
+/// The published colour is SHADED SKIN, not a placeholder: the renderer
+/// mixes its hover/press tint INTO it per vertex
+/// (`ImmersiveRenderer.tintedFinger`) rather than overwriting it, because
+/// whether a hand is working a panel -- and which of the two panels -- is
+/// the renderer's knowledge, not this loop's, while the shading is this
+/// side's (it is where the surface normals exist). Same lock-protected
+/// plain-value pattern as `FingerTips`/`WristCommGeometry`.
+final class FingerModel: @unchecked Sendable {
+    static let shared = FingerModel()
 
     private let lock = NSLock()
     private var _left: [Float] = []
@@ -151,8 +154,8 @@ final class FingerWire: @unchecked Sendable {
 
     /// Hands stood down -- publish nothing to draw, the same stand-down
     /// `FingerTips.invalidate()` answers for its own signal. Without it the
-    /// renderer would keep a frozen wire from the last tracked frame, which
-    /// a hover arriving later would then light up.
+    /// renderer would keep a frozen finger from the last tracked frame,
+    /// which a hover arriving later would then light up.
     func invalidate() {
         publish(left: [], right: [])
     }

@@ -165,7 +165,7 @@ final class HandInput: @unchecked Sendable {
             GunHand.shared.invalidate()
             EditorHandInput.shared.invalidate()
             FingerTips.shared.invalidate()
-            FingerWire.shared.invalidate()
+            FingerModel.shared.invalidate()
             QC_InputSetTurnHold(0)   // hands standing down: don't strand the hold
         }
     }
@@ -256,7 +256,7 @@ final class HandInput: @unchecked Sendable {
         GunHand.shared.invalidate()
         EditorHandInput.shared.invalidate()
         FingerTips.shared.invalidate()
-        FingerWire.shared.invalidate()
+        FingerModel.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
         QC_InputSetTurnHold(0)   // hands gone: don't strand the hold
         tpRingWas = false
@@ -293,12 +293,12 @@ final class HandInput: @unchecked Sendable {
         // regardless of the editor/wheel/gameplay gates below.
         FingerTips.shared.publish(left: Self.fingertip(left), right: Self.fingertip(right))
 
-        // ...and each hand's index-finger wireframe, for the same consumer
+        // ...and each hand's solid index finger, for the same consumer
         // and published at the same point for the same reason. The renderer
         // draws it only for the hand actually hovering or pressing a key, so
         // publishing both every update costs nothing on the frames where
         // neither hand is near the panel.
-        FingerWire.shared.publish(left: left.indexWireVerts, right: right.indexWireVerts)
+        FingerModel.shared.publish(left: left.indexFingerVerts, right: right.indexFingerVerts)
 
         // While the HUD layout editor is open, the hands drive ONLY the grab
         // (published just above). Every gameplay gesture -- fire, move, turn,
@@ -595,8 +595,8 @@ final class HandInput: @unchecked Sendable {
     /// `WristCommInput.anySideQualifies` loops its sides through.
     ///
     /// `fileprivate`, not `private`: `HandState.ingest` (same file) gates
-    /// `buildIndexWire` on this so the wire is built only while a side is
-    /// actually revealed enough to fire.
+    /// `buildIndexFinger` on this so the finger is built only while a side
+    /// is actually revealed enough to fire.
     fileprivate static func wristCommInUse() -> Bool {
         WristCommGeometry.shared.snapshot().sides.contains {
             WristComm.sideQualifies(enabled: $0.enabled, opacity: $0.opacity)
@@ -1153,11 +1153,11 @@ private struct HandState {
     /// drawn by the render thread at opacity 1 - phase. See VirtualHand.
     var virtualVerts: [Float] = []
 
-    /// The INDEX FINGER alone as a wireframe, corrected-tracking space,
-    /// 7 floats/vertex (xyz + rgba), triangle list. Built every ingest and
-    /// published through `FingerWire`; drawn only while this hand is working
-    /// the wrist communicator. See `buildIndexWire`.
-    var indexWireVerts: [Float] = []
+    /// The INDEX FINGER alone as SOLID geometry, corrected-tracking space,
+    /// 7 floats/vertex (xyz + shaded skin rgba), triangle list. Built every
+    /// ingest and published through `FingerModel`; drawn only while this
+    /// hand is working the wrist communicator. See `buildIndexFinger`.
+    var indexFingerVerts: [Float] = []
 
     /// Flips the palm-normal convention if the skeleton's winding turns
     /// out mirrored on hardware; calibrate on device, not by argument.
@@ -1473,11 +1473,11 @@ private struct HandState {
         }
 
         buildDebug(tip: vtip)   // inferred, so the wireframe doesn't drop fingers either
-        // The index-finger wire for the wrist communicator. Also fed the
+        // The solid index finger for the wrist communicator. Also fed the
         // INFERRED pose: the hand reaching across to a wrist panel is
         // partly occluded by the forearm it is reaching for, which is
-        // precisely when a tracked-only chain drops joints out of the wire.
-        buildIndexWire(tip: vtip)
+        // precisely when a tracked-only chain drops joints out of it.
+        buildIndexFinger(tip: vtip)
         // The DRAWN hand uses the INFERRED pose (vtip, defined above): ARKit
         // still reports a transform for an occluded joint, which is how
         // three.js/WebXR keeps every finger visible in a fist. Dropping
@@ -1500,32 +1500,15 @@ private struct HandState {
         func c(_ p: SIMD3<Float>) -> SIMD3<Float> {
             let q = corr * SIMD4(p, 1); return SIMD3(q.x, q.y, q.z)
         }
-        // A low-poly ellipsoid bead centred at `at`, elongated along `axis` with
-        // semi-length `long` and cross radius `rad` (a UV sphere scaled on its
-        // pole axis). Corrected on emit.
+        // One flat-coloured bead, corrected on emit. The geometry itself is
+        // `HandState.beadTriangles`, shared with the communicator's solid
+        // finger so the two cannot drift apart a sphere at a time; the
+        // normal it hands back is for the shaded finger and ignored here
+        // (this hand is deliberately flat-lit).
         func bead(_ at: SIMD3<Float>, _ axis: SIMD3<Float>, _ long: Float, _ rad: Float,
                   _ col: SIMD4<Float>) {
-            let zc = simd_length(axis) > 1e-5 ? simd_normalize(axis) : SIMD3<Float>(0, 1, 0)
-            var xc = simd_cross(SIMD3<Float>(0, 1, 0), zc)
-            xc = simd_length(xc) > 1e-5 ? simd_normalize(xc) : SIMD3(1, 0, 0)
-            let yc = simd_normalize(simd_cross(zc, xc))
-            let lon = 8, lat = 4
-            func pt(_ i: Int, _ j: Int) -> SIMD3<Float> {
-                let phi = Float.pi * Float(j) / Float(lat)          // pole (0) to pole (pi)
-                let th  = 2 * Float.pi * Float(i) / Float(lon)
-                let r = rad * sin(phi)
-                return at + xc * (r * cos(th)) + yc * (r * sin(th)) + zc * (long * cos(phi))
-            }
-            func emit(_ p: SIMD3<Float>) {
+            Self.beadTriangles(at: at, axis: axis, long: long, rad: rad) { p, _ in
                 let q = c(p); v += [q.x, q.y, q.z, col.x, col.y, col.z, col.w]
-            }
-            for j in 0..<lat {
-                for i in 0..<lon {
-                    let a = pt(i, j), b = pt(i + 1, j)
-                    let d = pt(i + 1, j + 1), e = pt(i, j + 1)
-                    emit(a); emit(b); emit(d)
-                    emit(a); emit(d); emit(e)
-                }
             }
         }
 
@@ -1561,31 +1544,110 @@ private struct HandState {
         virtualVerts = v
     }
 
-    /// The INDEX FINGER alone as a wireframe: thin-quad bones down the
-    /// metacarpal->knuckle->base->tip chain with a small octahedral node at
-    /// each joint. The wrist communicator's renderer draws this on the one
-    /// hand that is hovering or has just pressed a key, so the finger doing
-    /// the pressing is visible against the stone unit.
+    /// A low-poly ellipsoid bead: a UV sphere centred at `at`, scaled to
+    /// semi-length `long` on its `axis` pole and cross radius `rad`, handed
+    /// to `emit` as a triangle list with each corner's OUTWARD NORMAL.
+    ///
+    /// The normal is the ellipsoid's own gradient (so a bead with `long ==
+    /// rad` gets the exact sphere normal). The communicator's solid finger
+    /// shades with it; the virtual hand ignores it and stays flat-lit.
+    ///
+    /// ONE bead body for both, because the finger is meant to look like a
+    /// piece of that same hand -- two builders is how they would drift
+    /// apart a sphere at a time. 8 longitudes x 4 latitudes = 192 corners.
+    /// Caller space: whatever `at`/`axis` are in; neither the correction nor
+    /// the colour is this function's business.
+    private static func beadTriangles(at: SIMD3<Float>, axis: SIMD3<Float>,
+                                      long: Float, rad: Float,
+                                      _ emit: (SIMD3<Float>, SIMD3<Float>) -> Void) {
+        let zc = simd_length(axis) > 1e-5 ? simd_normalize(axis) : SIMD3<Float>(0, 1, 0)
+        var xc = simd_cross(SIMD3<Float>(0, 1, 0), zc)
+        xc = simd_length(xc) > 1e-5 ? simd_normalize(xc) : SIMD3(1, 0, 0)
+        let yc = simd_normalize(simd_cross(zc, xc))
+        let lon = 8, lat = 4
+        func pt(_ i: Int, _ j: Int) -> (p: SIMD3<Float>, n: SIMD3<Float>) {
+            let phi = Float.pi * Float(j) / Float(lat)          // pole (0) to pole (pi)
+            let th  = 2 * Float.pi * Float(i) / Float(lon)
+            let r = rad * sin(phi)
+            let p = at + xc * (r * cos(th)) + yc * (r * sin(th)) + zc * (long * cos(phi))
+            // grad((x/rad)^2 + (y/rad)^2 + (z/long)^2), times rad*long so the
+            // sphere case needs no special-casing.
+            var n = xc * (sin(phi) * cos(th) * long) + yc * (sin(phi) * sin(th) * long)
+                  + zc * (cos(phi) * rad)
+            n = simd_length(n) > 1e-6 ? simd_normalize(n) : zc
+            return (p, n)
+        }
+        for j in 0..<lat {
+            for i in 0..<lon {
+                let a = pt(i, j), b = pt(i + 1, j)
+                let d = pt(i + 1, j + 1), e = pt(i, j + 1)
+                emit(a.p, a.n); emit(b.p, b.n); emit(d.p, d.n)
+                emit(a.p, a.n); emit(d.p, d.n); emit(e.p, e.n)
+            }
+        }
+    }
+
+    /// The communicator finger's DEVICE-TUNING LEVERS. The skin tone is the
+    /// virtual hand's own (`buildVirtual`), so the finger on the panel and
+    /// the hand it belongs to are the same colour; the rest shape the solid.
+    ///
+    /// `fingerLight` is a FIXED direction in CORRECTED space -- the space the
+    /// panel, the hand and the eye all live in -- so the finger keeps the
+    /// same modelling however the player has recentred. Up-and-toward-the-
+    /// viewer, which is where a head looking down at its own wrist is.
+    private static let fingerSkin = SIMD3<Float>(0.80, 0.60, 0.48)
+    private static let fingerLight = simd_normalize(SIMD3<Float>(0.35, 0.82, 0.45))
+    /// Half-lambert floor: how lit a face pointing straight away still is, so
+    /// the unlit side of the finger is dim rather than black (there is no
+    /// ambient term in the guide shader to fall back on).
+    private static let fingerAmbient: Float = 0.42
+    /// Finger radius at the metacarpal and at the tip, metres -- the virtual
+    /// hand's own taper (0.0105 -> 0.0060), so the finger is exactly as thick
+    /// as the beads of the hand it continues.
+    private static let fingerRootRadius: Float = 0.0105
+    private static let fingerTipRadius: Float = 0.0060
+    /// Each bone segment's radius as a fraction of the joints it spans, so
+    /// the knuckle caps stand slightly proud of the shaft between them and
+    /// the finger reads as segmented rather than as one smooth tube.
+    private static let fingerSegmentScale: Float = 0.86
+
+    /// The INDEX FINGER alone as SOLID 3D geometry: a tapered capsule along
+    /// each bone of the metacarpal->knuckle->base->tip chain, with a rounded
+    /// cap at every joint, built from the same `beadTriangles` ellipsoid the
+    /// virtual hand is built from -- so the finger the wrist communicator
+    /// draws reads as a piece of that hand rather than as an overlay on it.
+    /// The renderer draws it on the one hand that is hovering or has just
+    /// pressed a key, so the finger doing the pressing is visible against
+    /// the stone unit.
+    ///
+    /// It replaced a thin-quad WIREFRAME of the same chain, which worked on
+    /// device (the pressing finger was legible) but read as debug art.
     ///
     /// Index only, and no wrist bone: the whole point is to show WHERE the
     /// pressing fingertip is, and a full hand rig over a 10 cm panel hides
-    /// the keys it is meant to be aiming at. Thin quads and octahedra for the
-    /// same reason `buildDebug` uses them -- foveation forbids line and point
-    /// primitives on device.
+    /// the keys it is meant to be aiming at.
+    ///
+    /// Each vertex carries SHADED SKIN rather than a flat placeholder, and
+    /// that is load-bearing: `drawHandDebug` has no lighting of its own, so
+    /// a solid shape in one flat colour is a silhouette -- a glow stick in
+    /// the shape of a finger. The shade is a half-lambert against
+    /// `fingerLight`, baked here because this is where the surface normals
+    /// exist. The renderer MIXES its hover/press tint into this colour
+    /// (`ImmersiveRenderer.tintedFinger`) instead of overwriting it, which
+    /// is what keeps the modelling through both feedback states.
     ///
     /// Gated on `HandInput.wristCommInUse()` (no debug toggle otherwise),
     /// because its consumer is a gameplay feature rather than a debug
-    /// overlay; the colour here is a neutral placeholder the renderer
-    /// overwrites with the hover/press tint. Corrected-tracking space,
-    /// 7 floats/vertex (xyz + rgba).
+    /// overlay. Corrected-tracking space, 7 floats/vertex (xyz + rgba),
+    /// triangles.
     ///
-    /// Without the gate this built ~144 verts (4 bone quads + 5 tapered
-    /// nodes) on every hand update whether or not any panel was even up to
-    /// draw it on -- `FingerWire` already treats an empty array as nothing
-    /// to draw, so publishing one here when no side qualifies is free.
-    private mutating func buildIndexWire(tip: (HandSkeleton.JointName) -> SIMD3<Float>?) {
+    /// Without the gate this built 1728 verts on every hand update whether
+    /// or not any panel was even up to draw it on -- `FingerModel` already
+    /// treats an empty array as nothing to draw, so publishing one here when
+    /// no side qualifies is free.
+    private mutating func buildIndexFinger(tip: (HandSkeleton.JointName) -> SIMD3<Float>?) {
         guard HandInput.wristCommInUse() else {
-            indexWireVerts = []
+            indexFingerVerts = []
             return
         }
         let chain: [HandSkeleton.JointName] = [
@@ -1593,49 +1655,56 @@ private struct HandState {
             .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip,
         ]
         let correction = TrackingSpace.correction
-        let placeholder = SIMD4<Float>(1, 1, 1, 1)
-        // 4 bone quads (2 triangles x 3 corners = 6 verts each) + 5 tapered
-        // nodes (8 tri-faces x 3 corners = 24 verts each) = 144 verts, 7
-        // floats apiece -- exact, not a round number, so a chain-length
-        // change here is the one place that also has to touch this.
+        // The rotation half of the SAME matrix, for the normals -- derived
+        // here rather than read from `TrackingSpace.rotation` so the two can
+        // never be one recenter apart (and it is one lock take, not two).
+        let normalRot = simd_float3x3(
+            SIMD3(correction.columns.0.x, correction.columns.0.y, correction.columns.0.z),
+            SIMD3(correction.columns.1.x, correction.columns.1.y, correction.columns.1.z),
+            SIMD3(correction.columns.2.x, correction.columns.2.y, correction.columns.2.z))
+        // 4 capsule segments + 5 joint caps = 9 beads x 192 corners x 7
+        // floats -- exact, not a round number, so a chain-length change here
+        // is the one place that also has to touch this.
         var v: [Float] = []
-        v.reserveCapacity((4 * 6 + 5 * 24) * 7)
-        func corner(_ p: SIMD3<Float>) {
-            let q = correction * SIMD4(p, 1)
-            v += [q.x, q.y, q.z, placeholder.x, placeholder.y, placeholder.z, placeholder.w]
-        }
-        // Thin quad bone, perpendicular off world-up so a "line" shows from
-        // most angles (the same construction and ~2.5 mm half-thickness
-        // `buildDebug`'s bones use).
-        let up = SIMD3<Float>(0, 1, 0)
-        func bone(_ a: SIMD3<Float>, _ b: SIMD3<Float>) {
-            var perp = simd_cross(b - a, up)
-            if simd_length(perp) < 1e-5 { perp = simd_cross(b - a, SIMD3(1, 0, 0)) }
-            perp = simd_length(perp) > 0 ? simd_normalize(perp) * 0.0025 : SIMD3(0.0025, 0, 0)
-            let a0 = a - perp, a1 = a + perp, b0 = b - perp, b1 = b + perp
-            corner(a0); corner(a1); corner(b0)
-            corner(a1); corner(b1); corner(b0)
-        }
-        func node(_ p: SIMD3<Float>, _ r: Float) {
-            let px = p + SIMD3(r,0,0), nx = p - SIMD3(r,0,0)
-            let py = p + SIMD3(0,r,0), ny = p - SIMD3(0,r,0)
-            let pz = p + SIMD3(0,0,r), nz = p - SIMD3(0,0,r)
-            func f(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ d: SIMD3<Float>) {
-                corner(a); corner(b); corner(d)
+        v.reserveCapacity((4 + 5) * 192 * 7)
+        func solid(_ at: SIMD3<Float>, _ axis: SIMD3<Float>, _ long: Float, _ rad: Float) {
+            Self.beadTriangles(at: at, axis: axis, long: long, rad: rad) { p, n in
+                let q = correction * SIMD4(p, 1)
+                let lit = simd_normalize(normalRot * n)
+                // Half-lambert: `fingerAmbient` at the terminator, 1 facing
+                // the light. Alpha is 1 here; the renderer owns the finger's
+                // real alpha (the side's live fade).
+                let shade = Self.fingerAmbient
+                    + (1 - Self.fingerAmbient) * max(0, simd_dot(lit, Self.fingerLight))
+                let c = Self.fingerSkin * shade
+                v += [q.x, q.y, q.z, c.x, c.y, c.z, 1]
             }
-            f(px,py,pz); f(py,nx,pz); f(nx,ny,pz); f(ny,px,pz)
-            f(py,px,nz); f(nx,py,nz); f(ny,nx,nz); f(px,ny,nz)
         }
-        var prev: SIMD3<Float>?
+        func radius(_ t: Float) -> Float {
+            Self.fingerRootRadius + (Self.fingerTipRadius - Self.fingerRootRadius) * t
+        }
+        var prev: (p: SIMD3<Float>, r: Float)?
         for (i, j) in chain.enumerated() {
             guard let cur = tip(j) else { prev = nil; continue }
-            if let p = prev { bone(p, cur) }
-            // Tapered nodes, fat knuckle to small tip, so the fingertip
-            // itself is the smallest, most precise mark on the panel.
-            node(cur, 0.0055 - 0.0015 * Float(i) / Float(chain.count - 1))
-            prev = cur
+            let r = radius(Float(i) / Float(chain.count - 1))
+            // The bone between this joint and the last one: one bead
+            // stretched along the bone (a capsule shaft), slightly slimmer
+            // than the caps at its ends so the knuckles still read.
+            if let p = prev {
+                let axis = cur - p.p
+                let len = simd_length(axis)
+                if len > 1e-5 {
+                    solid((p.p + cur) * 0.5, axis, len * 0.5,
+                          (p.r + r) * 0.5 * Self.fingerSegmentScale)
+                }
+            }
+            // ...and the joint cap itself, round (long == rad), tapering
+            // knuckle to tip so the fingertip is the smallest, most precise
+            // mark on the panel.
+            solid(cur, SIMD3<Float>(0, 1, 0), r, r)
+            prev = (cur, r)
         }
-        indexWireVerts = v
+        indexFingerVerts = v
     }
 
     /// A GREEN WIREFRAME skeleton: thin bones between joints and a small
