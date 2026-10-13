@@ -75,6 +75,11 @@ final class ImmersiveRenderer {
     /// Render-thread only, like the reveal state.
     private var commHeldFrame: [HudEditor.WristFrame?] = [nil, nil]
     private var commHeldSince: [Double] = [0, 0]
+    /// Per-side index of the fingertip (0 = left, 1 = right) last seen
+    /// hovering this side's grid -- the hand the index-finger wireframe is
+    /// drawn on, latched so the wire stays on that hand for the tail of a
+    /// press flash after the finger has withdrawn. Render-thread only.
+    private var commHoverHand: [Int?] = [nil, nil]
     /// Previous frame's timestamp for the reveal fade's dt. nil until the
     /// first communicator update; CACurrentMediaTime rather than the
     /// compositor clock because the fade is wall-time comfort easing, not
@@ -583,9 +588,15 @@ final class ImmersiveRenderer {
                 // Communicator last: it is its own device, seated BELOW the
                 // tiles, and its bezel must read over whatever it overlaps
                 // rather than under it.
-                drawWristComm(commFurniture, conchars: packet.conchars_texnum,
+                drawWristComm(commFurniture.quads, conchars: packet.conchars_texnum,
                               viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                               pipelines: pipelines, encoder: encoder)
+                // The pressing finger's wireframe, after the unit: it is
+                // depth-always (drawHandDebug), so it reads over the key it
+                // is on rather than disappearing into the bezel.
+                core.drawHandDebug(commFurniture.fingerWire,
+                                   viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                   pipelines: pipelines, encoder: encoder)
             }
             encoder.endEncoding()
         } else {
@@ -628,9 +639,12 @@ final class ImmersiveRenderer {
                                       viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                       pipelines: pipelines, encoder: encoder)
                     // Communicator last, as in the single-pass branch above.
-                    drawWristComm(commFurniture, conchars: packet.conchars_texnum,
+                    drawWristComm(commFurniture.quads, conchars: packet.conchars_texnum,
                                   viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                   pipelines: pipelines, encoder: encoder)
+                    core.drawHandDebug(commFurniture.fingerWire,
+                                       viewproj0: handViewproj[index], viewproj1: handViewproj[index],
+                                       pipelines: pipelines, encoder: encoder)
                 }
                 encoder.endEncoding()
             }
@@ -1188,8 +1202,17 @@ final class ImmersiveRenderer {
     /// One action cell's key face -- a cool dark grey, lighter than the
     /// bezel so each key's edge separates from the body around it.
     private static let commCellColor = SIMD4<Float>(0.16, 0.19, 0.24, 0.92)
-    /// Key legend colour: near-white, cool, legible against the key face.
-    private static let commLabelColor = SIMD4<Float>(0.88, 0.94, 1.0, 1.0)
+    /// Key legend colour: a warm, high-contrast PARCHMENT. A DEVICE-TUNING
+    /// LEVER -- this is the one number to move if the legends are hard to
+    /// read in the headset.
+    ///
+    /// It was a cool near-white, which the procedural stone key face
+    /// swallowed: the card is itself light and cool, so white-on-stone had
+    /// almost no hue separation left once the panel was half revealed.
+    /// Parchment separates by hue as well as by value, which survives the
+    /// stone texture, the hover wash and the fade alike. Alpha is still
+    /// multiplied by the side's live opacity at the draw (`faded`).
+    private static let commLabelColor = SIMD4<Float>(1.0, 0.92, 0.58, 1.0)
     /// Largest glyph a key legend may use (metres per conchars cell). A
     /// short label (GOD) would otherwise fill its key edge to edge; a long
     /// one (NOCLIP) is shrunk below this to fit, see `commGlyphSize`.
@@ -1227,6 +1250,13 @@ final class ImmersiveRenderer {
     /// `WristComm.pressFlash` so a press reads as a strike rather than a
     /// state change.
     private static let commPressWash = SIMD4<Float>(0.95, 0.98, 1.0, 0.90)
+    /// The index-finger wireframe's colour while its hand is HOVERING a key:
+    /// the legend parchment, so the finger reads as part of the same unit
+    /// rather than as a debug overlay that happens to be on the hand.
+    private static let commWireHover = SIMD4<Float>(1.0, 0.92, 0.58, 0.85)
+    /// ...and while the key it pressed is still flashing: near-white, the
+    /// `commPressWash` family, so the finger strikes with the key.
+    private static let commWirePress = SIMD4<Float>(0.97, 0.99, 1.0, 0.95)
     /// The lit face's size as a fraction of the key. Well inside
     /// `hud_panel_fragment`'s rounded corner radius, so a highlight lights
     /// the stone card it sits on rather than spilling past its mask and
@@ -1334,6 +1364,10 @@ final class ImmersiveRenderer {
         commRevealed = [false, false]
         commHeldFrame = [nil, nil]
         commHeldSince = [0, 0]
+        // The hovering hand goes with the flash it serves: resuming with a
+        // latched hand would draw a finger wire on a hand that is no longer
+        // anywhere near the panel.
+        commHoverHand = [nil, nil]
         lastCommTick = nil
         WristCommGeometry.shared.publish(.inactive)
         // A press flash must not survive the park: without this, pausing or
@@ -1386,7 +1420,9 @@ final class ImmersiveRenderer {
     }
 
     /// Advances the wrist communicator's reveal state for this frame and
-    /// returns the quads to draw (empty when nothing is revealed). Also
+    /// returns the quads to draw (empty when nothing is revealed) plus the
+    /// finger wireframe that goes over them (empty unless a key is hovered
+    /// or flashing -- see the wire's own comment in the loop below). Also
     /// publishes `WristCommGeometry` for the touch loop -- ALWAYS, for both
     /// sides whatever their state, since that reader gates itself.
     ///
@@ -1412,7 +1448,7 @@ final class ImmersiveRenderer {
     private func updateWristComm(wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
                                  headPos: SIMD3<Float>, headForward: SIMD3<Float>,
                                  headPoseAvailable: Bool, engineLive: Bool,
-                                 editorActive: Bool) -> [CommQuad] {
+                                 editorActive: Bool) -> (quads: [CommQuad], fingerWire: [Float]) {
         let now = CACurrentMediaTime()
 
         // The editor suppresses the communicator; a press flash from just
@@ -1452,13 +1488,25 @@ final class ImmersiveRenderer {
         // `WristCommGeometry` publishes. One pose, three paths.
         let tips = FingerTips.shared.snapshot()
         let lastFire = WristCommFeedback.shared.snapshot()
+        // The player's placement dials, read ONCE for the frame and as a set
+        // (see `VRSettings.wristCommPlacement` for why they are not four
+        // separate reads). Same class of nonisolated lock-protected read as
+        // the two above -- and the same precedent as the `offHandPitch/Yaw/
+        // Roll` reads this render thread already makes for the controller
+        // hand pose.
+        let dials = VRSettings.shared.wristCommPlacement
         var quads: [CommQuad] = []
         var sides: [WristCommGeometry.Side] = []
+        var fingerWire: [Float] = []
+        // The published finger wireframes, fetched lazily: nothing is hovered
+        // or flashing on most frames, and copying two vertex buffers out of a
+        // lock to then discard them is pure waste at 90 Hz.
+        var wire: (left: [Float], right: [Float])?
 
         for side in 0..<commOpacity.count {
             let live = side == 0 ? wrists.off : wrists.gun
             let enabled = side < comm.sides.count && comm.sides[side].enabled
-            let frame: HudEditor.WristFrame
+            let resolved: HudEditor.WristFrame
             if editorActive {
                 // No hold while editing: the comm is suppressed below
                 // anyway, and `wristFrames()` is doing its own (editor-
@@ -1466,10 +1514,30 @@ final class ImmersiveRenderer {
                 // means a later reveal re-acquires from a freshly seen
                 // wrist rather than an edit-session pose.
                 commHeldFrame[side] = nil
-                frame = live
+                resolved = live
             } else {
-                frame = commWristFrame(side: side, live: live, now: now)
+                resolved = commWristFrame(side: side, live: live, now: now)
             }
+
+            // The player's dials, applied ONCE here, to the pair that
+            // everything below is derived from: the reveal decision, the
+            // hover hit-test, the drawn quads AND the published
+            // `WristCommGeometry` side all take `frame`/`origin` from this
+            // one result, so the touch loop hit-tests the panel that is
+            // actually on screen and needs no change of its own. Applying it
+            // at the draw instead would move the picture off its hit-test --
+            // exactly the three-path split `commWristFrame` exists to avoid.
+            //
+            // The held (occlusion-hold) frame above stays the RAW wrist pose
+            // on purpose: the dials are a placement on top of whatever pose
+            // is current, so re-dialling mid-hold moves the panel rather than
+            // baking yesterday's dial into the held pose.
+            let adjusted = WristComm.adjustedFrame(
+                resolved,
+                origin: resolved.valid ? WristComm.commOrigin(wrist: resolved) : .zero,
+                tiltDegrees: dials.tilt, fwd: dials.fwd, side: dials.side, up: dials.up)
+            let frame = adjusted.frame
+            let origin = adjusted.origin
 
             guard enabled, !editorActive, frame.valid, headPoseAvailable else {
                 // Nothing to glance at -- or nothing that should be on
@@ -1482,12 +1550,11 @@ final class ImmersiveRenderer {
                                                               target: 0, dt: dt)
                 sides.append(WristCommGeometry.Side(
                     enabled: enabled, frame: frame,
-                    commOrigin: frame.valid ? WristComm.commOrigin(wrist: frame) : .zero,
+                    commOrigin: origin,
                     opacity: commOpacity[side]))
                 continue
             }
 
-            let origin = WristComm.commOrigin(wrist: frame)
             let revealed = WristComm.revealTarget(headPos: headPos, headForward: headForward,
                                                   commOrigin: origin,
                                                   wasRevealed: commRevealed[side])
@@ -1514,11 +1581,17 @@ final class ImmersiveRenderer {
             // highlight must only promise what that gate will honour -- a
             // key must not light under a fingertip while the panel is still
             // fading in or out.
-            let hovered: Int? = commOpacity[side] >= WristComm.fireRevealFloor
-                ? [tips.left, tips.right].compactMap {
+            //
+            // `hoverPick` reports WHICH tip won as well as which cell, which
+            // is the hand the finger wireframe below is drawn on. `map` (not
+            // `compactMap`) so an untracked hand keeps its slot and tip 1
+            // stays tip 1 -- the right hand.
+            let hover = commOpacity[side] >= WristComm.fireRevealFloor
+                ? WristComm.hoverPick([tips.left, tips.right].map {
                     $0.flatMap { WristComm.hoveredCell($0, commOrigin: origin, frame: frame) }
-                }.min()
+                })
                 : nil
+            let hovered: Int? = hover?.cell
 
             // Which key just fired, and how much of its flash is left. The
             // touch loop timestamps a fire with `CACurrentMediaTime()`, the
@@ -1541,10 +1614,55 @@ final class ImmersiveRenderer {
                                labels: side < comm.sides.count ? comm.sides[side].labels : [],
                                opacity: commOpacity[side],
                                hovered: hovered, pressedCell: pressedCell, press: press)
+
+            // The index-finger wireframe, on the ONE hand that is working
+            // this panel and only while it is working it. `WristCommFeedback`
+            // records the side and cell of a fire but not the hand, so the
+            // hovering hand is latched here and reused for the tail of the
+            // flash: `touchDepth` is a strict subset of `hoverDepth`, so the
+            // pressing finger is necessarily hovering at the instant of the
+            // fire -- the latch only covers the few frames after the finger
+            // has withdrawn while its key is still lit.
+            if let hover { commHoverHand[side] = hover.tip }
+            guard let hand = hover?.tip ?? (press > 0 ? commHoverHand[side] : nil) else {
+                continue
+            }
+            let published = wire ?? FingerWire.shared.snapshot()
+            wire = published
+            fingerWire += Self.tintedFingerWire(
+                hand == 0 ? published.left : published.right,
+                color: press > 0 ? Self.commWirePress : Self.commWireHover,
+                opacity: commOpacity[side])
         }
 
         WristCommGeometry.shared.publish(WristCommGeometry.Snapshot(sides: sides))
-        return quads
+        return (quads, fingerWire)
+    }
+
+    /// A published finger wireframe re-coloured for the communicator's
+    /// feedback state: the per-vertex rgba is OVERWRITTEN with `color`, its
+    /// alpha scaled by the side's live fade, so the wire appears and fades
+    /// with the panel it belongs to.
+    ///
+    /// Re-coloured here rather than at the publisher because the state it
+    /// carries (hovering a key vs flashing one) is the renderer's to know --
+    /// `HandInput` has no idea the hand is over a panel -- and the same
+    /// published buffer may be tinted differently for each side in one frame.
+    /// 7 floats per vertex (xyz + rgba), the `GuideVertex` layout every hand
+    /// overlay already uses.
+    private static func tintedFingerWire(_ verts: [Float], color: SIMD4<Float>,
+                                         opacity: Float) -> [Float] {
+        guard verts.count >= 21 else { return [] }
+        var out = verts
+        var i = 3
+        while i + 3 < out.count {
+            out[i] = color.x
+            out[i + 1] = color.y
+            out[i + 2] = color.z
+            out[i + 3] = color.w * opacity
+            i += 7
+        }
+        return out
     }
 
     /// One side's communicator geometry: the bezel body first, then the six
