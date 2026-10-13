@@ -331,6 +331,39 @@ cvar_t	vr_hud_healtharmor_off_y  = {"vr_hud_healtharmor_off_y", "-0.035", CVAR_A
 cvar_t	vr_hud_healtharmor_off_z  = {"vr_hud_healtharmor_off_z", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_scale  = {"vr_hud_healtharmor_scale", "1.0", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_show   = {"vr_hud_healtharmor_show", "1", CVAR_ARCHIVE};
+
+/* Wrist communicator (spy-watch action grid, seated below the HUD).
+   Per side: an enable, and six {command,label} pairs for the 2x3 cells
+   (row-major, 0 1 2 / 3 4 5). Commands are ordinary console strings and
+   fully rebindable; defaults are vanilla cheats. The gun side ships
+   disabled and unbound -- enabling it is how a second device appears. */
+cvar_t	vr_wristcomm_off        = {"vr_wristcomm_off", "1", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_cmd0   = {"vr_wristcomm_off_cmd0", "god", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_cmd1   = {"vr_wristcomm_off_cmd1", "impulse 9", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_cmd2   = {"vr_wristcomm_off_cmd2", "noclip", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_cmd3   = {"vr_wristcomm_off_cmd3", "notarget", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_cmd4   = {"vr_wristcomm_off_cmd4", "fly", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_cmd5   = {"vr_wristcomm_off_cmd5", "impulse 255", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_label0 = {"vr_wristcomm_off_label0", "GOD", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_label1 = {"vr_wristcomm_off_label1", "GIVE", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_label2 = {"vr_wristcomm_off_label2", "NOCLIP", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_label3 = {"vr_wristcomm_off_label3", "NOTGT", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_label4 = {"vr_wristcomm_off_label4", "FLY", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_label5 = {"vr_wristcomm_off_label5", "QUAD", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun        = {"vr_wristcomm_gun", "0", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_cmd0   = {"vr_wristcomm_gun_cmd0", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_cmd1   = {"vr_wristcomm_gun_cmd1", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_cmd2   = {"vr_wristcomm_gun_cmd2", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_cmd3   = {"vr_wristcomm_gun_cmd3", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_cmd4   = {"vr_wristcomm_gun_cmd4", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_cmd5   = {"vr_wristcomm_gun_cmd5", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_label0 = {"vr_wristcomm_gun_label0", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_label1 = {"vr_wristcomm_gun_label1", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_label2 = {"vr_wristcomm_gun_label2", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_label3 = {"vr_wristcomm_gun_label3", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_label4 = {"vr_wristcomm_gun_label4", "", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_gun_label5 = {"vr_wristcomm_gun_label5", "", CVAR_ARCHIVE};
+
 cvar_t	scr_conwidth = {"scr_conwidth", "0", CVAR_ARCHIVE};
 cvar_t	scr_conscale = {"scr_conscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_crosshairscale = {"scr_crosshairscale", "1", CVAR_ARCHIVE};
@@ -480,6 +513,32 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&vr_hud_healtharmor_off_z);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_scale);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_show);
+	Cvar_RegisterVariable (&vr_wristcomm_off);
+	Cvar_RegisterVariable (&vr_wristcomm_off_cmd0);
+	Cvar_RegisterVariable (&vr_wristcomm_off_cmd1);
+	Cvar_RegisterVariable (&vr_wristcomm_off_cmd2);
+	Cvar_RegisterVariable (&vr_wristcomm_off_cmd3);
+	Cvar_RegisterVariable (&vr_wristcomm_off_cmd4);
+	Cvar_RegisterVariable (&vr_wristcomm_off_cmd5);
+	Cvar_RegisterVariable (&vr_wristcomm_off_label0);
+	Cvar_RegisterVariable (&vr_wristcomm_off_label1);
+	Cvar_RegisterVariable (&vr_wristcomm_off_label2);
+	Cvar_RegisterVariable (&vr_wristcomm_off_label3);
+	Cvar_RegisterVariable (&vr_wristcomm_off_label4);
+	Cvar_RegisterVariable (&vr_wristcomm_off_label5);
+	Cvar_RegisterVariable (&vr_wristcomm_gun);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_cmd0);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_cmd1);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_cmd2);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_cmd3);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_cmd4);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_cmd5);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_label0);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_label1);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_label2);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_label3);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_label4);
+	Cvar_RegisterVariable (&vr_wristcomm_gun_label5);
 	Cvar_RegisterVariable (&scr_conwidth);
 	Cvar_RegisterVariable (&scr_conscale);
 	Cvar_RegisterVariable (&scr_crosshairscale);
