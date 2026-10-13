@@ -123,9 +123,10 @@ final class FingerTips: @unchecked Sendable {
 /// gesture or the HUD editor is active this frame.
 ///
 /// TRIANGLE vertices, 7 floats each (xyz + rgba), in corrected tracking
-/// space -- the `GuideVertex` layout every hand overlay uses. Capsule bone
-/// segments and round joint caps (`HandState.buildIndexFinger`), built from
-/// the same bead the virtual hand is; triangles throughout, since line and
+/// space -- the `GuideVertex` layout every hand overlay uses. SPARSE JOINT
+/// BEADS, one per joint of the index chain and nothing between them
+/// (`HandState.buildIndexFinger`), built from the same bead at the same
+/// radii as the virtual hand's; triangles throughout, since line and
 /// point primitives are illegal under the device's foveation rate map.
 /// Empty per hand exactly when that hand isn't tracked.
 ///

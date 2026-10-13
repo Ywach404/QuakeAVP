@@ -1602,26 +1602,34 @@ private struct HandState {
     /// ambient term in the guide shader to fall back on).
     private static let fingerAmbient: Float = 0.42
     /// Finger radius at the metacarpal and at the tip, metres -- the virtual
-    /// hand's own taper (0.0105 -> 0.0060), so the finger is exactly as thick
-    /// as the beads of the hand it continues.
+    /// hand's own taper (`buildVirtual`'s `0.0105 - 0.0045 * t`), so the
+    /// finger's beads are exactly the beads of the hand it continues.
     private static let fingerRootRadius: Float = 0.0105
     private static let fingerTipRadius: Float = 0.0060
-    /// Each bone segment's radius as a fraction of the joints it spans, so
-    /// the knuckle caps stand slightly proud of the shaft between them and
-    /// the finger reads as segmented rather than as one smooth tube.
-    private static let fingerSegmentScale: Float = 0.86
+    /// ...except the TIP bead, which is this much bigger than the hand's own
+    /// tip bead. It is the cursor -- the mark the player aims a key press
+    /// with -- so it earns a little more presence than the joints behind it
+    /// while still reading as one of them. A DEVICE-TUNING LEVER: raise it
+    /// if the pressing point is hard to place, but past ~1.5 the taper
+    /// inverts and the finger stops reading as a finger.
+    private static let fingerTipCursorScale: Float = 1.3
 
-    /// The INDEX FINGER alone as SOLID 3D geometry: a tapered capsule along
-    /// each bone of the metacarpal->knuckle->base->tip chain, with a rounded
-    /// cap at every joint, built from the same `beadTriangles` ellipsoid the
-    /// virtual hand is built from -- so the finger the wrist communicator
-    /// draws reads as a piece of that hand rather than as an overlay on it.
-    /// The renderer draws it on the one hand that is hovering or has just
-    /// pressed a key, so the finger doing the pressing is visible against
-    /// the stone unit.
+    /// The INDEX FINGER alone as SPARSE JOINT BEADS: one ellipsoid at each
+    /// joint of the metacarpal->knuckle->base->tip chain and NOTHING
+    /// between them, built from the same `beadTriangles` the virtual hand
+    /// is built from, at the same radii -- so the finger the wrist
+    /// communicator draws reads as a piece of that hand rather than as an
+    /// overlay on it.
     ///
-    /// It replaced a thin-quad WIREFRAME of the same chain, which worked on
-    /// device (the pressing finger was legible) but read as debug art.
+    /// Two shapes came before this. A thin-quad WIREFRAME of the same chain
+    /// was legible on device but read as debug art. A SOLID CAPSULE per
+    /// bone, with caps at the joints, fixed that and introduced a worse
+    /// problem: one continuous tapered tube with a rounded end is, in A.'s
+    /// words, "a little phallic", and the off-hand virtual hand right next
+    /// to it is beads. So the connecting segments are gone rather than
+    /// re-proportioned -- the beads read as a finger on their own for the
+    /// same reason `buildVirtual`'s read as a hand, and the two now match
+    /// by construction instead of by eye.
     ///
     /// Index only, and no wrist bone: the whole point is to show WHERE the
     /// pressing fingertip is, and a full hand rig over a 10 cm panel hides
@@ -1662,11 +1670,12 @@ private struct HandState {
             SIMD3(correction.columns.0.x, correction.columns.0.y, correction.columns.0.z),
             SIMD3(correction.columns.1.x, correction.columns.1.y, correction.columns.1.z),
             SIMD3(correction.columns.2.x, correction.columns.2.y, correction.columns.2.z))
-        // 4 capsule segments + 5 joint caps = 9 beads x 192 corners x 7
-        // floats -- exact, not a round number, so a chain-length change here
-        // is the one place that also has to touch this.
+        // One bead per joint: 5 beads x 192 corners x 7 floats -- exact, not
+        // a round number, so a chain-length change here is the one place
+        // that also has to touch this. (It was 9 beads while each bone
+        // carried a stretched shaft bead of its own.)
         var v: [Float] = []
-        v.reserveCapacity((4 + 5) * 192 * 7)
+        v.reserveCapacity(chain.count * 192 * 7)
         func solid(_ at: SIMD3<Float>, _ axis: SIMD3<Float>, _ long: Float, _ rad: Float) {
             Self.beadTriangles(at: at, axis: axis, long: long, rad: rad) { p, n in
                 let q = correction * SIMD4(p, 1)
@@ -1683,26 +1692,19 @@ private struct HandState {
         func radius(_ t: Float) -> Float {
             Self.fingerRootRadius + (Self.fingerTipRadius - Self.fingerRootRadius) * t
         }
-        var prev: (p: SIMD3<Float>, r: Float)?
         for (i, j) in chain.enumerated() {
-            guard let cur = tip(j) else { prev = nil; continue }
+            guard let cur = tip(j) else { continue }
+            let last = i == chain.count - 1
+            // One round bead per joint (long == rad, so the axis is
+            // irrelevant and `beadTriangles` returns true sphere normals),
+            // tapering knuckle to tip exactly as the virtual hand's beads
+            // do -- except the tip, lifted by `fingerTipCursorScale` so the
+            // pressing point is the most present mark on the panel rather
+            // than the least. Nothing is drawn BETWEEN the joints: the gaps
+            // are the look.
             let r = radius(Float(i) / Float(chain.count - 1))
-            // The bone between this joint and the last one: one bead
-            // stretched along the bone (a capsule shaft), slightly slimmer
-            // than the caps at its ends so the knuckles still read.
-            if let p = prev {
-                let axis = cur - p.p
-                let len = simd_length(axis)
-                if len > 1e-5 {
-                    solid((p.p + cur) * 0.5, axis, len * 0.5,
-                          (p.r + r) * 0.5 * Self.fingerSegmentScale)
-                }
-            }
-            // ...and the joint cap itself, round (long == rad), tapering
-            // knuckle to tip so the fingertip is the smallest, most precise
-            // mark on the panel.
+                  * (last ? Self.fingerTipCursorScale : 1)
             solid(cur, SIMD3<Float>(0, 1, 0), r, r)
-            prev = (cur, r)
         }
         indexFingerVerts = v
     }
