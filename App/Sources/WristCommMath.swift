@@ -56,6 +56,84 @@ enum WristComm {
         wrist.origin - wrist.up * (HudEditor.gridHalfY + hudGap + gridHalfY)
     }
 
+    /// The communicator's player-adjusted placement: `origin` shifted along
+    /// the wrist frame's own axes and the frame pitched about its `right`,
+    /// from the four `VRSettings.wristComm*` dials.
+    ///
+    /// Both halves come back TOGETHER, as one resolved pair, because they are
+    /// only ever correct together: the renderer feeds this single result to
+    /// the drawn quads, to the hover highlight and to the published
+    /// `WristCommGeometry` side, so a dialled panel is hit-tested where the
+    /// eye sees it. (The same three-path discipline `commWristFrame`'s doc
+    /// comment states for the occlusion hold -- the dials are a second way to
+    /// move the plane, and would break it exactly as a stale frame would.)
+    ///
+    /// Sign conventions, both chosen for how the dial reads in the headset:
+    ///
+    ///  * `fwd`/`side`/`up` are metres along `forward`/`right`/`up`. `forward`
+    ///    is the unit vector from the wrist TOWARD the eye (see the renderer's
+    ///    `wristFrame`), so +fwd brings the unit closer to your face.
+    ///  * `tiltDegrees` is a POSITIVE rotation about `right`, which pitches
+    ///    the TOP of the panel toward the viewer (at +90 the panel's `up`
+    ///    lies along `forward`). That is the direction a forearm-strapped
+    ///    unit has to lean to face a head looking down at it.
+    ///
+    /// `right` is deliberately untouched: it is the tilt axis, and it is also
+    /// the axis the six keys are laid out along, so leaving it alone keeps the
+    /// grid's columns where the hand learned them. `frame.origin` is untouched
+    /// too -- that is the WRIST plane's own origin (the HUD tiles hang off it);
+    /// the communicator's centre is the separate `origin` returned here, which
+    /// is the only point the hit-test projects against.
+    ///
+    /// An invalid (untracked) frame passes through whole, dials ignored: there
+    /// is no plane to move, and translating a zero frame would hand the touch
+    /// loop a grid floating where no wrist is. At all-zero dials this is the
+    /// identity, so the tuned-on-device behaviour is literally unchanged until
+    /// a dial moves.
+    static func adjustedFrame(_ frame: HudEditor.WristFrame, origin: SIMD3<Float>,
+                              tiltDegrees: Float, fwd: Float, side: Float,
+                              up: Float) -> (frame: HudEditor.WristFrame, origin: SIMD3<Float>) {
+        guard frame.valid else { return (frame, origin) }
+
+        let moved = origin + frame.right * side + frame.up * up + frame.forward * fwd
+        guard tiltDegrees != 0 else {
+            return (frame, moved)
+        }
+
+        // Rodrigues about `right`, written out rather than via simd_quatf so
+        // the host test harness needs nothing but simd's free functions: for a
+        // unit axis perpendicular to v, v' = v cos + (axis x v) sin.
+        let angle = tiltDegrees * .pi / 180
+        let c = cos(angle), s = sin(angle)
+        func rotate(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            simd_normalize(v * c + simd_cross(frame.right, v) * s)
+        }
+        var tilted = frame
+        tilted.up = rotate(frame.up)
+        tilted.forward = rotate(frame.forward)
+        return (tilted, moved)
+    }
+
+    /// The hovered cell AND which fingertip produced it, from one entry per
+    /// tracked tip (`nil` = that tip is not over the grid; index 0 = left,
+    /// 1 = right, the order `FingerTips` publishes).
+    ///
+    /// The cell is the MINIMUM hovered cell, which is exactly what the
+    /// renderer's previous `.min()` picked, so the drawn highlight is
+    /// unchanged by this existing; the point of the helper is the second
+    /// half, the tip, which is the hand the finger wireframe is drawn on. A
+    /// tie on one cell breaks to the lower tip index, so two hands over the
+    /// same key cannot alternate the wire between them frame to frame --
+    /// deterministic for the same reason the `.min()` was.
+    static func hoverPick(_ cells: [Int?]) -> (cell: Int, tip: Int)? {
+        var best: (cell: Int, tip: Int)?
+        for (tip, cell) in cells.enumerated() {
+            guard let cell else { continue }
+            if best == nil || cell < best!.cell { best = (cell, tip) }
+        }
+        return best
+    }
+
     /// The cell a world point lands on within `depth` of the grid plane, or
     /// nil (untracked wrist, off the grid laterally, or too far off the
     /// plane). The ONE hit-test body: `touchedCell` and `hoveredCell` are
