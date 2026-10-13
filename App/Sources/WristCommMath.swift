@@ -23,6 +23,7 @@ enum WristComm {
     static let gridHalfY: Float = (Float(rows) * cellSize + Float(rows - 1) * cellGap) * 0.5
     static let hudGap: Float = 0.012       // separation from the HUD grid above
     static let touchDepth: Float = 0.025   // fingertip must be this close to the plane
+    static let hoverDepth: Float = 0.08    // approach band: highlight before the touch
     static let cooldown: Double = 0.6      // per-cell re-fire gate, seconds
     static let revealOnCos: Float = 0.88   // ~28 deg: reveal when gaze this centred
     static let revealOffCos: Float = 0.82  // ~35 deg: hide past this (hysteresis)
@@ -37,6 +38,11 @@ enum WristComm {
     /// lowered must still hide, and only ever applied while the side is above
     /// `fireRevealFloor`: a stale frame plus a blind touch must not fire.
     static let occlusionHold: Double = 0.25
+    /// How long a fired key stays lit, seconds -- the press flash window
+    /// `WristCommFeedback`'s last fire is read against. Shorter than
+    /// `cooldown` deliberately: the flash must have finished before the
+    /// same key can fire again, so two presses read as two flashes.
+    static let pressFlash: Double = 0.25
 
     /// Cell N's centre in the comm's local right/up plane (row-major 2x3).
     static func cellCenter(_ index: Int) -> SIMD2<Float> {
@@ -50,17 +56,40 @@ enum WristComm {
         wrist.origin - wrist.up * (HudEditor.gridHalfY + hudGap + gridHalfY)
     }
 
-    /// The cell a world point touches, or nil (off the grid or off the plane).
-    static func touchedCell(_ p: SIMD3<Float>, commOrigin: SIMD3<Float>,
-                            frame: HudEditor.WristFrame) -> Int? {
+    /// The cell a world point lands on within `depth` of the grid plane, or
+    /// nil (untracked wrist, off the grid laterally, or too far off the
+    /// plane). The ONE hit-test body: `touchedCell` and `hoveredCell` are
+    /// the same test at two depths, so a change to the grid's lateral
+    /// bounds or its row/column rounding can never apply to the press but
+    /// not the highlight -- which would light one key and fire another.
+    private static func cell(_ p: SIMD3<Float>, commOrigin: SIMD3<Float>,
+                             frame: HudEditor.WristFrame, depth: Float) -> Int? {
         guard frame.valid else { return nil }
         let local = HudEditor.offsetInFrame(point: p, origin: commOrigin,
                                             right: frame.right, up: frame.up, forward: frame.forward)
         guard abs(local.x) <= gridHalfX, abs(local.y) <= gridHalfY,
-              abs(local.z) <= touchDepth else { return nil }
+              abs(local.z) <= depth else { return nil }
         let col = min(max(Int((local.x / cellPitch + Float(cols - 1) * 0.5).rounded()), 0), cols - 1)
         let row = min(max(Int((Float(rows - 1) * 0.5 - local.y / cellPitch).rounded()), 0), rows - 1)
         return row * cols + col
+    }
+
+    /// The cell a world point touches, or nil (off the grid or off the plane).
+    static func touchedCell(_ p: SIMD3<Float>, commOrigin: SIMD3<Float>,
+                            frame: HudEditor.WristFrame) -> Int? {
+        cell(p, commOrigin: commOrigin, frame: frame, depth: touchDepth)
+    }
+
+    /// The cell a world point is APPROACHING -- the same grid test as
+    /// `touchedCell`, bounded by the wider `hoverDepth` instead. Feedback
+    /// only: the renderer brightens this key so a fingertip on its way in
+    /// can see which one it is about to press, several centimetres before
+    /// `touchedCell` (and therefore the fire gate) agrees. `touchDepth` is
+    /// a strict subset of `hoverDepth`, so a key being pressed is always
+    /// also hovered and never flickers un-highlighted on the way down.
+    static func hoveredCell(_ p: SIMD3<Float>, commOrigin: SIMD3<Float>,
+                            frame: HudEditor.WristFrame) -> Int? {
+        cell(p, commOrigin: commOrigin, frame: frame, depth: hoverDepth)
     }
 
     /// Edge/cooldown fire gate. `touched` holds the cell under each tracked

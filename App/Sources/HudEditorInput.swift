@@ -215,6 +215,50 @@ final class WristCommGeometry: @unchecked Sendable {
     }
 }
 
+/// Cross-loop publish of the LAST wrist-communicator cell that actually
+/// fired, so the renderer can flash the key that was pressed. Written by
+/// the communicator's touch loop (`WristCommInput.tick`) at the one point
+/// it commits to a fire -- after `WristComm.updateTouch`'s edge/cooldown
+/// gate and after `WristComm.shouldFire` -- and read by the render thread
+/// in `ImmersiveRenderer.updateWristComm`.
+///
+/// Published from the TOUCH loop rather than from `WristCommStore.fire`
+/// deliberately: `fire` runs on the main actor one hop later, so keying the
+/// flash off it would date the press by however long that hop took and
+/// would also light up a cell that a console `wristcomm` refresh re-bound
+/// in between. The touch loop's own `CACurrentMediaTime()` is the instant
+/// the finger crossed the plane.
+///
+/// Only the last fire is kept, not a queue: `WristComm.pressFlash` is
+/// shorter than `WristComm.cooldown`, so one key's flash has always
+/// finished before that key can fire again, and two different keys cannot
+/// fire in the same tick (`updateTouch` fires at most one cell per tick).
+/// A second press inside the window therefore legitimately replaces the
+/// first rather than queueing behind it. Same lock-protected plain-value
+/// pattern as `FingerTips`/`WristCommGeometry`.
+final class WristCommFeedback: @unchecked Sendable {
+    static let shared = WristCommFeedback()
+
+    private let lock = NSLock()
+    private var _side = 0
+    private var _cell = 0
+    /// `nil` until the first fire of the session -- the renderer draws no
+    /// flash at all rather than flashing cell 0 at time 0, which a
+    /// `CACurrentMediaTime()` comparison against a default 0 would do for
+    /// the first `pressFlash` seconds after launch.
+    private var _time: Double?
+
+    func noteFire(side: Int, cell: Int, at time: Double) {
+        lock.lock(); _side = side; _cell = cell; _time = time; lock.unlock()
+    }
+
+    func snapshot() -> (side: Int, cell: Int, time: Double)? {
+        lock.lock(); defer { lock.unlock() }
+        guard let time = _time else { return nil }
+        return (_side, _cell, time)
+    }
+}
+
 /// Drives `HudEditor.updateGrab` every tick from real hand pinches
 /// (`EditorHandInput`) or Sense controller triggers/poses/thumbsticks
 /// (`SpatialControllerTracker` + `GCController`), and applies the result to
