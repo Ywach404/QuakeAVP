@@ -82,6 +82,39 @@ final class EditorHandInput: @unchecked Sendable {
     }
 }
 
+/// Cross-loop publish of each hand's index-fingertip world position, for
+/// the wrist communicator's touch hit-test (plan Task 3). Written by
+/// `HandInput.emit` every hand update, immediately alongside
+/// `EditorHandInput.shared.publish(...)` and ahead of every gate/suppression
+/// below it -- the communicator needs a fresh fingertip read whether or not
+/// a gameplay gesture or the HUD editor is active this frame, the same
+/// reasoning `EditorHandInput`'s doc comment gives for its own publish.
+/// `nil` per hand exactly when that hand's index tip isn't tracked. Same
+/// lock-protected plain-value pattern as `EditorHandInput`/`GunHand`/
+/// `OffHandWrist`.
+final class FingerTips: @unchecked Sendable {
+    static let shared = FingerTips()
+
+    private let lock = NSLock()
+    private var _left: SIMD3<Float>?
+    private var _right: SIMD3<Float>?
+
+    func publish(left: SIMD3<Float>?, right: SIMD3<Float>?) {
+        lock.lock(); _left = left; _right = right; lock.unlock()
+    }
+
+    func snapshot() -> (left: SIMD3<Float>?, right: SIMD3<Float>?) {
+        lock.lock(); defer { lock.unlock() }
+        return (_left, _right)
+    }
+
+    /// Hands stood down -- publish "lost" for both, the same stand-down
+    /// EditorHandInput.invalidate() answers for its own signal.
+    func invalidate() {
+        publish(left: nil, right: nil)
+    }
+}
+
 /// Cross-loop publish of this frame's workbench hit-test geometry. The
 /// render thread builds it (see `ImmersiveRenderer.publishWorkbenchGeometry`,
 /// which documents the zone/tile layout this mirrors) every frame the
