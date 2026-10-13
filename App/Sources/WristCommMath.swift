@@ -239,4 +239,15 @@ enum WristComm {
     static func shouldFire(_ command: String) -> Bool {
         !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    /// The one "panel in use" predicate for a single published side: up
+    /// (`enabled`) and faded in at least to the fire floor. Both
+    /// `WristCommInput.anySideQualifies` and `HandInput.wristCommInUse`
+    /// `.contains` their own `WristCommGeometry.Side` arrays through this,
+    /// so there is exactly one definition of "the panel is up" -- a second
+    /// opinion here would hold turning on frames where no key could be
+    /// pressed, or free it on frames where one could.
+    static func sideQualifies(enabled: Bool, opacity: Float) -> Bool {
+        enabled && opacity >= fireRevealFloor
+    }
 }

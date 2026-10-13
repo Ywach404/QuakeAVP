@@ -75,9 +75,10 @@ final class WristCommInput: @unchecked Sendable {
     /// Idle gate: nothing to hit-test unless at least one published side is
     /// both enabled and revealed past the fire floor -- matches the reveal
     /// state the render thread is actually drawing, not just "enabled".
+    /// `WristComm.sideQualifies` is the one shared predicate; see its doc.
     private static func anySideQualifies() -> Bool {
         WristCommGeometry.shared.snapshot().sides.contains {
-            $0.enabled && $0.opacity >= WristComm.fireRevealFloor
+            WristComm.sideQualifies(enabled: $0.enabled, opacity: $0.opacity)
         }
     }
 

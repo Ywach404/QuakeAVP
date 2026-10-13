@@ -320,6 +320,22 @@ final class VRSettings: @unchecked Sendable {
         return (_wristCommTilt, _wristCommFwd, _wristCommSide, _wristCommUp)
     }
 
+    /// Reset all four placement dials to zero in ONE lock take -- the write
+    /// side of the same atomicity `wristCommPlacement` reads with: four
+    /// separate setters would let the render thread's own single-lock read
+    /// land between two of them and sample a torn placement for a frame.
+    /// Persisted after the lock is released, same discipline as `store`.
+    func resetWristCommPlacement() {
+        lock.lock()
+        _wristCommTilt = 0; _wristCommFwd = 0; _wristCommSide = 0; _wristCommUp = 0
+        lock.unlock()
+        let d = UserDefaults.standard
+        d.set(Double(0), forKey: Self.commTiltKey)
+        d.set(Double(0), forKey: Self.commFwdKey)
+        d.set(Double(0), forKey: Self.commSideKey)
+        d.set(Double(0), forKey: Self.commUpKey)
+    }
+
     /// Clamped at the SETTER, not at the reader: a value out of range must
     /// never reach the store, so every reader (and the persisted default
     /// restored next launch) is in range by construction.

@@ -649,26 +649,26 @@ struct ContentView: View {
                                  step: 1, unit: "°", display: 1) {
                         VRSettings.shared.wristCommTilt = $0
                     }
+                    Text("Positive angle leans the TOP of the panel toward you.")
+                        .font(.caption2).foregroundStyle(.secondary)
                     commPlaceRow("Forward", $commFwdUI,
                                  -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                 step: 0.005, unit: "cm", display: 100) {
+                                 step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
                         VRSettings.shared.wristCommFwd = $0
                     }
                     commPlaceRow("Side", $commSideUI,
                                  -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                 step: 0.005, unit: "cm", display: 100) {
+                                 step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
                         VRSettings.shared.wristCommSide = $0
                     }
                     commPlaceRow("Height", $commUpUI,
                                  -VRSettings.commOffsetLimit...VRSettings.commOffsetLimit,
-                                 step: 0.005, unit: "cm", display: 100) {
+                                 step: 0.005, unit: "cm", display: 100, fmt: "%.1f") {
                         VRSettings.shared.wristCommUp = $0
                     }
                     Button("Reset position") {
                         commTiltUI = 0; commFwdUI = 0; commSideUI = 0; commUpUI = 0
-                        let s = VRSettings.shared
-                        s.wristCommTilt = 0; s.wristCommFwd = 0
-                        s.wristCommSide = 0; s.wristCommUp = 0
+                        VRSettings.shared.resetWristCommPlacement()
                     }
                     .font(.caption)
                 }
@@ -1632,7 +1632,7 @@ struct ContentView: View {
     /// (metres shown as cm); the stored value stays in the dial's own unit.
     private func commPlaceRow(_ label: String, _ value: Binding<Float>,
                               _ range: ClosedRange<Float>, step: Float,
-                              unit: String, display: Float,
+                              unit: String, display: Float, fmt: String = "%.0f",
                               apply: @escaping (Float) -> Void) -> some View {
         HStack {
             Text(label).font(.caption).frame(width: 64, alignment: .leading)
@@ -1641,11 +1641,17 @@ struct ContentView: View {
                 set: { value.wrappedValue = Float($0); apply(Float($0)) }),
                 in: Double(range.lowerBound)...Double(range.upperBound),
                 step: Double(step))
-            Text(String(format: "%.0f%@", value.wrappedValue * display, unit))
+            // Normalise -0 to 0 first: `%f` prints the sign bit even though
+            // -0.0 == 0.0, and a dial resting exactly at zero must never
+            // flash a stray minus sign depending on which side it last
+            // approached from.
+            Text(String(format: "\(fmt)%@", Self.normalizedZero(value.wrappedValue * display), unit))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 48, alignment: .trailing)
         }
     }
+
+    private static func normalizedZero(_ v: Float) -> Float { v == 0 ? 0 : v }
 
     /// Load the active profile's values into the slider mirrors, so the UI
     /// shows what was persisted (called on launch and on a profile switch).

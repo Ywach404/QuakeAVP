@@ -590,10 +590,16 @@ final class HandInput: @unchecked Sendable {
     /// `WristCommGeometry` rather than the reveal state itself keeps one
     /// definition of "the panel is up" shared by the draw, the touch gate and
     /// this hold -- a second opinion here would hold turning on frames where
-    /// no key could be pressed, or free it on frames where one could.
-    private static func wristCommInUse() -> Bool {
+    /// no key could be pressed, or free it on frames where one could. That one
+    /// definition is `WristComm.sideQualifies`, the same predicate
+    /// `WristCommInput.anySideQualifies` loops its sides through.
+    ///
+    /// `fileprivate`, not `private`: `HandState.ingest` (same file) gates
+    /// `buildIndexWire` on this so the wire is built only while a side is
+    /// actually revealed enough to fire.
+    fileprivate static func wristCommInUse() -> Bool {
         WristCommGeometry.shared.snapshot().sides.contains {
-            $0.enabled && $0.opacity >= WristComm.fireRevealFloor
+            WristComm.sideQualifies(enabled: $0.enabled, opacity: $0.opacity)
         }
     }
 
@@ -1567,18 +1573,33 @@ private struct HandState {
     /// same reason `buildDebug` uses them -- foveation forbids line and point
     /// primitives on device.
     ///
-    /// Built unconditionally (no debug toggle), because its consumer is a
-    /// gameplay feature rather than a debug overlay; the colour here is a
-    /// neutral placeholder the renderer overwrites with the hover/press tint.
-    /// Corrected-tracking space, 7 floats/vertex (xyz + rgba).
+    /// Gated on `HandInput.wristCommInUse()` (no debug toggle otherwise),
+    /// because its consumer is a gameplay feature rather than a debug
+    /// overlay; the colour here is a neutral placeholder the renderer
+    /// overwrites with the hover/press tint. Corrected-tracking space,
+    /// 7 floats/vertex (xyz + rgba).
+    ///
+    /// Without the gate this built ~144 verts (4 bone quads + 5 tapered
+    /// nodes) on every hand update whether or not any panel was even up to
+    /// draw it on -- `FingerWire` already treats an empty array as nothing
+    /// to draw, so publishing one here when no side qualifies is free.
     private mutating func buildIndexWire(tip: (HandSkeleton.JointName) -> SIMD3<Float>?) {
+        guard HandInput.wristCommInUse() else {
+            indexWireVerts = []
+            return
+        }
         let chain: [HandSkeleton.JointName] = [
             .indexFingerMetacarpal, .indexFingerKnuckle,
             .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip,
         ]
         let correction = TrackingSpace.correction
         let placeholder = SIMD4<Float>(1, 1, 1, 1)
+        // 4 bone quads (2 triangles x 3 corners = 6 verts each) + 5 tapered
+        // nodes (8 tri-faces x 3 corners = 24 verts each) = 144 verts, 7
+        // floats apiece -- exact, not a round number, so a chain-length
+        // change here is the one place that also has to touch this.
         var v: [Float] = []
+        v.reserveCapacity((4 * 6 + 5 * 24) * 7)
         func corner(_ p: SIMD3<Float>) {
             let q = correction * SIMD4(p, 1)
             v += [q.x, q.y, q.z, placeholder.x, placeholder.y, placeholder.z, placeholder.w]
