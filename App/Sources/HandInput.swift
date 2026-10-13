@@ -164,6 +164,7 @@ final class HandInput: @unchecked Sendable {
             OffHandWrist.shared.invalidate()
             GunHand.shared.invalidate()
             EditorHandInput.shared.invalidate()
+            FingerTips.shared.invalidate()
         }
     }
 
@@ -252,6 +253,7 @@ final class HandInput: @unchecked Sendable {
         OffHandWrist.shared.invalidate()
         GunHand.shared.invalidate()
         EditorHandInput.shared.invalidate()
+        FingerTips.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
         tpRingWas = false
     }
@@ -269,6 +271,13 @@ final class HandInput: @unchecked Sendable {
         // comment for why `point` is generic (not move/aim-labelled) and
         // nil exactly when that hand's pinch geometry isn't tracked.
         EditorHandInput.shared.publish(left: Self.editorSignal(left), right: Self.editorSignal(right))
+
+        // Wrist communicator touch (plan Task 3): each hand's index-tip
+        // world position, corrected into tracking space, published every
+        // update for the same reason as the publish just above -- the
+        // communicator's touch hit-test needs a fresh fingertip read
+        // regardless of the editor/wheel/gameplay gates below.
+        FingerTips.shared.publish(left: Self.fingertip(left), right: Self.fingertip(right))
 
         // While the HUD layout editor is open, the hands drive ONLY the grab
         // (published just above). Every gameplay gesture -- fire, move, turn,
@@ -984,6 +993,15 @@ final class HandInput: @unchecked Sendable {
         let mid = (thumb + index) * 0.5
         let corr = TrackingSpace.correction * SIMD4(mid, 1)
         return EditorHandSignal(pinched: hand.indexPinched, point: SIMD3(corr.x, corr.y, corr.z))
+    }
+
+    /// This hand's index-tip world position, corrected into tracking space,
+    /// for the wrist communicator's touch hit-test -- `nil` when the tip
+    /// isn't tracked.
+    private static func fingertip(_ hand: HandState) -> SIMD3<Float>? {
+        guard let index = hand.indexTipPos else { return nil }
+        let corr = TrackingSpace.correction * SIMD4(index, 1)
+        return SIMD3(corr.x, corr.y, corr.z)
     }
 
     private static let pulse = 0.12
