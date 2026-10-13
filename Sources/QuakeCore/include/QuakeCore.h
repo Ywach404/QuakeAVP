@@ -584,6 +584,16 @@ void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 void QC_InputSetTeleport (int active, int commit, float org_fwd, float org_right,
 			  float org_up, float yaw_deg, float pitch_deg);
 
+/* ANY-THREAD. Hold (1) or release (0) the aim-hand EDGE TURN (vr_edgeturn):
+   this is for a UI interaction -- the wrist communicator -- where reaching
+   the gun hand across to press a key is the same sideways sweep the edge
+   turn watches, and would otherwise spin the player mid-press. It touches
+   only that one engine-side turn path; movement, aim, fire, and the
+   smooth/snap turns Swift already suppresses on its own side are untouched.
+   Feed 0 the instant the UI stops being reachable (panel dismissed, hands
+   standing down) so a stuck hold never outlives the reach that set it. */
+void QC_InputSetTurnHold (int hold);
+
 /* Per-weapon gun placement, one entry per weapon slot in wheel order:
    axe, shotgun, super shotgun, nailgun, super nailgun, grenade launcher,
    rocket launcher, lightning gun. Quake units, in the gun's own drawn frame:
