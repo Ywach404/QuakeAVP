@@ -66,6 +66,11 @@ static float			qc_tp_org_shared[3];	/* body frame fwd,right,up */
 static float			qc_tp_yaw_shared;	/* room-relative, Quake deg */
 static float			qc_tp_pitch_shared;
 
+/* UI turn hold: set while a hand reaching across for a UI interaction (the
+   wrist communicator) must not also edge-turn the body. See QC_InputSetTurnHold
+   in QuakeCore.h. */
+static int			qc_turn_hold_shared;
+
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
 	pthread_mutex_lock (&qc_input_lock);
@@ -201,6 +206,17 @@ void QC_InputSetTeleport (int active, int commit, float org_fwd, float org_right
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
+/* Hold the aim-hand EDGE TURN (vr_edgeturn, below) without touching
+   movement, aim, fire, or the smooth/snap turn paths Swift already holds
+   itself -- see IN_Move's turn-lock block. Any thread; staged and drained
+   like every other setter here. */
+void QC_InputSetTurnHold (int hold)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_turn_hold_shared = hold ? 1 : 0;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
 void QC_InputSetWheel (int open, int has_anchor,
 		       float fwd, float right, float up, int highlight)
 {
@@ -260,6 +276,9 @@ int				qr_aim_active;		/* hand aim live (vr_handaim &&
 static int			qr_aim_valid;
 static float			qr_aim_yaw;		/* room-relative, Quake deg */
 static float			qr_aim_pitch;
+/* Drained from qc_turn_hold_shared; gates the edge-turn block only (see
+   QC_InputSetTurnHold). */
+static int			qr_turn_hold;
 static float			qr_expected_yaw;
 
 /* Teleport, engine-thread. qr_tp_valid/qr_tp_dest are read by qr_bridge.c to
@@ -503,6 +522,7 @@ static void IN_SnapshotInputs (void)
 	qr_height_trim = qc_height_trim_shared;
 	qr_bodyyaw_override = qc_bodyyaw_override_shared;
 	qr_bodyyaw_pinned = qc_bodyyaw_shared;
+	qr_turn_hold = qc_turn_hold_shared;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -1280,7 +1300,7 @@ void IN_Move (usercmd_t *cmd)
 	   it stays at the edge while the body sweeps under it -- continuous while
 	   held, stops when you bring the aim back to centre. Yields to an explicit
 	   stick/flick (rx), so a controller's right stick still wins. */
-	if (vr_edgeturn.value && qr_aim_active && fabsf (rx) < 0.2f)
+	if (vr_edgeturn.value && qr_aim_active && !qr_turn_hold && fabsf (rx) < 0.2f)
 	{
 		float a = aim_yaw_rel, dz = vr_edgeturn_dz.value;
 		if (fabsf (a) > dz)

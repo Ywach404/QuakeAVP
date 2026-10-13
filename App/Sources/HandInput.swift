@@ -166,6 +166,7 @@ final class HandInput: @unchecked Sendable {
             EditorHandInput.shared.invalidate()
             FingerTips.shared.invalidate()
             FingerWire.shared.invalidate()
+            QC_InputSetTurnHold(0)   // hands standing down: don't strand the hold
         }
     }
 
@@ -257,6 +258,7 @@ final class HandInput: @unchecked Sendable {
         FingerTips.shared.invalidate()
         FingerWire.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
+        QC_InputSetTurnHold(0)   // hands gone: don't strand the hold
         tpRingWas = false
     }
 
@@ -264,6 +266,16 @@ final class HandInput: @unchecked Sendable {
 
     private func emit(left: inout HandState, right: inout HandState) {
         var slice = PadAggregator.Slice()
+
+        // UI turn hold (wrist communicator), pushed to the engine-side
+        // edge turn (vr_edgeturn in in_null.c) on EVERY call, ahead of the
+        // HUD-editor/prayer/wheel early-returns below -- those gates `return`
+        // before reaching the turn-hold check further down, and a hold
+        // computed only there would strand the engine at 1 if one of them
+        // fired while the panel was still up. Computed here once and reused
+        // by the turning: block below. See QC_InputSetTurnHold's doc comment.
+        let turnHold = VRSettings.shared.wristCommNoTurn && Self.wristCommInUse()
+        QC_InputSetTurnHold(turnHold ? 1 : 0)
 
         // HUD live editor grab input (Task 5): published every update,
         // ahead of every gate/suppression below -- the editor's own grab
@@ -443,12 +455,14 @@ final class HandInput: @unchecked Sendable {
             // merely fading. A lock-snapshot read, the same class as the
             // publishers this method already touches.
             //
-            // NB: this covers every turn path HandInput OWNS. The aim-hand
-            // edge turn is engine-side (`vr_edgeturn` in in_null.c, off the
-            // aim yaw the engine reads for itself), and the wheel/editor
-            // gates above cannot suppress it either; `vr_edgeturn 0` is its
-            // own switch until it has a gate of its own.
-            if VRSettings.shared.wristCommNoTurn, Self.wristCommInUse() {
+            // NB: this covers every turn path HandInput drives directly. The
+            // aim-hand edge turn is engine-side (`vr_edgeturn` in in_null.c,
+            // off the aim yaw the engine reads for itself) and the
+            // wheel/editor gates above can't reach across to suppress it --
+            // so `turnHold`, computed above from this same condition, is
+            // pushed to the engine via QC_InputSetTurnHold every update and
+            // gates that path from in_null.c's side instead.
+            if turnHold {
                 turnGaugeVerts = []
                 // Drop any candidate whip run as well: a reach that began as
                 // a plausible whip must not fire the instant the panel fades.
