@@ -607,16 +607,17 @@ struct ContentView: View {
                         get: { wristCommEnabled },
                         set: {
                             wristCommEnabled = $0
-                            engine.send("vr_wristcomm_off \($0 ? 1 : 0)")
-                            // Push the new cvar state into the published snapshot
-                            // itself: the store's reveal-edge refresh can't fire
-                            // while a side reads disabled, so re-enabling from
-                            // this toggle has to refresh here or a user who
-                            // archived both sides off could never turn it back
-                            // on from the UI.
-                            WristCommStore.shared.refresh()
+                            // engine.send only ENQUEUES the cvar write (drained
+                            // on the engine thread a frame later), so a refresh()
+                            // here would read a value that hasn't landed yet and
+                            // -- on the re-enable path -- republish enabled=false
+                            // with nothing left to retrigger it. setEnabled owns
+                            // both the send and an optimistic update of the
+                            // cached snapshot's enabled bit, so the toggle and
+                            // the published state agree immediately.
+                            WristCommStore.shared.setEnabled(side: 0, $0)
                         }))
-                    Text("Glance at your off wrist for the action grid; touch a key to run its "
+                    Text("Glance at your off wrist for the action grid; touch a cell to run its "
                          + "command. Rebind from the console: vr_wristcomm_off_cmd0…5.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
