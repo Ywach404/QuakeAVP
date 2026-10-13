@@ -59,6 +59,8 @@ struct ContentView: View {
     @State private var teleportSound = true
     @State private var teleportFx = true
     @State private var telefrag = true
+    // Mirrors vr_wristcomm_off's own default (r_null.c registers it "1").
+    @State private var wristCommEnabled = true
     @State private var offHandModelOnly = true
     @State private var laser = false
     @State private var reticle = false
@@ -600,6 +602,24 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
                 }
                 }   // end: if hudPanelMode == 3 (Modular) -- editor is Modular-only
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Wrist communicator", isOn: Binding(
+                        get: { wristCommEnabled },
+                        set: {
+                            wristCommEnabled = $0
+                            engine.send("vr_wristcomm_off \($0 ? 1 : 0)")
+                            // Push the new cvar state into the published snapshot
+                            // itself: the store's reveal-edge refresh can't fire
+                            // while a side reads disabled, so re-enabling from
+                            // this toggle has to refresh here or a user who
+                            // archived both sides off could never turn it back
+                            // on from the UI.
+                            WristCommStore.shared.refresh()
+                        }))
+                    Text("Glance at your off wrist for the action grid; touch a key to run its "
+                         + "command. Rebind from the console: vr_wristcomm_off_cmd0…5.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Weapon wheel select (hands only)").font(.caption).foregroundStyle(.secondary)
                     Picker("Wheel select hand", selection: Binding(
