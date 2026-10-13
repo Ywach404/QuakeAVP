@@ -40,6 +40,7 @@ func assert(_ condition: Bool, _ label: String) {
 struct WristCommMathTest {
     static func main() {
         runCommGeometryTests()
+        runHoverTests()
         runTouchStateTests()
         runSeedingTests()
         runRevealTests()
@@ -68,6 +69,57 @@ func runCommGeometryTests() {
     var bad = wf; bad.valid = false
     assert(WristComm.touchedCell(p4, commOrigin: o, frame: bad) == nil, "invalid frame never hits")
     print("comm geometry ok")
+}
+
+// MARK: - Hover approach band
+
+func runHoverTests() {
+    let wf = HudEditor.WristFrame(anchor: 0, origin: .zero, right: SIMD3(1,0,0),
+                                  up: SIMD3(0,1,0), forward: SIMD3(0,0,1), valid: true)
+    let o = WristComm.commOrigin(wrist: wf)
+
+    // The band is strictly wider than the touch depth, or "hovering" and
+    // "touching" would be the same state and there would be nothing to
+    // highlight ahead of a press.
+    assert(WristComm.hoverDepth > WristComm.touchDepth, "the hover band is deeper than the touch depth")
+
+    // A fingertip approaching cell 4 head-on: inside the hover band, still
+    // short of the touch depth. This is the whole point of the feature --
+    // the key lights BEFORE it fires.
+    let c4 = WristComm.cellCenter(4)
+    let face = o + SIMD3(c4.x, c4.y, 0)
+    let approaching = face + SIMD3<Float>(0, 0, 0.05)
+    assert(WristComm.hoveredCell(approaching, commOrigin: o, frame: wf) == 4,
+           "z = 0.05 hovers cell 4")
+    assert(WristComm.touchedCell(approaching, commOrigin: o, frame: wf) == nil,
+           "z = 0.05 does NOT touch cell 4 -- the hover band is what caught it")
+
+    // Pressed against the face: both report the cell, so a pressed key is
+    // never un-highlighted on the way down.
+    let pressing = face + SIMD3<Float>(0, 0, 0.01)
+    assert(WristComm.hoveredCell(pressing, commOrigin: o, frame: wf) == 4, "z = 0.01 hovers cell 4")
+    assert(WristComm.touchedCell(pressing, commOrigin: o, frame: wf) == 4, "z = 0.01 touches cell 4")
+
+    // Well off the plane: neither. The band is bounded, not a half-space --
+    // a hand resting in the lap must not light the keys above it.
+    let far = face + SIMD3<Float>(0, 0, 0.2)
+    assert(WristComm.hoveredCell(far, commOrigin: o, frame: wf) == nil, "z = 0.2 hovers nothing")
+    assert(WristComm.touchedCell(far, commOrigin: o, frame: wf) == nil, "z = 0.2 touches nothing")
+
+    // Inside the band but off the grid laterally: the x/y bounds still apply.
+    assert(WristComm.hoveredCell(o + SIMD3(1, 0, 0.05), commOrigin: o, frame: wf) == nil,
+           "a point beside the grid never hovers, however close to the plane")
+
+    // An untracked wrist has no plane to hover over.
+    var bad = wf; bad.valid = false
+    assert(WristComm.hoveredCell(approaching, commOrigin: o, frame: bad) == nil,
+           "invalid frame never hovers")
+
+    // Both edges of the band are symmetric about the plane -- a fingertip
+    // that has pushed THROUGH the face (negative z) is still on the key.
+    assert(WristComm.hoveredCell(face - SIMD3<Float>(0, 0, 0.05), commOrigin: o, frame: wf) == 4,
+           "the band is symmetric about the plane")
+    print("hover ok")
 }
 
 // MARK: - Touch fire state machine

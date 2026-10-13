@@ -123,6 +123,14 @@ final class WristCommInput: @unchecked Sendable {
             let command = storeSides[s].commands[cell]
             guard WristComm.shouldFire(command) else { continue }
 
+            // Tell the renderer which key just went down, BEFORE the actor
+            // hop that actually runs the command -- this is the press
+            // flash's only source, and `now` is the tick that saw the
+            // fingertip cross the plane rather than whenever the main actor
+            // next gets a slot. Only fires that pass every gate above are
+            // published, so a touch on an unbound cell flashes nothing.
+            WristCommFeedback.shared.noteFire(side: s, cell: cell, at: now)
+
             Task { @MainActor in WristCommStore.shared.fire(side: s, cell: cell) }
         }
     }
