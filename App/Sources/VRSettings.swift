@@ -276,6 +276,7 @@ final class VRSettings: @unchecked Sendable {
     private static let commSideKey = "wristCommSide"
     private static let commUpKey = "wristCommUp"
     private static let commNoTurnKey = "wristCommNoTurn"
+    private static let commAlongArmKey = "wristCommAlongArm"
 
     private var _wristCommTilt: Float = 0
     private var _wristCommFwd: Float = 0
@@ -285,6 +286,12 @@ final class VRSettings: @unchecked Sendable {
     /// triggering that hand's own turn gesture, which is never what a reach
     /// for a key meant. Opt OUT from the Comfort menu.
     private var _wristCommNoTurn = true
+    /// Which way the unit is turned on the forearm: false (the default) is
+    /// ACROSS the wrist, the layout already tuned on device; true lays it
+    /// ALONG the arm, three keys down the forearm. Default false is the
+    /// zero-state the whole option is built around -- off, the placement
+    /// chain is the identity and the unit is bit-for-bit today's.
+    private var _wristCommAlongArm = false
 
     var wristCommTilt: Float {
         get { lock.lock(); defer { lock.unlock() }; return _wristCommTilt }
@@ -307,6 +314,21 @@ final class VRSettings: @unchecked Sendable {
         set {
             lock.lock(); _wristCommNoTurn = newValue; lock.unlock()
             UserDefaults.standard.set(newValue, forKey: Self.commNoTurnKey)
+        }
+    }
+    /// Read by the RENDER thread every frame
+    /// (`ImmersiveRenderer.updateWristComm`, where it enters the one
+    /// placement chain) while the window toggles it on the main actor --
+    /// hence the same lock-guarded backing store the dials use. It is not
+    /// folded into `wristCommPlacement` because it is not a dial: the
+    /// renderer needs it one step EARLIER in the chain (it changes the
+    /// seating as well as the frame), and reading it beside that tuple is a
+    /// second lock take of a single Bool, not a torn placement.
+    var wristCommAlongArm: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _wristCommAlongArm }
+        set {
+            lock.lock(); _wristCommAlongArm = newValue; lock.unlock()
+            UserDefaults.standard.set(newValue, forKey: Self.commAlongArmKey)
         }
     }
 
@@ -364,6 +386,11 @@ final class VRSettings: @unchecked Sendable {
         // own default-on flag).
         _wristCommNoTurn = d.object(forKey: Self.commNoTurnKey) == nil
             ? true : d.bool(forKey: Self.commNoTurnKey)
+        // No presence check needed on this one, unlike the flag above: its
+        // documented default IS false, which is exactly what `bool(forKey:)`
+        // answers for an absent key -- so a fresh install restores the
+        // across-the-wrist layout by the plain read.
+        _wristCommAlongArm = d.bool(forKey: Self.commAlongArmKey)
     }
 
     /// True when `chirality` is the hand that aims / fires / points the
