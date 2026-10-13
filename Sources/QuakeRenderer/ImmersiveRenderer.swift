@@ -1336,6 +1336,10 @@ final class ImmersiveRenderer {
         commHeldSince = [0, 0]
         lastCommTick = nil
         WristCommGeometry.shared.publish(.inactive)
+        // A press flash must not survive the park: without this, pausing or
+        // tearing down within pressFlash of a fire resumes with a key already
+        // lit (the fade crosses the draw floor in a single frame).
+        WristCommFeedback.shared.invalidate()
     }
 
     /// The wrist frame the communicator uses for `side` this frame: the live
@@ -1410,6 +1414,11 @@ final class ImmersiveRenderer {
                                  headPoseAvailable: Bool, engineLive: Bool,
                                  editorActive: Bool) -> [CommQuad] {
         let now = CACurrentMediaTime()
+
+        // The editor suppresses the communicator; a press flash from just
+        // before it opened must not survive to light a key the instant it
+        // closes (same stand-down rule the pause/teardown path applies).
+        if editorActive { WristCommFeedback.shared.invalidate() }
 
         // Bootstrap the bindings exactly once. The store's published
         // snapshot starts INERT -- both sides disabled, every label empty --
@@ -1500,10 +1509,16 @@ final class ImmersiveRenderer {
             // resolved plane. `min()` only to be deterministic when both
             // hands are over the grid at once -- an interaction nobody
             // aims, but one that must not flicker between two keys frame
-            // to frame.
-            let hovered = [tips.left, tips.right].compactMap {
-                $0.flatMap { WristComm.hoveredCell($0, commOrigin: origin, frame: frame) }
-            }.min()
+            // to frame. Gated on the FIRE floor, not the draw floor: the
+            // touch loop refuses to fire below fireRevealFloor, and the
+            // highlight must only promise what that gate will honour -- a
+            // key must not light under a fingertip while the panel is still
+            // fading in or out.
+            let hovered: Int? = commOpacity[side] >= WristComm.fireRevealFloor
+                ? [tips.left, tips.right].compactMap {
+                    $0.flatMap { WristComm.hoveredCell($0, commOrigin: origin, frame: frame) }
+                }.min()
+                : nil
 
             // Which key just fired, and how much of its flash is left. The
             // touch loop timestamps a fire with `CACurrentMediaTime()`, the
