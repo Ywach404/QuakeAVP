@@ -340,7 +340,16 @@ final class HandInput: @unchecked Sendable {
             _ = prayerDwell.update(active: false, now: summonNow)
         }
         if summonFired {
-            print("[summon] \(summonMode == .prayer ? "prayer sign" : "palm-up hold") recognised")
+            // UNGATED, and through `HandDebug.log` rather than `print`: this
+            // is the one line that separates "the sign was not recognised"
+            // from "the sign fired and the window did not open", and a bare
+            // print is invisible on a detached launch -- which is the only
+            // way the headset is run (lldb breaks audio and the compositor,
+            // see the repo notes). `log` prints AND pushes to the in-headset
+            // console, the same channel the [turn]/[flick] telemetry uses.
+            HandDebug.shared.log("[summon] \(summonMode == .prayer ? "prayer" : "palm-up hold")"
+                + " recognised -> opening console"
+                + (Self.summonConsole == nil ? " (NO HANDLER REGISTERED)" : ""))
             if let summon = Self.summonConsole { Task { @MainActor in summon() } }
         }
 
@@ -955,6 +964,11 @@ final class HandInput: @unchecked Sendable {
         // calibrated with no window on screen. Armed off the WRISTS rather than
         // the palms: palms together occlude each other, so a missing palm plane
         // is itself a finding and gating on it would hide the interesting case.
+        //
+        // Both lines go through `HandDebug.log`, so they reach the IN-HEADSET
+        // console as well as stdout -- calibrating the sign is a device job
+        // and a detached launch (the only one that keeps audio and the
+        // compositor healthy) has no stdout anyone can read.
         guard VRSettings.shared.inputLog, now - lastPrayerLog > 0.25 else { return }
         var wristGap = Float.infinity
         if let lw = left.wrist, let rw = right.wrist { wristGap = simd_distance(lw, rw) }
@@ -963,7 +977,7 @@ final class HandInput: @unchecked Sendable {
         func f(_ v: Float) -> String { String(format: "%.2f", v) }
 
         guard let l = left.palmPose, let r = right.palmPose else {
-            print("[summon] hands close (wrists \(f(wristGap))m) but no palm plane:"
+            HandDebug.shared.log("[summon] hands close (wrists \(f(wristGap))m) but no palm plane:"
                 + " L=\(left.palmPose != nil ? "ok" : "MISSING") [\(left.jointDebug)]"
                 + " R=\(right.palmPose != nil ? "ok" : "MISSING") [\(right.jointDebug)]")
             return
@@ -975,7 +989,7 @@ final class HandInput: @unchecked Sendable {
         // Each condition with a pass/fail mark, so the blocking one is obvious
         // without doing the comparison by eye.
         func mark(_ ok: Bool) -> String { ok ? "ok" : "NO" }
-        print("[summon] prayer=\(held ? 1 : 0)"
+        HandDebug.shared.log("[summon] prayer=\(held ? 1 : 0)"
             + " gap=\(f(gap))<=\(PrayerPose.gapMax) \(mark(gap <= PrayerPose.gapMax))"
             + " | face=\(f(face))<=\(PrayerPose.facingDotMax) \(mark(face <= PrayerPose.facingDotMax))"
             + " | toward=\(f(toward))>0 \(mark(toward > 0))"
