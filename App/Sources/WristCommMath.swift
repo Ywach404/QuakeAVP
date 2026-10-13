@@ -179,9 +179,9 @@ enum WristComm {
     /// The cell is the MINIMUM hovered cell, which is exactly what the
     /// renderer's previous `.min()` picked, so the drawn highlight is
     /// unchanged by this existing; the point of the helper is the second
-    /// half, the tip, which is the hand the finger wireframe is drawn on. A
+    /// half, the tip, which is the hand the solid finger model is drawn on. A
     /// tie on one cell breaks to the lower tip index, so two hands over the
-    /// same key cannot alternate the wire between them frame to frame --
+    /// same key cannot alternate the finger between them frame to frame --
     /// deterministic for the same reason the `.min()` was.
     static func hoverPick(_ cells: [Int?]) -> (cell: Int, tip: Int)? {
         var best: (cell: Int, tip: Int)?

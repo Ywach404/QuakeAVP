@@ -375,7 +375,7 @@ func runHoverPickTests() {
            "the picked cell matches the plain min() the renderer used before")
 
     // Both tips on the SAME cell: the lower tip index breaks the tie, so the
-    // finger wire can never alternate hands under a two-handed hover.
+    // finger model can never alternate hands under a two-handed hover.
     let tie = WristComm.hoverPick([1, 1])
     assert(tie?.cell == 1 && tie?.tip == 0, "a tie on one cell breaks to the lower tip index")
     print("hover pick ok")
