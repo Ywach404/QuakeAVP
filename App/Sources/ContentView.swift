@@ -275,7 +275,15 @@ struct ContentView: View {
                 // summon because this is the last link that cannot be unit
                 // tested -- whether an OpenWindowAction captured here still
                 // works after this view is gone.
-                print("[summon] opening the console window")
+                //
+                // Through `HandDebug.log` (wired to `engine.note` just above)
+                // rather than `print`, for the reason the summon side logs
+                // that way too: on a detached launch stdout goes nowhere, so
+                // a print here cannot distinguish "the closure never ran"
+                // from "openWindow did nothing". Safe from @MainActor: the
+                // sink wired above is the one that hops to the main actor,
+                // so `log` itself only prints and forwards.
+                HandDebug.shared.log("[summon] respawn closure reached -> openWindow(console)")
                 openWindow(id: QuakeAVPApp.consoleWindowID)
                 // You summoned the console mid-game: stop the world so a
                 // shambler isn't eating you while you read a slider. Resume is
