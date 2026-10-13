@@ -246,6 +246,110 @@ final class VRSettings: @unchecked Sendable {
                           set { lock.lock(); _hudScale = newValue; lock.unlock() } }
 
 
+    // MARK: - Wrist communicator
+
+    /// Wrist-communicator placement dials: a tilt about the panel's own
+    /// `right` axis (degrees, + leans the TOP toward you) and three offsets
+    /// along its forward/right/up (metres). They re-seat the unit on the
+    /// forearm, which is a per-player, per-posture matter of feel -- the same
+    /// kind of knob `offHandPitch` above is, and declared the same way: a
+    /// lock-guarded backing store, because the RENDER thread reads these
+    /// every frame (`ImmersiveRenderer.updateWristComm`) while the window
+    /// drags the slider on the main actor.
+    ///
+    /// They live here rather than in `vr_wristcomm_*` cvars on purpose. A
+    /// cvar would mean a main-actor hop to write and an engine round trip to
+    /// read back, and the value the renderer sampled would lag the slider by
+    /// a frame or more -- the stale-read the enable-toggle fix already had to
+    /// work around (see `WristCommStore.setEnabled`). Here the setter and the
+    /// renderer's read are the same lock.
+    ///
+    /// Persisted directly to `UserDefaults` (NOT through `InputProfile`):
+    /// these are a one-time physical fit of the unit to the player's arm, not
+    /// part of a swappable control profile, and A. must not have to re-dial
+    /// them after every launch.
+    static let commTiltLimit: Float = 45        // degrees, either way
+    static let commOffsetLimit: Float = 0.10    // metres, either way
+
+    private static let commTiltKey = "wristCommTilt"
+    private static let commFwdKey = "wristCommFwd"
+    private static let commSideKey = "wristCommSide"
+    private static let commUpKey = "wristCommUp"
+    private static let commNoTurnKey = "wristCommNoTurn"
+
+    private var _wristCommTilt: Float = 0
+    private var _wristCommFwd: Float = 0
+    private var _wristCommSide: Float = 0
+    private var _wristCommUp: Float = 0
+    /// Default TRUE: reaching across with the gun hand to press a key kept
+    /// triggering that hand's own turn gesture, which is never what a reach
+    /// for a key meant. Opt OUT from the Comfort menu.
+    private var _wristCommNoTurn = true
+
+    var wristCommTilt: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _wristCommTilt }
+        set { store(Self.clamp(newValue, Self.commTiltLimit), Self.commTiltKey) { $0._wristCommTilt = $1 } }
+    }
+    var wristCommFwd: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _wristCommFwd }
+        set { store(Self.clamp(newValue, Self.commOffsetLimit), Self.commFwdKey) { $0._wristCommFwd = $1 } }
+    }
+    var wristCommSide: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _wristCommSide }
+        set { store(Self.clamp(newValue, Self.commOffsetLimit), Self.commSideKey) { $0._wristCommSide = $1 } }
+    }
+    var wristCommUp: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _wristCommUp }
+        set { store(Self.clamp(newValue, Self.commOffsetLimit), Self.commUpKey) { $0._wristCommUp = $1 } }
+    }
+    var wristCommNoTurn: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _wristCommNoTurn }
+        set {
+            lock.lock(); _wristCommNoTurn = newValue; lock.unlock()
+            UserDefaults.standard.set(newValue, forKey: Self.commNoTurnKey)
+        }
+    }
+
+    /// All four placement dials in one lock take, for the render thread: it
+    /// needs them as a SET (they are applied together by
+    /// `WristComm.adjustedFrame`), and reading them one property at a time
+    /// would let a slider drag land between two of the reads and seat the
+    /// unit at a placement no dial ever described.
+    var wristCommPlacement: (tilt: Float, fwd: Float, side: Float, up: Float) {
+        lock.lock(); defer { lock.unlock() }
+        return (_wristCommTilt, _wristCommFwd, _wristCommSide, _wristCommUp)
+    }
+
+    /// Clamped at the SETTER, not at the reader: a value out of range must
+    /// never reach the store, so every reader (and the persisted default
+    /// restored next launch) is in range by construction.
+    private static func clamp(_ v: Float, _ limit: Float) -> Float {
+        v.isFinite ? min(max(v, -limit), limit) : 0
+    }
+
+    /// Assign under the lock, persist outside it -- `UserDefaults` is its own
+    /// synchronisation and has no business running inside a lock the render
+    /// thread is waiting on.
+    private func store(_ value: Float, _ key: String,
+                       _ assign: (VRSettings, Float) -> Void) {
+        lock.lock(); assign(self, value); lock.unlock()
+        UserDefaults.standard.set(Double(value), forKey: key)
+    }
+
+    private init() {
+        let d = UserDefaults.standard
+        _wristCommTilt = Self.clamp(Float(d.double(forKey: Self.commTiltKey)), Self.commTiltLimit)
+        _wristCommFwd = Self.clamp(Float(d.double(forKey: Self.commFwdKey)), Self.commOffsetLimit)
+        _wristCommSide = Self.clamp(Float(d.double(forKey: Self.commSideKey)), Self.commOffsetLimit)
+        _wristCommUp = Self.clamp(Float(d.double(forKey: Self.commUpKey)), Self.commOffsetLimit)
+        // `bool(forKey:)` answers false for an absent key, which would invert
+        // this flag's documented default on a fresh install -- hence the
+        // explicit presence check (the same shape `AudioSink` uses for its
+        // own default-on flag).
+        _wristCommNoTurn = d.object(forKey: Self.commNoTurnKey) == nil
+            ? true : d.bool(forKey: Self.commNoTurnKey)
+    }
+
     /// True when `chirality` is the hand that aims / fires / points the
     /// wheel. The off hand moves and anchors the wheel.
     func isDominant(left: Bool) -> Bool {
