@@ -1212,11 +1212,41 @@ final class ImmersiveRenderer {
     /// Parchment separates by hue as well as by value, which survives the
     /// stone texture, the hover wash and the fade alike. Alpha is still
     /// multiplied by the side's live opacity at the draw (`faded`).
-    private static let commLabelColor = SIMD4<Float>(1.0, 0.92, 0.58, 1.0)
+    /// Lifted again toward white after device feedback ("still really hard
+    /// to read the button titles"): conchars glyphs are a TEXTURED bronze
+    /// bitmap, so a tint alone cannot carry contrast against procedural
+    /// stone -- it changes the hue of ink that is still mid-value. Hue AND
+    /// value now, plus the shadow and strip below; those three together are
+    /// the legibility pass, and this is the first of them to move.
+    private static let commLabelColor = SIMD4<Float>(1.0, 0.97, 0.82, 1.0)
+    /// The legend's DROP SHADOW: the same string drawn first in near-black,
+    /// offset down-right in the panel plane, so every glyph has a dark edge
+    /// whatever the stone behind it happens to be doing. The two levers are
+    /// this colour and `commLabelShadowOffset` (metres, in-plane).
+    ///
+    /// Comm-only by construction: it lives in this draw loop rather than in
+    /// `RendererCore.drawPanelLabel`, so the HUD editor's workbench labels
+    /// (the other caller of that path) are untouched.
+    private static let commLabelShadowColor = SIMD4<Float>(0, 0, 0, 0.9)
+    private static let commLabelShadowOffset: Float = 0.0012
+    /// The slim DARK STRIP behind the text run -- drawn between the stone
+    /// key face and the legend, so the ink always sits on a consistent dark
+    /// band instead of on whatever the procedural noise put under it.
+    /// `commLabelStripHeight` is a multiple of the glyph cell,
+    /// `commLabelStripPad` a multiple of the run's own width (clamped to the
+    /// key, so the longest legend's band cannot spill past its key edge).
+    private static let commLabelStripColor = SIMD4<Float>(0.02, 0.02, 0.03, 0.5)
+    private static let commLabelStripHeight: Float = 1.4
+    private static let commLabelStripPad: Float = 1.12
     /// Largest glyph a key legend may use (metres per conchars cell). A
     /// short label (GOD) would otherwise fill its key edge to edge; a long
     /// one (NOCLIP) is shrunk below this to fit, see `commGlyphSize`.
-    private static let commGlyphCell: Float = 0.008
+    ///
+    /// Bumped with the legibility pass: raising the CAP only enlarges the
+    /// SHORT labels, since `commGlyphSize`'s fit rule still shrinks anything
+    /// long enough to reach the key edge -- so NOCLIP is exactly where it
+    /// was and GOD/QUAD got bigger.
+    private static let commGlyphCell: Float = 0.0095
     /// Fraction of the key width a legend may occupy, so the longest label
     /// keeps a visible margin inside its key rather than touching the edge.
     private static let commLabelFill: Float = 0.86
@@ -1319,6 +1349,16 @@ final class ImmersiveRenderer {
     private static func commGlyphSize(for label: String) -> Float {
         let count = Float(max(label.count, 1))
         return min(commGlyphCell, WristComm.cellSize * commLabelFill / count)
+    }
+
+    /// The dark strip behind one legend: the glyph run's own width
+    /// (`textQuads` lays glyphs exactly one `glyph` apart, so the run is
+    /// `count * glyph`) padded a little, and NEVER wider than the key --
+    /// a band that overhung its own key would square off the stone card's
+    /// rounded corners and read as a seam between the keys.
+    private static func commLabelStrip(for label: String, glyph: Float) -> (width: Float, height: Float) {
+        let run = Float(max(label.count, 1)) * glyph
+        return (min(run * commLabelStripPad, WristComm.cellSize), glyph * commLabelStripHeight)
     }
 
     /// One key's face this frame: its stone tint and the lit face washed
@@ -1766,7 +1806,11 @@ final class ImmersiveRenderer {
     ///     fading in and the card's fixed alpha would snap it on);
     ///  2. the hover/press lit face, inset over the card;
     ///  3. the conchars legend, LAST, so a near-white press flash lights
-    ///     the key underneath its label instead of swallowing it.
+    ///     the key underneath its label instead of swallowing it -- itself
+    ///     three passes (dark strip, drop shadow, bright fill), which is
+    ///     the legibility pass and is COMM-ONLY: it lives here, not in
+    ///     `RendererCore.drawPanelLabel`, so the HUD editor's workbench
+    ///     labels through that same path keep their single plain pass.
     ///
     /// Every colour arrives already faded by the caller.
     private func drawWristComm(_ quads: [CommQuad], conchars: UInt32,
@@ -1789,6 +1833,32 @@ final class ImmersiveRenderer {
             }
 
             if let label = quad.label {
+                // 3a. the dark strip the legend sits on, then 3b. a
+                // near-black copy of the string offset down-right, then 3c.
+                // the bright fill on top. Three passes for one legend
+                // because the ink is a BITMAP (conchars' textured bronze
+                // glyphs): colour alone cannot separate it from procedural
+                // stone, so the strip gives it a constant backdrop and the
+                // shadow gives every stroke an edge. All three are
+                // depth-always like the layers under them, so the painter
+                // order here IS the stacking order.
+                let strip = Self.commLabelStrip(for: label, glyph: quad.glyph)
+                core.drawFlatPanel(origin: quad.origin, right: quad.right, up: quad.up,
+                                   width: strip.width, height: strip.height,
+                                   color: Self.faded(Self.commLabelStripColor, quad.opacity),
+                                   viewproj0: viewproj0, viewproj1: viewproj1,
+                                   pipelines: pipelines, encoder: encoder)
+                // In-plane offset, so the shadow turns with the unit when it
+                // is lying along the forearm instead of across the wrist.
+                let drop = quad.right * Self.commLabelShadowOffset
+                         - quad.up * Self.commLabelShadowOffset
+                core.drawPanelLabel(text: label, origin: quad.origin + drop,
+                                    right: quad.right, up: quad.up,
+                                    cellSize: quad.glyph,
+                                    color: Self.faded(Self.commLabelShadowColor, quad.opacity),
+                                    conchars: conchars,
+                                    viewproj0: viewproj0, viewproj1: viewproj1,
+                                    pipelines: pipelines, encoder: encoder)
                 core.drawPanelLabel(text: label, origin: quad.origin,
                                     right: quad.right, up: quad.up,
                                     cellSize: quad.glyph,
