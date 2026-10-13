@@ -96,4 +96,13 @@ enum WristComm {
         let t = min(max(revealRate * dt, 0), 1)
         return current + (target - current) * t
     }
+
+    /// The touch loop's fire gate: a cell with no bound command (or one
+    /// that's only whitespace -- the same "unset" reading `WristCommStore.
+    /// fire` already applies) is a no-op touch, not a blank line sent to
+    /// the engine. Pure so the loop can check it before ever hopping to
+    /// the main actor.
+    static func shouldFire(_ command: String) -> Bool {
+        !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }

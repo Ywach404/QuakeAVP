@@ -42,6 +42,7 @@ struct WristCommMathTest {
         runCommGeometryTests()
         runTouchStateTests()
         runRevealTests()
+        runFireGateTests()
         print("PASSED (wrist_comm_test.swift)")
     }
 }
@@ -111,4 +112,13 @@ func runRevealTests() {
     assert(!WristComm.revealTarget(headPos: head, headForward: mid, commOrigin: origin, wasRevealed: false),
            "borderline keeps hidden")
     print("reveal ok")
+}
+
+// MARK: - Fire gate
+
+func runFireGateTests() {
+    assert(!WristComm.shouldFire(""), "empty command never fires")
+    assert(!WristComm.shouldFire("   "), "whitespace-only command never fires")
+    assert(WristComm.shouldFire("god"), "non-empty command fires")
+    print("fire gate ok")
 }

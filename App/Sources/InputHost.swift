@@ -64,6 +64,10 @@ final class InputHost {
         // -- the "Edit HUD Layout" entry point only ever needs to flip
         // `HudEditor.shared.active`, never to remember to start this.
         HudEditorInput.shared.start()
+        // The wrist communicator's touch->fire loop (Task 5): same
+        // idle-polls-while-nothing-revealed lifecycle as the line above, so
+        // starting it once here is enough.
+        WristCommInput.shared.start()
         refreshActive()
     }
 
