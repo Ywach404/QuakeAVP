@@ -76,8 +76,8 @@ final class ImmersiveRenderer {
     private var commHeldFrame: [HudEditor.WristFrame?] = [nil, nil]
     private var commHeldSince: [Double] = [0, 0]
     /// Per-side index of the fingertip (0 = left, 1 = right) last seen
-    /// hovering this side's grid -- the hand the index-finger wireframe is
-    /// drawn on, latched so the wire stays on that hand for the tail of a
+    /// hovering this side's grid -- the hand the solid index-finger model is
+    /// drawn on, latched so the finger stays on that hand for the tail of a
     /// press flash after the finger has withdrawn. Render-thread only.
     private var commHoverHand: [Int?] = [nil, nil]
     /// Previous frame's timestamp for the reveal fade's dt. nil until the
@@ -1292,7 +1292,7 @@ final class ImmersiveRenderer {
     /// How much of those tints is MIXED INTO the finger's own shaded skin,
     /// 0...1 -- the two DEVICE-TUNING LEVERS for the finger's material.
     ///
-    /// Not a full replace, which is what the wireframe this finger replaced
+    /// Not a full replace, which is what the wireframe this solid finger replaced
     /// used: a solid shape flooded with one colour has no shading left and
     /// reads as a glow stick in the shape of a finger. A wash keeps the
     /// bead modelling (`HandState.buildIndexFinger` bakes a half-lambert
@@ -1419,7 +1419,7 @@ final class ImmersiveRenderer {
         commHeldFrame = [nil, nil]
         commHeldSince = [0, 0]
         // The hovering hand goes with the flash it serves: resuming with a
-        // latched hand would draw a finger wire on a hand that is no longer
+        // latched hand would draw the finger model on a hand that is no longer
         // anywhere near the panel.
         commHoverHand = [nil, nil]
         lastCommTick = nil
@@ -1657,7 +1657,7 @@ final class ImmersiveRenderer {
             // fading in or out.
             //
             // `hoverPick` reports WHICH tip won as well as which cell, which
-            // is the hand the finger wireframe below is drawn on. `map` (not
+            // is the hand the solid finger below is drawn on. `map` (not
             // `compactMap`) so an untracked hand keeps its slot and tip 1
             // stays tip 1 -- the right hand.
             let hover = commOpacity[side] >= WristComm.fireRevealFloor
