@@ -286,7 +286,7 @@ static qboolean	scr_initialized;
 cvar_t	scr_menuscale = {"scr_menuscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
 cvar_t	scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE};
-cvar_t	vr_hud = {"vr_hud", "1", CVAR_ARCHIVE};	/* 0 off, 1 wrist-preset, 2 float-preset, 3 modular tiles */
+cvar_t	vr_hud = {"vr_hud", "3", CVAR_ARCHIVE};	/* 0 off, 1 wrist-preset, 2 float-preset, 3 modular tiles (default) */
 cvar_t	vr_hud_bg = {"vr_hud_bg", "1", CVAR_ARCHIVE};	/* dark panel behind each modular tile, drawn consumer-side */
 
 /* Modular HUD (Phase 1): per-tile placement. Default layout A --

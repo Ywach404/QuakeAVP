@@ -56,7 +56,7 @@ extern float qr_head[3];		/* body-frame head offset from recenter */
 extern float qr_head_yaw, qr_head_pitch;	/* head gaze, for the full menu */
 extern char qr_centerstring[256];	/* captured svc_centerprint (r_null.c) */
 extern double qr_centertime_until;	/* realtime (wall-clock) expiry for the prompt */
-extern cvar_t vr_hud;			/* status bar placement: 0 off, 1 wrist, 2 float */
+extern cvar_t vr_hud;			/* status bar placement: 0 off, 1 wrist, 2 float, 3 modular (default) */
 extern cvar_t vr_hud_bg;		/* background box behind modular tiles, drawn consumer-side */
 /* Modular HUD (Phase 1) per-tile layout cvars; defined+registered in r_null.c */
 extern cvar_t vr_hud_ammo_anchor, vr_hud_ammo_slot, vr_hud_ammo_span_w, vr_hud_ammo_span_h, vr_hud_ammo_off_x, vr_hud_ammo_off_y, vr_hud_ammo_off_z, vr_hud_ammo_scale, vr_hud_ammo_show;
