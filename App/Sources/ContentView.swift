@@ -685,16 +685,16 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented).labelsHidden()
                     Text(commAlongArm
-                         ? "The unit is STRAPPED TO YOUR FOREARM: three keys long down the "
-                           + "arm, two across, legends reading from the elbow toward your "
-                           + "hand. Lift your arm and it rides with it; roll your arm and "
-                           + "it rolls too. It sits on the inner face, where you can read "
-                           + "it looking down and press it with your other hand. It follows "
-                           + "your real forearm, so it needs hand tracking and will not "
-                           + "appear while Sense controllers are in hand."
+                         ? "The unit RIDES YOUR FOREARM: three keys long down the arm, two "
+                           + "across, seated just below the HUD tiles, reading from your "
+                           + "elbow toward your hand. Lift your arm and it comes with it — "
+                           + "and it always turns its face to you, so it never goes edge-on "
+                           + "however your arm is rolled. It follows your real forearm, so "
+                           + "it needs hand tracking and will not appear while Sense "
+                           + "controllers are in hand."
                          : "The unit sits ACROSS the wrist, facing you wherever you turn: "
                            + "three keys wide, two deep, just below the HUD. Switch to "
-                           + "Along arm to strap it to the forearm instead.")
+                           + "Along arm to run it down your forearm instead.")
                         .font(.caption2).foregroundStyle(.secondary)
                     Text("Each view keeps its own placement — switching here swaps the dials "
                          + "below to that view's own values, and tuning one never moves the "
@@ -719,10 +719,10 @@ struct ContentView: View {
                                  + "rim to tilt it. Height and Rotate are sliders only.")
                                 .font(.caption2).foregroundStyle(.secondary)
                             if commAlongArm {
-                                Text("On the arm the dials follow the ARM: Forward slides "
-                                     + "the unit along it from its seat just below the HUD "
-                                     + "tiles (0 = seated, clear of them), Side moves it "
-                                     + "across, Height lifts it off your skin.")
+                                Text("On the arm, Forward slides the unit ALONG your arm "
+                                     + "from its seat just below the HUD tiles (0 = seated, "
+                                     + "clear of them), Side moves it across the panel, and "
+                                     + "Height brings it toward you, off the arm.")
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                             commPlaceRow("Angle", commMirror($commTiltUI, $commTiltAlongUI),
@@ -746,23 +746,22 @@ struct ContentView: View {
                             // Spins the whole unit in its own plane -- the keys,
                             // the legends, the hit-test and the seating all turn
                             // together, because the renderer turns the FRAME they
-                            // are all built from. Across, 0 is the panel square
-                            // to the wrist. Along, it is a roll AROUND THE ARM and
-                            // 0 is the inner face, which the forearm frame lands
-                            // by construction -- 180 is the documented lever if
-                            // device testing says the derivation picked the other
-                            // face. It is a
-                            // slider and not a disc axis on purpose: the disc rim
-                            // is already Angle, and the two rotations would be
-                            // indistinguishable under a thumb.
+                            // are all built from. The SAME rotation in both views
+                            // now (`WristComm.orientedFrame` over each view's own
+                            // base frame): across, 0 is the panel square to the
+                            // wrist; along, 0 is the key run laid down the arm.
+                            // It is a slider and not a disc axis on purpose: the
+                            // disc rim is already Angle, and the two rotations
+                            // would be indistinguishable under a thumb.
                             commPlaceRow("Rotate", commMirror($commRotUI, $commRotAlongUI),
                                          -VRSettings.commRotLimit...VRSettings.commRotLimit,
                                          step: 1, unit: "°", display: 1,
                                          apply: commApply(\.wristCommRot, \.wristCommRotAlong))
                             Text(commAlongArm
-                                 ? "Rotate rolls the unit AROUND your arm — 0 puts it on "
-                                   + "the inner face, 180 on the other side. Use it if the "
-                                   + "unit comes up facing away from you."
+                                 ? "Rotate spins the unit in its own plane, facing you the "
+                                   + "whole way — 0 runs the keys down your arm. Use it when "
+                                   + "the run sits crooked. The unit re-seats under the HUD "
+                                   + "as it turns."
                                  : "Rotate spins the unit in its own plane — use it when "
                                    + "the keys sit crooked on your forearm. The unit "
                                    + "re-seats under the HUD as it turns.")
@@ -775,7 +774,7 @@ struct ContentView: View {
                         // defaults -- `wristCommDefaults` is the one statement of
                         // what those are, so the sliders cannot show something
                         // the store did not write (along's Height goes back to
-                        // 1 cm off the skin, not 0).
+                        // 1 cm toward you, not 0).
                         let d = VRSettings.wristCommDefaults(alongArm: commAlongArm)
                         if commAlongArm {
                             commTiltAlongUI = d.tilt; commFwdAlongUI = d.fwd
