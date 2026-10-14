@@ -77,6 +77,55 @@ struct QuakePaths {
                 print("[seed] FAILED to copy \(name).pak: \(error)")
             }
         }
+        seedBundledMusic(into: id1)
+    }
+
+    /// DEV ONLY -- strip with `seedBundledGameData`, which is its only caller.
+    /// The CD soundtrack rips ride in the bundle as a folder reference (see
+    /// project.yml's `App/DevGameData/music`), because `bgmusic.c` resolves
+    /// tracks as `music/trackNN.ogg` and the resources phase would otherwise
+    /// flatten them into the bundle root.
+    ///
+    /// Copy-if-absent-or-size-mismatch, exactly like the paks -- and
+    /// additive only. A track the user dropped in over the Files app that the
+    /// bundle knows nothing about is left strictly alone; this never deletes
+    /// and never prunes.
+    ///
+    /// Loose files under `music/` are only visible to the engine when the
+    /// `registered` cvar is 1 (common.c refuses loose paths containing a `/`
+    /// for shareware data). Dev builds seed pak1, so they are.
+    private static func seedBundledMusic(into id1: URL) {
+        let fm = FileManager.default
+        guard let src = Bundle.main.url(forResource: "music", withExtension: nil),
+              let tracks = try? fm.contentsOfDirectory(
+                at: src,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
+              ),
+              !tracks.isEmpty
+        else {
+            print("[seed] no bundled music folder in the app -- skipping")
+            return
+        }
+
+        let musicDirectory = id1.appendingPathComponent("music", isDirectory: true)
+        try? fm.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
+
+        var copied = 0
+        for track in tracks {
+            let dst = musicDirectory.appendingPathComponent(track.lastPathComponent)
+            let bundleSize = (try? track.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+            let dstSize = try? dst.resourceValues(forKeys: [.fileSizeKey]).fileSize
+            if dstSize == bundleSize { continue }
+            try? fm.removeItem(at: dst)
+            do {
+                try fm.copyItem(at: track, to: dst)
+                copied += 1
+            } catch {
+                print("[seed] FAILED to copy music/\(track.lastPathComponent): \(error)")
+            }
+        }
+        print("[seed] music: \(tracks.count) bundled track(s), \(copied) copied into Documents/id1/music")
     }
 
     /// True when `id1/pak0.pak` is actually present. Checked before boot so the

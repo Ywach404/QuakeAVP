@@ -29,4 +29,11 @@ tools/promo-assets/out/
 
 # Licensed soundtrack rips (A.'s own remaster copies). Never commit audio:
 # the music is not redistributable, same rule as the paks above.
-App/DevGameData/music/
+#
+# The CONTENTS are ignored rather than the directory, so the empty folder can
+# be kept alive by its .gitkeep -- project.yml carries it into the bundle as a
+# folder reference, and a folder reference to a path that does not exist is a
+# hard build failure on a fresh clone. Same arrangement as App/DevGameData
+# itself. Every real file in here is still ignored; do not relax this further.
+App/DevGameData/music/*
+!App/DevGameData/music/.gitkeep
