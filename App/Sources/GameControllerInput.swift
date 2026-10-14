@@ -24,6 +24,7 @@
 //  device, away from a Mac.
 //
 
+import Foundation
 import GameController
 
 @Observable
@@ -259,10 +260,34 @@ final class PadAggregator: @unchecked Sendable {
 
 /// Maps one PSVR2 Sense controller's per-hand profile onto its slice of the
 /// virtual pad. Left hand: movement stick, walk trigger, L1 = weapon wheel,
-/// face buttons cycle weapons, L3 = slow-mo toggle, create = menu. Right
+/// face buttons cycle weapons, L3 = slow-mo toggle, create = recenter. Right
 /// hand: aim stick, fire trigger, Cross + R1 = jump, Circle = use,
-/// R3 = recenter, options = menu.
+/// R3 = recenter, Options = summon the window.
 private enum SenseMapper {
+
+    /// The right-hand Options press, latched for an edge. `build` runs on
+    /// GameController's own handler queue and is called again for every
+    /// value change on the profile, so without this the window would be
+    /// re-summoned on every stick wobble while the button was held.
+    ///
+    /// `nonisolated(unsafe)` with a lock, like `WheelState`'s hold: the
+    /// handler queue is not the main actor, and the only thing crossing is
+    /// one Bool. The grip (wheel) and L3 (slow-mo) take the same route one
+    /// line apart -- an app-side consumer, not a pad bit.
+    private static let menuLock = NSLock()
+    nonisolated(unsafe) private static var menuWasDown = false
+
+    /// True exactly once per press. The window summon is an app-side action,
+    /// so it must not go through QC_PAD_MENU: in_null.c turns that bit into
+    /// K_ESCAPE for the engine menu, and the engine menu is a console-only
+    /// vestige now. That mapping STAYS for classic gamepads, which have no
+    /// other way in and whose Menu button is not this button.
+    private static func menuPressEdge(_ down: Bool) -> Bool {
+        menuLock.lock(); defer { menuLock.unlock() }
+        let edge = down && !menuWasDown
+        menuWasDown = down
+        return edge
+    }
 
     static func slice(forLeft left: Bool) -> PadAggregator.Source {
         left ? .senseLeft : .senseRight
@@ -331,7 +356,19 @@ private enum SenseMapper {
             set(QC_PAD_A, ["Button A", "Cross", "Grip", "Shoulder"])
             set(QC_PAD_B, ["Button B", "Circle"])
             set(QC_PAD_RTHUMB, ["Thumbstick Button", "Thumbstick , Button"])
-            set(QC_PAD_MENU, ["Options", "Menu"])
+            // Options summons the SwiftUI window -- the product's whole
+            // out-of-game surface -- instead of setting QC_PAD_MENU, which
+            // in_null.c turns into K_ESCAPE for the engine menu. Routed
+            // app-side like the grip (WheelState) and L3 (slow-mo) above
+            // rather than through a pad bit, and edge-latched so a held
+            // button summons once. The same closure the prayer gesture and
+            // the gauntlet's MENU key use, so all three pause identically.
+            let menuDown = ["Options", "Menu"].contains {
+                button(profile, containing: $0)?.isPressed == true
+            }
+            if menuPressEdge(menuDown), let summon = HandInput.summonConsole {
+                Task { @MainActor in summon() }
+            }
         }
         return slice
     }

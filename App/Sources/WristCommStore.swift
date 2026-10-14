@@ -104,10 +104,24 @@ final class WristCommStore {
     /// whitespace -- an unset binding reads as "", and a cvar edited to
     /// all-whitespace should behave the same way, not send a blank line to
     /// the engine).
+    /// One binding is RESERVED and never reaches the engine:
+    /// `WristComm.summonWindowCommand` summons the SwiftUI window, which is
+    /// the product's out-of-game surface now that the engine menu is a
+    /// console-only vestige. It is intercepted HERE, before the send, so the
+    /// sentinel can never reach Cbuf and print "Unknown command" at the
+    /// player. The closure is the same one the prayer gesture fires
+    /// (`HandInput.summonConsole`, registered by the window on appear), so
+    /// the two summons are identical down to the pause: opening the window
+    /// stops the world and zeroes the pad through GamePause, whichever
+    /// gesture asked for it.
     func fire(side: Int, cell: Int) {
         guard side >= 0, side < sides.count, cell >= 0, cell < sides[side].commands.count else { return }
         let cmd = sides[side].commands[cell].trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmd.isEmpty else { return }
+        if WristComm.isSummonWindow(cmd) {
+            HandInput.summonConsole?()
+            return
+        }
         QuakeEngineViewModel.shared.send(cmd)
     }
 

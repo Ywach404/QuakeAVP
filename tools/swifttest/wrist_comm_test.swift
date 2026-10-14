@@ -239,6 +239,22 @@ func runFireGateTests() {
     assert(!WristComm.shouldFire(""), "empty command never fires")
     assert(!WristComm.shouldFire("   "), "whitespace-only command never fires")
     assert(WristComm.shouldFire("god"), "non-empty command fires")
+    // The reserved summon: it passes the fire gate like any other binding
+    // (the touch is real), and `WristCommStore.fire` then routes it to the
+    // window instead of the engine. Pinned here because the string is a
+    // contract with r_null.c's vr_wristcomm_off_cmd5 default -- a typo on
+    // either side presents as a dead MENU key.
+    assert(WristComm.summonWindowCommand == "qavp_window",
+           "the summon sentinel is qavp_window")
+    assert(WristComm.shouldFire(WristComm.summonWindowCommand),
+           "the summon sentinel passes the fire gate")
+    assert(WristComm.isSummonWindow("qavp_window"), "the sentinel is recognised")
+    assert(WristComm.isSummonWindow("  qavp_window  "),
+           "recognised with surrounding whitespace, as shouldFire trims too")
+    assert(!WristComm.isSummonWindow("togglemenu"),
+           "an ordinary console command is not the sentinel")
+    assert(!WristComm.isSummonWindow("qavp_window now"),
+           "only the exact binding is the sentinel; anything else goes to the engine")
     print("fire gate ok")
 }
 
