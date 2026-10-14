@@ -68,13 +68,16 @@ int main (void)
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd2"), "noclip"), "off cmd2 defaults to noclip");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd3"), "notarget"), "off cmd3 defaults to notarget");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd4"), "fly"), "off cmd4 defaults to fly");
-	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd5"), "impulse 255"), "off cmd5 defaults to impulse 255");
+	/* cmd5/label5 track a deliberate default change: hands have no hardware
+	   menu button, so the sixth cell now opens the engine menu instead of
+	   giving quad. This test pins the new default on purpose. */
+	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd5"), "togglemenu"), "off cmd5 defaults to togglemenu");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label0"), "GOD"), "off label0 defaults to GOD");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label1"), "GIVE"), "off label1 defaults to GIVE");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label2"), "NOCLIP"), "off label2 defaults to NOCLIP");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label3"), "NOTGT"), "off label3 defaults to NOTGT");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label4"), "FLY"), "off label4 defaults to FLY");
-	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label5"), "QUAD"), "off label5 defaults to QUAD");
+	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label5"), "MENU"), "off label5 defaults to MENU");
 
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_gun_cmd0"), ""), "gun cmd0 defaults empty");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_gun_cmd1"), ""), "gun cmd1 defaults empty");

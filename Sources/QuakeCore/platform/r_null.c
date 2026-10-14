@@ -341,21 +341,26 @@ cvar_t	vr_hud_healtharmor_show   = {"vr_hud_healtharmor_show", "1", CVAR_ARCHIVE
 /* Wrist communicator (spy-watch action grid, seated below the HUD).
    Per side: an enable, and six {command,label} pairs for the 2x3 cells
    (row-major, 0 1 2 / 3 4 5). Commands are ordinary console strings and
-   fully rebindable; defaults are vanilla cheats. The gun side ships
-   disabled and unbound -- enabling it is how a second device appears. */
+   fully rebindable; defaults are five vanilla cheats and the menu. The gun
+   side ships disabled and unbound -- enabling it is how a second device
+   appears. */
 cvar_t	vr_wristcomm_off        = {"vr_wristcomm_off", "1", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_cmd0   = {"vr_wristcomm_off_cmd0", "god", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_cmd1   = {"vr_wristcomm_off_cmd1", "impulse 9", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_cmd2   = {"vr_wristcomm_off_cmd2", "noclip", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_cmd3   = {"vr_wristcomm_off_cmd3", "notarget", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_cmd4   = {"vr_wristcomm_off_cmd4", "fly", CVAR_ARCHIVE};
-cvar_t	vr_wristcomm_off_cmd5   = {"vr_wristcomm_off_cmd5", "impulse 255", CVAR_ARCHIVE};
+/* was "impulse 255" (quad): hands have no hardware button for the engine
+   menu, and a release build must still be able to open it -- quad is a
+   cheat, the menu is a necessity. CVAR_ARCHIVE, so a tuned install keeps
+   whatever the player already rebound this to. */
+cvar_t	vr_wristcomm_off_cmd5   = {"vr_wristcomm_off_cmd5", "togglemenu", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label0 = {"vr_wristcomm_off_label0", "GOD", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label1 = {"vr_wristcomm_off_label1", "GIVE", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label2 = {"vr_wristcomm_off_label2", "NOCLIP", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label3 = {"vr_wristcomm_off_label3", "NOTGT", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label4 = {"vr_wristcomm_off_label4", "FLY", CVAR_ARCHIVE};
-cvar_t	vr_wristcomm_off_label5 = {"vr_wristcomm_off_label5", "QUAD", CVAR_ARCHIVE};
+cvar_t	vr_wristcomm_off_label5 = {"vr_wristcomm_off_label5", "MENU", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_gun        = {"vr_wristcomm_gun", "0", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_gun_cmd0   = {"vr_wristcomm_gun_cmd0", "", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_gun_cmd1   = {"vr_wristcomm_gun_cmd1", "", CVAR_ARCHIVE};
