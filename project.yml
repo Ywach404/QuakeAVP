@@ -95,6 +95,23 @@ targets:
       - path: App/DevGameData
         excludes:
           - ".gitkeep"
+          # Added below as a folder reference instead; see there.
+          - "music"
+          - "music/**"
+      # DEV ONLY -- strip with the rest of DevGameData. The CD soundtrack
+      # rips, same status as the paks: the author's own, gitignored, never
+      # committed. A folder REFERENCE rather than a recursed group because
+      # the resources phase flattens groups into the bundle root, and the
+      # engine wants `music/trackNN.ogg` -- a directory, not ten loose files
+      # whose names a mission pack's own track02 would collide with.
+      # A folder reference to a path that does not exist is a hard build
+      # failure, not a skipped resource, so the directory is kept alive by a
+      # committed .gitkeep (.gitignore ignores its contents, not the folder)
+      # exactly the way App/DevGameData itself is. `optional` covers a
+      # checkout that deletes even that.
+      - path: App/DevGameData/music
+        type: folder
+        optional: true
       # Swift + Metal consumer half of the renderer. Compiled into the app
       # (not QuakeCore, which stays a plain C library); the bridge/ C half
       # is excluded here because QuakeCore compiles it.
