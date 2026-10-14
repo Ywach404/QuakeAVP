@@ -156,6 +156,108 @@ enum WristComm {
         return turned
     }
 
+    /// The ALONG-ARM view's panel basis, STRAPPED TO THE FOREARM: built from
+    /// the two forearm joints and one lateral axis, with no eye, no billboard
+    /// and no HUD plane anywhere in it. Lift the arm into the Buzz L and the
+    /// unit rides it; roll the arm and the unit rolls with it. That is the
+    /// whole difference from `orientedFrame`, which only turns a
+    /// billboarded wrist panel in its own plane and therefore never moves
+    /// with the arm at all.
+    ///
+    /// `wrist`/`elbow` are the `.forearmWrist`/`.forearmArm` joint positions
+    /// and `lateral` is a direction out of the INNER forearm face, all in
+    /// corrected tracking space -- see `ForearmPose` (HudEditorInput.swift),
+    /// which documents which joint-rotation column `lateral` is and how it
+    /// is mirrored between hands so one sign serves both.
+    ///
+    /// THE BASIS, and why each axis is where it is:
+    ///
+    ///  * `right = normalize(wrist - elbow)` -- the arm's long axis, pointing
+    ///    toward the HAND. `right` is the axis the three key columns run
+    ///    along AND the axis `RendererCore.textQuads` lays glyphs along, so
+    ///    this one assignment is what makes the unit a strap: three keys
+    ///    long down the forearm, two across, legends reading from the elbow
+    ///    toward the wrist. It is the same reading direction the across
+    ///    view's +90 default gives, so switching views does not relearn the
+    ///    keys.
+    ///  * `forward` = `lateral` orthonormalised against `right`
+    ///    (Gram-Schmidt) -- the surface normal off the inner forearm, i.e.
+    ///    the face the unit presents to a head looking down at it.
+    ///  * `up = forward x right`, which is the order forced by the
+    ///    invariant every frame in this file keeps, `right x up == forward`:
+    ///    r x (f x r) = f(r.r) - r(r.f) = f for a unit r perpendicular to f.
+    ///    The opposite order would read every legend mirrored while all
+    ///    three dot products still came out zero.
+    ///
+    /// READING DIRECTION is derived, not guessed, and pinned in
+    /// `runForearmFrameTests`: for a right-handed player's LEFT forearm held
+    /// across the chest (+Y up, facing -Z, so the arm runs +X) with `lateral`
+    /// = +Y, this gives `up` = -Z -- exactly the head-up vector of a head
+    /// that has tipped down from facing -Z to look at its own arm. Legends
+    /// upright for the wearer, by construction rather than by screenshot.
+    /// The across view's equivalent choice had to be called off a device
+    /// screenshot after shipping upside down; this one has an on-device
+    /// lever instead (below).
+    ///
+    /// `rollDegrees` ROLLS THE UNIT AROUND THE ARM, rotating the
+    /// (`up`, `forward`) pair about `right` -- it picks which face of the
+    /// forearm the unit sits on, and it is the one dial that recovers a
+    /// wrong answer from the two things here that cannot be verified without
+    /// hardware (which joint column `lateral` is, and its chirality sign).
+    /// A half turn puts the unit on the opposite face; anything between
+    /// walks it round. A rotation about `right` leaves `right` alone and
+    /// preserves cross products, so the long axis and the handedness both
+    /// survive any angle. ZERO IS AN EARLY RETURN, not a rotation by zero,
+    /// for the same reason `orientedFrame`'s is: 0 is this view's default
+    /// and must be bit-exact.
+    ///
+    /// THE ORIGIN IS NOT HERE. The caller seats the unit --
+    /// `mix(elbow, wrist, 0.5)` plus the placement dials along these axes
+    /// (Forward along the arm, Side across it, Height off the skin) -- and
+    /// hit-tests against that separate point, exactly as the across view
+    /// does with `commOrigin`. There is no HUD-relative drop for this view:
+    /// the unit sits ON the arm, not under a floating grid, so there is
+    /// nothing to clear. `frame.origin` is set to the wrist joint for
+    /// completeness and is read by no communicator consumer.
+    ///
+    /// DEGENERATE INPUTS come back `invalid`, never a NaN basis: a collapsed
+    /// forearm (both joints at one point, which is what an untracked pair
+    /// can report), a zero lateral, and a lateral parallel to the bone --
+    /// that last one being exactly what a WRONGLY CHOSEN joint-rotation
+    /// column looks like. Gram-Schmidt divides by zero on all three, so they
+    /// are refused before the division rather than after it.
+    static func forearmFrame(wrist: SIMD3<Float>, elbow: SIMD3<Float>,
+                             lateral: SIMD3<Float>,
+                             rollDegrees: Float) -> HudEditor.WristFrame {
+        let bone = wrist - elbow
+        guard simd_length(bone) > 1e-4, simd_length(lateral) > 1e-4 else {
+            return HudEditor.WristFrame.invalid
+        }
+        let right = simd_normalize(bone)
+        let perp = lateral - right * simd_dot(lateral, right)
+        // 1e-3 rather than 1e-4: `lateral` arrives unit-length, so this is a
+        // sine threshold -- about 0.06 degrees off the bone. Below it the
+        // normalised result is noise, not a face.
+        guard simd_length(perp) > 1e-3 else { return HudEditor.WristFrame.invalid }
+        let forward = simd_normalize(perp)
+        let up = simd_cross(forward, right)
+
+        guard rollDegrees != 0 else {
+            return HudEditor.WristFrame(anchor: -1, origin: wrist, right: right,
+                                        up: up, forward: forward, valid: true)
+        }
+        // Rodrigues about `right`, written out rather than via simd_quatf for
+        // the same reason `adjustedFrame` writes it out: the host test
+        // harness links nothing but simd's free functions.
+        let angle = rollDegrees * .pi / 180
+        let c = cos(angle), s = sin(angle)
+        func roll(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            simd_normalize(v * c + simd_cross(right, v) * s)
+        }
+        return HudEditor.WristFrame(anchor: -1, origin: wrist, right: right,
+                                    up: roll(up), forward: roll(forward), valid: true)
+    }
+
     /// The communicator's player-adjusted placement: `origin` shifted along
     /// the wrist frame's own axes and the frame pitched about its `right`,
     /// from the four `VRSettings.wristComm*` dials.
@@ -164,7 +266,7 @@ enum WristComm {
     /// only ever correct together: the renderer feeds this single result to
     /// the drawn quads, to the hover highlight and to the published
     /// `WristCommGeometry` side, so a dialled panel is hit-tested where the
-    /// eye sees it. (The same three-path discipline `commWristFrame`'s doc
+    /// eye sees it. (The same three-path discipline `commPose`'s doc
     /// comment states for the occlusion hold -- the dials are a second way to
     /// move the plane, and would break it exactly as a stale frame would.)
     ///
