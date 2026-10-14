@@ -154,6 +154,16 @@ final class GameControllerInput {
         set(QC_PAD_OPTIONS, pad.buttonOptions?.isPressed ?? false)
         set(QC_PAD_LTHUMB, pad.leftThumbstickButton?.isPressed ?? false)
         set(QC_PAD_RTHUMB, pad.rightThumbstickButton?.isPressed ?? false)
+        // The dpad, for menu navigation only -- in_null.c reads these four
+        // while key_dest is not key_game and nowhere else, so they reach no
+        // gameplay binding. Published because a dpad is how a gamepad player
+        // expects to walk a menu; the left stick does the same job through
+        // the same emulation, for the Sense pair (no dpad) and for anyone
+        // who reaches for the stick.
+        set(QC_PAD_DPAD_UP, pad.dpad.up.isPressed)
+        set(QC_PAD_DPAD_DOWN, pad.dpad.down.isPressed)
+        set(QC_PAD_DPAD_LEFT, pad.dpad.left.isPressed)
+        set(QC_PAD_DPAD_RIGHT, pad.dpad.right.isPressed)
         return .init(
             lx: pad.leftThumbstick.xAxis.value, ly: pad.leftThumbstick.yAxis.value,
             rx: pad.rightThumbstick.xAxis.value, ry: pad.rightThumbstick.yAxis.value,

@@ -529,7 +529,16 @@ enum {
 	QC_PAD_MENU		= 1 << 6,
 	QC_PAD_OPTIONS		= 1 << 7,
 	QC_PAD_LTHUMB		= 1 << 8,
-	QC_PAD_RTHUMB		= 1 << 9
+	QC_PAD_RTHUMB		= 1 << 9,
+	/* The dpad, published so the engine can navigate menus with it as well
+	   as with the left stick. It reaches no gameplay binding: in_null.c
+	   reads these four only while key_dest is not key_game. A Sense
+	   controller has no dpad and sets none of them -- its stick covers the
+	   same job through the same emulation. */
+	QC_PAD_DPAD_UP		= 1 << 10,
+	QC_PAD_DPAD_DOWN	= 1 << 11,
+	QC_PAD_DPAD_LEFT	= 1 << 12,
+	QC_PAD_DPAD_RIGHT	= 1 << 13
 };
 
 typedef struct qc_gamepad_state_s {
