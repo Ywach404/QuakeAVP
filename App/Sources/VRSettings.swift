@@ -274,11 +274,12 @@ final class VRSettings: @unchecked Sendable {
     /// angle that reads right on a forearm is not near any particular one and
     /// -90 is a legitimate answer (it is the mapping that shipped first).
     static let commRotLimit: Float = 180
-    /// The ALONG view's rotation default, now that the view is FOREARM-LOCKED:
-    /// 0, because `WristComm.forearmFrame` already lands the inner-forearm
-    /// face by construction -- the lateral axis it is handed points out of
-    /// that face (see `ForearmPose`). The dial no longer picks a face at
-    /// all: the panel billboards at the eye, so Rotate is an IN-PLANE spin
+    /// The ALONG view's rotation default: 0, because
+    /// `WristComm.alongBaseFrame` already lays the key run along the arm's
+    /// apparent direction, cell 0 at the elbow end. The dial does not pick a
+    /// FACE of the forearm any more -- that was the flat-to-skin
+    /// construction's job for `rot`, and it is retired along with it. The
+    /// panel billboards at the eye, so Rotate is an IN-PLANE spin
     /// of the key run, the same thing it means in the across view. Zero is
     /// the derived reading direction -- the key run laid along the arm's
     /// apparent direction, cell 0 at the elbow end -- and the dial is there
@@ -296,12 +297,19 @@ final class VRSettings: @unchecked Sendable {
     /// still means "just off the arm toward you" -- but by a different axis
     /// than it used to: Height now runs along the billboarded panel's
     /// `forward`, which points AT THE EYE, rather than out of the forearm's
-    /// skin. Over a forearm glanced at from above the two are within a few
-    /// degrees of each other, which is why the number carries over
-    /// unchanged: enough that the unit clears a sleeve and reads as sitting
-    /// ON the arm rather than sunk into it, small enough that it still reads
-    /// as worn rather than floating. The other four along dials default to
-    /// 0 -- seated under the HUD, centred, untilted, key run along the arm.
+    /// skin. Over a forearm glanced at from above the two are close enough
+    /// that the number carries over unchanged: enough clearance that the
+    /// unit reads as sitting ON the arm rather than sunk into it, small
+    /// enough that it still reads as worn rather than floating.
+    ///
+    /// IT IS CLEARANCE, NOT DECORATION, which is why it is the one along
+    /// dial with a non-zero default and why `resolveCommPlacement` permutes
+    /// it onto the right axis explicitly. At 0 the panel's plane -- the
+    /// plane the touch test projects against -- lies on the bone, several
+    /// centimetres inside the arm, and a fingertip stopped by the skin can
+    /// be outside `WristComm.touchDepth` (0.025 m) altogether: the keys
+    /// light and do not fire. The other four along dials default to 0 --
+    /// seated under the HUD, centred, untilted, key run along the arm.
     static let commUpAlongDefault: Float = 0.01
 
     // TWO SETS OF THE SAME FIVE DIALS, one per orientation view. On device
@@ -445,7 +453,8 @@ final class VRSettings: @unchecked Sendable {
     /// render thread: it needs them as a SET (applied together, in
     /// `ImmersiveRenderer.resolveCommPlacement` -- across via
     /// `WristComm.orientedFrame` + `WristComm.commOrigin` +
-    /// `WristComm.adjustedFrame`, along via `WristComm.forearmFrame` +
+    /// `WristComm.adjustedFrame`, along via `WristComm.alongBaseFrame` +
+    /// `WristComm.orientedFrame` + `WristComm.alongSeatDistance` +
     /// `WristComm.adjustedFrame`), and reading them one property at a time
     /// would let a slider drag land between two of the reads and seat the
     /// unit at a placement no dial ever described.
@@ -483,10 +492,11 @@ final class VRSettings: @unchecked Sendable {
     /// sample a torn placement for a frame.
     ///
     /// Per-view, and defaults rather than zeros: the along view's Height
-    /// default is 1 cm OFF THE SKIN, so resetting it to 0 would sink the
-    /// unit into the forearm. Resetting one view deliberately leaves the
-    /// other view's tuning alone -- that separation is the whole point of
-    /// the two sets.
+    /// default is 1 cm TOWARD YOU, off the arm, so resetting it to 0 would
+    /// leave the panel's plane on the bone -- inside the forearm, where a
+    /// fingertip stopped by the skin never reaches `WristComm.touchDepth`.
+    /// Resetting one view deliberately leaves the other view's tuning alone
+    /// -- that separation is the whole point of the two sets.
     ///
     /// Reads its numbers from `wristCommDefaults`, which the settings
     /// window's Reset button also mirrors into its sliders: ONE statement

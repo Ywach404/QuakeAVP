@@ -1558,11 +1558,17 @@ final class ImmersiveRenderer {
     /// -- is now unwritable, because there is only one place they are
     /// applied at all.
     ///
-    /// Dial meanings follow from that, identically in both views: the
-    /// offsets ride the ORIENTED panel's own axes, so Forward runs along the
+    /// Dial meanings come out the same in both views -- Forward along the
     /// panel's long axis (which the along base frame has lying down the
-    /// arm), Side across it, Height toward the eye. The along view no longer
-    /// bakes any of them into `origin`.
+    /// arm), Side across it, Height toward the eye -- but NOT by handing
+    /// `adjustedFrame` the same three arguments. Its parameter names are
+    /// written for the across frame; the along base frame assigns `right`/
+    /// `up`/`forward` to different physical axes, so the along case permutes
+    /// the dials onto it. The permutation is spelled out at the call below,
+    /// where it is made, and pinned by directional (not identity) assertions
+    /// in `runAlongBaseFrameTests`. What IS now common to both views: the
+    /// offsets are applied once, by `adjustedFrame`, and the along view no
+    /// longer bakes any of them into `origin`.
     ///
     /// WHY THE ALONG VIEW BILLBOARDS AT ALL: see
     /// `WristComm.alongBaseFrame`. Flat to the skin is geometrically honest
@@ -1619,8 +1625,33 @@ final class ImmersiveRenderer {
             // a collapsed forearm.
             let armAxis = simd_normalize(arm.wrist - arm.elbow)
             let origin = arm.wrist - armAxis * WristComm.alongSeatDistance(rollDegrees: dials.rot)
+            // THE OFFSETS ARE PERMUTED, DELIBERATELY, AND MUST STAY SO.
+            // `adjustedFrame` moves the origin by `right * side + up * up +
+            // forward * fwd` -- parameter names written for the ACROSS
+            // frame, where `forward` is the toward-you axis and `right` the
+            // across-the-panel one. This view's base frame assigns the same
+            // three names differently: `right` is THE ARM, `forward` is
+            // toward the eye, `up` is across the panel. So the dials go in
+            // rotated by one --
+            //
+            //     Forward (along the arm)   -> side: rides `right`
+            //     Side    (across the panel)-> up:   rides `up`
+            //     Height  (toward you)      -> fwd:  rides `forward`
+            //
+            // -- and that is what the captions, the defaults and
+            // `runAlongBaseFrameTests`' directional assertions all say.
+            // Passing them positionally compiles, type-checks and silently
+            // gives three wrong dials: it shipped once, in the commit that
+            // folded this view's hand-rolled offsets into `adjustedFrame`,
+            // and the 1 cm default Height slid the panel sideways instead of
+            // lifting it off the arm -- putting the hit-test plane inside
+            // the forearm, where a fingertip stopped by the skin never
+            // reaches `touchDepth`. The test asserts DIRECTIONS (dot
+            // products against the bone and the line of sight) rather than
+            // restating this call, so the next way of getting it wrong
+            // fails too.
             return WristComm.adjustedFrame(oriented, origin: origin, tiltDegrees: dials.tilt,
-                                           fwd: dials.fwd, side: dials.side, up: dials.up)
+                                           fwd: dials.up, side: dials.fwd, up: dials.side)
         }
     }
 
@@ -1783,15 +1814,17 @@ final class ImmersiveRenderer {
             // yesterday's dial into the held pose. That is why `CommPose`
             // carries the forearm's two joints rather than a built frame.
             //
-            // What the dials mean no longer depends on the view, which is
-            // the point of `resolveCommPlacement`'s one chain shape: in
-            // BOTH, Rotate spins the unit in its own plane and the offsets
-            // ride the turned panel's axes. The views differ only in which
-            // base frame they spin and which axis they seat along -- across
-            // drops down the billboarded wrist plane, along backs down the
-            // forearm. The settings captions say so in each view's own
-            // words (on the arm, the panel's long axis IS the arm, so
-            // "Forward along the panel" reads as "along your arm").
+            // What the dials DO reads the same in both views now -- Rotate
+            // spins the unit in its own plane, Forward runs along the
+            // panel's long axis, Side across it, Height toward you -- which
+            // is the point of `resolveCommPlacement`'s one chain shape. The
+            // views differ in which base frame they spin, which axis they
+            // seat along (across drops down the billboarded wrist plane,
+            // along backs down the forearm), and -- because the two base
+            // frames put different physical axes under the same three field
+            // names -- in which order the offsets are handed to
+            // `adjustedFrame`. That last one is a trap, not a symmetry; it
+            // is spelled out where it is made.
             let adjusted = resolveCommPlacement(resolved, sideIndex: side, eye: headPos,
                                                 dials: dials)
             let frame = adjusted.frame
