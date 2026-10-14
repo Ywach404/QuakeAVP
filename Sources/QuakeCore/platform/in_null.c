@@ -633,6 +633,85 @@ static void IN_TriggerEdge (float value, qboolean *down, int key)
 	}
 }
 
+/* ========================================================================
+ * menu navigation -- stick and dpad as arrow keys
+ * ===================================================================== */
+
+/* Upstream in_sdl.c's joystick menu emulation, timing included: an event on
+   the press, the first repeat after a delay, then a faster cadence while
+   held. Without the repeat, walking the options list costs one stick flick
+   per row. */
+#define QR_MENUKEY_DELAY	0.5	/* before the first repeat */
+#define QR_MENUKEY_REPEAT	0.1	/* between repeats after that */
+#define QR_MENUKEY_PUSH		0.5f	/* stick deflection that counts as held */
+
+static void IN_MenuKeyEdge (int wasdown, int isdown, int key, double *timer)
+{
+	if (!wasdown && isdown)
+	{
+		Key_Event (key, true);
+		*timer = realtime + QR_MENUKEY_DELAY;
+	}
+	else if (wasdown && isdown)
+	{
+		if (realtime >= *timer)
+		{
+			Key_Event (key, true);
+			*timer = realtime + QR_MENUKEY_REPEAT;
+		}
+	}
+	else if (wasdown && !isdown)
+	{
+		Key_Event (key, false);
+		*timer = 0;
+	}
+}
+
+/*
+================
+IN_MenuKeys -- give the menu (and the console's scrollback) the arrow keys a
+keyboard would send, from the left stick and the dpad.
+
+The held state is recomputed EVERY tick, not only while a menu is up: it has
+to fall to false the moment key_dest returns to key_game, or the release
+event never fires and keys.c is left holding the arrow down -- leave a menu
+with B while still pushing the stick and the next menu you open scrolls by
+itself.
+
+Gated on key_dest so the sticks never reach the console's own arrow bindings
+during play, and so this cannot collide with locomotion: with no world loaded
+key_dest is key_game and K_UPARROW is a console history key.
+
+A and B are deliberately NOT remapped to ENTER/ESCAPE: menu.c handles
+K_ABUTTON and K_BBUTTON natively in every one of its key handlers (12 of 12
+that take ENTER also take A; 13 of 13 that take ESCAPE also take B), and the
+qr_padkeys table above already delivers both, so a remap would run each menu
+action twice.
+================
+*/
+static void IN_MenuKeys (void)
+{
+	static const int	keys[4] = { K_UPARROW, K_DOWNARROW, K_LEFTARROW, K_RIGHTARROW };
+	static int		down[4];
+	static double		timer[4];
+	int			now[4];
+	int			menu = (key_dest != key_game);
+	int			i;
+
+	/* Stick Y is +up -- GameController's convention, the same sign IN_Move
+	   reads as forward -- so pushing up is a positive deflection. */
+	now[0] = menu && (qr_pad.ly >  QR_MENUKEY_PUSH || (qr_pad.buttons & QC_PAD_DPAD_UP));
+	now[1] = menu && (qr_pad.ly < -QR_MENUKEY_PUSH || (qr_pad.buttons & QC_PAD_DPAD_DOWN));
+	now[2] = menu && (qr_pad.lx < -QR_MENUKEY_PUSH || (qr_pad.buttons & QC_PAD_DPAD_LEFT));
+	now[3] = menu && (qr_pad.lx >  QR_MENUKEY_PUSH || (qr_pad.buttons & QC_PAD_DPAD_RIGHT));
+
+	for (i = 0; i < 4; i++)
+	{
+		IN_MenuKeyEdge (down[i], now[i], keys[i], &timer[i]);
+		down[i] = now[i];
+	}
+}
+
 void IN_Commands (void)
 {
 	size_t i;
@@ -675,6 +754,10 @@ void IN_Commands (void)
 	if (!qr_wheel_open)
 		IN_TriggerEdge (qr_pad.rt, &qr_rt_down, K_RTRIGGER);
 	IN_TriggerEdge (qr_pad.lt, &qr_lt_down, K_LTRIGGER);
+
+	/* After the button edges above, so a MENU press and the first arrow it
+	   could produce land in the engine's own order. */
+	IN_MenuKeys ();
 
 	qr_pad_prev = qr_pad;
 }
@@ -1183,6 +1266,19 @@ void IN_Move (usercmd_t *cmd)
 	   risk). The head-follow absorb below still runs -- physically
 	   walking is real motion and stays honoured. */
 	if (qr_wheel_open)
+	{
+		IN_AbsorbHeadOffset ();
+		return;
+	}
+
+	/* A menu or the console has the input: the left stick is walking the
+	   menu (IN_MenuKeys), not walking the player. Same shape and the same
+	   absorb as the wheel gate above -- physically walking is real motion
+	   and stays honoured. This did nothing visible before this round
+	   because nothing drew the menu; now that it is on screen, without
+	   this the stick that scrolls the options list also walks you off
+	   whatever ledge the panel is floating over. */
+	if (key_dest != key_game)
 	{
 		IN_AbsorbHeadOffset ();
 		return;
