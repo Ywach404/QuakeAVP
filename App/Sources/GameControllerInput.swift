@@ -18,7 +18,10 @@
 //
 //  The element names on Sense profiles are matched by substring on purpose:
 //  the exact keys aren't documented, so on connect the full element list is
-//  logged once for field calibration rather than silently dropping input.
+//  logged once for field calibration rather than silently dropping input --
+//  to Xcode's console AND the in-headset one (SenseMapper.logElements), since
+//  a mismatched mapping is exactly the kind of thing that only shows up on
+//  device, away from a Mac.
 //
 
 import GameController
@@ -353,11 +356,26 @@ private enum SenseMapper {
     }
 
     /// One-time dump so a mismatched mapping is diagnosable from the log
-    /// instead of presenting as dead buttons.
+    /// instead of presenting as dead buttons. Also mirrored into the in-app
+    /// console (QuakeEngineViewModel.note), the same direct-append path
+    /// AudioSink's onLog and HandDebug.log use to surface app-side diagnostics
+    /// in the headset -- not the `send("echo ...")` route, because
+    /// `GameControllerInput`/`InputHost` attach controllers independently of
+    /// `engine.boot()` and `send()` silently no-ops (no retry) while the
+    /// engine isn't `.running`; `note()` appends regardless. `@MainActor`
+    /// because `note()` is main-actor-isolated and this enum isn't -- the one
+    /// call site (`attach`) is already on the main actor, so this is just
+    /// naming that. Quotes are stripped for display tidiness only: `note()`
+    /// never goes through Cbuf, so there's no parse hazard to guard against,
+    /// just undocumented vendor strings that could otherwise look broken in
+    /// the console.
+    @MainActor
     static func logElements(of controller: GCController) {
         let profile = controller.physicalInputProfile
         let buttons = profile.buttons.keys.sorted().joined(separator: ", ")
         let dpads = profile.dpads.keys.sorted().joined(separator: ", ")
-        print("[input] spatial controller '\(controller.vendorName ?? "?")' buttons: [\(buttons)] dpads: [\(dpads)]")
+        let line = "[input] spatial controller '\(controller.vendorName ?? "?")' buttons: [\(buttons)] dpads: [\(dpads)]"
+        print(line)
+        QuakeEngineViewModel.shared.note(line.replacingOccurrences(of: "\"", with: "'"))
     }
 }
