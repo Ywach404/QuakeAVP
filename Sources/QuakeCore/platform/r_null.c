@@ -14,12 +14,18 @@
  * from upstream 0.97 -- gameplay and config.cfg depend on them), the refresh
  * globals, and the screen-update flow.
  *
- * Still honestly stubbed, listed in README.md's roadmap: all 2D drawing
- * (Draw_*), entities (alias/brush/sprite), particles, dynamic light and
- * lightstyle updates, fog rendering. Sky and liquids are real now (ported
- * into the bridge; drawn via QC_BATCH_SKY/LIQUID). Fog_ParseServerMessage
- * and R_ParseParticleEffect still must consume their network bytes -- they
- * are stubs that have to be correct.
+ * The 2D layer is real too: the Draw_* bodies below build quads in the
+ * frame packet's overlay buffer, which carries the status bar, centerprints,
+ * and -- emitted from SCR_UpdateScreen below rather than from the frame
+ * build, so it works with no world loaded -- the menu, console, notify lines
+ * and intermission scoreboards. What is still missing from it is listed in
+ * README.md's roadmap (console text entry, the input-line cursor pics, the
+ * translated skin preview, gl_screen.c's small overlays).
+ *
+ * Still honestly stubbed, also in that roadmap: entities (alias/brush/
+ * sprite), particles, dynamic light and lightstyle updates, fog rendering.
+ * Fog_ParseServerMessage and R_ParseParticleEffect still must consume their
+ * network bytes -- they are stubs that have to be correct.
  *
  * The section headers below still map 1:1 onto the upstream files.
  */
@@ -661,7 +667,13 @@ int SCR_ModalMessage (const char *text, float timeout)
 }
 
 /* ========================================================================
- * gl_draw.c -- 2D drawing (still stubbed; M-next: HUD and console text)
+ * gl_draw.c -- 2D drawing (real; forwards to the bridge's quad builder)
+ *
+ * Every body here appends to the building frame's overlay buffer, which the
+ * Metal side draws as a 320x200 plane -- stretched to the window, or mapped
+ * onto a panel in the headset. Draw_TileClear is the only genuine no-op
+ * left, and says why. What the 2D layer still lacks is listed in this
+ * file's header comment and in README.md's roadmap.
  * ===================================================================== */
 
 qpic_t	*draw_disc;
