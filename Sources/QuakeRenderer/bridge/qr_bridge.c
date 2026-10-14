@@ -3685,8 +3685,8 @@ static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
 	trivertx_t	*v;
 	double		sy = 0, sz = 0;
 
-	ff = CLAMP (0.3f, ff, 1.f);       /* keep from rear */
-	fb = CLAMP (0.3f, fb, 1.f);       /* keep from front */
+	ff = CLAMP (0.3f, ff, 1.f);       /* keep from front */
+	fb = CLAMP (0.3f, fb, 1.f);       /* keep from rear */
 
 	/* disabled: front plane above every byte, rear plane below every byte */
 	out[0] = 255.f; out[1] = -1.f; out[2] = out[3] = 128.f;

@@ -5,7 +5,9 @@
 //  the baked-in round sits at a different depth on each weapon so one global
 //  value can't fit all. Values are remembered per weapon and across launches;
 //  the render thread pushes the held weapon's trim to the vr_weaponclip /
-//  vr_weaponclipback cvars whenever the active weapon changes, and the engine's
+//  vr_weaponclipback cvars whenever the active weapon changes -- or the trim
+//  VARIANT changes under the same weapon (see lastWeapon's invalidation in
+//  setMode/setLimbs/setProfileBase) -- and the engine's
 //  QR_WeaponClip also feeds those planes back into the grip so trimming
 //  re-seats the gun on the hand. The Weapon menu edits the current weapon.
 //
@@ -126,6 +128,15 @@ final class WeaponTrim: @unchecked Sendable {
     private var globalGrip: Float = 0.15
     private var current = 1                 // held-weapon index (shotgun default)
     private var lastWeapon: UInt32 = 0
+    /// Sentinel for `lastWeapon` that forces `frame()` to re-push on the next
+    /// call even though the held weapon hasn't changed -- set when the trim
+    /// VARIANT changes instead (setMode/setLimbs/setProfileBase), because the
+    /// front/rear tables are keyed by variant and the old variant's values
+    /// would otherwise stay live until the next weapon switch (a stale rear
+    /// clip reads as a pinched muzzle at rest). `.max` can never collide with
+    /// a real `activeWeapon`: STAT_ACTIVEWEAPON is byte-truncated upstream, so
+    /// every value `frame()` is ever called with fits in a byte.
+    private static let invalidWeapon: UInt32 = .max
 
     /// Wired by the UI to the engine console queue (same route as WheelState).
     nonisolated(unsafe) var sendCommand: (@Sendable (String) -> Void)?
@@ -183,6 +194,10 @@ final class WeaponTrim: @unchecked Sendable {
         lock.lock()
         guard m != mode else { lock.unlock(); return }
         mode = m
+        // The variant changed under whatever weapon is held -- invalidate so
+        // frame() re-pushes that weapon's NEW-variant trim next frame instead
+        // of leaving the old variant's clip live until a weapon switch.
+        lastWeapon = Self.invalidWeapon
         lock.unlock()
         publish()
     }
@@ -195,6 +210,9 @@ final class WeaponTrim: @unchecked Sendable {
         let v = on ? 1 : 0
         guard v != limbs else { lock.unlock(); return }
         limbs = v
+        // Same reasoning as setMode: the variant moved, so force frame() to
+        // re-push the held weapon's trim for it.
+        lastWeapon = Self.invalidWeapon
         lock.unlock()
         publish()
     }
@@ -203,6 +221,10 @@ final class WeaponTrim: @unchecked Sendable {
     /// its global placement is. Untuned weapons follow these.
     func setProfileBase(mode: Int, back: Float, up: Float, side: Float, grip: Float) {
         lock.lock()
+        // Only invalidate on an actual mode change; setMode (active.didSet,
+        // InputProfile) already ran on a profile switch, so this avoids a
+        // second no-op invalidation on an otherwise-ordinary re-apply.
+        if mode != self.mode { lastWeapon = Self.invalidWeapon }
         self.mode = mode
         global = Placement(back: back, up: up, side: side)
         globalGrip = grip
@@ -272,8 +294,10 @@ final class WeaponTrim: @unchecked Sendable {
         sendCommand?("vr_weapongrip \(grip)\n")
     }
 
-    /// Render thread, once per frame: when the held weapon changes, push its
-    /// stored trim so each gun keeps its own values.
+    /// Render thread, once per frame: when the held weapon changes -- or the
+    /// trim variant changed under it (lastWeapon forced to `invalidWeapon` by
+    /// setMode/setLimbs/setProfileBase) -- push its stored trim so each gun
+    /// keeps its own values.
     func frame(activeWeapon: UInt32) {
         lock.lock()
         guard activeWeapon != lastWeapon, activeWeapon != 0 else { lock.unlock(); return }
