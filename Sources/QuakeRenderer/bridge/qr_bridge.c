@@ -6341,6 +6341,180 @@ static void QR_EmitModularHud (qr_frame_slot_t *slot)
 	slot->frame.num_hud_tiles = QC_HUD_TILE_COUNT;
 }
 
+/*
+================
+QR_EmitScreen2D -- the rest of the 2D layer: the menu, the console, the
+intermission scoreboards, and the console's notify lines.
+
+Driven from SCR_UpdateScreen's own 2D point in r_null.c rather than from the
+frame build, and that placement is the point: V_RenderView returns
+immediately whenever con_forcedup is set -- no world loaded, or not signed on
+-- so nothing inside the build runs on exactly the frames where the console
+and the main menu are the only thing there is to draw. Both halves are engine
+thread inside the engine's own frame (GL_BeginRendering claimed the slot,
+GL_EndRendering publishes it), between V_RenderView and V_UpdateBlend, which
+is where upstream's gl_screen.c calls M_Draw and Con_DrawConsole too.
+
+Exactly one of the four draws runs, mirroring upstream's precedence: the menu
+over everything (it lays its own console background and fade wash down
+first), the console over the game, the intermission scoreboard over a
+finished level, and the notify lines over ordinary play.
+
+The verts go into the SAME overlay buffer the HUD emitters fill, and the
+sub-range written is published on the packet so the HUD consumers can clip it
+back out -- appending last is what makes that range a contiguous tail. See
+qc_frame_t's screen2d_first_vert comment for why a vert range and not a batch
+range.
+================
+*/
+static void QR_EmitScreen2DInto (qr_frame_slot_t *slot)
+{
+	uint32_t	base;
+
+	if (!slot)
+		return;
+
+	/* Upstream's SCR_SetUpToDrawConsole, minus the slide animation.
+	   scr_con_current has three readers -- console.c (how many rows),
+	   QR_CanvasXform's CANVAS_CONSOLE (the slide offset that lifts the
+	   notify lines to the top edge), and M_Draw (whether to put the console
+	   background behind the menu) -- so it has to be settled before any
+	   draw below. It is PINNED rather than eased toward a target: the slide
+	   mimics a terminal dropping down over the screen, and there is no
+	   screen here -- a console scrolling down out of the top edge of a
+	   panel floating in the room reads as a glitch, not as a console.
+
+	   Con_CheckResize is upstream's too, and nothing in this port was
+	   calling it: con_linewidth sat at Con_Init's provisional 38 columns
+	   for the whole session, so console output was being folded at 38
+	   characters whether or not anything ever drew it. */
+	if (vid.conwidth > 0)
+		Con_CheckResize ();
+	if (con_forcedup || key_dest == key_console)
+		scr_con_current = (float) glheight;
+	else
+		scr_con_current = 0.f;
+
+	QR_EnsureConchars ();
+	QR_EnsureWhite ();
+
+	/* Force opaque white, for the reason spelled out at length in
+	   QR_EmitTile: V_PolyBlend sets qr_draw_color from v_blend and never
+	   resets it, and V_RenderView has just run it, so without this the
+	   whole menu inherits the last damage flash's alpha and goes faint. */
+	qr_draw_color[0] = qr_draw_color[1] = qr_draw_color[2] = qr_draw_color[3] = 1.f;
+
+	qr_overlay_slot = slot;
+	qr_overlay_canvas = CANVAS_DEFAULT;
+	base = slot->frame.num_overlay_verts;
+
+	if (key_dest == key_menu)
+		M_Draw ();
+	else if (key_dest == key_console || con_forcedup)
+	{
+		/* glheight, not vid.conheight: Con_DrawConsole's argument is in
+		   DRAWABLE pixels -- it converts with lines * vid.conheight /
+		   glheight -- so the full drawable height is how you ask for a
+		   console the full height of its own canvas. */
+		Con_DrawConsole (glheight, true);
+	}
+	else if (cl.intermission == 1 && cl.worldmodel)
+		Sbar_IntermissionOverlay ();
+	else if (cl.intermission == 2 && cl.worldmodel)
+		Sbar_FinaleOverlay ();
+	else
+		Con_DrawNotify ();
+
+	slot->frame.screen2d_first_vert = base;
+	slot->frame.screen2d_vert_count = slot->frame.num_overlay_verts - base;
+
+	qr_overlay_slot = NULL;
+	qr_overlay_canvas = CANVAS_DEFAULT;
+}
+
+void QR_EmitScreen2D (void)
+{
+	if (qr_building < 0)
+		return;
+	QR_EmitScreen2DInto (&qr_slots[qr_building]);
+}
+
+#ifdef QAVP_HOSTCHECK
+/*
+================
+Host-test-only support for screen2d_test's range checks. Lays down
+`prefix_quads` fills at a known x to stand in for whatever the HUD emitters
+wrote earlier in the frame, then drives the REAL emitter over a test slot
+with key_dest forced, and reports the range it claimed plus the first prefix
+vertex (which must come back untouched).
+
+key_dest and m_state are saved and restored: they are engine globals other
+tests in the same binary may care about.
+================
+*/
+void QR_TestEmitScreen2DInto (int kdest, int prefix_quads, int prefix_x,
+			      uint32_t *first, uint32_t *count, uint32_t *total,
+			      float *prefix_first_x)
+{
+	static int	con_ready;
+	qr_frame_slot_t	slot;
+	keydest_t	saved_dest = key_dest;
+	enum m_state_e	saved_state = m_state;
+	int		i;
+
+	QR_TestEnsureFixtures ();
+	if (!con_ready)
+	{
+		/* Con_CheckResize and Con_DrawNotify both index con_text, which
+		   only Con_Init allocates; the fixtures above only cover the
+		   texture/wad side.
+
+		   Asked for the SMALLEST console buffer Con_Init accepts, through
+		   the same -consize argument a player would use: the default is
+		   1 MB and Con_CheckResize allocates a second copy of it as
+		   scratch, which together overrun the test hunk above. */
+		static char	*consize_argv[] = { "hostcheck", "-consize", "16" };
+		int		saved_argc = com_argc;
+		char		**saved_argv = com_argv;
+
+		con_ready = 1;
+		com_argc = 3;
+		com_argv = consize_argv;
+		Con_Init ();
+		com_argc = saved_argc;
+		com_argv = saved_argv;
+	}
+
+	memset (&slot, 0, sizeof (slot));
+
+	qr_overlay_slot = &slot;
+	qr_overlay_canvas = CANVAS_DEFAULT;
+	for (i = 0; i < prefix_quads; i++)
+		QR_DrawFill (prefix_x, 0, 4, 4, 0, 1.f);
+	qr_overlay_slot = NULL;
+
+	key_dest = (keydest_t) kdest;
+	m_state = (kdest == key_menu) ? m_main : m_none;
+	con_forcedup = false;
+	cl.intermission = 0;
+
+	QR_EmitScreen2DInto (&slot);
+
+	key_dest = saved_dest;
+	m_state = saved_state;
+
+	if (first) *first = slot.frame.screen2d_first_vert;
+	if (count) *count = slot.frame.screen2d_vert_count;
+	if (total) *total = slot.frame.num_overlay_verts;
+	if (prefix_first_x)
+		*prefix_first_x = (prefix_quads > 0 && slot.overlay_verts)
+				? slot.overlay_verts[0] : 0.f;
+
+	free (slot.overlay_verts);
+	free (slot.overlay_batches);
+}
+#endif /* QAVP_HOSTCHECK */
+
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
 	static qmodel_t	*models[8];
@@ -7042,6 +7216,10 @@ void QR_BeginFrame (void)
 	slot->frame.num_hud_tiles = 0;
 	slot->frame.hud_mode = 0;
 	slot->frame.hud_bg = 0;
+	/* An empty range, not last frame's: the consumer gates its 2D panel on
+	   the count, and this slot's previous life may have had a menu up. */
+	slot->frame.screen2d_first_vert = 0;
+	slot->frame.screen2d_vert_count = 0;
 	slot->frame.fog_density = 0.f;
 	slot->frame.fog_color[0] = slot->frame.fog_color[1] = slot->frame.fog_color[2] = 0.f;
 	slot->frame.sky_fog = 0.f;

@@ -116,6 +116,16 @@ void QR_DrawPicStretch (int x, int y, int w, int h, qpic_t *pic, float alpha);
    frame" (e.g. full ammo/health). */
 void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT]);
 
+/* The rest of the 2D layer -- menu, console, intermission scoreboards, notify
+   lines -- appended to the building frame's overlay buffer as one tracked
+   range (qc_frame_t.screen2d_first_vert/vert_count). Called from
+   SCR_UpdateScreen's 2D point, after V_RenderView and before V_UpdateBlend,
+   so it also runs on frames with no world where V_RenderView returns early
+   and no HUD emitter runs at all. Engine thread, inside the engine's own
+   frame: M_Draw and Con_DrawConsole are engine entry points and this is
+   where upstream's gl_screen.c calls them. */
+void QR_EmitScreen2D (void);
+
 /* The per-tile emitter (QR_EmitTile, Phase 1 Task 2) stays file-static in
    qr_bridge.c: it takes the file-local qr_frame_slot_t, and its only
    callers -- QR_EmitModularHud (Task 3) and the QAVP_HOSTCHECK test hook
