@@ -49,6 +49,7 @@ struct WristCommMathTest {
         runAdjustedFrameTests()
         runHoverPickTests()
         runOrientationTests()
+        runForearmFrameTests()
         print("PASSED (wrist_comm_test.swift)")
     }
 }
@@ -635,4 +636,211 @@ func runOrientationTests() {
         }
     }
     print("orientation ok")
+}
+
+// MARK: - The forearm-locked (along-arm) frame
+
+/// `WristComm.forearmFrame` builds the along-arm view's panel basis STRAPPED
+/// TO THE ARM, from the two forearm joints plus a lateral axis -- no eye, no
+/// billboard, no HUD plane. These tests pin the three things a reader cannot
+/// derive from the signature: which way the long axis runs, which way the
+/// face points, and what the Rotate dial does to both.
+func runForearmFrameTests() {
+
+    // THE REFERENCE POSE, used by every assertion below that talks about
+    // "the wearer": a right-handed player's LEFT forearm lifted across the
+    // chest into the Buzz L, in the renderer's corrected tracking space (+Y
+    // up, the player facing -Z, so the player's own right is +X).
+    //
+    //   elbow  left of centre, wrist across to the right  -> the arm runs +X
+    //   lateral +Y                                        -> out of the INNER
+    //                                                        forearm face,
+    //                                                        toward the
+    //                                                        looking-down head
+    let elbow = SIMD3<Float>(-0.20, 1.05, -0.25)
+    let wrist = SIMD3<Float>(0.10, 1.05, -0.25)
+    let lateral = SIMD3<Float>(0, 1, 0)
+    let armAxis = simd_normalize(wrist - elbow)
+
+    let f = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
+                                   lateral: lateral, rollDegrees: 0)
+    assert(f.valid, "forearm: a tracked forearm builds a valid frame")
+
+    // MARK: the long axis runs ALONG the arm, toward the hand
+
+    // `right` is both the axis the three key columns run along and the axis
+    // `RendererCore.textQuads` lays glyphs along, so this single assertion
+    // is what makes the unit a strap rather than a billboard.
+    assert(near(f.right, armAxis, 1e-5), "forearm: right is the arm axis, elbow -> wrist")
+    assert(simd_dot(f.right, wrist - elbow) > 0, "forearm: ...pointing toward the HAND, not the elbow")
+
+    // MARK: the face comes off the inner forearm
+
+    let projected = simd_normalize(lateral - armAxis * simd_dot(lateral, armAxis))
+    assert(near(f.forward, projected, 1e-5),
+           "forearm: at roll 0 the face normal is the lateral axis, orthonormalised")
+    assert(simd_dot(f.forward, lateral) > 0,
+           "forearm: ...on the lateral's OWN side of the arm, not the opposite face")
+
+    // MARK: legends upright for a head looking down at the L
+
+    // A wearer facing -Z who tips their head down to read the unit carries
+    // their head-up vector from +Y round to -Z. The panel's `up` has to
+    // agree with it or every legend reads upside down -- the exact failure
+    // the across view's `orientedFrame` hit on device and had to have called
+    // off a screenshot. Here it is derived and PINNED instead.
+    assert(near(f.up, SIMD3<Float>(0, 0, -1), 1e-5),
+           "forearm: in the L pose the panel's up is the looking-down head's up")
+
+    // ...and the key run reads from the elbow toward the wrist: cell 0 (the
+    // first binding) at the elbow end, cell 2 (the end of the top row) at
+    // the wrist end. The same reading direction the across view's +90 gives,
+    // so a player switching views does not have to relearn the keys.
+    let c0 = WristComm.cellCenter(0), c2 = WristComm.cellCenter(2)
+    assert(simd_dot(f.right * c0.x + f.up * c0.y, f.right) < 0,
+           "forearm: cell 0 sits at the ELBOW end of the unit")
+    assert(simd_dot(f.right * c2.x + f.up * c2.y, f.right) > 0,
+           "forearm: cell 2 sits at the WRIST end of the unit")
+
+    // MARK: orthonormal and right-handed at EVERY roll
+
+    // Same invariant every frame in this file keeps. `HudEditor.offsetInFrame`
+    // assumes unit axes (a short basis silently widens the grid's bounds) and
+    // a LEFT-handed triple mirrors every legend while all three dot products
+    // still read zero.
+    for deg in [Float(-180), -137, -90, -37, 0, 1, 30, 45, 90, 137, 180] {
+        let r = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
+                                       lateral: lateral, rollDegrees: deg)
+        assert(r.valid, "forearm/\(deg): still valid")
+        assert(near(simd_length(r.right), 1), "forearm/\(deg): right stays unit")
+        assert(near(simd_length(r.up), 1), "forearm/\(deg): up stays unit")
+        assert(near(simd_length(r.forward), 1), "forearm/\(deg): forward stays unit")
+        assert(abs(simd_dot(r.right, r.up)) < 1e-5, "forearm/\(deg): right . up stays 0")
+        assert(abs(simd_dot(r.up, r.forward)) < 1e-5, "forearm/\(deg): up . forward stays 0")
+        assert(abs(simd_dot(r.right, r.forward)) < 1e-5, "forearm/\(deg): right . forward stays 0")
+        assert(near(simd_cross(r.right, r.up), r.forward, 1e-5),
+               "forearm/\(deg): right x up stays forward")
+        // Roll is AROUND THE ARM: the long axis is the rotation axis and
+        // must not move an inch, whatever the dial says.
+        assert(near(r.right, armAxis, 1e-5), "forearm/\(deg): the arm axis is the roll axis")
+    }
+
+    // MARK: what the Rotate dial actually does
+
+    // A half turn puts the unit on the OPPOSITE face of the forearm -- the
+    // one lever for "the derivation picked the wrong face on device".
+    let flipped = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
+                                         lateral: lateral, rollDegrees: 180)
+    assert(near(flipped.forward, -f.forward, 1e-4), "forearm: 180 flips the face")
+    assert(near(flipped.up, -f.up, 1e-4), "forearm: 180 turns the legends end over end with it")
+
+    // The sweep DIRECTION, which is the half of the sign choice a flip
+    // cannot see: at +90 the old face normal has swung onto the old `up`.
+    let quarter = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
+                                         lateral: lateral, rollDegrees: 90)
+    assert(near(simd_dot(quarter.forward, f.up), -1, 1e-4),
+           "forearm: +90 sweeps the face normal onto -up")
+    assert(near(simd_dot(quarter.up, f.forward), 1, 1e-4),
+           "forearm: ...and up onto the old face normal")
+
+    // ...and it really is a rotation BY the dialled angle, not a snap.
+    for deg in [Float(30), 137] {
+        let r = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
+                                       lateral: lateral, rollDegrees: deg)
+        let rad = deg * .pi / 180
+        assert(near(simd_dot(r.forward, f.forward), cos(rad), 1e-5),
+               "forearm/\(deg): the face turns by cos(theta) onto the old face")
+        assert(near(simd_dot(r.forward, f.up), -sin(rad), 1e-5),
+               "forearm/\(deg): ...and by -sin(theta) onto up -- the sweep goes forward -> -up")
+    }
+
+    // MARK: handedness of the HAND is not baked in
+
+    // The publisher mirrors `lateral` per chirality so it means
+    // "out of the inner forearm" for BOTH hands (see `ForearmPose`). The
+    // frame builder therefore must be chirality-BLIND: the same arm pointing
+    // the other way, with its own lateral, builds the mirror-image placement
+    // and still a right-handed basis. A builder that hard-coded a hand would
+    // pass every assertion above and fail here.
+    let rElbow = SIMD3<Float>(0.20, 1.05, -0.25)
+    let rWrist = SIMD3<Float>(-0.10, 1.05, -0.25)
+    let g = WristComm.forearmFrame(wrist: rWrist, elbow: rElbow,
+                                   lateral: lateral, rollDegrees: 0)
+    assert(g.valid, "forearm: the other arm builds a valid frame too")
+    assert(near(g.right, simd_normalize(rWrist - rElbow), 1e-5),
+           "forearm: the other arm's long axis still runs elbow -> wrist")
+    assert(near(simd_cross(g.right, g.up), g.forward, 1e-5),
+           "forearm: the other arm's basis is right-handed too")
+    assert(near(g.up, SIMD3<Float>(0, 0, 1), 1e-5),
+           "forearm: the other arm's legends are upright for the same looking-down head")
+
+    // MARK: degenerate inputs are INVALID, never a NaN basis
+
+    // Every one of these is a real tracking state: a collapsed forearm (both
+    // joints reported at one point), a lateral axis that came back zero, and
+    // a lateral that is parallel to the bone -- which is what a WRONGLY
+    // CHOSEN joint-rotation column looks like (see `ForearmPose`'s
+    // documentation of the column pick). Gram-Schmidt divides by zero on all
+    // three, so they have to be refused before the division, not after.
+    let degenerate: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, String)] = [
+        (wrist, wrist, lateral, "a collapsed forearm"),
+        (wrist, wrist + SIMD3<Float>(0, 0, 5e-5), lateral, "a sub-0.1 mm forearm"),
+        (wrist, elbow, .zero, "a zero lateral axis"),
+        (wrist, elbow, armAxis, "a lateral parallel to the bone"),
+        (wrist, elbow, armAxis * -3, "a lateral antiparallel to the bone"),
+    ]
+    for (w, e, l, name) in degenerate {
+        for deg in [Float(0), 90] {
+            let bad = WristComm.forearmFrame(wrist: w, elbow: e, lateral: l, rollDegrees: deg)
+            assert(!bad.valid, "forearm: \(name) is invalid (\(deg))")
+            assert(bad.right.x.isFinite && bad.up.y.isFinite && bad.forward.z.isFinite,
+                   "forearm: \(name) is finite, not a NaN basis (\(deg))")
+        }
+    }
+
+    // MARK: the composed chain -- a key fires where it lights
+
+    // The renderer's ALONG path in full: forearmFrame -> the caller's
+    // mid-forearm origin with the dials along the frame's OWN axes ->
+    // adjustedFrame for the tilt alone. Every cell must still hit-test to
+    // itself, which is what keeps the hover highlight, the drawn quad and
+    // the published hit-test geometry on one plane.
+    for deg in [Float(0), 37] {
+        let r = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
+                                       lateral: lateral, rollDegrees: deg)
+        let mid = (elbow + wrist) * 0.5
+        var seated = mid
+        seated += r.right * 0.02
+        seated += r.up * -0.01
+        seated += r.forward * 0.01
+        let dialled = WristComm.adjustedFrame(r, origin: seated, tiltDegrees: 12,
+                                              fwd: 0, side: 0, up: 0)
+        // The tilt-only call must not move the unit a second time: the
+        // offsets are already in `seated` (they run in the arm's axes, not
+        // the eye's), and double-applying them is the one mistake this
+        // chain invites.
+        assert(near(dialled.origin, seated, 1e-6),
+               "forearm/\(deg): the tilt-only call leaves the seated origin alone")
+        for cell in 0 ..< (WristComm.cols * WristComm.rows) {
+            let c = WristComm.cellCenter(cell)
+            let p = dialled.origin + dialled.frame.right * c.x + dialled.frame.up * c.y
+            assert(WristComm.touchedCell(p, commOrigin: dialled.origin,
+                                         frame: dialled.frame) == cell,
+                   "forearm/\(deg): dialled cell \(cell) hit-tests to itself")
+        }
+    }
+
+    // The three dials, in the meanings the settings caption now gives them:
+    // Forward slides ALONG the arm, Side moves ACROSS it, Height lifts OFF
+    // the skin. These are the frame axes the renderer multiplies them by, so
+    // a caption and a renderer that disagree fail here.
+    let mid = (elbow + wrist) * 0.5
+    assert(near(mid + f.right * 0.05, mid + armAxis * 0.05, 1e-6),
+           "forearm: +Forward slides the unit along the arm toward the hand")
+    assert(near(mid + f.forward * 0.01, mid + SIMD3<Float>(0, 0.01, 0), 1e-6),
+           "forearm: +Height lifts the unit off the skin, along the face normal")
+    assert(abs(simd_dot(f.up, armAxis)) < 1e-5,
+           "forearm: +Side runs across the arm, never along it")
+
+    print("forearm frame ok")
 }
