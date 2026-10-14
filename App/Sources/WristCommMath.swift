@@ -247,11 +247,19 @@ enum WristComm {
     ///
     ///  * `forward = normalize(eye - wrist)` -- the panel's normal points at
     ///    the eye. The seat point for this is the WRIST JOINT, not the
-    ///    panel's own (seated, dialled) centre: the centre is not known yet
-    ///    at this stage of the chain, and over the ~15 cm between them the
-    ///    direction to a head half a metre away differs by a few degrees --
-    ///    less than the panel's own angular size, and a face that chased the
-    ///    exact centre would also rock as the dials moved it.
+    ///    panel's own (seated, dialled) centre, which is not known yet at
+    ///    this stage of the chain. BE HONEST ABOUT WHAT THAT COSTS: the seat
+    ///    is 0.1445 m down the arm and a glance is about 0.45 m, so the
+    ///    direction to the eye from the wrist and from the panel's centre
+    ///    differ by as much as atan(0.1445 / 0.45), roughly 18 degrees --
+    ///    not the few degrees it would be flattering to claim, and more at
+    ///    a dialled-out Forward. Accepted, for two reasons: 18 degrees off
+    ///    square is still a plainly readable panel (the failure this round
+    ///    exists to fix was 80-odd degrees off, an edge-on line), and a face
+    ///    that chased the dialled centre would rock as the dials moved it,
+    ///    turning every placement tweak into a reorientation. Expect a
+    ///    visibly non-square panel at wide Forward settings; expect it never
+    ///    to go edge-on.
     ///  * `right` = the arm axis Gram-Schmidt'd against `forward` -- the
     ///    arm's direction AS SEEN IN THE PANEL PLANE. `right` is the axis
     ///    the three key columns run along and the axis

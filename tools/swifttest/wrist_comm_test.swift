@@ -862,6 +862,37 @@ func runForearmFrameTests() {
     print("forearm frame ok")
 }
 
+/// `ImmersiveRenderer.resolveCommPlacement`'s ALONG case, MIRRORED: the
+/// oriented base frame, the origin seated down the arm, and `adjustedFrame`
+/// with the three offsets permuted onto the axes the dial NAMES mean.
+///
+/// THE PERMUTATION IS THE WHOLE REASON THIS HELPER EXISTS. `adjustedFrame`
+/// is written for the across view, where the panel's `forward` is the
+/// Height-ish "toward you" axis and its `right` is the Side-ish one; the
+/// along base frame's axes are a different assignment of the same three
+/// names (`right` is the ARM, `forward` is toward the eye, `up` is across
+/// the panel), so the three dials have to be handed in rotated by one.
+/// Passing them positionally compiles, type-checks, and silently gives three
+/// wrong dials -- which is exactly what shipped and what the directional
+/// assertions below now catch.
+///
+/// This harness does not compile `ImmersiveRenderer.swift`, so this is a
+/// MIRROR and not the thing itself: it can only hold the renderer honest if
+/// the two are changed together. That is the standing cost of a pure-math
+/// harness, already noted at the end of `runForearmFrameTests`, and it is
+/// why the permutation is spelled out in both places rather than inferred.
+func alongChain(_ base: HudEditor.WristFrame, rollDegrees: Float,
+                seated: SIMD3<Float>, tilt: Float,
+                fwd: Float, side: Float, up: Float)
+    -> (frame: HudEditor.WristFrame, origin: SIMD3<Float>) {
+    let oriented = WristComm.orientedFrame(base, rollDegrees: rollDegrees)
+    // Forward -> `side` (rides `right`, the arm), Side -> `up` (across the
+    // panel), Height -> `fwd` (rides `forward`, toward the eye). Mirrors
+    // `resolveCommPlacement`, which spells the same mapping out.
+    return WristComm.adjustedFrame(oriented, origin: seated, tiltDegrees: tilt,
+                                   fwd: up, side: fwd, up: side)
+}
+
 // MARK: - The along view's eye-facing base frame
 
 /// `WristComm.alongBaseFrame` is the along view's panel basis as it stands
@@ -1018,18 +1049,10 @@ func runAlongBaseFrameTests() {
     for deg in [Float(0), 37] {
         let oriented = WristComm.orientedFrame(f, rollDegrees: deg)
         let seated = wrist - armAxis * WristComm.alongSeatDistance(rollDegrees: deg)
-        let dialled = WristComm.adjustedFrame(oriented, origin: seated, tiltDegrees: 12,
-                                              fwd: 0.01, side: 0.02, up: -0.005)
-        // The offsets ride the ORIENTED panel's own axes, which is what the
-        // caption promises and what `adjustedFrame` does -- stated here
-        // because the along view used to fold them into the origin itself
-        // and call `adjustedFrame` for the tilt alone.
-        let sideStep: SIMD3<Float> = oriented.right * 0.02
-        let upStep: SIMD3<Float> = oriented.up * -0.005
-        let fwdStep: SIMD3<Float> = oriented.forward * 0.01
-        let byHand: SIMD3<Float> = seated + sideStep + upStep + fwdStep
-        assert(near(dialled.origin, byHand, 1e-6),
-               "along base/\(deg): the dial offsets ride the oriented panel's axes")
+        let dialled = alongChain(f, rollDegrees: deg, seated: seated, tilt: 12,
+                                 fwd: 0.01, side: 0.02, up: -0.005)
+        assert(near(dialled.frame.right, oriented.right, 1e-6),
+               "along base/\(deg): the chain's frame is the oriented one")
         for cell in 0 ..< (WristComm.cols * WristComm.rows) {
             let c = WristComm.cellCenter(cell)
             let p = dialled.origin + dialled.frame.right * c.x + dialled.frame.up * c.y
@@ -1044,6 +1067,98 @@ func runAlongBaseFrameTests() {
         let p0 = dialled.origin + dialled.frame.right * c0.x + dialled.frame.up * c0.y
         assert(simd_dot(p0 - dialled.origin, armAxis) < 0,
                "along base/\(deg): cell 0 sits on the ELBOW side of the panel")
+    }
+
+    // MARK: WHAT THE DIAL NAMES MEAN -- directional, not an identity
+
+    // The assertion this block replaces restated `adjustedFrame`'s own
+    // formula ("the offsets ride the oriented panel's axes") and was
+    // therefore unable to fail for the bug it was supposed to cover: the
+    // renderer's three offsets went in POSITIONALLY, so Forward rode
+    // `forward` (at the player's face) instead of the arm, Side rode the
+    // arm, and Height rode the across-panel axis -- three dials permuted
+    // against every caption, default and doc in the round, and the default
+    // 1 cm Height sank the hit-test plane into the forearm instead of
+    // lifting it clear.
+    //
+    // These are the captions' claims as DIRECTIONS, one `simd_dot` each,
+    // measured as the DELTA a single dial makes against the all-zero
+    // placement. An identity cannot express "+Forward moves it along your
+    // arm"; a dot product can, and it fails the moment the permutation is
+    // wrong whichever way round it is written.
+    let toEyeUnit = simd_normalize(eye - wrist)
+    func movedBy(_ deg: Float, fwd: Float = 0, side: Float = 0, up: Float = 0) -> SIMD3<Float> {
+        let seated = wrist - armAxis * WristComm.alongSeatDistance(rollDegrees: deg)
+        let zero = alongChain(f, rollDegrees: deg, seated: seated, tilt: 0,
+                              fwd: 0, side: 0, up: 0)
+        let one = alongChain(f, rollDegrees: deg, seated: seated, tilt: 0,
+                             fwd: fwd, side: side, up: up)
+        return one.origin - zero.origin
+    }
+
+    // The REFERENCE POSE HERE IS SQUARE TO THE ARM -- `squareF` below puts
+    // the eye in the plane through the wrist perpendicular to a +X bone, so
+    // the projected arm IS the arm and each claim can be checked as an exact
+    // length rather than a sign. The general (oblique) pose follows after.
+    let squareEye = SIMD3<Float>(0.10, 1.55, 0.15)
+    let squareF = WristComm.alongBaseFrame(wrist: wrist, elbow: elbow, eye: squareEye)
+    let squareToEye = simd_normalize(squareEye - wrist)
+    assert(near(squareF.right, armAxis, 1e-5),
+           "along dials: the square reference pose really does project the arm whole")
+    func squareMovedBy(fwd: Float = 0, side: Float = 0, up: Float = 0) -> SIMD3<Float> {
+        let seated = wrist - armAxis * WristComm.alongSeatDistance(rollDegrees: 0)
+        let zero = alongChain(squareF, rollDegrees: 0, seated: seated, tilt: 0,
+                              fwd: 0, side: 0, up: 0)
+        let one = alongChain(squareF, rollDegrees: 0, seated: seated, tilt: 0,
+                             fwd: fwd, side: side, up: up)
+        return one.origin - zero.origin
+    }
+    let step: Float = 0.03
+
+    // FORWARD SLIDES IT ALONG YOUR ARM, toward the hand for a positive dial
+    // -- the dial the caption tells A. to re-seat the unit with.
+    let dFwd = squareMovedBy(fwd: step)
+    assert(near(simd_dot(dFwd, armAxis), step, 1e-6),
+           "along dials: +Forward slides the unit ALONG the arm, toward the hand")
+    assert(near(simd_length(dFwd), step, 1e-6),
+           "along dials: ...and along it ALONE, with nothing left over")
+
+    // HEIGHT BRINGS IT TOWARD YOU. This is the one the default depends on:
+    // `commUpAlongDefault` is 1 cm, and it has to be 1 cm of CLEARANCE in
+    // front of the arm or the hit-test plane sits inside the forearm and a
+    // fingertip stopped by the skin never reaches the touch band.
+    let dUp = squareMovedBy(up: step)
+    assert(near(simd_dot(dUp, squareToEye), step, 1e-6),
+           "along dials: +Height brings the unit TOWARD THE EYE, off the arm")
+    assert(near(simd_length(dUp), step, 1e-6),
+           "along dials: ...and toward it ALONE")
+
+    // SIDE MOVES IT ACROSS THE PANEL -- perpendicular to both of the above,
+    // which is the only direction left.
+    let dSide = squareMovedBy(side: step)
+    assert(abs(simd_dot(dSide, armAxis)) < 1e-6,
+           "along dials: +Side does not move the unit along the arm")
+    assert(abs(simd_dot(dSide, squareToEye)) < 1e-6,
+           "along dials: ...nor toward the eye")
+    assert(near(simd_length(dSide), step, 1e-6),
+           "along dials: ...it moves it ACROSS the panel, the one axis left")
+
+    // THE OBLIQUE POSE, where the projected arm is foreshortened and the
+    // exact lengths above no longer hold: the SIGNS still must. This is the
+    // pose the device is actually in -- the eye is never exactly square to
+    // the forearm -- and it is where a permutation that happened to look
+    // right in the contrived pose would still show.
+    for deg in [Float(0), 37] {
+        let fwdDelta = movedBy(deg, fwd: step)
+        assert(simd_dot(fwdDelta, armAxis) > 0,
+               "along dials/\(deg): +Forward still carries the unit toward the hand")
+        assert(abs(simd_dot(fwdDelta, toEyeUnit)) < 1e-6,
+               "along dials/\(deg): ...and never at the player's face")
+        // `orientedFrame` leaves `forward` alone, so Height is exactly the
+        // toward-the-eye axis at EVERY Rotate angle, not merely in sign.
+        let upDelta = movedBy(deg, up: step)
+        assert(near(simd_dot(upDelta, toEyeUnit), step, 1e-6),
+               "along dials/\(deg): +Height is the toward-the-eye axis at every Rotate")
     }
 
     print("along base frame ok")
