@@ -92,6 +92,20 @@ void QR_DrawCharacter (int x, int y, int num);
 void QR_DrawString (int x, int y, const char *str);
 void QR_DrawFill (int x, int y, int w, int h, int c, float alpha);
 
+/* Draw_CachePic's backing: the menu/console .lmp art, cached by name in
+   storage that outlives Host_ClearMemory (see qr_bridge.c). Returns NULL for
+   art that will not load -- r_null.c substitutes its dummy pic -- and
+   complains once per name, not once per frame. QR_DrawNewGame empties the
+   cache on a gamedir change, as upstream Draw_NewGame does. */
+qpic_t *QR_DrawCachePic (const char *path);
+void QR_DrawNewGame (void);
+
+/* The remaining two real Draw_* bodies: the menu's half-black wash over the
+   whole plane, and one pic stretched to an explicit size at a flat alpha
+   (what Draw_ConsoleBackground needs, without mutating the cache entry). */
+void QR_DrawFadeScreen (void);
+void QR_DrawPicStretch (int x, int y, int w, int h, qpic_t *pic, float alpha);
+
 /* Modular HUD (Phase 1): turns the vr_hud_<tile>_* cvars into per-tile
    placement. Pure except for the cvar reads; fills tile_id/anchor/offset/
    scale and clamps out-of-range anchor/scale, but leaves first_vert/

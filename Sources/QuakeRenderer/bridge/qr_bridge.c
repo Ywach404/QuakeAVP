@@ -5344,6 +5344,40 @@ void QR_CanvasXform (canvastype canvas, float out[4])
 	out[0] = 0.f; out[1] = 0.f; out[2] = 1.f; out[3] = 1.f;
 	if (canvas == CANVAS_SBAR)
 		out[1] = 152.f;		/* 320x48 bar at the bottom of 320x200 */
+	else if (canvas == CANVAS_CONSOLE)
+	{
+		/* Upstream's glOrtho (0, vid.conwidth, vid.conheight + lines, lines)
+		   expressed as an offset+scale onto the 320x200 plane.
+		   `lines` is the console SLIDE: how far the console has yet to come
+		   down, in console-canvas pixels. It is not decoration -- it is what
+		   puts Con_DrawNotify's output on screen at all, since that function
+		   draws its first line at y == vid.conheight, i.e. one full canvas
+		   BELOW the console's own text, and relies on the slide to lift it
+		   back to the top edge. With the console fully down the term is zero
+		   and the canvas is the plain conwidth/conheight -> 320x200 scale.
+
+		   Derived from vid.conwidth/conheight rather than written out as a
+		   constant so the one place that decides the nominal console size
+		   (vid_null.c) stays the only place. */
+		float	slide = 0.f;
+
+		if (vid.conwidth <= 0 || vid.conheight <= 0)
+			return;				/* before VID_Init: identity */
+		if (glheight > 0)
+			slide = (float) vid.conheight
+			      - (scr_con_current * (float) vid.conheight / (float) glheight);
+		out[2] = 320.f / (float) vid.conwidth;
+		out[3] = 200.f / (float) vid.conheight;
+		out[1] = -slide * out[3];
+	}
+	/* CANVAS_MENU is deliberately the IDENTITY, not an entry above: menu.c
+	   draws in 320x200 already (M_DrawCharacter/M_DrawPic pass their
+	   coordinates straight through, and every menu centres on 320/2), so the
+	   overlay plane IS the menu canvas. Upstream needs a transform here only
+	   because it is mapping that canvas onto a physical screen of some other
+	   size, with scr_menuscale and ericw's 640-wide overflow room for long
+	   keybindings -- the 320..640 half of which falls off the right of this
+	   plane, exactly as it falls off a 4:3 screen upstream. */
 }
 
 void QR_GlyphCell (int ch, float uv[4])
@@ -5535,6 +5569,168 @@ static uint32_t QR_PicTexnum (qpic_t *pic)
 	return gl.gltexture ? gl.gltexture->texnum : 0;
 }
 
+/*
+================
+Draw_CachePic's backing -- the menu and console .lmp art (gfx/*.lmp, raw
+qpic_t: width, height, indexed pixels), cached by name.
+
+The wrapper lives in file-scope static storage rather than on the hunk, which
+is the whole reason this can exist at all: Host_ClearMemory runs
+Hunk_FreeToLowMark on every map change, so a hunk-allocated qpic_t -- what
+QR_DrawPicFromWad returns -- is dangling by the next level while menu.c keeps
+calling Draw_CachePic for the same names across the whole session. The
+embedded gltexture is a TEXPREF_PERSIST load, which QR_TexMgr_NewGame's
+free-everything-but-persist pass also spares, so the pair survives together.
+Same construction as QR_EmitTile's ammo-emblem store, one level up.
+
+A name that fails to load is cached as a NEGATIVE entry (width 0) and
+reported once: a damaged or shareware install is missing art, and the menus
+have to come up anyway. r_null.c substitutes its dummy pic for the NULL.
+
+Bounded at upstream's MAX_CACHED_PICS with upstream's Sys_Error on overflow:
+the names come from menu.c and sbar.c and are a closed set well under the
+bound, so hitting it means something is generating names, which is a bug to
+hear about rather than silently start thrashing a cache over.
+================
+*/
+#define QR_MAX_CACHED_PICS	128
+
+typedef struct qr_cachepic_s {
+	char	name[MAX_QPATH];
+	qpic_t	pic;
+	byte	padding[sizeof(qr_glpic_t)];	/* room for the payload past pic.data[4] */
+} qr_cachepic_t;
+
+static qr_cachepic_t	qr_cachepics[QR_MAX_CACHED_PICS];
+static int		qr_num_cachepics;
+
+/* Lookup-or-insert, split out so the host test can exercise the cache
+   bookkeeping without a filesystem to load art from. A fresh entry comes back
+   fully zeroed: the width is the loaded/not-loaded flag every other function
+   here reads, and the payload must not be a previous generation's gltexture
+   pointer for QR_DrawNewGame to find. */
+static qr_cachepic_t *QR_CachePicSlot (const char *path, int *is_new)
+{
+	qr_cachepic_t	*entry;
+	int		i;
+
+	*is_new = 0;
+	for (i = 0; i < qr_num_cachepics; i++)
+		if (!strcmp (path, qr_cachepics[i].name))
+			return &qr_cachepics[i];
+
+	if (qr_num_cachepics == QR_MAX_CACHED_PICS)
+		Sys_Error ("Draw_CachePic: more than %d cached pics", QR_MAX_CACHED_PICS);
+
+	*is_new = 1;
+	entry = &qr_cachepics[qr_num_cachepics++];
+	memset (entry, 0, sizeof (*entry));
+	q_strlcpy (entry->name, path, MAX_QPATH);
+	return entry;
+}
+
+qpic_t *QR_DrawCachePic (const char *path)
+{
+	qr_cachepic_t	*entry;
+	qpic_t		*dat;
+	qr_glpic_t	gl;
+	int		is_new, w, h;
+
+	if (!path || !*path)
+		return NULL;
+
+	entry = QR_CachePicSlot (path, &is_new);
+	if (!is_new)
+		return entry->pic.width ? &entry->pic : NULL;	/* hit, or a cached miss */
+
+	entry->pic.width = entry->pic.height = 0;
+	dat = (qpic_t *) COM_LoadTempFile (path, NULL);
+	if (!dat)
+	{
+		Con_Printf ("Draw_CachePic: can't find %s\n", path);
+		return NULL;
+	}
+
+	/* The lump header is little-endian on disk; read it the way
+	   QR_DrawPicFromWad reads the wad's, rather than swapping in place.
+	   Sanity-bound it before the upload: a truncated or non-qpic file would
+	   otherwise hand TexMgr a width*height span to read past the end of. */
+	w = LittleLong (dat->width);
+	h = LittleLong (dat->height);
+	if (w <= 0 || h <= 0 || w > 4096 || h > 4096)
+	{
+		Con_Printf ("Draw_CachePic: %s is not a qpic (%dx%d)\n", path, w, h);
+		return NULL;
+	}
+
+	gl.gltexture = QR_TexMgr_LoadImage (NULL, path, w, h, SRC_INDEXED,
+			dat->data, path, (src_offset_t) (sizeof(int) * 2),
+			TEXPREF_ALPHA | TEXPREF_NEAREST | TEXPREF_PAD | TEXPREF_PERSIST);
+	gl.sl = 0; gl.tl = 0; gl.sh = 1; gl.th = 1;	/* Metal never pads */
+	entry->pic.width = w;
+	entry->pic.height = h;
+	memcpy (entry->pic.data, &gl, sizeof(qr_glpic_t));
+	return &entry->pic;
+}
+
+/*
+================
+QR_DrawNewGame -- empty the cache when the game directory changes, which is
+upstream Draw_NewGame's job too. Without it `game mg3` would keep serving id1's
+menu plaque for the rest of the session, since every entry above is keyed by
+name alone and both gamedirs name their art the same things.
+
+The textures go with the entries. They are TEXPREF_PERSIST, so the
+QR_TexMgr_NewGame pass that runs alongside this deliberately spares them --
+nothing else would ever free them -- and QR_FreeTexture only ENQUEUES the
+release for the consumer to drain at its own frame boundary, so dropping one
+that the packet in flight still references is safe (that batch simply finds no
+texture and skips).
+================
+*/
+void QR_DrawNewGame (void)
+{
+	int	i;
+
+	for (i = 0; i < qr_num_cachepics; i++)
+	{
+		qr_glpic_t	gl;
+
+		memcpy (&gl, qr_cachepics[i].pic.data, sizeof(qr_glpic_t));
+		if (qr_cachepics[i].pic.width && gl.gltexture)
+			QR_FreeTexture (gl.gltexture);
+		qr_cachepics[i].name[0] = '\0';
+	}
+	qr_num_cachepics = 0;
+}
+
+#ifdef QAVP_HOSTCHECK
+/* Cache bookkeeping for screen2d_test: the lookup/insert itself, the entry
+   count, and a way to plant an entry as if its art had loaded (the host test
+   has no filesystem, so the real load always misses -- what is under test is
+   the bookkeeping and the storage's lifetime across a hunk wipe). */
+const void *QR_TestCachePicSlot (const char *path, int *is_new)
+{
+	return QR_CachePicSlot (path, is_new);
+}
+
+qpic_t *QR_TestCachePicPut (const char *path, int w, int h)
+{
+	qr_cachepic_t	*entry;
+	int		is_new;
+
+	entry = QR_CachePicSlot (path, &is_new);
+	entry->pic.width = w;
+	entry->pic.height = h;
+	return &entry->pic;
+}
+
+int QR_TestCachePicCount (void)
+{
+	return qr_num_cachepics;
+}
+#endif /* QAVP_HOSTCHECK */
+
 void QR_DrawPic (int x, int y, qpic_t *pic)
 {
 	float	xf[4], buf[6 * 9];
@@ -5602,6 +5798,66 @@ void QR_DrawFill (int x, int y, int w, int h, int c, float alpha)
 	QR_CanvasXform (qr_overlay_canvas, xf);
 	n = QR_FillVerts (buf, x, y, w, h, col, xf);
 	QR_OverlayAppend (qr_overlay_slot, qr_white_texnum, buf, n);
+}
+
+/*
+================
+QR_DrawFadeScreen -- upstream's half-black wash under the menu, as a fill
+over the whole overlay plane through the white texel.
+
+Black is written literally rather than taken from d_8to24table[0]: upstream
+draws this with glColor4f (0, 0, 0, 0.5) and no texture at all, so it owes
+nothing to the palette, and a mod shipping a non-black entry 0 must not tint
+the menu's backdrop.
+================
+*/
+void QR_DrawFadeScreen (void)
+{
+	float	xf[4], buf[6 * 9];
+	float	col[4] = { 0.f, 0.f, 0.f, 0.5f };	/* upstream's 0.5 */
+	int	n;
+
+	if (!qr_overlay_slot)
+		return;
+	QR_EnsureWhite ();
+	if (!qr_white_texnum)
+		return;
+	QR_SetCanvas (CANVAS_DEFAULT);		/* as upstream's Draw_FadeScreen does */
+	QR_CanvasXform (qr_overlay_canvas, xf);
+	n = QR_FillVerts (buf, 0, 0, 320, 200, col, xf);
+	QR_OverlayAppend (qr_overlay_slot, qr_white_texnum, buf, n);
+}
+
+/*
+================
+QR_DrawPicStretch -- one pic scaled to an explicit w x h at the current
+canvas, at a flat alpha. Draw_ConsoleBackground's primitive: upstream gets the
+same effect by overwriting the cached conback's width/height with the console
+canvas size and then calling Draw_Pic, which mutates a cache entry other
+callers share. Passing the size instead leaves the cache alone.
+
+The alpha is the caller's, not qr_draw_color's, for the same reason
+QR_EmitTile forces white: V_PolyBlend leaves the draw colour at the last
+damage flash, so anything inheriting it goes faint after the first hit.
+================
+*/
+void QR_DrawPicStretch (int x, int y, int w, int h, qpic_t *pic, float alpha)
+{
+	float	xf[4], buf[6 * 9];
+	float	uv[4] = {0, 0, 1, 1};
+	float	col[4] = {1.f, 1.f, 1.f, 1.f};
+	uint32_t texnum;
+	int	n;
+
+	if (!qr_overlay_slot || !pic || alpha <= 0.f || w <= 0 || h <= 0)
+		return;
+	texnum = QR_PicTexnum (pic);
+	if (!texnum)
+		return;
+	col[3] = (alpha > 1.f) ? 1.f : alpha;
+	QR_CanvasXform (qr_overlay_canvas, xf);
+	n = QR_PicVerts (buf, x, y, w, h, uv, col, xf);
+	QR_OverlayAppend (qr_overlay_slot, texnum, buf, n);
 }
 
 /*
