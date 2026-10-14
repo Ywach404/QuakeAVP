@@ -274,12 +274,27 @@ final class VRSettings: @unchecked Sendable {
     /// angle that reads right on a forearm is not near any particular one and
     /// -90 is a legitimate answer (it is the mapping that shipped first).
     static let commRotLimit: Float = 180
-    /// The ALONG view's rotation default. +90 is exactly the quarter turn the
-    /// old `alongArm: true` flag applied (`right' = +up`, `up' = -right`), so
-    /// the dial replacing the flag leaves A.'s tuned along-arm unit where it
-    /// was -- pinned in `runOrientationTests`. The ACROSS view's default is 0,
-    /// which `WristComm.orientedFrame` early-returns as the identity.
-    static let commRotAlongDefault: Float = 90
+    /// The ALONG view's rotation default, now that the view is FOREARM-LOCKED:
+    /// 0, because `WristComm.forearmFrame` already lands the inner-forearm
+    /// face by construction -- the lateral axis it is handed points out of
+    /// that face (see `ForearmPose`). The dial is no longer the thing that
+    /// makes the unit along-arm at all; it ROLLS THE UNIT AROUND THE ARM,
+    /// and its job is to recover the one part of the derivation that cannot
+    /// be checked without hardware. If the unit comes up on the OUTSIDE of
+    /// the forearm on device, 180 is the answer and this constant is where
+    /// it gets paid off.
+    ///
+    /// It was +90 while the view was a billboarded panel turned in its own
+    /// plane; under the new construction that number means a quarter roll
+    /// round the arm, which is an EDGE, so it could not simply carry over.
+    /// That is why the along keys below are versioned rather than reused.
+    static let commRotAlongDefault: Float = 0
+    /// The ALONG view's Height default, in metres OFF THE SKIN. One
+    /// centimetre: enough that the unit's stone clears a sleeve and reads as
+    /// sitting ON the arm rather than sunk into it, small enough that it
+    /// still reads as strapped rather than hovering. The other three along
+    /// dials default to 0 -- mid-forearm, centred, untilted.
+    static let commUpAlongDefault: Float = 0.01
 
     // TWO SETS OF THE SAME FIVE DIALS, one per orientation view. On device
     // the two layouts want genuinely different seatings -- the across-wrist
@@ -298,11 +313,24 @@ final class VRSettings: @unchecked Sendable {
     private static let commSideKey = "wristCommSide"
     private static let commUpKey = "wristCommUp"
     private static let commRotKey = "wristCommRotAcross"
-    private static let commTiltAlongKey = "wristCommTiltAlong"
-    private static let commFwdAlongKey = "wristCommFwdAlong"
-    private static let commSideAlongKey = "wristCommSideAlong"
-    private static let commUpAlongKey = "wristCommUpAlong"
-    private static let commRotAlongKey = "wristCommRotAlong"
+    // THE ALONG KEYS ARE VERSIONED (`...2`), and that is a deliberate
+    // one-way migration, not a slip. All five along dials CHANGED MEANING
+    // when the view became forearm-locked: Forward was "toward the eye" and
+    // is now "along the arm", Side was "right in the billboard plane" and is
+    // now "across the arm", Height was "up in that plane" and is now "off
+    // the skin", Rotate was an in-plane spin and is now a roll around the
+    // arm, and the tilt pitches about an axis that is now the bone. A number
+    // tuned against the old meanings describes nothing under the new ones --
+    // a persisted Rotate of 90 would have stood the unit on the EDGE of the
+    // forearm and read as the feature being broken. New keys mean the new
+    // view starts from its own documented defaults; the old keys are simply
+    // left behind, unread and harmless. The ACROSS keys above are untouched,
+    // because that view is unchanged.
+    private static let commTiltAlongKey = "wristCommTiltAlong2"
+    private static let commFwdAlongKey = "wristCommFwdAlong2"
+    private static let commSideAlongKey = "wristCommSideAlong2"
+    private static let commUpAlongKey = "wristCommUpAlong2"
+    private static let commRotAlongKey = "wristCommRotAlong2"
     private static let commNoTurnKey = "wristCommNoTurn"
     private static let commAlongArmKey = "wristCommAlongArm"
 
@@ -314,7 +342,7 @@ final class VRSettings: @unchecked Sendable {
     private var _wristCommTiltAlong: Float = 0
     private var _wristCommFwdAlong: Float = 0
     private var _wristCommSideAlong: Float = 0
-    private var _wristCommUpAlong: Float = 0
+    private var _wristCommUpAlong: Float = VRSettings.commUpAlongDefault
     private var _wristCommRotAlong: Float = VRSettings.commRotAlongDefault
     /// Default TRUE: reaching across with the gun hand to press a key kept
     /// triggering that hand's own turn gesture, which is never what a reach
@@ -413,12 +441,21 @@ final class VRSettings: @unchecked Sendable {
     /// The view selector is read inside the same take (see
     /// `wristCommAlongArm`), so a toggle landing mid-read can never hand
     /// back one view's rotation with the other view's offsets.
-    var wristCommPlacement: (tilt: Float, fwd: Float, side: Float, up: Float, rot: Float) {
+    ///
+    /// It is also RETURNED, not just consulted. Since the along view became
+    /// forearm-locked, the selector picks the renderer's POSE SOURCE as well
+    /// as its dials -- a billboarded wrist plane or the arm itself -- and a
+    /// selector sampled in a second lock take could pair one view's source
+    /// with the other view's numbers for a frame, which is a panel visibly
+    /// jumping off the arm mid-toggle.
+    var wristCommPlacement: (alongArm: Bool, tilt: Float, fwd: Float,
+                             side: Float, up: Float, rot: Float) {
         lock.lock(); defer { lock.unlock() }
         return _wristCommAlongArm
-            ? (_wristCommTiltAlong, _wristCommFwdAlong, _wristCommSideAlong,
+            ? (true, _wristCommTiltAlong, _wristCommFwdAlong, _wristCommSideAlong,
                _wristCommUpAlong, _wristCommRotAlong)
-            : (_wristCommTilt, _wristCommFwd, _wristCommSide, _wristCommUp, _wristCommRot)
+            : (false, _wristCommTilt, _wristCommFwd, _wristCommSide,
+               _wristCommUp, _wristCommRot)
     }
 
     /// Reset the ACTIVE view's five placement dials to that VIEW'S DEFAULTS
@@ -427,40 +464,51 @@ final class VRSettings: @unchecked Sendable {
     /// render thread's own single-lock read land between two of them and
     /// sample a torn placement for a frame.
     ///
-    /// Per-view, and defaults rather than zeros: the along view's rotation
-    /// default is +90 (the quarter turn that makes it the along-arm unit at
-    /// all), so resetting it to 0 would hand back an across-wrist panel
-    /// under an "Along arm" label. Resetting one view deliberately leaves
-    /// the other view's tuning alone -- that separation is the whole point
-    /// of the two sets.
+    /// Per-view, and defaults rather than zeros: the along view's Height
+    /// default is 1 cm OFF THE SKIN, so resetting it to 0 would sink the
+    /// unit into the forearm. Resetting one view deliberately leaves the
+    /// other view's tuning alone -- that separation is the whole point of
+    /// the two sets.
+    ///
+    /// Reads its numbers from `wristCommDefaults`, which the settings
+    /// window's Reset button also mirrors into its sliders: ONE statement
+    /// of what a reset produces, so the UI and the store cannot disagree.
     ///
     /// Persisted after the lock is released, same discipline as `store`.
     func resetWristCommPlacement() {
         lock.lock()
         let along = _wristCommAlongArm
-        let rot: Float = along ? Self.commRotAlongDefault : 0
+        let d0 = Self.wristCommDefaults(alongArm: along)
         if along {
-            _wristCommTiltAlong = 0; _wristCommFwdAlong = 0
-            _wristCommSideAlong = 0; _wristCommUpAlong = 0; _wristCommRotAlong = rot
+            _wristCommTiltAlong = d0.tilt; _wristCommFwdAlong = d0.fwd
+            _wristCommSideAlong = d0.side; _wristCommUpAlong = d0.up
+            _wristCommRotAlong = d0.rot
         } else {
-            _wristCommTilt = 0; _wristCommFwd = 0
-            _wristCommSide = 0; _wristCommUp = 0; _wristCommRot = rot
+            _wristCommTilt = d0.tilt; _wristCommFwd = d0.fwd
+            _wristCommSide = d0.side; _wristCommUp = d0.up
+            _wristCommRot = d0.rot
         }
         lock.unlock()
         let d = UserDefaults.standard
-        d.set(Double(0), forKey: along ? Self.commTiltAlongKey : Self.commTiltKey)
-        d.set(Double(0), forKey: along ? Self.commFwdAlongKey : Self.commFwdKey)
-        d.set(Double(0), forKey: along ? Self.commSideAlongKey : Self.commSideKey)
-        d.set(Double(0), forKey: along ? Self.commUpAlongKey : Self.commUpKey)
-        d.set(Double(rot), forKey: along ? Self.commRotAlongKey : Self.commRotKey)
+        d.set(Double(d0.tilt), forKey: along ? Self.commTiltAlongKey : Self.commTiltKey)
+        d.set(Double(d0.fwd), forKey: along ? Self.commFwdAlongKey : Self.commFwdKey)
+        d.set(Double(d0.side), forKey: along ? Self.commSideAlongKey : Self.commSideKey)
+        d.set(Double(d0.up), forKey: along ? Self.commUpAlongKey : Self.commUpKey)
+        d.set(Double(d0.rot), forKey: along ? Self.commRotAlongKey : Self.commRotKey)
     }
 
     /// The per-view defaults the window's Reset button mirrors into its own
-    /// slider state, so the UI and the store cannot disagree about what a
-    /// reset produced. Same two cases `resetWristCommPlacement` writes.
+    /// slider state, and the same ones `resetWristCommPlacement` writes --
+    /// one statement, two readers.
+    ///
+    /// The along view's two non-zero defaults are both forearm facts, not
+    /// taste: Height lifts the unit 1 cm off the skin
+    /// (`commUpAlongDefault`), and Rotate is 0 because the frame already
+    /// lands the inner face (`commRotAlongDefault`). Forward 0 is
+    /// mid-forearm.
     static func wristCommDefaults(alongArm: Bool)
         -> (tilt: Float, fwd: Float, side: Float, up: Float, rot: Float) {
-        (0, 0, 0, 0, alongArm ? commRotAlongDefault : 0)
+        alongArm ? (0, 0, 0, commUpAlongDefault, commRotAlongDefault) : (0, 0, 0, 0, 0)
     }
 
     /// Clamped at the SETTER, not at the reader: a value out of range must
@@ -489,11 +537,18 @@ final class VRSettings: @unchecked Sendable {
         _wristCommTiltAlong = Self.clamp(Float(d.double(forKey: Self.commTiltAlongKey)), Self.commTiltLimit)
         _wristCommFwdAlong = Self.clamp(Float(d.double(forKey: Self.commFwdAlongKey)), Self.commOffsetLimit)
         _wristCommSideAlong = Self.clamp(Float(d.double(forKey: Self.commSideAlongKey)), Self.commOffsetLimit)
-        _wristCommUpAlong = Self.clamp(Float(d.double(forKey: Self.commUpAlongKey)), Self.commOffsetLimit)
-        // Presence-checked, unlike every dial above it: this one's documented
-        // default is +90, not 0, and `double(forKey:)` answers 0 for an absent
-        // key -- which would un-turn the along-arm unit on first launch after
-        // the update and read as the feature having broken.
+        // Presence-checked, unlike the dials above it: this one's documented
+        // default is +1 cm off the skin, not 0, and `double(forKey:)` answers
+        // 0 for an absent key -- which would sink the unit into the forearm
+        // on first launch after the update.
+        _wristCommUpAlong = d.object(forKey: Self.commUpAlongKey) == nil
+            ? Self.commUpAlongDefault
+            : Self.clamp(Float(d.double(forKey: Self.commUpAlongKey)), Self.commOffsetLimit)
+        // Presence-checked too, although this view's default is now 0 and a
+        // plain read would answer 0 anyway. Kept explicit because the default
+        // is the documented on-device LEVER for the inner/outer face (see
+        // `commRotAlongDefault`): the day it moves to 180, this line must
+        // already be the one that honours it.
         _wristCommRotAlong = d.object(forKey: Self.commRotAlongKey) == nil
             ? Self.commRotAlongDefault
             : Self.clamp(Float(d.double(forKey: Self.commRotAlongKey)), Self.commRotLimit)
