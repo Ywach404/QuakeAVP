@@ -711,6 +711,78 @@ typedef struct {
 
 /* Copy the latest roster snapshot. Callable from any thread. */
 void QC_AdminCopyState (qc_admin_state_t *out);
+
+/*
+ * ---------------------------------------------------------------------------
+ * Session (produced by Sources/QuakeCore/platform/session_avp.c).
+ *
+ * What the window's Game tab -- save/load and multiplayer -- needs to know
+ * about the engine, in exactly the same shape as the admin roster above:
+ * refreshed on the ENGINE thread inside QC_Frame, published under a mutex,
+ * read from any thread. The structs it summarises (sv, svs, cl, cls and the
+ * network layer's hostcache[]) are engine-thread-only and are never exposed;
+ * what crosses is this copy.
+ *
+ * It is read-only, like the admin snapshot. Everything the tab does in
+ * return -- `save`, `load`, `connect`, `disconnect`, `slist` -- goes out
+ * through QC_ExecuteCommand like every other console command.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Matches the engine's HOSTCACHESIZE and hostcache_t field widths (net_defs.h);
+   the copy is byte-for-byte what `slist` filled in, so a name that the engine
+   truncated is truncated here too rather than being silently different. */
+#define QC_SERVER_MAX		8
+#define QC_SERVER_NAME_LEN	16
+#define QC_SERVER_MAP_LEN	16
+#define QC_SERVER_CNAME_LEN	32
+/* com_gamedir is a MAX_OSPATH (160) buffer; round up for headroom. */
+#define QC_GAMEDIR_LEN		256
+
+/* Why `save` would be refused right now, in Host_Savegame_f's own guard
+   order (host_cmd.c). The UI shows the reason rather than guessing, so a
+   disabled Save button says the same thing the console would print. */
+enum {
+	QC_SAVE_OK		= 0,
+	QC_SAVE_NO_LOCAL_GAME	= 1,	/* !sv.active */
+	QC_SAVE_NOMONSTERS	= 2,	/* sv.nomonsters */
+	QC_SAVE_INTERMISSION	= 3,	/* cl.intermission */
+	QC_SAVE_MULTIPLAYER	= 4,	/* svs.maxclients != 1 */
+	QC_SAVE_PLAYER_DEAD	= 5	/* an active client with health <= 0 */
+};
+
+typedef struct {
+	char	name[QC_SERVER_NAME_LEN];
+	char	map[QC_SERVER_MAP_LEN];
+	char	cname[QC_SERVER_CNAME_LEN];	/* what `connect` takes */
+	int32_t	users;
+	int32_t	maxusers;			/* 0 = the server did not say */
+} qc_server_t;
+
+typedef struct {
+	int32_t	connected;		/* cls.state == ca_connected */
+	int32_t	level_loaded;		/* sv.active -- a local game is up */
+	int32_t	save_block;		/* QC_SAVE_* above; 0 means save works */
+	int32_t	slist_in_progress;	/* NET_Slist_f is still polling */
+	int32_t	server_count;		/* valid entries in servers[] */
+	qc_server_t	servers[QC_SERVER_MAX];
+	/* com_gamedir: the ABSOLUTE directory `save`/`load` read and write, which
+	   is NOT basedir/id1 -- COM_AddGameDirectory re-points com_gamedir at
+	   <userdir>/<game> when userdir differs from basedir, and `game <mod>`
+	   moves it again. The window scans this path for .sav files rather than
+	   rebuilding it from QuakePaths, so the list is always the directory the
+	   engine itself would write into. */
+	char	gamedir[QC_GAMEDIR_LEN];
+} qc_session_state_t;
+
+/* Copy the latest session snapshot. Callable from any thread. */
+void QC_SessionCopyState (qc_session_state_t *out);
+
+/* Copy at most `max` server-browser rows into `out` and return how many were
+   written -- the same snapshot as above, for a caller that wants only the
+   list. Callable from any thread. */
+int QC_ServerListCopy (qc_server_t *out, int max);
+
 /* Export only. During demo playback IN_Move still runs and re-derives the
    body yaw from the demo's viewangles (the aim), so the hand weapon would be
    placed from the wrong body frame. With `override` set, the engine pins

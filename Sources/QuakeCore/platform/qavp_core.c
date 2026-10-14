@@ -10,6 +10,7 @@
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include "admin_avp.h"
+#include "session_avp.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -113,6 +114,10 @@ void QC_Frame (double dt)
 	/* After the tick, outside Host_Frame's error frame: it only touches
 	   server state and never calls into progs. */
 	Admin_Frame ();
+	/* Same slot, same reason: both read server/client state and neither
+	   enters progs. Host_Frame has just run NET_Poll, so a server search
+	   in flight is as current here as it ever gets. */
+	Session_Frame ();
 }
 
 void QC_Shutdown (void)
