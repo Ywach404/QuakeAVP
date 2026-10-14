@@ -98,9 +98,15 @@ enum WristComm {
     /// WHY IT IS DERIVED AND NOT DIALLED. The HUD grid is billboarded AT the
     /// wrist joint (`ImmersiveRenderer.wristFrame`: origin = wrist + a 3 cm
     /// lift, half-extents `HudEditor.gridHalfX`/`gridHalfY`), so in the
-    /// glance pose its worst-case reach along the arm is its LONG half,
-    /// `gridHalfX`. The along unit used to be seated at the forearm
-    /// MIDPOINT with nothing clearing that grid at all, which is why no
+    /// NOMINAL glance pose -- forearm roughly in the view azimuth -- its
+    /// reach along the arm is its LONG half, `gridHalfX`. That is a nominal
+    /// figure, not a bound: the grid's `right` is horizontal, perpendicular
+    /// to the view azimuth rather than to the forearm, so at an off-axis
+    /// head yaw the 3 cm wrist lift also projects onto the arm axis and the
+    /// true along-arm support peaks around 0.109 m -- past the 0.0875 m
+    /// this seat clears against nominal `gridHalfX`. The along unit used to
+    /// be seated at the forearm MIDPOINT with nothing clearing that grid at
+    /// all, which is why no
     /// combination of the placement dials could get it out from under the
     /// modular HUD's wrist tiles: the two were seated off different things
     /// and converged near the wrist. Now the clearance is the seat and the
@@ -142,9 +148,14 @@ enum WristComm {
     ///
     /// DELIBERATELY STATIC in the other sense too, a NOMINAL-pose clearance
     /// rather than an exact one: the HUD grid is billboarded, so its true
-    /// projection onto the arm varies with every head movement, and a seat
-    /// that tracked it would slide the keys out from under the player's
-    /// finger as he looked around. Static seat, stable keys.
+    /// projection onto the arm -- `gridHalfX` plus whatever the 3 cm wrist
+    /// lift contributes at the current head yaw -- varies with every head
+    /// movement, and a seat that tracked it would slide the keys out from
+    /// under the player's finger as he looked around. That variation is not
+    /// bounded by this seat: at an adversarial ~46 deg head yaw it can
+    /// overlap the grid again, by about 2 cm. Accepted anyway, because a
+    /// seat chasing the exact projection is worse than one occasionally
+    /// grazed at an off-axis glance. Static seat, stable keys.
     static func alongSeatDistance(rollDegrees: Float) -> Float {
         HudEditor.gridHalfX + hudGap + gridHalfX
     }

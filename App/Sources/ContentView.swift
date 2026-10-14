@@ -33,7 +33,11 @@ struct ContentView: View {
     /// vr_hud: 0 off, 1 wrist, 2 float, 3 modular (default). Mirrors the
     /// cvar's own default since there is no live cvar read-back, so it MUST
     /// keep matching r_null.c's `vr_hud` -- a mirror that drifted would show
-    /// the picker on a mode the engine is not in.
+    /// the picker on a mode the engine is not in. This mirror is display-only
+    /// for the picker above; `HudEditor.Session.enter()` reads `vr_hud`
+    /// live itself rather than trusting this value, so an install whose
+    /// archived mode differs from this hardcoded default is never clobbered
+    /// by opening and closing the tile editor.
     @State private var hudPanelMode: Int = 3
     /// Per-tile vr_hud_<tile>_anchor/_show seeds. Anchors are the four
     /// QC_HUD_ANCHOR_* values (WRIST_OFF 0, WRIST_GUN 1, GUN 2, FLOAT 3).
@@ -1973,13 +1977,15 @@ struct ContentView: View {
     }
 
     /// "Edit HUD Layout": opens the live workbench. `HudEditor.Session.enter`
-    /// now reads every tile's anchor/offset/scale/show straight off the live
-    /// `vr_hud_<tile>_*` cvars itself (via `QC_CvarValue`), so there are no
-    /// Phase 1 mirrors to pass in here -- only the current status-bar mode,
-    /// so `enter` can force `vr_hud 3` for the workbench's frozen tile row
-    /// and restore this mode on Done/Cancel.
+    /// reads every tile's anchor/offset/scale/show, AND the current
+    /// `vr_hud` mode to restore on Done/Cancel, straight off the live
+    /// cvars itself (via `QC_CvarValue`) -- so there is nothing to pass in
+    /// here. It must read the mode live rather than take `hudPanelMode`:
+    /// that mirror has no cvar read-back of its own (see its doc comment
+    /// above) and would otherwise archive its hardcoded default over
+    /// whatever mode the player actually had set.
     private func enterHudLayoutEdit() {
-        HudEditor.shared.enter(currentHudMode: hudPanelMode)
+        HudEditor.shared.enter()
     }
 
     /// Done: commits the workbench's edits to the `vr_hud_<tile>_*` cvars
