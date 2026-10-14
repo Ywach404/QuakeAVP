@@ -5570,7 +5570,8 @@ void QR_DrawCharacter (int x, int y, int num)
 
 void QR_DrawString (int x, int y, const char *str)
 {
-	float	xf[4], buf[6 * 9 * 256], capped[257];
+	float	xf[4], buf[6 * 9 * 256];
+	char	capped[257];
 	int	n;
 	if (!qr_overlay_slot || !str)
 		return;
