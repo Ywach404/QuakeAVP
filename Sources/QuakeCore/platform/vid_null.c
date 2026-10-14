@@ -31,14 +31,30 @@ int	glx, gly, glwidth = 1280, glheight = 720;
 #define QAVP_VID_WIDTH	1280
 #define QAVP_VID_HEIGHT	720
 
+/* The CONSOLE canvas, separate from the one above because it is read by
+   different code for a different purpose. vid.width/height feed the refdef's
+   fov adaptation (AdaptFovx wants the drawable's 16:9 aspect); vid.conwidth/
+   conheight are the coordinate space console.c lays text out in, and in this
+   port that space is mapped onto the renderer's 320x200 overlay plane, which
+   is 1.6:1 and lands on a floating panel rather than a screen.
+
+   Hence 640x400 and not 1280x720: 640 keeps the classic 78-column console
+   (Con_CheckResize: (conwidth >> 3) - 2), and 640x400 is an exact 2:1 onto
+   320x200, so console glyph cells stay square. At 1280 the same text is 158
+   columns at 2 virtual pixels per character -- unreadable on a panel an arm's
+   length away. Nothing but console.c reads these two fields (swept across the
+   whole tree), so this moves the console and nothing else. */
+#define QAVP_CON_WIDTH	640
+#define QAVP_CON_HEIGHT	400
+
 void VID_Init (void)
 {
 	vid.width	= QAVP_VID_WIDTH;
 	vid.height	= QAVP_VID_HEIGHT;
-	vid.conwidth	= QAVP_VID_WIDTH;
-	vid.conheight	= QAVP_VID_HEIGHT;
+	vid.conwidth	= QAVP_CON_WIDTH;
+	vid.conheight	= QAVP_CON_HEIGHT;
 	vid.rowbytes	= QAVP_VID_WIDTH;
-	vid.conrowbytes	= QAVP_VID_WIDTH;
+	vid.conrowbytes	= QAVP_CON_WIDTH;
 	vid.aspect	= (float)QAVP_VID_WIDTH / (float)QAVP_VID_HEIGHT;
 	vid.numpages	= 1;
 	vid.recalc_refdef = 1;

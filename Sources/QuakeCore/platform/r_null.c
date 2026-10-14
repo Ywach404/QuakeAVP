@@ -684,6 +684,10 @@ void Draw_Init (void)
 
 void Draw_NewGame (void)
 {
+	/* Upstream empties the cached-pic list here and reloads the wad pics.
+	   The reload is already covered (Sbar_LoadPics and friends run from
+	   Host_NewGame around this); the cache drop is the bridge's. */
+	QR_DrawNewGame ();
 }
 
 qpic_t *Draw_PicFromWad (const char *name)
@@ -694,29 +698,62 @@ qpic_t *Draw_PicFromWad (const char *name)
 
 qpic_t *Draw_CachePic (const char *path)
 {
-	/* TODO(2D milestone): load the .lmp and cache it. Doing that properly
-	   needs a cache whose lifetime survives Hunk_FreeToLowMark on map
-	   change, which is renderer bookkeeping -- not worth building twice. */
-	(void) path;
-	return QAVP_DummyPic ();
+	/* The dummy substitution is the same contract Draw_PicFromWad has: a
+	   missing lump must not take the menus down, since this is also the
+	   shareware path (no gfx/menudot*, no episode art) and a damaged
+	   install's. Callers read width/height off the result unconditionally. */
+	qpic_t *p = QR_DrawCachePic (path);
+	return p ? p : QAVP_DummyPic ();
 }
 
 void Draw_Character (int x, int y, int num)		{ QR_DrawCharacter (x, y, num); }
 void Draw_DebugChar (char num)				{ (void)num; }
 void Draw_Pic (int x, int y, qpic_t *pic)		{ QR_DrawPic (x, y, pic); }
-void Draw_ConsoleBackground (void)			{ }
-void Draw_TileClear (int x, int y, int w, int h)	{ (void)x; (void)y; (void)w; (void)h; }
-void Draw_FadeScreen (void)				{ }
+void Draw_FadeScreen (void)				{ QR_DrawFadeScreen (); }
 void Draw_String (int x, int y, const char *str)	{ QR_DrawString (x, y, str); }
+
+/* Genuine no-op (see the stub rule in docs/working-notes.md): upstream clears
+   the letterbox around a reduced viewsize with a tiled rock texture. There is
+   no letterbox here -- the overlay plane is exactly the 2D canvas and the 3D
+   view is a headset, not a window inside it -- so there is nothing to clear
+   and nothing downstream reads the result. */
+void Draw_TileClear (int x, int y, int w, int h)	{ (void)x; (void)y; (void)w; (void)h; }
 
 void Draw_Fill (int x, int y, int w, int h, int c, float alpha)
 {
 	QR_DrawFill (x, y, w, h, c, alpha);
 }
 
+void Draw_ConsoleBackground (void)
+{
+	qpic_t	*pic = Draw_CachePic ("gfx/conback.lmp");
+
+	/* Upstream's alpha rule exactly: opaque while the console is FORCED up
+	   (no world behind it to see), scr_conalpha otherwise. The cvar is
+	   upstream's, with upstream's 0.5 default -- on a floating panel 0.5
+	   black over a bright level is thin, and raising scr_conalpha is the
+	   intended answer rather than a new cvar. */
+	float	alpha = con_forcedup ? 1.f : scr_conalpha.value;
+
+	/* Stretched to the console canvas, which CANVAS_CONSOLE then maps onto
+	   the overlay plane -- upstream gets there by overwriting the cached
+	   pic's width/height, which would scribble on a shared cache entry. */
+	GL_SetCanvas (CANVAS_CONSOLE);
+	QR_DrawPicStretch (0, 0, vid.conwidth, vid.conheight, pic, alpha);
+}
+
 void Draw_TransPicTranslate (int x, int y, qpic_t *pic, int top, int bottom)
 {
-	(void)x; (void)y; (void)pic; (void)top; (void)bottom;
+	/* Drawn UNTRANSLATED. The only caller is the multiplayer setup menu's
+	   player preview, where the translation recolours the shirt/trousers to
+	   the chosen palette ranges. Doing it properly means a second
+	   palette-translated upload per colour change (upstream keeps a
+	   menuplyr_pixels copy of the raw indices for exactly that); the preview
+	   is a two-slider cosmetic on a menu page this port cannot even host a
+	   game from yet. Showing the default skin is the honest placeholder --
+	   the pic is there, the colours do not follow the sliders. */
+	(void) top; (void) bottom;
+	QR_DrawPic (x, y, pic);
 }
 
 void GL_SetCanvas (canvastype newcanvas)
