@@ -1239,7 +1239,8 @@ struct ContentView: View {
             // `bgmvolume` the music level -- both CVAR_ARCHIVE, so the engine
             // persists them in config.cfg. Mute zeroes both and unmute restores
             // the slider values, so it works regardless of the archived levels.
-            // (Music has no codec wired yet, so that slider is forward-looking.)
+            // Music is live: USE_CODEC_VORBIS/WAVE are defined and
+            // platform/snd_vorbis_avp.c decodes id1/music/trackNN.ogg.
             VStack(alignment: .leading, spacing: 6) {
                 Text("Sound").font(.caption.weight(.semibold))
                 Toggle("Mute", isOn: Binding(
