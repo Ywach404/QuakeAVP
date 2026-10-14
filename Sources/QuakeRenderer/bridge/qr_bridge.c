@@ -5686,6 +5686,16 @@ nothing else would ever free them -- and QR_FreeTexture only ENQUEUES the
 release for the consumer to drain at its own frame boundary, so dropping one
 that the packet in flight still references is safe (that batch simply finds no
 texture and skips).
+
+The conchars handle goes too, and that one is a dangling pointer rather than
+stale art: QR_EnsureConchars uploads the font WITHOUT TEXPREF_PERSIST (it is
+an ordinary wad pic), so the QR_TexMgr_NewGame pass immediately before this
+has already freed it, while qr_conchars_texnum still holds its number.
+Zeroing it makes the next QR_EnsureConchars re-upload from the new gamedir's
+wad, which is exactly what upstream's Draw_NewGame does by calling
+W_LoadWadFile and Draw_LoadPics again. Without it every piece of TEXT --
+status bar numbers, menu items, console lines -- draws from a freed texture
+after a `game` command.
 ================
 */
 void QR_DrawNewGame (void)
@@ -5702,6 +5712,8 @@ void QR_DrawNewGame (void)
 		qr_cachepics[i].name[0] = '\0';
 	}
 	qr_num_cachepics = 0;
+
+	qr_conchars_texnum = 0;
 }
 
 #ifdef QAVP_HOSTCHECK

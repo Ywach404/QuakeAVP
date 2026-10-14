@@ -658,8 +658,25 @@ void SCR_EndLoadingPlaque (void)
 
 int SCR_ModalMessage (const char *text, float timeout)
 {
-	/* Used for "are you sure you want to quit". No UI to answer with, so
-	   answer yes -- the Swift shell owns confirmation dialogs. */
+	/* No UI to answer a y/n prompt with: the reply arrives through
+	   Char_Event, which this port never calls, so the engine would wait for
+	   a 'y' that cannot be typed. Answering yes keeps the two callers that
+	   exist working -- but note what changed this round, because it is now
+	   reachable where it was not before.
+
+	   menu.c has exactly two: Single Player -> New Game while a server is
+	   running ("start a new game?"), where yes is what the player just
+	   asked for, and Options -> Reset config, where yes runs resetcfg and
+	   wipes every archived cvar -- including the device-tuned vr_* values --
+	   with no confirmation at all. Before this round the menu was invisible
+	   and neither could be reached; now one button press on the wrong row
+	   does it.
+
+	   Not "fixed" by answering no, because the two want opposite defaults
+	   and declining would silently break restarting a game from the menu,
+	   which is the common path. The real answer is a confirmation the panel
+	   can show and the pad can answer -- menu interaction work, not this
+	   round's. Until then: documented, and on the device checklist. */
 	(void) timeout;
 	if (text)
 		Con_Printf ("%s", text);
