@@ -50,6 +50,7 @@ struct WristCommMathTest {
         runHoverPickTests()
         runOrientationTests()
         runForearmFrameTests()
+        runAlongSeatTests()
         print("PASSED (wrist_comm_test.swift)")
     }
 }
@@ -808,16 +809,16 @@ func runForearmFrameTests() {
 
     // MARK: the composed chain -- a key fires where it lights
 
-    // The renderer's ALONG path in full: forearmFrame -> the caller's
-    // mid-forearm origin with the dials along the frame's OWN axes ->
-    // adjustedFrame for the tilt alone. Every cell must still hit-test to
-    // itself, which is what keeps the hover highlight, the drawn quad and
-    // the published hit-test geometry on one plane.
+    // The renderer's ALONG path in full: forearmFrame -> the seated origin
+    // (`alongSeatDistance` down the arm from the wrist) with the dials along
+    // the frame's OWN axes -> adjustedFrame for the tilt alone. Every cell
+    // must still hit-test to itself, which is what keeps the hover
+    // highlight, the drawn quad and the published hit-test geometry on one
+    // plane.
     for deg in [Float(0), 37] {
         let r = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
                                        lateral: lateral, rollDegrees: deg)
-        let mid = (elbow + wrist) * 0.5
-        var seated = mid
+        var seated = wrist - r.right * WristComm.alongSeatDistance(rollDegrees: deg)
         seated += r.right * 0.02
         seated += r.up * -0.01
         seated += r.forward * 0.01
@@ -858,4 +859,122 @@ func runForearmFrameTests() {
            "forearm: f.up is perpendicular to the arm axis -- what +Side would ride, never along it")
 
     print("forearm frame ok")
+}
+
+// MARK: - The along view's seat below the HUD grid
+
+/// `WristComm.alongSeatDistance` is the along view's answer to the across
+/// view's `commOrigin`: one derivation, two drop axes. The across unit drops
+/// DOWN the billboarded wrist plane; this one backs DOWN THE ARM from the
+/// wrist joint, because the HUD grid is billboarded AT that joint and the
+/// along unit used to be seated mid-forearm with nothing clearing it at all
+/// -- which is the collision A. hit on device, where "no matter the
+/// parameters" the gauntlet fought the modular HUD's wrist tiles.
+///
+/// THE REQUIREMENT these pin, in one line: the unit's near edge clears the
+/// HUD grid's long reach by at least `hudGap` at EVERY Rotate angle. The
+/// seat is whatever serves that, and what serves it here is a CONSTANT --
+/// see the first block below.
+func runAlongSeatTests() {
+    let hudReach = HudEditor.gridHalfX          // the HUD grid's LONG half
+    let floor = hudReach + WristComm.hudGap     // no seat may be this close
+    let expected = floor + WristComm.gridHalfX  // ...and this is the seat
+
+    // THE SEAT IS FLAT. `rollDegrees` in the ALONG view is a roll ABOUT THE
+    // ARM -- `forearmFrame` turns up/forward about `right`, and `right` IS
+    // the arm axis -- so the panel's supporting half-extent along that axis,
+    //
+    //     |dot(right, armAxis)| * gridHalfX + |dot(up, armAxis)| * gridHalfY
+    //
+    // is `1 * gridHalfX + 0 * gridHalfY` whatever the dial says. A roll
+    // cannot present the short half down the arm, because the short half is
+    // never pointed down the arm. This is the assertion that fails against
+    // the across view's rotated-rectangle formula, which varies with the
+    // roll and seats the unit 2 cm too close at a quarter turn.
+    for deg in [Float(0), 45, 90, -90, 137, -137, 180, -180, 17, -17] {
+        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), expected),
+               "along seat/\(deg): the seat does not move -- a roll about the arm "
+               + "cannot change the extent along it")
+    }
+    // ...and in metres, the number A. can measure against on device:
+    // 0.0755 + 0.012 + 0.057.
+    assert(near(WristComm.alongSeatDistance(rollDegrees: 0), 0.1445, 1e-5),
+           "along seat: the seat is 14.45 cm down the arm")
+
+    // Swept finely rather than at the pretty angles alone, because a seat
+    // that varied would most likely do it smoothly and could slip between
+    // any two of them.
+    for deg in stride(from: Float(-180), through: 180, by: 5) {
+        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), expected),
+               "along seat/\(deg): still flat on a fine sweep")
+        // THE INVARIANT, stated separately from the value: the seat is
+        // strictly past the HUD's own long reach plus the gap, so the unit's
+        // CENTRE is clear of the grid before its own extent is counted at
+        // all. A seat that dropped the `hudReach` term would still look
+        // plausible on a slider and would fail here at every angle.
+        assert(WristComm.alongSeatDistance(rollDegrees: deg) > floor,
+               "along seat/\(deg): never inside the HUD's long reach + gap")
+    }
+
+    // Symmetry, which a flat seat satisfies trivially and is kept anyway:
+    // it is the property that has to survive if the seat is ever made to
+    // follow the roll again, and it costs nothing to leave standing.
+    for deg in [Float(1), 17, 45, 73, 90, 137, 180] {
+        assert(near(WristComm.alongSeatDistance(rollDegrees: deg),
+                    WristComm.alongSeatDistance(rollDegrees: -deg)),
+               "along seat/\(deg): -t seats exactly like +t")
+    }
+
+    // MARK: composed -- the seat through the real origin math
+
+    // The renderer's ALONG chain as it now stands: `forearmFrame` for the
+    // basis, then `wrist - right * seat` for the centre. Measured in the
+    // arm's own coordinate -- dot with the arm axis, the wrist joint at 0,
+    // the elbow in the negative direction -- which is the coordinate the
+    // HUD grid's half-extents are expressed in too.
+    //
+    // Run at 0 AND at 90: the quarter turn is where the old roll-varying
+    // formula put the unit's edge 8 mm inside the grid, so it is the angle
+    // this block exists to hold.
+    let elbow = SIMD3<Float>(-0.20, 1.05, -0.25)
+    let wrist = SIMD3<Float>(0.10, 1.05, -0.25)
+    let lateral = SIMD3<Float>(0, 1, 0)
+    let armAxis = simd_normalize(wrist - elbow)
+
+    for deg in [Float(0), 90] {
+        let frame = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
+                                           lateral: lateral, rollDegrees: deg)
+        assert(frame.valid, "along seat/\(deg): the reference forearm builds a valid frame")
+        let seat = WristComm.alongSeatDistance(rollDegrees: deg)
+        let centre = wrist - frame.right * seat
+        assert(near(simd_dot(centre - wrist, armAxis), -seat, 1e-6),
+               "along seat/\(deg): the seated centre sits exactly `seat` down the arm")
+        assert(simd_dot(centre - wrist, armAxis) > simd_dot(elbow - wrist, armAxis),
+               "along seat/\(deg): ...and still on the forearm, not past the elbow")
+
+        // The unit's own WRIST-SIDE EDGE, taken from the panel's four
+        // corners projected back onto the arm axis rather than from the seat
+        // formula -- the one quantity here that can disagree with
+        // `alongSeatDistance`, and so the one worth composing. It has to sit
+        // a full `hudGap` clear of the HUD grid's near reach, which is
+        // -gridHalfX in this coordinate. This is the requirement itself,
+        // measured off the real frame rather than restated.
+        var edge = -Float.greatestFiniteMagnitude
+        for sx in [Float(-1), 1] {
+            for sy in [Float(-1), 1] {
+                let corner = centre + frame.right * (sx * WristComm.gridHalfX)
+                                    + frame.up * (sy * WristComm.gridHalfY)
+                edge = max(edge, simd_dot(corner - wrist, armAxis))
+            }
+        }
+        assert(edge <= -(hudReach + WristComm.hudGap) + 1e-6,
+               "along seat/\(deg): the wrist-side edge stays a full hudGap below the HUD grid")
+        // ...and not needlessly far below it either: the seat is the
+        // tightest one that satisfies the clearance, so the edge lands ON
+        // the gap rather than somewhere past it.
+        assert(near(edge, -(hudReach + WristComm.hudGap), 1e-5),
+               "along seat/\(deg): ...and exactly a hudGap, not further out than it needs")
+    }
+
+    print("along seat ok")
 }

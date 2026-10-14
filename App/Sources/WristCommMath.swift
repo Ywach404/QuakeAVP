@@ -66,9 +66,10 @@ enum WristComm {
     ///     |sin t| * gridHalfX + |cos t| * gridHalfY
     ///
     /// -- the supporting half-width of the rotated rectangle in the drop
-    /// direction. This is the ACROSS view's own seating (the along view sits
-    /// on the arm, not under the HUD, and never calls this function -- see
-    /// `forearmFrame`). At t = 0 that is the two-row short half (`gridHalfY`,
+    /// direction. This is the ACROSS view's own seating; the along view never
+    /// calls this function -- it drops down the ARM instead, from its own
+    /// `alongSeatDistance` below, which is this same derivation on the other
+    /// axis. At t = 0 that is the two-row short half (`gridHalfY`,
     /// the panel square to the wrist); at t = +-90 the three-key long half
     /// (`gridHalfX`, the panel turned on its side); in between it sweeps
     /// smoothly, so the unit starts under the HUD at EVERY angle rather than
@@ -83,6 +84,69 @@ enum WristComm {
         let t = rollDegrees * .pi / 180
         let extent = abs(sin(t)) * gridHalfX + abs(cos(t)) * gridHalfY
         return wrist.origin - wrist.up * (HudEditor.gridHalfY + hudGap + extent)
+    }
+
+    /// The ALONG-ARM view's seat: how far DOWN THE ARM, from the wrist joint
+    /// toward the elbow, the unit's centre sits so it clears the HUD grid.
+    ///
+    /// `commOrigin`'s derivation on the other axis -- one seating rule, two
+    /// drop directions. The across unit drops down the billboarded wrist
+    /// plane's own `up`; this one backs along the forearm, because that is
+    /// the only direction a forearm-strapped unit can move without leaving
+    /// the arm.
+    ///
+    /// WHY IT IS DERIVED AND NOT DIALLED. The HUD grid is billboarded AT the
+    /// wrist joint (`ImmersiveRenderer.wristFrame`: origin = wrist + a 3 cm
+    /// lift, half-extents `HudEditor.gridHalfX`/`gridHalfY`), so in the
+    /// glance pose its worst-case reach along the arm is its LONG half,
+    /// `gridHalfX`. The along unit used to be seated at the forearm
+    /// MIDPOINT with nothing clearing that grid at all, which is why no
+    /// combination of the placement dials could get it out from under the
+    /// modular HUD's wrist tiles: the two were seated off different things
+    /// and converged near the wrist. Now the clearance is the seat and the
+    /// dials move the unit FROM it.
+    ///
+    /// The three terms: the HUD's own reach along the arm, the gap, and then
+    /// the unit's own supporting half-extent along that same axis.
+    ///
+    /// AND THAT LAST TERM IS A CONSTANT HERE, which is the one place this
+    /// view's seating genuinely parts from `commOrigin`'s. Both compute the
+    /// same thing -- the panel's supporting half-extent in the drop
+    /// direction, the largest projection of its four corners:
+    ///
+    ///     |dot(right, armAxis)| * gridHalfX + |dot(up, armAxis)| * gridHalfY
+    ///
+    /// -- but `rollDegrees` means something different in each. Across, it is
+    /// an IN-PLANE turn (`orientedFrame` rotates right/up about the panel's
+    /// own normal), so both dot products move and the extent sweeps between
+    /// the two halves. Along, it is a roll ABOUT THE ARM (`forearmFrame`
+    /// rotates up/forward about `right`), and `right` IS the arm axis -- so
+    /// those dot products are 1 and 0 at every angle and the extent is
+    /// `gridHalfX`, flat. A roll cannot present the short half down the arm,
+    /// because the short half is never pointed down the arm.
+    ///
+    /// Written out rather than left as the across view's `|cos t|`/`|sin t|`
+    /// form, which looks like the same rule and is not: that form seats the
+    /// unit 2 cm closer at a quarter turn, putting its near edge 8 mm INSIDE
+    /// the grid -- the exact overlap this function exists to prevent, at the
+    /// one dial a player reaches for when the unit comes up on the wrong
+    /// face.
+    ///
+    /// `rollDegrees` is kept in the signature even though the answer does
+    /// not depend on it, for the reason `commOrigin`'s doc gives for making
+    /// it required: the seat and the roll are resolved together in the
+    /// renderer's one placement chain, and a caller that could seat the unit
+    /// without stating the angle is the shape of bug this parameter makes
+    /// impossible to write. That the answer comes back the same is the
+    /// POINT, and `runAlongSeatTests` pins it at every angle.
+    ///
+    /// DELIBERATELY STATIC in the other sense too, a NOMINAL-pose clearance
+    /// rather than an exact one: the HUD grid is billboarded, so its true
+    /// projection onto the arm varies with every head movement, and a seat
+    /// that tracked it would slide the keys out from under the player's
+    /// finger as he looked around. Static seat, stable keys.
+    static func alongSeatDistance(rollDegrees: Float) -> Float {
+        HudEditor.gridHalfX + hudGap + gridHalfX
     }
 
     /// The communicator ROTATED IN ITS OWN PLANE by `rollDegrees`: a rotation
@@ -213,14 +277,15 @@ enum WristComm {
     /// for the same reason `orientedFrame`'s is: 0 is this view's default
     /// and must be bit-exact.
     ///
-    /// THE ORIGIN IS NOT HERE. The caller seats the unit --
-    /// `mix(elbow, wrist, 0.5)` plus the placement dials along these axes
-    /// (Forward along the arm, Side across it, Height off the skin) -- and
-    /// hit-tests against that separate point, exactly as the across view
-    /// does with `commOrigin`. There is no HUD-relative drop for this view:
-    /// the unit sits ON the arm, not under a floating grid, so there is
-    /// nothing to clear. `frame.origin` is set to the wrist joint for
-    /// completeness and is read by no communicator consumer.
+    /// THE ORIGIN IS NOT HERE. The caller seats the unit -- the wrist joint
+    /// backed off down the arm by `alongSeatDistance`, plus the placement
+    /// dials along these axes (Forward along the arm, Side across it,
+    /// Height off the skin) -- and hit-tests against that separate point,
+    /// exactly as the across view does with `commOrigin`. The seat IS this
+    /// view's HUD clearance: the grid is billboarded at the wrist joint, so
+    /// a unit on the arm has to back away from that joint just as the
+    /// across unit drops below it. `frame.origin` is set to the wrist joint
+    /// for completeness and is read by no communicator consumer.
     ///
     /// DEGENERATE INPUTS come back `invalid`, never a NaN basis: a collapsed
     /// forearm (both joints at one point, which is what an untracked pair
