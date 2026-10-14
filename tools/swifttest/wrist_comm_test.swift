@@ -50,6 +50,7 @@ struct WristCommMathTest {
         runHoverPickTests()
         runOrientationTests()
         runForearmFrameTests()
+        runAlongBaseFrameTests()
         runAlongSeatTests()
         print("PASSED (wrist_comm_test.swift)")
     }
@@ -861,6 +862,213 @@ func runForearmFrameTests() {
     print("forearm frame ok")
 }
 
+// MARK: - The along view's eye-facing base frame
+
+/// `WristComm.alongBaseFrame` is the along view's panel basis as it stands
+/// now: anchored to the forearm but BILLBOARDED TO THE EYE. The skin-locked
+/// construction it replaces (`forearmFrame`, still in the file and still
+/// tested below) put the panel's face on the forearm itself, which reads
+/// edge-on -- "a horizontal line" -- from every natural glance pose, and no
+/// amount of Angle/Rotate recovers that: the gimbal turns a panel the head
+/// is looking along the plane of. The fix is to keep the POSITION on the arm
+/// and hand the ORIENTATION to the eye.
+///
+/// These tests pin the three things that makes true: the face always points
+/// at the eye, the key run still reads elbow -> wrist, and the frame stays a
+/// right-handed orthonormal basis through the shared `orientedFrame` spin.
+func runAlongBaseFrameTests() {
+
+    // THE REFERENCE POSE: a right-handed player's LEFT forearm lifted across
+    // the chest into the Buzz L, in the renderer's corrected tracking space
+    // (+Y up, the player facing -Z, so the player's own right is +X). The
+    // arm runs +X; the eye is above and in front of the wrist, which is
+    // where a head that has glanced down at its own arm is.
+    let elbow = SIMD3<Float>(-0.20, 1.05, -0.25)
+    let wrist = SIMD3<Float>(0.10, 1.05, -0.25)
+    let eye = SIMD3<Float>(0.05, 1.55, 0.05)
+    let armAxis = simd_normalize(wrist - elbow)
+
+    let f = WristComm.alongBaseFrame(wrist: wrist, elbow: elbow, eye: eye)
+    assert(f.valid, "along base: a tracked forearm and a head build a valid frame")
+
+    // MARK: the face points AT THE EYE -- the whole round's reason
+
+    assert(near(f.forward, simd_normalize(eye - wrist), 1e-5),
+           "along base: forward is the unit vector from the wrist toward the eye")
+    assert(near(simd_length(f.forward), 1), "along base: ...and it is unit")
+
+    // MARK: the long axis is the arm AS SEEN IN THE PANEL PLANE
+
+    // Gram-Schmidt rather than the raw bone: `right` has to lie IN the
+    // panel's plane or the basis is not orthonormal and
+    // `HudEditor.offsetInFrame` mis-projects every touch. What survives the
+    // projection is the arm's apparent direction, which is what keeps three
+    // keys reading down the forearm.
+    let projectedArm = simd_normalize(armAxis - f.forward * simd_dot(armAxis, f.forward))
+    assert(near(f.right, projectedArm, 1e-5),
+           "along base: right is the arm axis orthonormalised against the face")
+    assert(simd_dot(f.right, armAxis) > 0,
+           "along base: ...still pointing toward the HAND, so the keys read elbow -> wrist")
+
+    // MARK: orthonormal, right-handed, and still so after the Rotate spin
+
+    // `HudEditor.offsetInFrame` assumes unit axes (a short basis silently
+    // widens the grid's bounds) and a LEFT-handed triple mirrors every
+    // legend while all three dot products still read zero. The spin is the
+    // SHARED `orientedFrame`, the same one the across view uses -- the
+    // structural point of this round -- so it is checked through it.
+    func pinBasis(_ r: HudEditor.WristFrame, _ what: String) {
+        assert(near(simd_length(r.right), 1), "\(what): right is unit")
+        assert(near(simd_length(r.up), 1), "\(what): up is unit")
+        assert(near(simd_length(r.forward), 1), "\(what): forward is unit")
+        assert(abs(simd_dot(r.right, r.up)) < 1e-5, "\(what): right . up is 0")
+        assert(abs(simd_dot(r.up, r.forward)) < 1e-5, "\(what): up . forward is 0")
+        assert(abs(simd_dot(r.right, r.forward)) < 1e-5, "\(what): right . forward is 0")
+        assert(near(simd_cross(r.right, r.up), r.forward, 1e-5),
+               "\(what): right x up == forward")
+    }
+    pinBasis(f, "along base")
+    for deg in [Float(-180), -137, -90, -45, -37, 0, 1, 30, 45, 90, 137, 180] {
+        let r = WristComm.orientedFrame(f, rollDegrees: deg)
+        pinBasis(r, "along base/\(deg)")
+        // THE PANEL NEVER GOES EDGE-ON. An in-plane spin is a rotation about
+        // the face normal, so Rotate turns the key run and leaves the face
+        // pointing exactly where it was -- at the eye. This is the assertion
+        // the skin-locked construction could not make at any angle, and it
+        // is the device symptom stated as a number.
+        assert(near(r.forward, f.forward, 1e-6),
+               "along base/\(deg): Rotate spins the keys IN the plane, the face stays on the eye")
+    }
+
+    // MARK: the panel faces the eye from WHEREVER the eye is
+
+    // Swept rather than asserted once, because "faces you" is a claim about
+    // every glance pose, and the failure A. hit was pose-dependent: the old
+    // frame was perfectly face-on in the one contrived pose and edge-on in
+    // the natural ones.
+    for dx in [Float(-0.6), -0.2, 0, 0.2, 0.6] {
+        for dy in [Float(-0.3), 0.1, 0.5] {
+            for dz in [Float(-0.4), 0.05, 0.7] {
+                let e = wrist + SIMD3(dx, dy, dz)
+                let r = WristComm.alongBaseFrame(wrist: wrist, elbow: elbow, eye: e)
+                assert(r.valid, "along base/eye(\(dx),\(dy),\(dz)): valid")
+                assert(near(simd_dot(r.forward, simd_normalize(e - wrist)), 1, 1e-5),
+                       "along base/eye(\(dx),\(dy),\(dz)): the face is square to the eye, never edge-on")
+                pinBasis(r, "along base/eye(\(dx),\(dy),\(dz))")
+            }
+        }
+    }
+
+    // MARK: the arm pointing AT the eye falls back rather than vanishing
+
+    // The one genuinely degenerate direction: with the bone along the line
+    // of sight there is no arm direction left in the panel plane to lay the
+    // keys along. Refusing the frame would blank the unit every time the arm
+    // swung through the view axis -- a flicker, in the middle of a reach --
+    // so it falls back to the worldUp billboard basis instead, exactly as
+    // `RendererCore.billboardBasis` builds one.
+    let axial = wrist + armAxis * 0.5
+    let fb = WristComm.alongBaseFrame(wrist: wrist, elbow: elbow, eye: axial)
+    assert(fb.valid, "along base: the arm pointing at the eye still builds a frame")
+    pinBasis(fb, "along base/axial")
+    assert(near(fb.right, simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), fb.forward)), 1e-5),
+           "along base/axial: the fallback right is the worldUp billboard's")
+    assert(simd_dot(fb.up, SIMD3<Float>(0, 1, 0)) > 0.9,
+           "along base/axial: ...which leaves the legends upright, not rolled onto their side")
+
+    // ...and the fallback's OWN degenerate case, a face straight up the
+    // world axis, where `cross(worldUp, forward)` is itself zero: the arm
+    // held vertical with the eye above it.
+    let upWrist = SIMD3<Float>(0.10, 1.20, -0.25)
+    let upElbow = SIMD3<Float>(0.10, 0.90, -0.25)
+    let overhead = WristComm.alongBaseFrame(wrist: upWrist, elbow: upElbow,
+                                            eye: upWrist + SIMD3<Float>(0, 0.5, 0))
+    assert(overhead.valid, "along base: a vertical arm under a vertical eye still builds a frame")
+    pinBasis(overhead, "along base/overhead")
+    assert(near(overhead.right, SIMD3<Float>(1, 0, 0), 1e-5),
+           "along base/overhead: ...on the billboard basis's own (1,0,0) fallback")
+
+    // MARK: degenerate inputs are INVALID, never a NaN basis
+
+    // Both are real tracking states: a collapsed forearm (both joints
+    // reported at one point, which is what an untracked pair reports) and an
+    // eye at the wrist (a head pose that has not resolved). Both divide by
+    // zero in a normalisation, so both are refused before the division.
+    let degenerate: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, String)] = [
+        (wrist, wrist, eye, "a collapsed forearm"),
+        (wrist, wrist + SIMD3<Float>(0, 0, 5e-5), eye, "a sub-0.1 mm forearm"),
+        (wrist, elbow, wrist, "an eye at the wrist"),
+        (wrist, elbow, wrist + SIMD3<Float>(5e-5, 0, 0), "an eye 0.05 mm off the wrist"),
+    ]
+    for (w, e, y, name) in degenerate {
+        let bad = WristComm.alongBaseFrame(wrist: w, elbow: e, eye: y)
+        assert(!bad.valid, "along base: \(name) is invalid")
+        assert(bad.right.x.isFinite && bad.up.y.isFinite && bad.forward.z.isFinite,
+               "along base: \(name) is finite, not a NaN basis")
+    }
+
+    // MARK: the renderer's chain in full -- a key fires where it lights
+
+    // `resolveCommPlacement`'s ALONG case, reproduced: the base frame, the
+    // shared `orientedFrame` spin, the seated origin down the arm, and
+    // `adjustedFrame` with ALL FOUR dials -- the same chain shape the across
+    // case has, differing only in the base frame and the seating axis. Every
+    // cell must hit-test to itself, which is what keeps the hover highlight,
+    // the drawn quad and the published hit-test geometry on one plane.
+    for deg in [Float(0), 37] {
+        let oriented = WristComm.orientedFrame(f, rollDegrees: deg)
+        let seated = wrist - armAxis * WristComm.alongSeatDistance(rollDegrees: deg)
+        let dialled = WristComm.adjustedFrame(oriented, origin: seated, tiltDegrees: 12,
+                                              fwd: 0.01, side: 0.02, up: -0.005)
+        // The offsets ride the ORIENTED panel's own axes, which is what the
+        // caption promises and what `adjustedFrame` does -- stated here
+        // because the along view used to fold them into the origin itself
+        // and call `adjustedFrame` for the tilt alone.
+        let sideStep: SIMD3<Float> = oriented.right * 0.02
+        let upStep: SIMD3<Float> = oriented.up * -0.005
+        let fwdStep: SIMD3<Float> = oriented.forward * 0.01
+        let byHand: SIMD3<Float> = seated + sideStep + upStep + fwdStep
+        assert(near(dialled.origin, byHand, 1e-6),
+               "along base/\(deg): the dial offsets ride the oriented panel's axes")
+        for cell in 0 ..< (WristComm.cols * WristComm.rows) {
+            let c = WristComm.cellCenter(cell)
+            let p = dialled.origin + dialled.frame.right * c.x + dialled.frame.up * c.y
+            assert(WristComm.touchedCell(p, commOrigin: dialled.origin,
+                                         frame: dialled.frame) == cell,
+                   "along base/\(deg): dialled cell \(cell) hit-tests to itself")
+        }
+        // ...and cell 0, the first binding, is at the ELBOW end of the run:
+        // the reading direction this view derives from its own joints and
+        // keeps through the spin.
+        let c0 = WristComm.cellCenter(0)
+        let p0 = dialled.origin + dialled.frame.right * c0.x + dialled.frame.up * c0.y
+        assert(simd_dot(p0 - dialled.origin, armAxis) < 0,
+               "along base/\(deg): cell 0 sits on the ELBOW side of the panel")
+    }
+
+    print("along base frame ok")
+}
+
+/// The panel's WRIST-SIDE EDGE in the arm's own coordinate: the largest
+/// projection of its four corners back onto the arm axis, with the wrist
+/// joint at 0 and the elbow in the negative direction. Measured off a real
+/// frame rather than restated from `alongSeatDistance`, which is the whole
+/// point of composing it -- the two can disagree, and that disagreement is
+/// the overlap the seat exists to prevent.
+func cornerReach(_ centre: SIMD3<Float>, _ frame: HudEditor.WristFrame,
+                 _ armAxis: SIMD3<Float>, _ wrist: SIMD3<Float>) -> Float {
+    var edge = -Float.greatestFiniteMagnitude
+    for sx in [Float(-1), 1] {
+        for sy in [Float(-1), 1] {
+            let alongRight: SIMD3<Float> = frame.right * (sx * WristComm.gridHalfX)
+            let alongUp: SIMD3<Float> = frame.up * (sy * WristComm.gridHalfY)
+            let corner: SIMD3<Float> = centre + alongRight + alongUp
+            edge = max(edge, simd_dot(corner - wrist, armAxis))
+        }
+    }
+    return edge
+}
+
 // MARK: - The along view's seat below the HUD grid
 
 /// `WristComm.alongSeatDistance` is the along view's answer to the across
@@ -878,35 +1086,57 @@ func runForearmFrameTests() {
 func runAlongSeatTests() {
     let hudReach = HudEditor.gridHalfX          // the HUD grid's LONG half
     let floor = hudReach + WristComm.hudGap     // no seat may be this close
-    let expected = floor + WristComm.gridHalfX  // ...and this is the seat
 
-    // THE SEAT IS FLAT. `rollDegrees` in the ALONG view is a roll ABOUT THE
-    // ARM -- `forearmFrame` turns up/forward about `right`, and `right` IS
-    // the arm axis -- so the panel's supporting half-extent along that axis,
+    // THE SEAT FOLLOWS THE ROTATE DIAL AGAIN. Under the forearm-locked
+    // construction this view used to have, `rollDegrees` was a roll ABOUT
+    // THE ARM -- the long axis WAS the rotation axis, so no angle could
+    // present the short half down the arm and the seat was flat. The
+    // billboarded along view turns the panel IN ITS OWN PLANE instead
+    // (`orientedFrame`, the same function the across view uses), so the four
+    // corners genuinely swing and the supporting half-extent along the arm
+    // is the rotated rectangle's again:
     //
-    //     |dot(right, armAxis)| * gridHalfX + |dot(up, armAxis)| * gridHalfY
+    //     |cos t| * gridHalfX + |sin t| * gridHalfY
     //
-    // is `1 * gridHalfX + 0 * gridHalfY` whatever the dial says. A roll
-    // cannot present the short half down the arm, because the short half is
-    // never pointed down the arm. This is the assertion that fails against
-    // the across view's rotated-rectangle formula, which varies with the
-    // roll and seats the unit 2 cm too close at a quarter turn.
-    for deg in [Float(0), 45, 90, -90, 137, -137, 180, -180, 17, -17] {
-        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), expected),
-               "along seat/\(deg): the seat does not move -- a roll about the arm "
-               + "cannot change the extent along it")
+    // -- the long half end-on at 0, the short half at a quarter turn, and a
+    // smooth sweep between, so the unit starts clear of the HUD at every
+    // angle rather than overlapping it part-way through a turn.
+    func expected(_ deg: Float) -> Float {
+        let t = deg * .pi / 180
+        return floor + abs(cos(t)) * WristComm.gridHalfX + abs(sin(t)) * WristComm.gridHalfY
+    }
+
+    // THE ENDPOINTS, which are the two readings the formula exists to tell
+    // apart: a flat seat passes the first and fails the second.
+    assert(near(WristComm.alongSeatDistance(rollDegrees: 0), floor + WristComm.gridHalfX),
+           "along seat/0: end-on, so the panel's LONG half supports it")
+    for deg in [Float(180), -180] {
+        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), floor + WristComm.gridHalfX),
+               "along seat/\(deg): a half turn is end-on again")
+    }
+    for deg in [Float(90), -90] {
+        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), floor + WristComm.gridHalfY),
+               "along seat/\(deg): a quarter turn presents the SHORT half down the arm")
+    }
+    // ...and the diagonal, where BOTH halves contribute. A formula that took
+    // the larger of the two extents rather than their supporting sum would
+    // pass every endpoint above and fail here.
+    let diagonal = floor + (WristComm.gridHalfX + WristComm.gridHalfY) * cos(Float.pi / 4)
+    for deg in [Float(45), -45, 135, -135] {
+        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), diagonal),
+               "along seat/\(deg): both halves support the panel at the diagonal")
     }
     // ...and in metres, the number A. can measure against on device:
     // 0.0755 + 0.012 + 0.057.
     assert(near(WristComm.alongSeatDistance(rollDegrees: 0), 0.1445, 1e-5),
-           "along seat: the seat is 14.45 cm down the arm")
+           "along seat: the seat is 14.45 cm down the arm at Rotate 0")
 
-    // Swept finely rather than at the pretty angles alone, because a seat
-    // that varied would most likely do it smoothly and could slip between
-    // any two of them.
+    // Swept at 5 degrees rather than at the pretty angles alone: a seat that
+    // agreed at the endpoints and dipped between them -- which is what a
+    // wrong trig term looks like -- slips between any coarser pair.
     for deg in stride(from: Float(-180), through: 180, by: 5) {
-        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), expected),
-               "along seat/\(deg): still flat on a fine sweep")
+        assert(near(WristComm.alongSeatDistance(rollDegrees: deg), expected(deg)),
+               "along seat/\(deg): the rotated rectangle's own support, on a fine sweep")
         // THE INVARIANT, stated separately from the value: the seat is
         // strictly past the HUD's own long reach plus the gap, so the unit's
         // CENTRE is clear of the grid before its own extent is counted at
@@ -916,9 +1146,10 @@ func runAlongSeatTests() {
                "along seat/\(deg): never inside the HUD's long reach + gap")
     }
 
-    // Symmetry, which a flat seat satisfies trivially and is kept anyway:
-    // it is the property that has to survive if the seat is ever made to
-    // follow the roll again, and it costs nothing to leave standing.
+    // Symmetry: an extent does not care which way the panel was spun, which
+    // is exactly what the absolute values in the formula are there for. -45
+    // therefore seats identically to +45, and a sign slip that only showed
+    // on one side of zero is caught here rather than on device.
     for deg in [Float(1), 17, 45, 73, 90, 137, 180] {
         assert(near(WristComm.alongSeatDistance(rollDegrees: deg),
                     WristComm.alongSeatDistance(rollDegrees: -deg)),
@@ -927,26 +1158,33 @@ func runAlongSeatTests() {
 
     // MARK: composed -- the seat through the real origin math
 
-    // The renderer's ALONG chain as it now stands: `forearmFrame` for the
-    // basis, then `wrist - right * seat` for the centre. Measured in the
-    // arm's own coordinate -- dot with the arm axis, the wrist joint at 0,
-    // the elbow in the negative direction -- which is the coordinate the
-    // HUD grid's half-extents are expressed in too.
+    // The renderer's ALONG chain as it now stands: `alongBaseFrame` for the
+    // basis, the shared `orientedFrame` for the Rotate spin, then
+    // `wrist - armAxis * seat` for the centre. Measured in the arm's own
+    // coordinate -- dot with the arm axis, the wrist joint at 0, the elbow
+    // in the negative direction -- which is the coordinate the HUD grid's
+    // half-extents are expressed in too.
     //
-    // Run at 0 AND at 90: the quarter turn is where the old roll-varying
-    // formula put the unit's edge 8 mm inside the grid, so it is the angle
-    // this block exists to hold.
+    // THE EYE IS PLACED SQUARE TO THE ARM here (same x as the wrist, so the
+    // line of sight is perpendicular to a +X bone), which is the pose the
+    // seat formula is the exact answer for: the panel's long axis is the
+    // PROJECTED arm, and only in this pose does the projection preserve its
+    // full length. Every other pose foreshortens it, and the sweep below
+    // pins that the foreshortening can only ever help.
     let elbow = SIMD3<Float>(-0.20, 1.05, -0.25)
     let wrist = SIMD3<Float>(0.10, 1.05, -0.25)
-    let lateral = SIMD3<Float>(0, 1, 0)
+    let squareEye = SIMD3<Float>(0.10, 1.55, 0.15)
     let armAxis = simd_normalize(wrist - elbow)
 
+    // Run at 0 AND at 90: the quarter turn is where the seat differs most
+    // from a flat one, and where a formula with the two halves swapped
+    // would put the unit's edge 2 cm inside the grid.
     for deg in [Float(0), 90] {
-        let frame = WristComm.forearmFrame(wrist: wrist, elbow: elbow,
-                                           lateral: lateral, rollDegrees: deg)
-        assert(frame.valid, "along seat/\(deg): the reference forearm builds a valid frame")
+        let base = WristComm.alongBaseFrame(wrist: wrist, elbow: elbow, eye: squareEye)
+        assert(base.valid, "along seat/\(deg): the reference pose builds a valid frame")
+        let frame = WristComm.orientedFrame(base, rollDegrees: deg)
         let seat = WristComm.alongSeatDistance(rollDegrees: deg)
-        let centre = wrist - frame.right * seat
+        let centre = wrist - armAxis * seat
         assert(near(simd_dot(centre - wrist, armAxis), -seat, 1e-6),
                "along seat/\(deg): the seated centre sits exactly `seat` down the arm")
         assert(simd_dot(centre - wrist, armAxis) > simd_dot(elbow - wrist, armAxis),
@@ -959,21 +1197,37 @@ func runAlongSeatTests() {
         // a full `hudGap` clear of the HUD grid's near reach, which is
         // -gridHalfX in this coordinate. This is the requirement itself,
         // measured off the real frame rather than restated.
-        var edge = -Float.greatestFiniteMagnitude
-        for sx in [Float(-1), 1] {
-            for sy in [Float(-1), 1] {
-                let corner = centre + frame.right * (sx * WristComm.gridHalfX)
-                                    + frame.up * (sy * WristComm.gridHalfY)
-                edge = max(edge, simd_dot(corner - wrist, armAxis))
+        assert(near(cornerReach(centre, frame, armAxis, wrist),
+                    -(hudReach + WristComm.hudGap), 1e-5),
+               "along seat/\(deg): the wrist-side edge lands exactly a hudGap below the grid")
+    }
+
+    // MARK: off-axis glances can only seat the panel FURTHER out, never nearer
+
+    // The honest half of the nominal. The panel's long axis is the arm as
+    // seen in the panel plane, so at any other glance angle it is the bone
+    // foreshortened by the sine of the arm-to-eye angle -- which shrinks the
+    // extent along the arm. The seat is computed from the unforeshortened
+    // figure, so the real edge can only ever come out below the required
+    // clearance line, never above it. (What this does NOT bound is the HUD
+    // grid's own billboarded reach; see `alongSeatDistance`'s doc for the
+    // ~0.109 m adversarial case, which is a property of the grid, not of
+    // this panel.)
+    let line = -(hudReach + WristComm.hudGap)
+    for dx in [Float(-0.8), -0.3, 0, 0.3, 0.8] {
+        for dy in [Float(-0.4), 0.2, 0.6] {
+            for dz in [Float(-0.5), 0.1, 0.9] {
+                let eye = wrist + SIMD3(dx, dy, dz)
+                let base = WristComm.alongBaseFrame(wrist: wrist, elbow: elbow, eye: eye)
+                assert(base.valid, "along seat/eye(\(dx),\(dy),\(dz)): valid")
+                for deg in [Float(0), 45, 90, 137] {
+                    let frame = WristComm.orientedFrame(base, rollDegrees: deg)
+                    let centre = wrist - armAxis * WristComm.alongSeatDistance(rollDegrees: deg)
+                    assert(cornerReach(centre, frame, armAxis, wrist) <= line + 1e-5,
+                           "along seat/eye(\(dx),\(dy),\(dz))/\(deg): still clear of the grid")
+                }
             }
         }
-        assert(edge <= -(hudReach + WristComm.hudGap) + 1e-6,
-               "along seat/\(deg): the wrist-side edge stays a full hudGap below the HUD grid")
-        // ...and not needlessly far below it either: the seat is the
-        // tightest one that satisfies the clearance, so the edge lands ON
-        // the gap rather than somewhere past it.
-        assert(near(edge, -(hudReach + WristComm.hudGap), 1e-5),
-               "along seat/\(deg): ...and exactly a hudGap, not further out than it needs")
     }
 
     print("along seat ok")

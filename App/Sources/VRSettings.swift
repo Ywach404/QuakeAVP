@@ -277,23 +277,31 @@ final class VRSettings: @unchecked Sendable {
     /// The ALONG view's rotation default, now that the view is FOREARM-LOCKED:
     /// 0, because `WristComm.forearmFrame` already lands the inner-forearm
     /// face by construction -- the lateral axis it is handed points out of
-    /// that face (see `ForearmPose`). The dial is no longer the thing that
-    /// makes the unit along-arm at all; it ROLLS THE UNIT AROUND THE ARM,
-    /// and its job is to recover the one part of the derivation that cannot
-    /// be checked without hardware. If the unit comes up on the OUTSIDE of
-    /// the forearm on device, 180 is the answer and this constant is where
-    /// it gets paid off.
+    /// that face (see `ForearmPose`). The dial no longer picks a face at
+    /// all: the panel billboards at the eye, so Rotate is an IN-PLANE spin
+    /// of the key run, the same thing it means in the across view. Zero is
+    /// the derived reading direction -- the key run laid along the arm's
+    /// apparent direction, cell 0 at the elbow end -- and the dial is there
+    /// for the few tens of degrees of skew between that and however the
+    /// player wants to read it, not for a quarter or half turn.
     ///
-    /// It was +90 while the view was a billboarded panel turned in its own
-    /// plane; under the new construction that number means a quarter roll
-    /// round the arm, which is an EDGE, so it could not simply carry over.
-    /// That is why the along keys below are versioned rather than reused.
+    /// It has been 0 through two constructions and for two different
+    /// reasons, which is why the keys below are versioned rather than
+    /// reused: under the flat-to-skin panel 0 meant "the inner face", and a
+    /// stored 90 meant "stood on the arm's edge". Under this one 90 means
+    /// "the key run across the arm instead of along it". Same number, three
+    /// different placements.
     static let commRotAlongDefault: Float = 0
-    /// The ALONG view's Height default, in metres OFF THE SKIN. One
-    /// centimetre: enough that the unit's stone clears a sleeve and reads as
-    /// sitting ON the arm rather than sunk into it, small enough that it
-    /// still reads as strapped rather than hovering. The other three along
-    /// dials default to 0 -- seated under the HUD, centred, untilted.
+    /// The ALONG view's Height default, in metres. One centimetre, and it
+    /// still means "just off the arm toward you" -- but by a different axis
+    /// than it used to: Height now runs along the billboarded panel's
+    /// `forward`, which points AT THE EYE, rather than out of the forearm's
+    /// skin. Over a forearm glanced at from above the two are within a few
+    /// degrees of each other, which is why the number carries over
+    /// unchanged: enough that the unit clears a sleeve and reads as sitting
+    /// ON the arm rather than sunk into it, small enough that it still reads
+    /// as worn rather than floating. The other four along dials default to
+    /// 0 -- seated under the HUD, centred, untilted, key run along the arm.
     static let commUpAlongDefault: Float = 0.01
 
     // TWO SETS OF THE SAME FIVE DIALS, one per orientation view. On device
@@ -313,24 +321,32 @@ final class VRSettings: @unchecked Sendable {
     private static let commSideKey = "wristCommSide"
     private static let commUpKey = "wristCommUp"
     private static let commRotKey = "wristCommRotAcross"
-    // THE ALONG KEYS ARE VERSIONED (`...2`), and that is a deliberate
-    // one-way migration, not a slip. All five along dials CHANGED MEANING
-    // when the view became forearm-locked: Forward was "toward the eye" and
-    // is now "along the arm", Side was "right in the billboard plane" and is
-    // now "across the arm", Height was "up in that plane" and is now "off
-    // the skin", Rotate was an in-plane spin and is now a roll around the
-    // arm, and the tilt pitches about an axis that is now the bone. A number
-    // tuned against the old meanings describes nothing under the new ones --
-    // a persisted Rotate of 90 would have stood the unit on the EDGE of the
-    // forearm and read as the feature being broken. New keys mean the new
-    // view starts from its own documented defaults; the old keys are simply
-    // left behind, unread and harmless. The ACROSS keys above are untouched,
-    // because that view is unchanged.
-    private static let commTiltAlongKey = "wristCommTiltAlong2"
-    private static let commFwdAlongKey = "wristCommFwdAlong2"
-    private static let commSideAlongKey = "wristCommSideAlong2"
-    private static let commUpAlongKey = "wristCommUpAlong2"
-    private static let commRotAlongKey = "wristCommRotAlong2"
+    // THE ALONG KEYS ARE VERSIONED, and `...3` is the SECOND one-way bump,
+    // for the same reason the first was: the along view's five dials changed
+    // meaning again, so a stored number describes a placement that no longer
+    // exists.
+    //
+    //   `...` (unversioned) -> `...2`: the view went from a billboarded
+    //     panel to one strapped flat on the forearm. Rotate became a roll
+    //     AROUND THE ARM, the offsets moved into the arm's axes.
+    //   `...2` -> `...3`: the panel keeps its forearm ANCHOR but billboards
+    //     its face at the eye again. Rotate is an in-plane spin once more
+    //     (so a stored roll of 90, which used to pick a FACE of the arm, now
+    //     stands the key run across it), the offsets ride the billboarded
+    //     panel's axes rather than the bone's, and Height is "toward you"
+    //     rather than "off the skin". A. tuned the `...2` values against the
+    //     flat panel; carried over, they would mis-place this one and read
+    //     as the fix not working.
+    //
+    // New keys mean the new view starts from its own documented defaults;
+    // the superseded keys are simply left behind, unread and harmless. The
+    // ACROSS keys above are untouched through both bumps, because that view
+    // has not changed.
+    private static let commTiltAlongKey = "wristCommTiltAlong3"
+    private static let commFwdAlongKey = "wristCommFwdAlong3"
+    private static let commSideAlongKey = "wristCommSideAlong3"
+    private static let commUpAlongKey = "wristCommUpAlong3"
+    private static let commRotAlongKey = "wristCommRotAlong3"
     private static let commNoTurnKey = "wristCommNoTurn"
     private static let commAlongArmKey = "wristCommAlongArm"
 
@@ -503,13 +519,13 @@ final class VRSettings: @unchecked Sendable {
     /// slider state, and the same ones `resetWristCommPlacement` writes --
     /// one statement, two readers.
     ///
-    /// The along view's two non-zero defaults are both forearm facts, not
-    /// taste: Height lifts the unit 1 cm off the skin
-    /// (`commUpAlongDefault`), and Rotate is 0 because the frame already
-    /// lands the inner face (`commRotAlongDefault`). Forward 0 is the
-    /// DERIVED SEAT -- `WristComm.alongSeatDistance` down the arm from the
-    /// wrist joint, just clear of the HUD grid billboarded there -- not a
-    /// point on the bone, so the dial slides from a clearance rather than
+    /// The along view's one non-zero default is a forearm fact, not taste:
+    /// Height lifts the unit 1 cm off the arm toward you
+    /// (`commUpAlongDefault`). Rotate is 0 because the base frame already
+    /// lays the key run along the arm (`commRotAlongDefault`). Forward 0 is
+    /// the DERIVED SEAT -- `WristComm.alongSeatDistance` down the arm from
+    /// the wrist joint, just clear of the HUD grid billboarded there -- not
+    /// a point on the bone, so the dial slides from a clearance rather than
     /// from the forearm midpoint.
     static func wristCommDefaults(alongArm: Bool)
         -> (tilt: Float, fwd: Float, side: Float, up: Float, rot: Float) {
@@ -543,16 +559,17 @@ final class VRSettings: @unchecked Sendable {
         _wristCommFwdAlong = Self.clamp(Float(d.double(forKey: Self.commFwdAlongKey)), Self.commOffsetLimit)
         _wristCommSideAlong = Self.clamp(Float(d.double(forKey: Self.commSideAlongKey)), Self.commOffsetLimit)
         // Presence-checked, unlike the dials above it: this one's documented
-        // default is +1 cm off the skin, not 0, and `double(forKey:)` answers
+        // default is +1 cm toward you, not 0, and `double(forKey:)` answers
         // 0 for an absent key -- which would sink the unit into the forearm
-        // on first launch after the update.
+        // on first launch after the update. That absent key is the NORMAL
+        // case on the launch after a version bump, not an edge case.
         _wristCommUpAlong = d.object(forKey: Self.commUpAlongKey) == nil
             ? Self.commUpAlongDefault
             : Self.clamp(Float(d.double(forKey: Self.commUpAlongKey)), Self.commOffsetLimit)
-        // Presence-checked too, although this view's default is now 0 and a
-        // plain read would answer 0 anyway. Kept explicit because the default
-        // is the documented on-device LEVER for the inner/outer face (see
-        // `commRotAlongDefault`): the day it moves to 180, this line must
+        // Presence-checked too, although this view's default is 0 and a plain
+        // read would answer 0 anyway. Kept explicit because the default is
+        // the documented on-device lever for this view's reading direction
+        // (see `commRotAlongDefault`): the day it moves off 0, this line must
         // already be the one that honours it.
         _wristCommRotAlong = d.object(forKey: Self.commRotAlongKey) == nil
             ? Self.commRotAlongDefault

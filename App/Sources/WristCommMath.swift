@@ -92,72 +92,69 @@ enum WristComm {
     /// `commOrigin`'s derivation on the other axis -- one seating rule, two
     /// drop directions. The across unit drops down the billboarded wrist
     /// plane's own `up`; this one backs along the forearm, because that is
-    /// the only direction a forearm-strapped unit can move without leaving
-    /// the arm.
+    /// the only direction a unit riding the arm can move without leaving it.
     ///
     /// WHY IT IS DERIVED AND NOT DIALLED. The HUD grid is billboarded AT the
     /// wrist joint (`ImmersiveRenderer.wristFrame`: origin = wrist + a 3 cm
     /// lift, half-extents `HudEditor.gridHalfX`/`gridHalfY`), so in the
     /// NOMINAL glance pose -- forearm roughly in the view azimuth -- its
-    /// reach along the arm is its LONG half, `gridHalfX`. That is a nominal
-    /// figure, not a bound: the grid's `right` is horizontal, perpendicular
-    /// to the view azimuth rather than to the forearm, so at an off-axis
-    /// head yaw the 3 cm wrist lift also projects onto the arm axis and the
-    /// true along-arm support peaks around 0.109 m -- past the 0.0875 m
-    /// this seat clears against nominal `gridHalfX`. The along unit used to
-    /// be seated at the forearm MIDPOINT with nothing clearing that grid at
-    /// all, which is why no
-    /// combination of the placement dials could get it out from under the
-    /// modular HUD's wrist tiles: the two were seated off different things
-    /// and converged near the wrist. Now the clearance is the seat and the
-    /// dials move the unit FROM it.
+    /// reach along the arm is its LONG half, `gridHalfX`. The along unit
+    /// used to be seated at the forearm MIDPOINT with nothing clearing that
+    /// grid at all, which is why no combination of the placement dials could
+    /// get it out from under the modular HUD's wrist tiles: the two were
+    /// seated off different things and converged near the wrist. Now the
+    /// clearance is the seat and the dials move the unit FROM it.
     ///
     /// The three terms: the HUD's own reach along the arm, the gap, and then
-    /// the unit's own supporting half-extent along that same axis.
+    /// the unit's own supporting half-extent along that same axis --
     ///
-    /// AND THAT LAST TERM IS A CONSTANT HERE, which is the one place this
-    /// view's seating genuinely parts from `commOrigin`'s. Both compute the
-    /// same thing -- the panel's supporting half-extent in the drop
-    /// direction, the largest projection of its four corners:
+    ///     |cos t| * gridHalfX + |sin t| * gridHalfY
     ///
-    ///     |dot(right, armAxis)| * gridHalfX + |dot(up, armAxis)| * gridHalfY
+    /// -- the largest projection of the panel's four corners back onto the
+    /// drop direction, which is `commOrigin`'s term with the two halves
+    /// swapped because the drop here is along the panel's LONG axis instead
+    /// of across it. At t = 0 the panel is end-on and its long half
+    /// (`gridHalfX`) supports it; at t = +-90 the three-key run lies across
+    /// the arm and only the short half (`gridHalfY`) does; in between it
+    /// sweeps smoothly. The absolute values are why -45 seats exactly like
+    /// +45: an extent does not care which way the panel was spun.
     ///
-    /// -- but `rollDegrees` means something different in each. Across, it is
-    /// an IN-PLANE turn (`orientedFrame` rotates right/up about the panel's
-    /// own normal), so both dot products move and the extent sweeps between
-    /// the two halves. Along, it is a roll ABOUT THE ARM (`forearmFrame`
-    /// rotates up/forward about `right`), and `right` IS the arm axis -- so
-    /// those dot products are 1 and 0 at every angle and the extent is
-    /// `gridHalfX`, flat. A roll cannot present the short half down the arm,
-    /// because the short half is never pointed down the arm.
+    /// THAT TERM WAS FLAT FOR ONE ROUND, and the reason it is back is the
+    /// reason this view changed. While the along panel was STRAPPED TO THE
+    /// SKIN, `rollDegrees` rolled it ABOUT THE ARM -- the long axis was the
+    /// rotation axis itself, so the extent along the arm could not move and
+    /// the rotated-rectangle form was simply wrong, seating the unit 2 cm
+    /// too close at a quarter turn. The panel now BILLBOARDS to the eye
+    /// (`alongBaseFrame`) and Rotate is once more an IN-PLANE spin applied
+    /// by the shared `orientedFrame`, so the corners genuinely swing and the
+    /// rotated-rectangle support is the right model again. One dial name,
+    /// two geometries, and the seat has to follow whichever is live.
     ///
-    /// Written out rather than left as the across view's `|cos t|`/`|sin t|`
-    /// form, which looks like the same rule and is not: that form seats the
-    /// unit 2 cm closer at a quarter turn, putting its near edge 8 mm INSIDE
-    /// the grid -- the exact overlap this function exists to prevent, at the
-    /// one dial a player reaches for when the unit comes up on the wrong
-    /// face.
+    /// STILL A NOMINAL, NOT A BOUND, for two separate reasons worth keeping
+    /// apart:
     ///
-    /// `rollDegrees` is kept in the signature even though the answer does
-    /// not depend on it, for the reason `commOrigin`'s doc gives for making
-    /// it required: the seat and the roll are resolved together in the
-    /// renderer's one placement chain, and a caller that could seat the unit
-    /// without stating the angle is the shape of bug this parameter makes
-    /// impossible to write. That the answer comes back the same is the
-    /// POINT, and `runAlongSeatTests` pins it at every angle.
+    ///  * The HUD grid is billboarded, so its true projection onto the arm
+    ///    -- `gridHalfX` plus whatever the 3 cm wrist lift contributes at
+    ///    the current head yaw -- varies with every head movement, peaking
+    ///    around 0.109 m, past the 0.0875 m this seat clears against nominal
+    ///    `gridHalfX`. At an adversarial ~46 deg head yaw the two can
+    ///    overlap again, by about 2 cm. Accepted: a seat that chased the
+    ///    exact projection would slide the keys out from under the player's
+    ///    finger as he looked around, and stable keys beat an occasional
+    ///    graze.
+    ///  * The unit's own long axis is the PROJECTED arm (the arm direction
+    ///    as seen in the panel plane), not the bone, so the extent above is
+    ///    the arm-perpendicular-to-the-eye case. Every other pose foreshortens
+    ///    it, by exactly the sine of the arm-to-eye angle -- which only ever
+    ///    makes the real extent SMALLER than this one, so this reason costs
+    ///    clearance in no direction. `runAlongSeatTests` sweeps eye
+    ///    directions to pin that.
     ///
-    /// DELIBERATELY STATIC in the other sense too, a NOMINAL-pose clearance
-    /// rather than an exact one: the HUD grid is billboarded, so its true
-    /// projection onto the arm -- `gridHalfX` plus whatever the 3 cm wrist
-    /// lift contributes at the current head yaw -- varies with every head
-    /// movement, and a seat that tracked it would slide the keys out from
-    /// under the player's finger as he looked around. That variation is not
-    /// bounded by this seat: at an adversarial ~46 deg head yaw it can
-    /// overlap the grid again, by about 2 cm. Accepted anyway, because a
-    /// seat chasing the exact projection is worse than one occasionally
-    /// grazed at an off-axis glance. Static seat, stable keys.
+    /// Static seat, stable keys.
     static func alongSeatDistance(rollDegrees: Float) -> Float {
-        HudEditor.gridHalfX + hudGap + gridHalfX
+        let t = rollDegrees * .pi / 180
+        return HudEditor.gridHalfX + hudGap
+            + abs(cos(t)) * gridHalfX + abs(sin(t)) * gridHalfY
     }
 
     /// The communicator ROTATED IN ITS OWN PLANE by `rollDegrees`: a rotation
@@ -231,13 +228,116 @@ enum WristComm {
         return turned
     }
 
+    /// The ALONG-ARM view's panel basis: ANCHORED TO THE FOREARM, FACING THE
+    /// EYE. The unit rides the arm -- lift it into the Buzz L and the panel
+    /// goes with it -- but its face is billboarded, so it reads square from
+    /// wherever the head happens to be rather than presenting whatever angle
+    /// the skin is at.
+    ///
+    /// WHY THIS AND NOT `forearmFrame` (below, which is what the renderer
+    /// used to call). That one put the face on the forearm itself, which is
+    /// geometrically honest and unusable: in any natural glance pose the
+    /// inner forearm is nearly edge-on to the eye, so the panel came up as a
+    /// horizontal line on device, and the Angle/Rotate gimbal cannot recover
+    /// it -- turning a panel the head is looking along the PLANE of just
+    /// turns the line. Position and orientation were coupled; this splits
+    /// them. The seat still rides the arm, the face no longer does.
+    ///
+    /// THE BASIS:
+    ///
+    ///  * `forward = normalize(eye - wrist)` -- the panel's normal points at
+    ///    the eye. The seat point for this is the WRIST JOINT, not the
+    ///    panel's own (seated, dialled) centre: the centre is not known yet
+    ///    at this stage of the chain, and over the ~15 cm between them the
+    ///    direction to a head half a metre away differs by a few degrees --
+    ///    less than the panel's own angular size, and a face that chased the
+    ///    exact centre would also rock as the dials moved it.
+    ///  * `right` = the arm axis Gram-Schmidt'd against `forward` -- the
+    ///    arm's direction AS SEEN IN THE PANEL PLANE. `right` is the axis
+    ///    the three key columns run along and the axis
+    ///    `RendererCore.textQuads` lays glyphs along, so this is what keeps
+    ///    the unit reading down the forearm, elbow toward hand, instead of
+    ///    becoming an ordinary wrist billboard with no arm in it.
+    ///  * `up = cross(forward, right)`, the order forced by the invariant
+    ///    every frame in this file keeps, `right x up == forward`:
+    ///    r x (f x r) = f(r.r) - r(r.f) = f for a unit r perpendicular to f.
+    ///    The opposite order reads every legend mirrored while all three dot
+    ///    products still come out zero.
+    ///
+    /// THE DEGENERATE ARM FALLS BACK, IT DOES NOT INVALIDATE. When the bone
+    /// points at the eye there is no arm direction left in the panel plane
+    /// to lay the keys along, and the Gram-Schmidt residual goes to zero.
+    /// Refusing the frame there would blank the unit every time the arm
+    /// swung through the view axis -- a flicker in the middle of a reach,
+    /// and at exactly the moment the panel is biggest on screen. So this
+    /// falls back to the plain worldUp billboard basis instead, the same
+    /// construction `RendererCore.billboardBasis` uses (including its
+    /// (1, 0, 0) escape for a face straight up the world axis), inlined
+    /// rather than called because this file compiles alone in the host test
+    /// harness with no renderer beside it. The result is a readable,
+    /// upright, valid panel that has merely lost its arm-following reading
+    /// direction for the moment the arm is pointed at the player's face.
+    ///
+    /// NO ROLL PARAMETER. Rotate is applied downstream by the shared
+    /// `orientedFrame(_:rollDegrees:)`, exactly as the across view does --
+    /// an IN-PLANE spin about this `forward`, which turns the key run and
+    /// leaves the face on the eye. That shared step is the point: both views
+    /// are now one chain shape (base frame -> `orientedFrame` -> seated
+    /// origin -> `adjustedFrame`), differing only in the base frame and the
+    /// seating axis.
+    ///
+    /// `origin` is set to the wrist joint and `anchor` to -1 for
+    /// completeness; the renderer overwrites both, the same convention
+    /// `forearmFrame` keeps. The unit's real centre is the separate seated
+    /// origin the caller computes (`alongSeatDistance` down the arm), which
+    /// is the only point the hit-test projects against.
+    ///
+    /// DEGENERATE INPUTS come back `invalid`, never a NaN basis: a collapsed
+    /// forearm (both joints at one point, which is what an untracked pair
+    /// reports) and an eye at the wrist (an unresolved head pose). Both
+    /// divide by zero in a normalisation, so both are refused before the
+    /// division rather than after it.
+    static func alongBaseFrame(wrist: SIMD3<Float>, elbow: SIMD3<Float>,
+                               eye: SIMD3<Float>) -> HudEditor.WristFrame {
+        let bone = wrist - elbow
+        let toEye = eye - wrist
+        guard simd_length(bone) > 1e-4, simd_length(toEye) > 1e-4 else {
+            return HudEditor.WristFrame.invalid
+        }
+        let armAxis = simd_normalize(bone)
+        let forward = simd_normalize(toEye)
+
+        let perp = armAxis - forward * simd_dot(armAxis, forward)
+        // 1e-3: a sine threshold, both inputs being unit -- about 0.06 deg
+        // off the line of sight. Below it the normalised residual is noise,
+        // not a reading direction, so the worldUp billboard takes over.
+        var right: SIMD3<Float>
+        if simd_length(perp) > 1e-3 {
+            right = simd_normalize(perp)
+        } else {
+            right = simd_cross(SIMD3<Float>(0, 1, 0), forward)
+            right = simd_length(right) < 1e-4 ? SIMD3<Float>(1, 0, 0) : simd_normalize(right)
+        }
+        let up = simd_cross(forward, right)
+        return HudEditor.WristFrame(anchor: -1, origin: wrist, right: right,
+                                    up: up, forward: forward, valid: true)
+    }
+
     /// The ALONG-ARM view's panel basis, STRAPPED TO THE FOREARM: built from
     /// the two forearm joints and one lateral axis, with no eye, no billboard
     /// and no HUD plane anywhere in it. Lift the arm into the Buzz L and the
-    /// unit rides it; roll the arm and the unit rolls with it. That is the
-    /// whole difference from `orientedFrame`, which only turns a
-    /// billboarded wrist panel in its own plane and therefore never moves
-    /// with the arm at all.
+    /// unit rides it; roll the arm and the unit rolls with it.
+    ///
+    /// NOT CURRENTLY CALLED BY THE RENDERER. The along view now uses
+    /// `alongBaseFrame` above, which keeps this one's forearm ANCHORING and
+    /// hands its ORIENTATION to the eye -- because flat to the skin reads
+    /// edge-on from every natural glance pose, which is the device finding
+    /// that retired this path (see `alongBaseFrame`'s own doc). It stays in
+    /// the file, tested and correct, because the skin-locked construction is
+    /// a plausible future OPTION rather than a mistake: it is the right
+    /// answer the moment the panel is something the hand grips or the arm
+    /// occludes, and deleting a correct derivation of a forearm basis to
+    /// re-derive it later is the trade this file has already lost once.
     ///
     /// `wrist`/`elbow` are the `.forearmWrist`/`.forearmArm` joint positions
     /// and `lateral` is a direction out of the INNER forearm face, all in

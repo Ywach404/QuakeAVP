@@ -123,6 +123,16 @@ final class FingerTips: @unchecked Sendable {
 /// `lateral` POINTS OUT OF THE INNER FOREARM, for BOTH hands. See
 /// `ForearmPose` for which joint-rotation column it is and why the right
 /// hand's is negated.
+///
+/// `lateral` IS CURRENTLY UNREAD BY THE COMMUNICATOR. The along view
+/// billboards its face at the eye (`WristComm.alongBaseFrame`) rather than
+/// laying it flat on the skin, so only `wrist`/`elbow` reach the placement
+/// chain. The axis is still published rather than ripped out: it is the one
+/// input `WristComm.forearmFrame` (also kept) needs, the flat-to-skin
+/// construction is a live option for a later grip/occlusion pass, and the
+/// cost of carrying one already-mirrored unit vector per hand is nil next to
+/// re-deriving which joint column it is -- the part of this that cannot be
+/// worked out without hardware.
 struct ForearmSample {
     var wrist: SIMD3<Float>
     var elbow: SIMD3<Float>

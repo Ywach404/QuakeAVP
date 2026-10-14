@@ -1543,34 +1543,56 @@ final class ImmersiveRenderer {
     /// `adjustedFrame` applies the tilt and all three offsets in that turned
     /// frame's axes.
     ///
-    /// ALONG is the new, forearm-locked chain. `WristComm.forearmFrame`
-    /// builds the basis from the two forearm joints with the Rotate dial as
-    /// a roll AROUND THE ARM; the unit is then seated DOWN THE ARM from the
-    /// wrist joint by `WristComm.alongSeatDistance` and moved along that
-    /// basis -- Forward along the arm, Side across it, Height off the skin
-    /// -- and `adjustedFrame` is called for the TILT ALONE, with zero
-    /// offsets, because the offsets are already in the origin. Passing them
-    /// twice is the one mistake this chain invites and
-    /// `runForearmFrameTests` pins the tilt-only call against it.
+    /// ALONG is the SAME CHAIN SHAPE, and that is the structural win of this
+    /// round: base frame -> `orientedFrame(rot)` -> seated origin ->
+    /// `adjustedFrame(all four dials)`, for both views. They differ in
+    /// exactly two places -- WHICH BASE FRAME (`WristComm.alongBaseFrame`,
+    /// anchored on the forearm and billboarded at the eye, against the
+    /// already-billboarded wrist plane) and WHICH AXIS THE UNIT SEATS ALONG
+    /// (down the arm by `alongSeatDistance`, against down the panel by
+    /// `commOrigin`). Everything else is shared code. The along case used to
+    /// be a second chain with its own spin, its own offset application and
+    /// its own tilt-only `adjustedFrame` call; the two then had to be kept
+    /// in step by hand, and the one mistake that invites -- applying the
+    /// offsets twice, once into the origin and once through `adjustedFrame`
+    /// -- is now unwritable, because there is only one place they are
+    /// applied at all.
     ///
-    /// BOTH cases now clear the HUD grid by derivation, which is the fix for
-    /// the collision A. hit on device: the along unit was seated at the
-    /// forearm MIDPOINT, off a different thing entirely from the wrist
-    /// tiles, and near the wrist the two always fought -- no placement dial
-    /// could separate them because the dials moved one and not the other.
-    /// One derivation, two drop axes: across drops down the billboarded
-    /// wrist plane (`commOrigin`), along backs away down the arm
-    /// (`alongSeatDistance`). The seat applies in EVERY `vr_hud` mode,
+    /// Dial meanings follow from that, identically in both views: the
+    /// offsets ride the ORIENTED panel's own axes, so Forward runs along the
+    /// panel's long axis (which the along base frame has lying down the
+    /// arm), Side across it, Height toward the eye. The along view no longer
+    /// bakes any of them into `origin`.
+    ///
+    /// WHY THE ALONG VIEW BILLBOARDS AT ALL: see
+    /// `WristComm.alongBaseFrame`. Flat to the skin is geometrically honest
+    /// and unreadable -- in any natural glance pose the inner forearm is
+    /// nearly edge-on to the eye, and the panel came up on device as a
+    /// horizontal line that the Angle/Rotate gimbal could not recover. The
+    /// position stays on the arm; only the orientation moved to the eye.
+    ///
+    /// BOTH cases clear the HUD grid by derivation, which is the fix for the
+    /// collision A. hit on device: the along unit was seated at the forearm
+    /// MIDPOINT, off a different thing entirely from the wrist tiles, and
+    /// near the wrist the two always fought -- no placement dial could
+    /// separate them because the dials moved one and not the other. One
+    /// derivation, two drop axes. The seat applies in EVERY `vr_hud` mode,
     /// deliberately -- it is one muscle-memory position, and a unit that
     /// jumped when the player changed HUD style would be worse than a unit
     /// seated a little low with the tiles off. Nothing about the HUD's mode
     /// or its live tiles reaches this chain.
     ///
+    /// `eye` is the head position the caller already has in hand
+    /// (`updateWristComm`'s `headPos`, the device anchor's own translation),
+    /// threaded through rather than re-read: no new publisher, no extra lock
+    /// take, and the frame the panel faces is the same head pose the reveal
+    /// test below is taken against.
+    ///
     /// An invalid pose resolves to an invalid frame at the origin, which is
     /// exactly what the across path produced before and what the caller's
     /// `frame.valid` guard expects.
     private func resolveCommPlacement(
-        _ pose: CommPose, sideIndex: Int,
+        _ pose: CommPose, sideIndex: Int, eye: SIMD3<Float>,
         dials: (alongArm: Bool, tilt: Float, fwd: Float, side: Float, up: Float, rot: Float)
     ) -> (frame: HudEditor.WristFrame, origin: SIMD3<Float>) {
         switch pose {
@@ -1583,22 +1605,22 @@ final class ImmersiveRenderer {
                 tiltDegrees: dials.tilt, fwd: dials.fwd, side: dials.side, up: dials.up)
         case .along(let arm):
             let anchor = sideIndex == 0 ? Int(QC_HUD_ANCHOR_WRIST_OFF) : Int(QC_HUD_ANCHOR_WRIST_GUN)
-            var frame = WristComm.forearmFrame(wrist: arm.wrist, elbow: arm.elbow,
-                                               lateral: arm.lateral, rollDegrees: dials.rot)
-            guard frame.valid else {
+            var base = WristComm.alongBaseFrame(wrist: arm.wrist, elbow: arm.elbow, eye: eye)
+            guard base.valid else {
                 return (HudEditor.WristFrame(anchor: anchor, origin: .zero, right: .zero,
                                              up: .zero, forward: .zero, valid: false), .zero)
             }
-            frame.anchor = anchor
-            // Seated clear of the wrist-billboarded HUD grid, then the dials
-            // in the ARM's own axes -- Forward now slides FROM THE SEAT, so
-            // its 0 is "just below the tiles" rather than "mid-forearm".
-            var origin = arm.wrist - frame.right * WristComm.alongSeatDistance(rollDegrees: dials.rot)
-            origin += frame.right * dials.fwd       // along the arm, toward the hand
-            origin += frame.up * dials.side         // across the arm
-            origin += frame.forward * dials.up      // off the skin
-            return WristComm.adjustedFrame(frame, origin: origin, tiltDegrees: dials.tilt,
-                                           fwd: 0, side: 0, up: 0)
+            base.anchor = anchor
+            let oriented = WristComm.orientedFrame(base, rollDegrees: dials.rot)
+            // Seated down the TRUE bone, not the panel's long axis: the
+            // panel's is the bone as seen in the billboarded plane, and the
+            // unit has to back away along the arm it is riding whatever the
+            // head is doing. Guarded by `base.valid`, which already refused
+            // a collapsed forearm.
+            let armAxis = simd_normalize(arm.wrist - arm.elbow)
+            let origin = arm.wrist - armAxis * WristComm.alongSeatDistance(rollDegrees: dials.rot)
+            return WristComm.adjustedFrame(oriented, origin: origin, tiltDegrees: dials.tilt,
+                                           fwd: dials.fwd, side: dials.side, up: dials.up)
         }
     }
 
@@ -1617,6 +1639,12 @@ final class ImmersiveRenderer {
     /// head pose to glance WITH takes no reveal decision at all and simply
     /// decays what is already up -- never a hard cut, and never a reveal
     /// test against an identity (missing) head pose.
+    ///
+    /// `headPos` does double duty now: the reveal test above takes its
+    /// glance direction from it, and `resolveCommPlacement` bills it as the
+    /// EYE the along view's panel turns its face toward. One head pose, both
+    /// uses -- a second read could in principle face the panel at one eye
+    /// position and test the glance against another.
     ///
     /// A wrist (or forearm) whose live pose drops out while its panel is up
     /// keeps its last valid one briefly -- see `commPose`. While the HUD live
@@ -1755,14 +1783,17 @@ final class ImmersiveRenderer {
             // yesterday's dial into the held pose. That is why `CommPose`
             // carries the forearm's two joints rather than a built frame.
             //
-            // What the dials mean depends on the view, and
-            // `resolveCommPlacement` is the one place that knows: across,
-            // Rotate turns the billboarded unit in its own plane and the
-            // offsets run in those turned axes; along, Rotate ROLLS THE UNIT
-            // AROUND THE ARM and the offsets run in the arm's own axes --
-            // Forward along it, Side across it, Height off the skin. The
-            // settings captions say both.
-            let adjusted = resolveCommPlacement(resolved, sideIndex: side, dials: dials)
+            // What the dials mean no longer depends on the view, which is
+            // the point of `resolveCommPlacement`'s one chain shape: in
+            // BOTH, Rotate spins the unit in its own plane and the offsets
+            // ride the turned panel's axes. The views differ only in which
+            // base frame they spin and which axis they seat along -- across
+            // drops down the billboarded wrist plane, along backs down the
+            // forearm. The settings captions say so in each view's own
+            // words (on the arm, the panel's long axis IS the arm, so
+            // "Forward along the panel" reads as "along your arm").
+            let adjusted = resolveCommPlacement(resolved, sideIndex: side, eye: headPos,
+                                                dials: dials)
             let frame = adjusted.frame
             let origin = adjusted.origin
 
@@ -1909,8 +1940,8 @@ final class ImmersiveRenderer {
     /// Every extent here is PANEL-LOCAL -- `gridHalfX` along `frame.right`,
     /// `gridHalfY` along `frame.up`, cell centres as right/up multiples --
     /// which is what makes either view's rotation free: the caller hands in
-    /// an already-turned frame -- across via `WristComm.orientedFrame`,
-    /// along via `WristComm.forearmFrame`'s own Rodrigues roll -- and the
+    /// an already-turned frame -- `WristComm.orientedFrame` in BOTH views
+    /// now, over each view's own base frame -- and the
     /// bezel, the keys and the legends all turn with it, in agreement with
     /// the hover test and the published geometry built from the same frame.
     /// Keep it that way; a world-axis extent here would wrap the rotated
