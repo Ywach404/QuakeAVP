@@ -12,7 +12,13 @@ import os
 
 /// Which section the persistent control panel shows. Replaces the old Comfort
 /// and Weapon pop-out popovers, which auto-dismissed and hid your values.
-private enum PanelTab: Hashable { case comfort, weapon, admin, capture, debug }
+/// `game` is the out-of-game menu: save/load and multiplayer. It is its own
+/// tab rather than a section under Admin because Admin is cheats over a
+/// loaded level and Capture is demos -- this is the thing you reach for
+/// BEFORE there is a level, and since the engine menu is now console-only it
+/// is the only way to reach any of it. First in the strip for the same
+/// reason.
+private enum PanelTab: Hashable { case game, comfort, weapon, admin, capture, debug }
 
 struct ContentView: View {
     /// Not owned here either — see QuakeEngineViewModel. A window close must
@@ -137,8 +143,16 @@ struct ContentView: View {
     @State private var curlSensUI: Float = 0.72
     @State private var hammerDropUI: Float = 45
     @State private var showWeapon = false
-    @State private var activeTab: PanelTab = .comfort
+    @State private var activeTab: PanelTab = .game
     @State private var roster = EnemyRoster()
+    // The Game tab's engine read-back (save guards, connection, LAN browser)
+    // and its two typed fields. Both fields are filtered as they are typed --
+    // see ConsoleArgument for why a space or a semicolon cannot be allowed to
+    // reach Cbuf.
+    @State private var session = SessionState()
+    @State private var saveName = "s0"
+    @State private var joinAddress = ""
+    @State private var slotPendingDelete: SaveGameSlot?
     @State private var killAI = false
     @State private var infightAttacker: Int32 = 0
     @State private var infightTarget: Int32 = 0
@@ -482,6 +496,7 @@ struct ContentView: View {
     private var controlPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("Panel", selection: $activeTab) {
+                Text("Game").tag(PanelTab.game)
                 Text("Comfort").tag(PanelTab.comfort)
                 Text("Weapon").tag(PanelTab.weapon)
                 Text("Admin").tag(PanelTab.admin)
@@ -493,6 +508,7 @@ struct ContentView: View {
             ScrollView {
                 Group {
                     switch activeTab {
+                    case .game: gameContent
                     case .comfort: comfortContent
                     case .weapon: weaponContent
                     case .admin: adminContent
@@ -1020,6 +1036,193 @@ struct ContentView: View {
             if let img = UIImage(contentsOfFile: path) { return Image(uiImage: img) }
         }
         return nil
+    }
+
+    /// Game tab: save/load and multiplayer -- the out-of-game menu, in the
+    /// window. The engine menu still exists behind the console's `togglemenu`
+    /// but nothing routes to it any more; this is the surface.
+    ///
+    /// Every control here reads ENGINE truth rather than keeping a copy:
+    /// whether Save is allowed and why not comes from the session snapshot
+    /// (which computes it in Host_Savegame_f's own guard order), the slot
+    /// list is a scan of the engine's live `com_gamedir`, the connection
+    /// state is `cls.state`, and the server rows are `slist`'s own hostcache.
+    private var gameContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            saveLoadSection
+            Divider()
+            multiplayerSection
+        }
+        .onAppear { session.startPolling(); session.refreshSlots() }
+        .onDisappear { session.stopPolling() }
+    }
+
+    private var saveLoadSection: some View {
+        let running = engine.status == .running
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Save / Load").font(.headline)
+            Text("The same files the console's save and load use, in the game "
+                 + "directory the engine is running out of.")
+                .font(.caption).foregroundStyle(.secondary)
+            // The engine's own refusal, said in advance. No second opinion:
+            // the reason is computed engine-side next to the guards it
+            // mirrors (session_avp.c).
+            if let why = session.saveBlock.caption {
+                Label(why, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                TextField("Save name", text: Binding(
+                    get: { saveName },
+                    set: { saveName = ConsoleArgument.sanitizedSavegameName($0) }))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                Button("Save") { session.save(saveName) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!running || !session.canSave
+                              || !ConsoleArgument.isValidSavegameName(saveName))
+            }
+            Text("Letters, digits, - and _ only; a space or a semicolon would "
+                 + "split the command before the engine saw the name.")
+                .font(.caption2).foregroundStyle(.secondary)
+            // The engine menu's own twelve slots (menu.c, s0...s11), so a
+            // slot saved here is the slot `load s3` loads.
+            Text("Quick slots").font(.caption).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(SaveGameHeader.quickSlotNames, id: \.self) { slot in
+                        Button(slot) { saveName = slot; session.save(slot) }
+                            .font(.caption.monospacedDigit())
+                    }
+                }
+                .padding(.bottom, 2)
+            }
+            .disabled(!running || !session.canSave)
+            Divider()
+            if session.slots.isEmpty {
+                Text(session.gameDirectory == nil
+                     ? "Waiting for the engine."
+                     : "No saved games yet.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(session.slots) { slot in saveSlotRow(slot, running: running) }
+            }
+            Button("Rescan") { session.refreshSlots() }
+                .font(.caption)
+        }
+        .buttonStyle(.bordered)
+        .confirmationDialog("Delete this saved game?",
+                            isPresented: Binding(get: { slotPendingDelete != nil },
+                                                 set: { if !$0 { slotPendingDelete = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let slot = slotPendingDelete { session.delete(slot) }
+                slotPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { slotPendingDelete = nil }
+        } message: {
+            Text(slotPendingDelete.map { "\($0.name) — \($0.displayText)" }
+                 ?? "")
+        }
+    }
+
+    private func saveSlotRow(_ slot: SaveGameSlot, running: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(slot.name)
+                    .font(.caption.monospaced().weight(.semibold))
+                // The comment line the engine wrote: level name and kills.
+                Text(slot.displayText.isEmpty ? "—" : slot.displayText)
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text(slot.modified.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2).foregroundStyle(.tertiary)
+                if !slot.isLoadable {
+                    // `load` calls Host_Error on a version mismatch, which
+                    // drops you to the console. Say so instead of offering it.
+                    Text("Savegame version \(slot.version) — this engine reads "
+                         + "version \(SaveGameHeader.version).")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
+            }
+            Spacer()
+            Button("Load") { session.load(slot.name) }
+                .disabled(!running || !slot.isLoadable)
+            Button("Delete", role: .destructive) { slotPendingDelete = slot }
+        }
+        .font(.caption)
+    }
+
+    private var multiplayerSection: some View {
+        let running = engine.status == .running
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Multiplayer").font(.headline)
+            HStack {
+                TextField("Address, e.g. 192.168.1.9", text: Binding(
+                    get: { joinAddress },
+                    set: { joinAddress = ConsoleArgument.sanitizedAddress($0) }))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                Button("Join") { session.connect(to: joinAddress) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!running || !ConsoleArgument.isValidAddress(joinAddress))
+            }
+            if session.connected {
+                HStack(spacing: 8) {
+                    Label("Connected", systemImage: "link")
+                        .font(.caption).foregroundStyle(.green)
+                    Spacer()
+                    Button("Disconnect") { session.disconnect() }
+                        .disabled(!running)
+                }
+            }
+            Divider()
+            HStack(spacing: 8) {
+                Button("Find games") { session.searchServers() }
+                    .disabled(!running || session.isSearching)
+                if session.isSearching {
+                    ProgressView().controlSize(.small)
+                    Text("Searching…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text("Quake finds servers by broadcasting on your local network — "
+                 + "there is no master server list, so this shows games on this "
+                 + "network only. Each search starts the list empty and fills it "
+                 + "as replies arrive, over about a second and a half.")
+                .font(.caption2).foregroundStyle(.secondary)
+            if session.servers.isEmpty {
+                Text(session.isSearching ? "Listening…" : "No servers found yet.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(session.servers) { server in serverRow(server, running: running) }
+            }
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private func serverRow(_ server: SessionState.Server, running: Bool) -> some View {
+        Button {
+            session.connect(to: server.address)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(server.name.isEmpty ? server.address : server.name)
+                        .font(.caption.weight(.semibold))
+                    // Whatever the reply carried, including a game this
+                    // headset is hosting itself -- `slist` searches the
+                    // loopback driver too, and filtering it out here would
+                    // be the window disagreeing with the engine.
+                    Text([server.map.isEmpty ? nil : server.map,
+                          server.playersText,
+                          server.address]
+                            .compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption2)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!running)
     }
 
     /// Admin tab: single-player cheats/utilities, sent to the console. Disabled
