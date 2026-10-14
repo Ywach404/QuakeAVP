@@ -39,8 +39,11 @@ targets:
       # guard can't be fixed without diverging from upstream. Scoped to this
       # file rather than the target: everything else in platform/ is new code
       # and compiles clean. Mirrored by extra_cflags() in tools/check-core.sh.
+      # -Wcomma is Xcode's addition and fires five times; -Wno-tautological-
+      # compare is for the host check's clang, kept here so the two lists
+      # read the same.
       - path: Sources/QuakeCore/platform/stb_vorbis.c
-        compilerFlags: "-Wno-tautological-compare"
+        compilerFlags: "-Wno-tautological-compare -Wno-comma"
       - path: Sources/QuakeCore/include
       # The renderer's engine-side half. Pure C (no Metal) so `make check`
       # still proves the whole library on any host; it lives under
