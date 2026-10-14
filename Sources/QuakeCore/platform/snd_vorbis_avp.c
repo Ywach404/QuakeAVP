@@ -47,6 +47,11 @@
  * block only and fails with VORBIS_outofmem -- deterministic, printed, and
  * survivable.
  *
+ * Once alloc_buffer is non-NULL this block is the decoder's ENTIRE budget:
+ * the stb_vorbis struct itself (vorbis_alloc -> setup_malloc), the codebooks,
+ * and the per-frame temporaries (temp_alloc -> setup_temp_malloc) all come
+ * out of it. Nothing falls back to malloc behind our back.
+ *
  * Measured against the ten 44.1 kHz stereo CD rips this port ships with:
  * setup (codebooks) 217,880 bytes at worst, temporaries 4,096. 512 KB is
  * about 2.3x that, which leaves room for a denser codebook than id's rips
@@ -110,6 +115,34 @@ static qboolean S_VORBIS_CodecOpenStream (snd_stream_t *stream)
 	}
 
 	info = stb_vorbis_get_info (priv->vf);
+
+	/*
+	 * Mono or stereo only, the same restriction snd_wave.c:171-176 puts on a
+	 * WAV. It is not a taste question: S_RawSamples (snd_dma.c:702-761) is
+	 * four hardcoded (channels, width) branches with NO else, and s_rawend++
+	 * lives only inside them. Hand it six channels and it paints nothing and
+	 * advances nothing, so BGM_UpdateStream's `while (s_rawend < paintedtime
+	 * + MAX_RAW_SAMPLES)` (bgmusic.c:394) never terminates -- and the
+	 * did_rewind latch cannot save it, because every read after the rewind
+	 * returns > 0 and clears the latch again. The engine thread, which also
+	 * runs the simulation, spins forever: in a headset that reads as the app
+	 * freezing on level load.
+	 *
+	 * Reachable by an ordinary user, not just by a malformed file:
+	 * UIFileSharingEnabled lets anyone drop a 5.1 rip in as
+	 * Documents/id1/music/track02.ogg, and the seeder deliberately leaves
+	 * user-supplied tracks alone. Refusing it costs the music and nothing
+	 * else.
+	 */
+	if (info.channels != 1 && info.channels != 2)
+	{
+		Con_Printf ("%s: unsupported channel count %d (mono or stereo only)\n",
+			    stream->name, info.channels);
+		stb_vorbis_close (priv->vf);
+		free (priv);
+		return false;
+	}
+
 	stream->info.rate = info.sample_rate;
 	stream->info.channels = info.channels;
 	stream->info.bits = 16;
@@ -135,7 +168,7 @@ at the wrong speed rather than like a bug.
 static int S_VORBIS_CodecReadStream (snd_stream_t *stream, int bytes, void *buffer)
 {
 	vorbis_priv_t	*priv = (vorbis_priv_t *) stream->priv;
-	int		frames, got;
+	int		frames, got, err;
 
 	frames = bytes / (stream->info.channels * 2);
 	if (frames <= 0)
@@ -145,11 +178,39 @@ static int S_VORBIS_CodecReadStream (snd_stream_t *stream, int bytes, void *buff
 							stream->info.channels,
 							(short *) buffer,
 							frames * stream->info.channels);
-	if (got < 0)
+	if (got > 0)
+		return got * stream->info.channels * 2;
+
+	/*
+	 * stb never returns a negative count: its inner loop breaks on EOF and on
+	 * a decode error alike and hands back whatever it managed, so a zero is
+	 * ambiguous on its own. Asking stb_vorbis_get_error separates them, and
+	 * the distinction is the difference between two very different
+	 * behaviours in BGM_UpdateStream: a 0 return rewinds and plays on
+	 * (bgmusic.c:449), a negative one prints "Stream read error" and stops
+	 * (bgmusic.c:455-459). Without this, a corrupt packet mid-track looks
+	 * exactly like the end of the song -- the track silently restarts from
+	 * the top at the same spot every time, forever, with nothing in the
+	 * console. That is the failure this file's header argues against.
+	 *
+	 * Measured on a deliberately corrupted 44.1 kHz rip: stb sets
+	 * VORBIS_missing_capture_pattern (30) on the read that stops short, and
+	 * sets nothing at all across 3146 clean reads to a true EOF -- so this
+	 * cannot misreport the end of a good file. VORBIS_need_more_data is
+	 * excluded because stb itself labels it "not a real error".
+	 *
+	 * get_error clears the flag as it reads it, which is what we want: one
+	 * report per fault.
+	 */
+	err = stb_vorbis_get_error (priv->vf);
+	if (err != VORBIS__no_error && err != VORBIS_need_more_data)
+	{
+		Con_Printf ("%s: stb_vorbis decode error %d\n", stream->name, err);
 		return -1;
+	}
 
 	/* 0 is the EOF signal BGM_UpdateStream rewinds on. */
-	return got * stream->info.channels * 2;
+	return 0;
 }
 
 /*
