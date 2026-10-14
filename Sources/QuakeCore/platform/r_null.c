@@ -589,7 +589,15 @@ void SCR_UpdateScreen (void)
 
 	V_RenderView ();
 
-	/* 2D overlay drawing happened here upstream; still stubbed */
+	/* Where upstream's gl_screen.c draws the 2D layer, and where this port
+	   draws the half of it that is not the HUD: the menu, the console, the
+	   intermission scoreboards and the notify lines. It has to be HERE and
+	   not inside the frame build, because V_RenderView above returns
+	   immediately while con_forcedup is set -- which is exactly the state
+	   (no world, or not signed on) in which the console and the main menu
+	   are the only thing on screen. The HUD keeps its own emitters inside
+	   the build, where the world state they read lives. */
+	QR_EmitScreen2D ();
 
 	/* upstream calls this from gl_screen.c after the view: computes the
 	   polyblend colour AND decays the cshift percents. Without it the

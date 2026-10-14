@@ -1,10 +1,12 @@
 /*
  * screen2d_test.c -- the menu/console half of the 2D layer: the CANVAS_MENU
- * and CANVAS_CONSOLE affines and the Draw_CachePic wrapper cache.
+ * and CANVAS_CONSOLE affines, the Draw_CachePic wrapper cache, and
+ * QR_EmitScreen2D's overlay vertex range.
  *
- * The affine checks are pure (globals in, four floats out). The cache checks
- * go through the QAVP_HOSTCHECK hooks, which drive the real code paths --
- * see QR_TestCachePicSlot in qr_bridge.c for what they do and do not fake.
+ * The affine checks are pure (globals in, four floats out). The cache and
+ * range checks go through the QAVP_HOSTCHECK hooks, which drive the real
+ * code paths -- see QR_TestCachePicSlot / QR_TestEmitScreen2DInto in
+ * qr_bridge.c for what they do and do not fake.
  */
 #include "quakedef.h"
 #include "qr_bridge.h"
@@ -86,6 +88,46 @@ static void test_affines (void)
 	vid.conheight = 400;
 }
 
+/* --------------------------------------------------------- emitted range
+ * QR_EmitScreen2D appends to the SAME overlay buffer the HUD emitters have
+ * already filled, and publishes the sub-range it wrote so the HUD consumers
+ * can leave it alone. The hook below drives the real emitter over a test
+ * slot, after laying down a known prefix of fills to stand in for the HUD.
+ */
+extern void QR_TestEmitScreen2DInto (int kdest, int prefix_quads, int prefix_x,
+				     uint32_t *first, uint32_t *count,
+				     uint32_t *total, float *prefix_first_x);
+
+static void test_range (void)
+{
+	uint32_t	first, count, total;
+	float		prefix_x;
+
+	/* key_game, nothing pending: the emitter runs (notify lines) but has
+	   nothing to say, so the range is empty and sits at the end. */
+	QR_TestEmitScreen2DInto (key_game, 3, 7, &first, &count, &total, &prefix_x);
+	CHECK (count == 0, "key_game with no notify lines emits no screen2d verts");
+	CHECK (first == 18, "empty range still starts past the 3-quad prefix");
+	CHECK (total == 18, "empty emit leaves the overlay buffer at the prefix");
+
+	/* key_menu: M_Draw runs. The host fixture has no filesystem, so every
+	   Draw_CachePic misses and the menu's art emits nothing -- the one
+	   thing that does draw is Draw_FadeScreen's single quad, which is
+	   exactly the "now real" body this round added. Six verts, therefore,
+	   and the assertion is deterministic for that reason. */
+	QR_TestEmitScreen2DInto (key_menu, 3, 7, &first, &count, &total, &prefix_x);
+	CHECK (first == 18, "screen2d range starts after the HUD prefix");
+	CHECK (count == 6, "menu emit = Draw_FadeScreen's one quad (no art in the fixture)");
+	CHECK (first + count == total, "range ends at the end of the overlay buffer");
+	CHECK (FEQ(prefix_x, 7), "the HUD prefix's verts are untouched by the emit");
+
+	/* No prefix at all -- the no-world frame, where V_RenderView returned
+	   before any HUD emitter ran. The range must start at zero, not at
+	   whatever the last frame left behind. */
+	QR_TestEmitScreen2DInto (key_menu, 0, 0, &first, &count, &total, &prefix_x);
+	CHECK (first == 0 && count == 6, "no-world frame emits from vert 0");
+}
+
 /* ------------------------------------------------------------- pic cache
  * Draw_CachePic's wrapper cache. The host fixture has no filesystem, so the
  * load always fails; what is under test is the bookkeeping around it and the
@@ -164,6 +206,7 @@ static void test_cache (void)
 int main (void)
 {
 	test_affines ();
+	test_range ();
 	test_cache ();
 
 	printf ("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

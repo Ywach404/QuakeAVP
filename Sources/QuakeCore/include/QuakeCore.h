@@ -451,6 +451,29 @@ typedef struct qc_frame_s {
 	   tiles. Always QC_HUD_TILE_COUNT entries, indexed by QC_HUD_TILE_*. */
 	uint32_t		num_hud_tiles;
 	const qc_hud_tile_t	*hud_tiles;
+
+	/* The REST of the 2D layer -- the menu, the console, the intermission
+	   scoreboards, the console's notify lines -- as one contiguous
+	   sub-range of the same overlay_verts run above. The engine appends it
+	   last (QR_EmitScreen2D, driven from SCR_UpdateScreen rather than from
+	   the frame build, so it also runs on frames with no world), which is
+	   what makes the range a tail.
+
+	   vert_count 0 means nothing is up this frame; the consumer draws its
+	   panel only when it is non-zero, and draws it whatever hud_mode says
+	   -- a menu is not a HUD preset and coexists with the wrist HUD.
+
+	   A VERT range and not a batch range, deliberately: overlay batches
+	   coalesce by texnum with no flush between emitters, so the last HUD
+	   batch and the first menu quad can share one batch when both are
+	   conchars. Consumers therefore intersect each batch's vert range with
+	   the range they want, exactly as drawHudTiles already does for a
+	   batch that straddles two tiles -- and for the same reason, both
+	   halves of a straddling batch get drawn once, by whoever owns them.
+	   The HUD-preset path (drawOverlay, hud_mode 1/2) draws every batch and
+	   so must clip this range OUT; see its guard. */
+	uint32_t		screen2d_first_vert;
+	uint32_t		screen2d_vert_count;
 } qc_frame_t;
 
 /* Latest published frame, or NULL only if nothing has been published yet
