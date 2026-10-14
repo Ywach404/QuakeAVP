@@ -1049,15 +1049,16 @@ final class ImmersiveRenderer {
     /// paused, so anchoring it to anything in the world (or to a hand that
     /// is also working the controller) would be wrong.
     ///
-    /// Gated on the packet's range being non-empty — which is the engine
-    /// saying a menu, console, scoreboard or notify line is actually up —
-    /// and NOT on `hud_mode`: a menu is not a HUD preset, it draws in every
+    /// Gated on `RendererCore.hasScreen2D` — the shared answer to "is the
+    /// engine saying a menu, console, scoreboard or notify line is up", so
+    /// that placing a panel and drawing into it cannot disagree — and NOT
+    /// on `hud_mode`: a menu is not a HUD preset, it draws in every
     /// mode including `vr_hud 0`, and it coexists with the wrist HUD. nil
     /// without a head pose, for `hudPanelModel`'s reason: there is nothing
     /// sane left to anchor to.
     private func screen2dPanelModel(packet: qc_frame_t, originFromDevice: simd_float4x4,
                                     headPoseAvailable: Bool) -> simd_float4x4? {
-        guard packet.screen2d_vert_count > 0,
+        guard RendererCore.hasScreen2D(packet),
               let frame = floatAnchorFrame(originFromDevice: originFromDevice,
                                            headPoseAvailable: headPoseAvailable,
                                            distance: Self.screen2dDistance,
