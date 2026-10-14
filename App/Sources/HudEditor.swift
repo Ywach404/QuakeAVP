@@ -128,9 +128,17 @@ extension HudEditor {
         /// Takes the Cancel snapshot, opens the workbench, and forces
         /// `vr_hud 3` so the workbench's frozen tile row has something to
         /// draw -- the row only renders while the engine is emitting
-        /// modular tiles (Review Focus #4) -- recording `currentHudMode`
-        /// so `commit()`/`cancel()` can restore it.
-        func enter(currentHudMode: Int) {
+        /// modular tiles (Review Focus #4) -- reading the LIVE `vr_hud`
+        /// cvar itself (not a passed-in value) so `commit()`/`cancel()`
+        /// restore whatever mode the player actually had archived. A
+        /// caller-supplied mode would be a SwiftUI mirror with no cvar
+        /// read-back of its own (see `ContentView.hudPanelMode`), so on an
+        /// install whose archived `vr_hud` differs from that mirror's
+        /// hardcoded default, Done/Cancel would silently overwrite the
+        /// player's choice -- reading it here instead means this can never
+        /// diverge from what is actually live, exactly as the tile seeding
+        /// above does.
+        func enter() {
             grab = nil
             for (index, cvar) in Session.tileCvarNames.enumerated() {
                 working[index] = TileEdit(
@@ -146,7 +154,7 @@ extension HudEditor {
                 working[index].spanH = Int(QC_CvarValue("vr_hud_\(cvar)_span_h"))
             }
             snapshot()
-            priorHudMode = currentHudMode
+            priorHudMode = Int(QC_CvarValue("vr_hud"))
             priorDrawViewModel = QC_CvarValue("r_drawviewmodel")
             active = true
             QuakeEngineViewModel.shared.send("vr_hud 3")
