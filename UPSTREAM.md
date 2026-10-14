@@ -60,7 +60,14 @@ stay byte-identical.
 | `net_win.c` `net_wins.c` `net_wipx.c` `pl_win.c` | Windows-only. |
 | `pl_linux.c` | X11 clipboard/icon. Replaced by `platform/pl_null.c`. |
 | `pl_osx.m` | AppKit. Not applicable to visionOS, but worth re-reading when the clipboard is wired up. |
-| `snd_flac.c` `snd_mikmod.c` `snd_modplug.c` `snd_mp3.c` `snd_mp3tag.c` `snd_mpg123.c` `snd_opus.c` `snd_umx.c` `snd_vorbis.c` `snd_xmp.c` | Optional codecs, all needing third-party libs. `snd_wave.c` is kept. |
+| `snd_flac.c` `snd_mikmod.c` `snd_modplug.c` `snd_mp3.c` `snd_mp3tag.c` `snd_mpg123.c` `snd_opus.c` `snd_umx.c` `snd_vorbis.c` `snd_xmp.c` | Optional codecs, all needing third-party libs. `snd_wave.c` is kept, and **vorbis is supplied instead by `platform/snd_vorbis_avp.c`** on the vendored stb_vorbis (below) — same `vorbis_codec` vtable, no libvorbisfile. The headers (`snd_vorbis.h` et al.) *are* vendored; they only declare the vtable symbol. |
+
+Both kept codecs are switched on by `USE_CODEC_WAVE=1 USE_CODEC_VORBIS=1`, which
+`snd_codec.c`'s `S_CodecInit` tests before registering anything. The pair is
+defined in three places that must stay in sync: `project.yml`'s
+`GCC_PREPROCESSOR_DEFINITIONS`, `tools/check-core.sh` and `tools/check-unit.sh`.
+With neither defined the entire BGM chain still compiles and simply plays
+nothing, which is how it shipped until the soundtrack round.
 
 Two files kept despite their misleading names: **`gl_model.c`** (BSP/MDL/SPR
 parsing — the server needs it for collision hulls) and **`gl_refrag.c`**
@@ -69,6 +76,33 @@ parsing — the server needs it for collision hulls) and **`gl_refrag.c`**
 `lodepng.c` is present but **not compiled as its own translation unit** — it is
 `#include`d by `image.c`, exactly as upstream does it. It's excluded in both
 `project.yml` and `tools/check-core.sh`; keep those in sync.
+
+## Other third-party sources
+
+Single-file libraries vendored verbatim. Never hand-edit one: re-download at a
+newer commit and record it here.
+
+| File | Source | Pinned at |
+|---|---|---|
+| `Sources/QuakeCore/engine/miniz.h` | came with QuakeSpasm | the QuakeSpasm commit above (patched, see below) |
+| `Sources/QuakeCore/engine/lodepng.c` / `.h` | came with QuakeSpasm | the QuakeSpasm commit above |
+| `Sources/QuakeCore/platform/stb_vorbis.c` | `github.com/nothings/stb`, public domain / MIT | last commit touching the file: `1ee679ca2ef753a528db5ba6801e1067b40481b8` (repo master `2c980bb59875b0d32144a71867fbdebb2f77cd20` when taken). SHA-256 `4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636` |
+
+Unlike `lodepng.c`, `stb_vorbis.c` **is** its own translation unit: the codec in
+`platform/snd_vorbis_avp.c` includes it a second time under
+`STB_VORBIS_HEADER_ONLY` for the declarations only, which is stb's documented
+two-TU arrangement. `STB_VORBIS_NO_STDIO` is deliberately *not* defined —
+`stb_vorbis_open_file_section` is the whole reason it was chosen, because a
+pak-embedded `music/trackNN.ogg` is a window into a much larger file. It is
+also the one file compiled with an extra `-Wno-tautological-compare`, scoped to
+it alone in `project.yml` and in `tools/check-core.sh`'s `extra_cflags`.
+
+A gotcha worth knowing before chasing a silent soundtrack: `common.c`'s
+loose-file branch (the `registered.value` test in `COM_FindFile`) skips any
+filename containing a `/` when `registered` is 0. Music lives at
+`music/trackNN.ogg`, so with shareware-only data a loose music folder is
+invisible no matter what the codecs say. Dev and release builds both ship
+`pak1`, which sets `registered` to 1.
 
 ## Patches applied to vendored files
 
