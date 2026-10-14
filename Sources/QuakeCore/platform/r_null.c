@@ -350,11 +350,21 @@ cvar_t	vr_wristcomm_off_cmd1   = {"vr_wristcomm_off_cmd1", "impulse 9", CVAR_ARC
 cvar_t	vr_wristcomm_off_cmd2   = {"vr_wristcomm_off_cmd2", "noclip", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_cmd3   = {"vr_wristcomm_off_cmd3", "notarget", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_cmd4   = {"vr_wristcomm_off_cmd4", "fly", CVAR_ARCHIVE};
-/* was "impulse 255" (quad): hands have no hardware button for the engine
-   menu, and a release build must still be able to open it -- quad is a
-   cheat, the menu is a necessity. CVAR_ARCHIVE, so a tuned install keeps
-   whatever the player already rebound this to. */
-cvar_t	vr_wristcomm_off_cmd5   = {"vr_wristcomm_off_cmd5", "togglemenu", CVAR_ARCHIVE};
+/* The MENU key. "qavp_window" is NOT a console command -- it is a RESERVED
+   sentinel the app intercepts (WristCommStore.fire / WristComm.
+   summonWindowCommand) and turns into the same window summon the prayer
+   gesture fires. It never reaches Cbuf, which is why the engine does not
+   need to know the string; if it ever leaked it would print "Unknown
+   command", so the app checks before it sends.
+
+   It was "togglemenu" (and "impulse 255" before that). The SwiftUI window is
+   now the product's entire out-of-game surface -- save/load, multiplayer,
+   settings -- and the engine menu is a console-only vestige, so the one
+   hardware-less way into a menu should open the surface that has everything
+   rather than the one that is being retired. Rebind to "togglemenu" to get
+   the engine menu back on this key; CVAR_ARCHIVE, so a tuned install keeps
+   whatever the player already set. */
+cvar_t	vr_wristcomm_off_cmd5   = {"vr_wristcomm_off_cmd5", "qavp_window", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label0 = {"vr_wristcomm_off_label0", "GOD", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label1 = {"vr_wristcomm_off_label1", "GIVE", CVAR_ARCHIVE};
 cvar_t	vr_wristcomm_off_label2 = {"vr_wristcomm_off_label2", "NOCLIP", CVAR_ARCHIVE};

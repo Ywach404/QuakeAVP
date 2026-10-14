@@ -638,6 +638,27 @@ enum WristComm {
         !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// A RESERVED binding that is handled app-side and never reaches the
+    /// engine: it summons the SwiftUI window, which is now the product's
+    /// whole out-of-game surface. `WristCommStore.fire` compares the cell's
+    /// trimmed command against this and calls the summon closure instead of
+    /// sending; the sixth off-wrist cell ships bound to it (see
+    /// `vr_wristcomm_off_cmd5` in platform/r_null.c).
+    ///
+    /// It is spelled with the project's own prefix precisely so it cannot
+    /// collide with a console command now or after an upstream merge -- if
+    /// it ever did leak to the engine, the engine would print "Unknown
+    /// command" and the key would look broken. Named here, in the pure file,
+    /// so there is one definition and the host test can pin it.
+    static let summonWindowCommand = "qavp_window"
+
+    /// True when a cell's binding is the reserved summon rather than a
+    /// console command. Trimmed, because `shouldFire` already treats
+    /// surrounding whitespace as insignificant and the two must agree.
+    static func isSummonWindow(_ command: String) -> Bool {
+        command.trimmingCharacters(in: .whitespacesAndNewlines) == summonWindowCommand
+    }
+
     /// The one "panel in use" predicate for a single published side: up
     /// (`enabled`) and faded in at least to the fire floor. Both
     /// `WristCommInput.anySideQualifies` and `HandInput.wristCommInUse`

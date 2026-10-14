@@ -68,10 +68,15 @@ int main (void)
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd2"), "noclip"), "off cmd2 defaults to noclip");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd3"), "notarget"), "off cmd3 defaults to notarget");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd4"), "fly"), "off cmd4 defaults to fly");
-	/* cmd5/label5 track a deliberate default change: hands have no hardware
-	   menu button, so the sixth cell now opens the engine menu instead of
-	   giving quad. This test pins the new default on purpose. */
-	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd5"), "togglemenu"), "off cmd5 defaults to togglemenu");
+	/* cmd5/label5 track a SECOND deliberate default change (it was "impulse
+	   255" for quad, then "togglemenu"): the SwiftUI window is now the whole
+	   out-of-game surface and the engine menu is a console-only vestige, so
+	   the MENU key summons the window. "qavp_window" is a reserved sentinel
+	   the app intercepts before Cbuf, not a console command -- pinned here
+	   because the engine side of that contract is this default string, and a
+	   typo in it would present as a dead key. The label stays MENU. */
+	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_cmd5"), "qavp_window"), "off cmd5 defaults to the qavp_window sentinel");
+	CHECK (Cmd_Exists ("qavp_window") == false, "the sentinel is deliberately NOT a console command");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label0"), "GOD"), "off label0 defaults to GOD");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label1"), "GIVE"), "off label1 defaults to GIVE");
 	CHECK (!strcmp (QC_CvarString ("vr_wristcomm_off_label2"), "NOCLIP"), "off label2 defaults to NOCLIP");
