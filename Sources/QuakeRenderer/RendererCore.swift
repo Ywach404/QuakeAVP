@@ -854,9 +854,18 @@ final class RendererCore {
         // batch, so the boundary only exists in vertex space. Same mechanism
         // `drawHudTiles` uses for a batch straddling two tiles, and the
         // reason the packet carries a vert range rather than a batch range.
+        //
+        // Both bounds are clamped into the buffer before they become a
+        // Range: a Swift `a..<b` with a > b TRAPS, which would take the
+        // render thread down rather than drop a frame, and it would do so
+        // before drawOverlayBatch's own max/min could clamp anything. The
+        // producer keeps the range a tail inside the buffer, so this is
+        // defensive — but it is the one place here that did arithmetic on a
+        // packet field instead of clamping it, and every other consumer in
+        // this file clamps.
         let total = Int(frame.num_overlay_verts)
-        let screen2dStart = Int(frame.screen2d_first_vert)
-        let screen2dEnd = screen2dStart + Int(frame.screen2d_vert_count)
+        let screen2dStart = min(Int(frame.screen2d_first_vert), total)
+        let screen2dEnd = min(screen2dStart + Int(frame.screen2d_vert_count), total)
         for i in 0..<Int(frame.num_overlay_batches) {
             let b = batches[i]
             if frame.screen2d_vert_count == 0 {
@@ -866,6 +875,19 @@ final class RendererCore {
                 drawOverlayBatch(b, within: screen2dEnd..<total, encoder: encoder)
             }
         }
+    }
+
+    /// Whether this packet has a 2D panel (menu / console / scoreboard /
+    /// notify lines) to draw at all. ONE definition, because two consumers
+    /// act on it a step apart — `ImmersiveRenderer.screen2dPanelModel`
+    /// decides whether to place a panel and `drawScreen2D` decides whether
+    /// to draw into it — and a frame placed but not drawn, or the reverse,
+    /// is the kind of disagreement that only shows up as a flicker.
+    /// Emitted counts are always a multiple of 6; the threshold is "at
+    /// least one triangle" so a malformed packet cannot ask for a
+    /// zero-triangle draw.
+    static func hasScreen2D(_ frame: qc_frame_t) -> Bool {
+        frame.screen2d_vert_count >= 3
     }
 
     /// Draws the part of one overlay batch that falls inside `range`, under
@@ -899,11 +921,21 @@ final class RendererCore {
     ///
     /// Draws nothing when the range is empty, which is every ordinary
     /// playing frame, so an idle frame costs one comparison.
+    ///
+    /// A frame that DOES draw uploads the whole overlay run once per call,
+    /// and the two-pass immersive layout calls this once per eye — so a menu
+    /// frame costs up to two full-buffer allocations on top of the status
+    /// bar's own. That is the idiom every draw in this file already uses
+    /// (`drawOverlay` and `drawHudTiles` each make their own copy per call)
+    /// and hoisting it means a per-frame buffer cache keyed on packet
+    /// identity, which is a change to those shipped paths as well. Left
+    /// alone deliberately; the cost is bounded by "a menu is up", and if a
+    /// menu frame ever drops on device this is the first thing to hoist.
     func drawScreen2D(frame: qc_frame_t,
                       viewproj0: simd_float4x4, viewproj1: simd_float4x4,
                       pipelines: RenderPipelines,
                       encoder: MTLRenderCommandEncoder) {
-        guard frame.screen2d_vert_count >= 3, frame.num_overlay_batches > 0,
+        guard Self.hasScreen2D(frame), frame.num_overlay_batches > 0,
               let verts = frame.overlay_verts, let batches = frame.overlay_batches,
               let pipeline = pipelines.text
         else { return }
@@ -921,9 +953,12 @@ final class RendererCore {
             encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
         }
         // The whole run is uploaded so vertex indices still match the
-        // packet's; only this range is drawn.
-        let start = Int(frame.screen2d_first_vert)
-        let range = start..<(start + Int(frame.screen2d_vert_count))
+        // packet's; only this range is drawn. Clamped into the buffer for
+        // drawOverlay's reason: an out-of-range pair would trap building
+        // the Range, not merely draw nothing.
+        let total = Int(frame.num_overlay_verts)
+        let start = min(Int(frame.screen2d_first_vert), total)
+        let range = start..<min(start + Int(frame.screen2d_vert_count), total)
         for i in 0..<Int(frame.num_overlay_batches) {
             drawOverlayBatch(batches[i], within: range, encoder: encoder)
         }
@@ -1219,20 +1254,16 @@ final class RendererCore {
                 encoder.setVertexBytes(raw.baseAddress!, length: MemoryLayout<GuideUniforms>.stride, index: 1)
             }
 
-            let tileStart = Int(tile.first_vert)
-            let tileEnd = tileStart + Int(tile.vert_count)
+            // The intersection is `drawOverlayBatch`'s, not a second copy of
+            // it: this loop IS where that arithmetic was first written, and
+            // the menu/console path needs the identical clip, so there is
+            // one of it. Bounds clamped into the buffer as everywhere else
+            // here, since a Range literal with lowerBound > upperBound traps.
+            let total = Int(frame.num_overlay_verts)
+            let tileStart = min(Int(tile.first_vert), total)
+            let tileRange = tileStart..<min(tileStart + Int(tile.vert_count), total)
             for b in 0..<Int(frame.num_overlay_batches) {
-                let batch = batches[b]
-                let batchStart = Int(batch.first_vert)
-                let batchEnd = batchStart + Int(batch.vert_count)
-                let start = max(batchStart, tileStart)
-                let end = min(batchEnd, tileEnd)
-                guard end > start else { continue }   // no overlap with this tile
-                guard let tex = textures[batch.texnum] else { continue }
-                encoder.setFragmentTexture(tex, index: 0)
-                encoder.drawPrimitives(type: .triangle,
-                                       vertexStart: start,
-                                       vertexCount: end - start)
+                drawOverlayBatch(batches[b], within: tileRange, encoder: encoder)
             }
         }
     }
