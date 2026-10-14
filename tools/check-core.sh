@@ -33,6 +33,12 @@ CFLAGS=(
   -std=gnu99 -O0 -g0
   -DQAVP_PLATFORM
   -DQAVP_HOSTCHECK
+  # Background music. snd_codec.c registers a codec only when its USE_CODEC_*
+  # macro is defined: wave is the vendored snd_wave.c, vorbis is
+  # platform/snd_vorbis_avp.c on stb_vorbis. Keep in sync with project.yml's
+  # GCC_PREPROCESSOR_DEFINITIONS and tools/check-unit.sh.
+  -DUSE_CODEC_WAVE=1
+  -DUSE_CODEC_VORBIS=1
   -I"$ROOT/Sources/QuakeCore/engine"
   -I"$ROOT/Sources/QuakeCore/platform"
   -I"$ROOT/Sources/QuakeCore/include"
@@ -56,6 +62,17 @@ skip() {
   return 1
 }
 
+# Per-file warning escapes. Scoped to one file on purpose: everything in
+# platform/ is new code and is meant to compile clean at the default level.
+# stb_vorbis.c is vendored verbatim (UPSTREAM.md), so its one tautological
+# pointer-overflow guard cannot be fixed without diverging from upstream.
+# Mirrored by the compilerFlags on the same file in project.yml.
+extra_cflags() {
+  case "$(basename "$1")" in
+    stb_vorbis.c) echo "-Wno-tautological-compare" ;;
+  esac
+}
+
 mkdir -p "$OUT"
 rm -f "$OUT"/*.o
 
@@ -64,7 +81,9 @@ for src in "$ROOT"/Sources/QuakeCore/engine/*.c "$ROOT"/Sources/QuakeCore/platfo
            "$ROOT"/Sources/QuakeRenderer/bridge/*.c; do
   skip "$src" && continue
   obj="$OUT/$(basename "$src" .c).o"
-  if ! "$CC" "${CFLAGS[@]}" -c -o "$obj" "$src" 2> "$OUT/last.err"; then
+  # ${xtra[@]+...} so an empty array doesn't trip `set -u` on bash 3.2.
+  read -r -a xtra <<< "$(extra_cflags "$src")"
+  if ! "$CC" "${CFLAGS[@]}" ${xtra[@]+"${xtra[@]}"} -c -o "$obj" "$src" 2> "$OUT/last.err"; then
     echo "COMPILE FAIL: ${src#$ROOT/}"
     sed 's/^/    /' "$OUT/last.err" | head -25
     fail=1

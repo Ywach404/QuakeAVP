@@ -32,6 +32,15 @@ targets:
           - "progdefs.q1"
           - ".upstream-rev"
       - path: Sources/QuakeCore/platform
+        excludes:
+          # Compiled below with its own flag; see there.
+          - "stb_vorbis.c"
+      # Vendored verbatim (UPSTREAM.md), so its one tautological pointer
+      # guard can't be fixed without diverging from upstream. Scoped to this
+      # file rather than the target: everything else in platform/ is new code
+      # and compiles clean. Mirrored by extra_cflags() in tools/check-core.sh.
+      - path: Sources/QuakeCore/platform/stb_vorbis.c
+        compilerFlags: "-Wno-tautological-compare"
       - path: Sources/QuakeCore/include
       # The renderer's engine-side half. Pure C (no Metal) so `make check`
       # still proves the whole library on any host; it lives under
@@ -42,7 +51,12 @@ targets:
         PRODUCT_NAME: QuakeCore
         # QAVP_PLATFORM switches quakedef.h and miniz.h off SDL/OpenGL and
         # onto the shims in Sources/QuakeCore/platform. Nothing else reads it.
-        GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) QAVP_PLATFORM=1"
+        # USE_CODEC_* is what snd_codec.c's S_CodecInit tests before
+        # registering a codec; with neither defined the whole BGM chain
+        # compiles and does nothing. WAVE is the vendored snd_wave.c, VORBIS
+        # is platform/snd_vorbis_avp.c on stb_vorbis. Keep the pair in sync
+        # with tools/check-core.sh and tools/check-unit.sh.
+        GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) QAVP_PLATFORM=1 USE_CODEC_WAVE=1 USE_CODEC_VORBIS=1"
         GCC_C_LANGUAGE_STANDARD: gnu99
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/Sources/QuakeCore/engine"
