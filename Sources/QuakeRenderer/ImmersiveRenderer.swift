@@ -69,11 +69,17 @@ final class ImmersiveRenderer {
     // like the wrist latch above.
     private var commOpacity: [Float] = [0, 0]
     private var commRevealed: [Bool] = [false, false]
-    /// Per-side last valid wrist frame, and when it was last seen, for the
-    /// communicator's OWN bounded occlusion hold -- see `commWristFrame`,
+    /// Per-side last valid communicator POSE, and when it was last seen, for
+    /// the communicator's OWN bounded occlusion hold -- see `commPose`,
     /// which documents why the editor latch above cannot serve here.
     /// Render-thread only, like the reveal state.
-    private var commHeldFrame: [HudEditor.WristFrame?] = [nil, nil]
+    ///
+    /// ONE hold per side, whichever view is up: the across view's
+    /// billboarded wrist plane and the along view's forearm pose are the
+    /// two cases of `CommPose`, and both go through the same storage, the
+    /// same timestamp and the same reveal gate. A second hold for the
+    /// second view would be a second thing to keep in step with the first.
+    private var commHeldPose: [CommPose?] = [nil, nil]
     private var commHeldSince: [Double] = [0, 0]
     /// Per-side index of the fingertip (0 = left, 1 = right) last seen
     /// hovering this side's grid -- the hand the solid index-finger model is
@@ -1412,7 +1418,7 @@ final class ImmersiveRenderer {
     private func standDownWristComm() {
         commOpacity = [0, 0]
         commRevealed = [false, false]
-        commHeldFrame = [nil, nil]
+        commHeldPose = [nil, nil]
         commHeldSince = [0, 0]
         // The hovering hand goes with the flash it serves: resuming with a
         // latched hand would draw the finger model on a hand that is no longer
@@ -1426,8 +1432,56 @@ final class ImmersiveRenderer {
         WristCommFeedback.shared.invalidate()
     }
 
-    /// The wrist frame the communicator uses for `side` this frame: the live
-    /// one whenever it is valid, and otherwise -- for at most
+    /// The RAW, PRE-DIAL pose one side's communicator is built from, in
+    /// whichever view is active -- the single thing the occlusion hold holds.
+    ///
+    /// Raw rather than resolved, deliberately, and that is the same choice
+    /// the across path has always made: the placement dials are a placement
+    /// on top of whatever pose is current, so re-dialling mid-hold has to
+    /// move the panel rather than find yesterday's dial baked into the held
+    /// pose. Holding the resolved frame would bake it.
+    ///
+    /// Two cases because there are two genuinely different sources, not two
+    /// renderings of one: `across` is the eye-billboarded wrist plane
+    /// (`wristFrames()`), which is what the watch-glance view wants and
+    /// which does not move with the arm; `along` is the forearm itself
+    /// (`ForearmPose`), which is what a unit STRAPPED to the arm wants and
+    /// which has no eye in it at all.
+    private enum CommPose {
+        case across(HudEditor.WristFrame)
+        case along(ForearmSample)
+
+        var valid: Bool {
+            switch self {
+            case .across(let frame): return frame.valid
+            case .along(let sample): return sample.valid
+            }
+        }
+    }
+
+    /// This side's live communicator pose for the active view. The across
+    /// case is the frame the HUD tiles already sit on, so the two can never
+    /// drift apart; the along case is the forearm of the hand on that side
+    /// (side 0 = off hand, side 1 = gun hand).
+    ///
+    /// `arms` and `offIsLeft` are passed in rather than read here because
+    /// both sides must agree on them: a handedness sampled per side could,
+    /// if the setting moved mid-frame, strap BOTH panels to the same arm --
+    /// the same reason the dials are one atomic read.
+    private func liveCommPose(side: Int, alongArm: Bool,
+                              wrists: (off: HudEditor.WristFrame, gun: HudEditor.WristFrame),
+                              arms: (left: ForearmSample, right: ForearmSample),
+                              offIsLeft: Bool) -> CommPose {
+        guard alongArm else { return .across(side == 0 ? wrists.off : wrists.gun) }
+        // Off hand is the LEFT hand for a right-handed player; the gun hand
+        // is the other one -- the mapping `offHandWristPosition` makes from
+        // the same `VRSettings.rightHanded`.
+        let wantLeft = side == 0 ? offIsLeft : !offIsLeft
+        return .along(wantLeft ? arms.left : arms.right)
+    }
+
+    /// The pose the communicator uses for `side` this frame: the live one
+    /// whenever it is valid, and otherwise -- for at most
     /// `WristComm.occlusionHold` seconds, and only while this side is
     /// revealed past `WristComm.fireRevealFloor` -- the last valid one.
     ///
@@ -1449,24 +1503,87 @@ final class ImmersiveRenderer {
     /// fade out. Bounded for the same reason: a wrist genuinely lowered out
     /// of view still hides, just a quarter-second later.
     ///
-    /// The frame returned here feeds BOTH the drawn quads and the published
-    /// `WristCommGeometry` side, so the fingertip is hit-tested against the
-    /// panel the eye is looking at -- the same three-path discipline the HUD
-    /// keeps between its tiles, its editor grid and its hit-test geometry.
-    private func commWristFrame(side: Int, live: HudEditor.WristFrame,
-                                now: Double) -> HudEditor.WristFrame {
+    /// The pose returned here resolves into the ONE frame + origin that
+    /// feeds the drawn quads, the hover test and the published
+    /// `WristCommGeometry` side alike, so the fingertip is hit-tested
+    /// against the panel the eye is looking at -- the same three-path
+    /// discipline the HUD keeps between its tiles, its editor grid and its
+    /// hit-test geometry. It covers BOTH views: the along view's arm is
+    /// hidden by the reaching hand just as readily as the across view's
+    /// wrist is, and more so, since the reach crosses the whole forearm.
+    private func commPose(side: Int, live: CommPose, now: Double) -> CommPose {
         if live.valid {
-            commHeldFrame[side] = live
+            commHeldPose[side] = live
             commHeldSince[side] = now
             return live
         }
         guard commOpacity[side] > WristComm.fireRevealFloor,
-              let held = commHeldFrame[side],
+              let held = commHeldPose[side],
               now - commHeldSince[side] <= WristComm.occlusionHold else {
-            commHeldFrame[side] = nil
+            commHeldPose[side] = nil
             return live
         }
         return held
+    }
+
+    /// One side's resolved communicator placement: the panel frame and the
+    /// panel centre, from a raw pose plus the active view's five dials.
+    /// THE one resolution -- reveal, hover, quads, press flash, finger beads
+    /// and the published geometry all take this pair and nothing else.
+    ///
+    /// ACROSS is bit-for-bit the chain that shipped: `orientedFrame` turns
+    /// the billboarded wrist plane in its own plane, `commOrigin` drops the
+    /// unit clear of the HUD grid by the rotated rectangle's own extent, and
+    /// `adjustedFrame` applies the tilt and all three offsets in that turned
+    /// frame's axes.
+    ///
+    /// ALONG is the new, forearm-locked chain. `WristComm.forearmFrame`
+    /// builds the basis from the two forearm joints with the Rotate dial as
+    /// a roll AROUND THE ARM; the unit is then seated at the FOREARM
+    /// MIDPOINT and moved along that basis -- Forward along the arm, Side
+    /// across it, Height off the skin -- and `adjustedFrame` is called for
+    /// the TILT ALONE, with zero offsets, because the offsets are already
+    /// in the origin. Passing them twice is the one mistake this chain
+    /// invites and `runForearmFrameTests` pins the tilt-only call against
+    /// it.
+    ///
+    /// There is no HUD-relative drop in the along case, and that absence is
+    /// the point: the across unit hangs under a floating HUD grid and has to
+    /// clear it, while this one sits ON the arm, where the only thing worth
+    /// clearing is the sleeve (the Height dial, defaulting to 1 cm).
+    ///
+    /// An invalid pose resolves to an invalid frame at the origin, which is
+    /// exactly what the across path produced before and what the caller's
+    /// `frame.valid` guard expects.
+    private func resolveCommPlacement(
+        _ pose: CommPose, side: Int,
+        dials: (alongArm: Bool, tilt: Float, fwd: Float, side: Float, up: Float, rot: Float)
+    ) -> (frame: HudEditor.WristFrame, origin: SIMD3<Float>) {
+        switch pose {
+        case .across(let wrist):
+            let oriented = WristComm.orientedFrame(wrist, rollDegrees: dials.rot)
+            return WristComm.adjustedFrame(
+                oriented,
+                origin: wrist.valid ? WristComm.commOrigin(wrist: wrist,
+                                                           rollDegrees: dials.rot) : .zero,
+                tiltDegrees: dials.tilt, fwd: dials.fwd, side: dials.side, up: dials.up)
+        case .along(let arm):
+            let anchor = side == 0 ? Int(QC_HUD_ANCHOR_WRIST_OFF) : Int(QC_HUD_ANCHOR_WRIST_GUN)
+            var frame = WristComm.forearmFrame(wrist: arm.wrist, elbow: arm.elbow,
+                                               lateral: arm.lateral, rollDegrees: dials.rot)
+            guard frame.valid else {
+                return (HudEditor.WristFrame(anchor: anchor, origin: .zero, right: .zero,
+                                             up: .zero, forward: .zero, valid: false), .zero)
+            }
+            frame.anchor = anchor
+            // Mid-forearm, then the dials in the ARM's own axes.
+            var origin = (arm.elbow + arm.wrist) * 0.5
+            origin += frame.right * dials.fwd       // along the arm, toward the hand
+            origin += frame.up * dials.side         // across the arm
+            origin += frame.forward * dials.up      // off the skin
+            return WristComm.adjustedFrame(frame, origin: origin, tiltDegrees: dials.tilt,
+                                           fwd: 0, side: 0, up: 0)
+        }
     }
 
     /// Advances the wrist communicator's reveal state for this frame and
@@ -1485,8 +1602,8 @@ final class ImmersiveRenderer {
     /// decays what is already up -- never a hard cut, and never a reveal
     /// test against an identity (missing) head pose.
     ///
-    /// A wrist whose live frame drops out while its panel is up keeps its
-    /// last valid pose briefly -- see `commWristFrame`. While the HUD live
+    /// A wrist (or forearm) whose live pose drops out while its panel is up
+    /// keeps its last valid one briefly -- see `commPose`. While the HUD live
     /// editor is open every side is treated as hidden: the comm sits 12 mm
     /// under the grid being rearranged, where it is already inert (the touch
     /// loop refuses to fire during an edit session) but would only clutter
@@ -1552,6 +1669,19 @@ final class ImmersiveRenderer {
         // sides are then built from this one value, so a toggle or a drag
         // landing mid-frame can never turn one side and not the other.
         let dials = VRSettings.shared.wristCommPlacement
+        // The VIEW comes back inside that same take, not from a second read:
+        // it now selects the POSE SOURCE (`liveCommPose`) as well as the
+        // resolution (`resolveCommPlacement`), so a toggle landing between
+        // two reads could strap the unit to an arm using the across view's
+        // numbers. Both sides take this one answer.
+        let alongArm = dials.alongArm
+        // The along view's pose source, snapshotted ONCE for both sides, and
+        // only when that view is up -- across never looks at an arm. Same
+        // class of nonisolated lock-protected read as the dials above.
+        let arms = alongArm
+            ? ForearmPose.shared.snapshot()
+            : (left: ForearmSample.invalid, right: ForearmSample.invalid)
+        let offIsLeft = VRSettings.shared.rightHanded
         var quads: [CommQuad] = []
         var sides: [WristCommGeometry.Side] = []
         var finger: [Float] = []
@@ -1561,57 +1691,46 @@ final class ImmersiveRenderer {
         var published: (left: [Float], right: [Float])?
 
         for side in 0..<commOpacity.count {
-            let live = side == 0 ? wrists.off : wrists.gun
+            let live = liveCommPose(side: side, alongArm: alongArm, wrists: wrists,
+                                    arms: arms, offIsLeft: offIsLeft)
             let enabled = side < comm.sides.count && comm.sides[side].enabled
-            let resolved: HudEditor.WristFrame
+            let resolved: CommPose
             if editorActive {
                 // No hold while editing: the comm is suppressed below
                 // anyway, and `wristFrames()` is doing its own (editor-
-                // specific) latching for the grid. Dropping the held frame
+                // specific) latching for the grid. Dropping the held pose
                 // means a later reveal re-acquires from a freshly seen
-                // wrist rather than an edit-session pose.
-                commHeldFrame[side] = nil
+                // wrist or arm rather than an edit-session pose.
+                commHeldPose[side] = nil
                 resolved = live
             } else {
-                resolved = commWristFrame(side: side, live: live, now: now)
+                resolved = commPose(side: side, live: live, now: now)
             }
 
-            // The player's ORIENTATION, then the player's dials, applied
-            // ONCE here, to the pair that
+            // THE ONE RESOLUTION, applied once here, to the pair
             // everything below is derived from: the reveal decision, the
-            // hover hit-test, the drawn quads AND the published
-            // `WristCommGeometry` side all take `frame`/`origin` from this
-            // one result, so the touch loop hit-tests the panel that is
-            // actually on screen and needs no change of its own. Applying it
-            // at the draw instead would move the picture off its hit-test --
-            // exactly the three-path split `commWristFrame` exists to avoid.
+            // hover hit-test, the drawn quads, the press flash, the finger
+            // beads AND the published `WristCommGeometry` side all take
+            // `frame`/`origin` from this one result, so the touch loop
+            // hit-tests the panel that is actually on screen and needs no
+            // change of its own. Applying any of it at the draw instead
+            // would move the picture off its hit-test -- exactly the
+            // three-path split the hold above exists to avoid.
             //
-            // The held (occlusion-hold) frame above stays the RAW wrist pose
-            // on purpose: the dials are a placement on top of whatever pose
-            // is current, so re-dialling mid-hold moves the panel rather than
-            // baking yesterday's dial into the held pose.
+            // The held (occlusion-hold) pose above stays RAW on purpose:
+            // the dials are a placement on top of whatever pose is current,
+            // so re-dialling mid-hold moves the panel rather than baking
+            // yesterday's dial into the held pose. That is why `CommPose`
+            // carries the forearm's two joints rather than a built frame.
             //
-            // `orientedFrame` goes BEFORE the dials, which is what makes
-            // Rotate a placement rather than a second layout: the whole unit
-            // turns in its own plane, and because the keys, the legends, the
-            // hover test and the published geometry are all panel-local
-            // multiples of this frame's right/up, they turn with it. The
-            // dials then act in the TURNED unit's axes -- at the along
-            // view's +90 default the tilt pitches about the arm's long axis,
-            // Side runs down the arm and Height across it (see
-            // `orientedFrame`; the settings caption says so too).
-            //
-            // `rot` reaches the seating as well, because the unit's extent
-            // along the drop depends on how far it has been turned
-            // (`commOrigin` projects the rotated rectangle). The SAME
-            // `dials.rot` feeds both, out of the one atomic read above, so
-            // the frame and the drop can never be built from two angles.
-            let oriented = WristComm.orientedFrame(resolved, rollDegrees: dials.rot)
-            let adjusted = WristComm.adjustedFrame(
-                oriented,
-                origin: resolved.valid ? WristComm.commOrigin(wrist: resolved,
-                                                              rollDegrees: dials.rot) : .zero,
-                tiltDegrees: dials.tilt, fwd: dials.fwd, side: dials.side, up: dials.up)
+            // What the dials mean depends on the view, and
+            // `resolveCommPlacement` is the one place that knows: across,
+            // Rotate turns the billboarded unit in its own plane and the
+            // offsets run in those turned axes; along, Rotate ROLLS THE UNIT
+            // AROUND THE ARM and the offsets run in the arm's own axes --
+            // Forward along it, Side across it, Height off the skin. The
+            // settings captions say both.
+            let adjusted = resolveCommPlacement(resolved, side: side, dials: dials)
             let frame = adjusted.frame
             let origin = adjusted.origin
 
