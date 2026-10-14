@@ -166,6 +166,7 @@ final class HandInput: @unchecked Sendable {
             EditorHandInput.shared.invalidate()
             FingerTips.shared.invalidate()
             FingerModel.shared.invalidate()
+            ForearmPose.shared.invalidate()
             QC_InputSetTurnHold(0)   // hands standing down: don't strand the hold
         }
     }
@@ -257,6 +258,7 @@ final class HandInput: @unchecked Sendable {
         EditorHandInput.shared.invalidate()
         FingerTips.shared.invalidate()
         FingerModel.shared.invalidate()
+        ForearmPose.shared.invalidate()
         QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0)   // drop any armed teleport
         QC_InputSetTurnHold(0)   // hands gone: don't strand the hold
         tpRingWas = false
@@ -311,6 +313,13 @@ final class HandInput: @unchecked Sendable {
         // publishing both every update costs nothing on the frames where
         // neither hand is near the panel.
         FingerModel.shared.publish(left: left.indexFingerVerts, right: right.indexFingerVerts)
+
+        // ...and each hand's forearm pose, for the communicator's along-arm
+        // view, published at the same point for the same reason. The
+        // renderer uses it only while that view is selected; publishing it
+        // unconditionally keeps this file free of a setting it has no other
+        // business reading, and costs two joint reads already taken above.
+        ForearmPose.shared.publish(left: Self.forearm(left), right: Self.forearm(right))
 
         // While the HUD layout editor is open, the hands drive ONLY the grab
         // (published just above). Every gameplay gesture -- fire, move, turn,
@@ -1110,6 +1119,22 @@ final class HandInput: @unchecked Sendable {
         return SIMD3(corr.x, corr.y, corr.z)
     }
 
+    /// This hand's forearm pose, corrected into tracking space, for the
+    /// communicator's along-arm view -- `invalid` when either forearm joint
+    /// isn't tracked. The two joint POSITIONS take the full correction; the
+    /// lateral is a DIRECTION and takes it with w = 0, the same split
+    /// `hudDock` already makes between a wrist point and a forearm vector.
+    private static func forearm(_ hand: HandState) -> ForearmSample {
+        guard let wrist = hand.forearmWristPos, let elbow = hand.forearmElbowPos,
+              let lateral = hand.forearmLateral else { return .invalid }
+        let corr = TrackingSpace.correction
+        let w = corr * SIMD4(wrist, 1)
+        let e = corr * SIMD4(elbow, 1)
+        let l = corr * SIMD4(lateral, 0)
+        return ForearmSample(wrist: SIMD3(w.x, w.y, w.z), elbow: SIMD3(e.x, e.y, e.z),
+                             lateral: SIMD3(l.x, l.y, l.z), valid: true)
+    }
+
     private static let pulse = 0.12
     private static func stick(_ metres: Float) -> Float {
         let deadzone: Float = 0.02, full: Float = 0.12
@@ -1170,6 +1195,17 @@ private struct HandState {
     // Deliberately NOT the forearm aim ray, which ignores the hand on purpose.
     var pointOrigin: SIMD3<Float>?
     var pointDir: SIMD3<Float>?
+
+    /// The two forearm joints and the lateral axis off the inner forearm
+    /// face, ROOM FRAME (uncorrected, like every other raw pose here) --
+    /// the wrist communicator's along-arm view straps its unit to these.
+    /// nil together, exactly when either forearm joint is untracked. The
+    /// lateral is already chirality-corrected (see `ForearmPose`, which
+    /// documents the column and the mirroring); `emit` only has the
+    /// tracking-space correction left to apply.
+    var forearmWristPos: SIMD3<Float>?
+    var forearmElbowPos: SIMD3<Float>?
+    var forearmLateral: SIMD3<Float>?
 
     /// Coloured finger bones for the debug overlay, corrected-tracking
     /// space, 7 floats/vertex (xyz + rgba), line list. Built in ingest.
@@ -1265,6 +1301,17 @@ private struct HandState {
                 * skeleton.joint(joint).anchorFromJointTransform
             return SIMD3(world.columns.3.x, world.columns.3.y, world.columns.3.z)
         }
+        // The joint's FULL world transform, not just its translation: the
+        // forearm block below needs the joint's own ROTATION, which is the
+        // only thing in the skeleton that says which way round the arm is
+        // rolled. Strict (`isTracked`) like `tip`, for the same reason --
+        // an inferred forearm roll would silently spin the strapped panel.
+        func pose(_ joint: HandSkeleton.JointName) -> simd_float4x4? {
+            let j = skeleton.joint(joint)
+            guard j.isTracked else { return nil }
+            return anchor.originFromAnchorTransform * j.anchorFromJointTransform
+        }
+
         // A lost thumb tip (easy to occlude when curling toward the palm) only
         // disables the pinch -- it must NOT drop the whole hand. The aim, the
         // virtual hand and the other gestures all survive without it.
@@ -1497,6 +1544,32 @@ private struct HandState {
             aimDir = nil
             aimBaseDir = nil
             aimSmoothed = nil
+        }
+
+        // The forearm pose for the wrist communicator's along-arm view: the
+        // bone's two endpoints plus the lateral axis its face comes off.
+        // Read from the SAME two joints the aim ray above uses, which is
+        // why it is here rather than anywhere else -- those joints were
+        // never once missing across a full session's joint log, so a panel
+        // strapped to them cannot wink out in a pose the gun survives.
+        //
+        // `lateral` is the `.forearmArm` joint's THIRD COLUMN (local +Z),
+        // negated for the right hand because the two skeletons are mirror
+        // images. Both the column and the sign are documented at length on
+        // `ForearmPose` (HudEditorInput.swift), including the on-device
+        // levers for each -- they are the two things here that cannot be
+        // verified without hardware, and this project's own standing rule
+        // (docs/visionos-hand-gestures.md) is not to trust a derived sign.
+        if let armPose = pose(.forearmArm), let wristJoint = tip(.forearmWrist) {
+            let elbow = SIMD3(armPose.columns.3.x, armPose.columns.3.y, armPose.columns.3.z)
+            let lat = SIMD3(armPose.columns.2.x, armPose.columns.2.y, armPose.columns.2.z)
+            forearmWristPos = wristJoint
+            forearmElbowPos = elbow
+            forearmLateral = isLeft ? lat : -lat
+        } else {
+            forearmWristPos = nil
+            forearmElbowPos = nil
+            forearmLateral = nil
         }
 
         buildDebug(tip: vtip)   // inferred, so the wireframe doesn't drop fingers either

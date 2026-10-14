@@ -115,6 +115,112 @@ final class FingerTips: @unchecked Sendable {
     }
 }
 
+/// One forearm's pose for the wrist communicator's ALONG-ARM view: the two
+/// forearm joints and the lateral axis the panel's face comes off, all in
+/// corrected tracking space. `valid` is false exactly when either forearm
+/// joint is untracked -- there is no arm to strap the unit to.
+///
+/// `lateral` POINTS OUT OF THE INNER FOREARM, for BOTH hands. See
+/// `ForearmPose` for which joint-rotation column it is and why the right
+/// hand's is negated.
+struct ForearmSample {
+    var wrist: SIMD3<Float>
+    var elbow: SIMD3<Float>
+    var lateral: SIMD3<Float>
+    var valid: Bool
+
+    static let invalid = ForearmSample(wrist: .zero, elbow: .zero,
+                                       lateral: .zero, valid: false)
+}
+
+/// Cross-loop publish of each hand's FOREARM POSE, for the wrist
+/// communicator's along-arm view -- the one that straps the unit to the arm
+/// rather than billboarding it at the wrist. Written by `HandInput.emit`
+/// every hand update, immediately alongside `FingerTips.shared.publish(...)`
+/// and ahead of every gate/suppression below it, for the same reason those
+/// publishes give: the communicator needs a fresh pose whether or not the
+/// editor is open or a gameplay gesture fired this frame. Read by the render
+/// thread in `ImmersiveRenderer.updateWristComm`. Same lock-protected
+/// plain-value pattern as `FingerTips`/`FingerModel`.
+///
+/// WHICH JOINTS. `.forearmArm` (the elbow-side forearm joint) and
+/// `.forearmWrist`. Both are in the group this project measured as never
+/// once untracked across a whole session (docs/visionos-hand-gestures.md
+/// §1) and both already carry the gun's aim ray, so the unit cannot wink
+/// out in a pose the gun survives.
+///
+/// WHICH AXIS `lateral` IS, and why. It is the `.forearmArm` joint's own
+/// rotation, THIRD COLUMN (the joint frame's local +Z), negated for the
+/// right hand. The reasoning, in order:
+///
+///  1. The bone itself is unusable. ARKit's hand rig runs each joint's
+///     local X down its bone, so `.forearmArm`'s first column is very
+///     nearly `normalize(wrist - elbow)` -- it is the arm axis the panel
+///     already has, and Gram-Schmidt against it collapses to nothing.
+///     `WristComm.forearmFrame` refuses exactly that input rather than
+///     dividing by it.
+///  2. That leaves the two axes spanning the forearm's cross-section: one
+///     dorsal/palmar (out of the flat inner or outer face) and one
+///     radial/ulnar (edge to edge, thumb side to little-finger side). The
+///     unit's face must come off a FACE, not an edge, so the dorsal/palmar
+///     one is the pick: the third column.
+///  3. Its SIGN is the half of this that cannot be derived. The two faces
+///     are the inner (where a watch strap's dial sits, and where A. wants
+///     the unit) and the outer.
+///
+/// ...so, honestly: 1 and 2 are structural and 3 is a guess. This project
+/// has been here before -- the palm normal in
+/// docs/visionos-hand-gestures.md came out of the BACK of the hand after
+/// anatomy was worked out at a desk three times, and that file's standing
+/// rule is "do not trust a normal's sign derived by reasoning; measure it
+/// on hardware". The lever is therefore built in rather than argued:
+///
+///   * WRONG FACE (unit on the outside of the forearm): the along view's
+///     **Rotate dial**, which rolls the unit around the arm. 180 is the
+///     other face; anything between walks it round. If it lands at 180,
+///     move `VRSettings.commRotAlongDefault` and the guess is paid off
+///     permanently.
+///   * WRONG COLUMN (the unit's face points out of the arm's EDGE, or it
+///     refuses to appear at all because the column came back parallel to
+///     the bone): change the column index below. The parallel case is
+///     caught, not crashed -- `forearmFrame` returns an invalid frame and
+///     the panel simply does not draw.
+///
+/// WHY THE RIGHT HAND IS NEGATED. The two hand skeletons are mirror images,
+/// so one local axis points out of the inner face on one hand and the outer
+/// face on the other -- the same mirroring `PalmPose` already flips with
+/// `if !isLeft { n = -n }` for its palm normal and across-palm axis. The
+/// flip is applied HERE, at publish, so `lateral` means the same anatomical
+/// thing for both hands and ONE Rotate dial serves both sides. Were it left
+/// to the renderer or the dial, a player who switched the panel to the gun
+/// wrist would find it 180 degrees out with no setting that fixed both.
+///
+/// Invalidated at the same stand-down sites as `FingerTips`: an arm that
+/// has gone must not leave a frozen pose for the renderer to strap a panel
+/// to.
+final class ForearmPose: @unchecked Sendable {
+    static let shared = ForearmPose()
+
+    private let lock = NSLock()
+    private var _left = ForearmSample.invalid
+    private var _right = ForearmSample.invalid
+
+    func publish(left: ForearmSample, right: ForearmSample) {
+        lock.lock(); _left = left; _right = right; lock.unlock()
+    }
+
+    func snapshot() -> (left: ForearmSample, right: ForearmSample) {
+        lock.lock(); defer { lock.unlock() }
+        return (_left, _right)
+    }
+
+    /// Hands stood down -- publish "no arm" for both, the same stand-down
+    /// `FingerTips.invalidate()` answers for its own signal.
+    func invalidate() {
+        publish(left: .invalid, right: .invalid)
+    }
+}
+
 /// Cross-loop publish of each hand's SOLID INDEX FINGER, for the wrist
 /// communicator's touch feedback. Written by `HandInput.emit` every hand
 /// update, immediately alongside `FingerTips.shared.publish(...)` and ahead
