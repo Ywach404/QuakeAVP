@@ -694,13 +694,21 @@ func runForearmFrameTests() {
 
     // ...and the key run reads from the elbow toward the wrist: cell 0 (the
     // first binding) at the elbow end, cell 2 (the end of the top row) at
-    // the wrist end. The same reading direction the across view's +90 gives,
-    // so a player switching views does not have to relearn the keys.
+    // the wrist end -- this view's own reading direction, derived above
+    // from its own joints, not a cross-check against the across view (its
+    // `rot` default is 0, a billboarded panel with no elbow to read from).
+    //
+    // The two asserts below reduce, by `f.right`/`f.up` orthonormality (the
+    // dot product kills the `c*.y` term and `dot(f.right, f.right) == 1`),
+    // to `c0.x < 0` / `c2.x > 0` -- a property of `cellCenter`'s own layout,
+    // already pinned in `runCommGeometryTests`, not of this frame. They are
+    // kept here as a cheap sanity check that the two don't disagree, not as
+    // independent proof that the composed placement reads elbow-to-wrist.
     let c0 = WristComm.cellCenter(0), c2 = WristComm.cellCenter(2)
     assert(simd_dot(f.right * c0.x + f.up * c0.y, f.right) < 0,
-           "forearm: cell 0 sits at the ELBOW end of the unit")
+           "forearm: cellCenter(0).x is on the elbow side of the grid's own layout")
     assert(simd_dot(f.right * c2.x + f.up * c2.y, f.right) > 0,
-           "forearm: cell 2 sits at the WRIST end of the unit")
+           "forearm: cellCenter(2).x is on the wrist side of the grid's own layout")
 
     // MARK: orthonormal and right-handed at EVERY roll
 
@@ -830,17 +838,24 @@ func runForearmFrameTests() {
         }
     }
 
-    // The three dials, in the meanings the settings caption now gives them:
-    // Forward slides ALONG the arm, Side moves ACROSS it, Height lifts OFF
-    // the skin. These are the frame axes the renderer multiplies them by, so
-    // a caption and a renderer that disagree fail here.
+    // What these three actually pin: the frame-axis identities the settings
+    // caption's dial meanings (Forward ALONG the arm, Side ACROSS it, Height
+    // OFF the skin) are DOCUMENTED to rely on -- `f.right == armAxis`,
+    // `f.forward == +Y` and `f.right perp f.up` are all already established
+    // 150-odd lines above; these three restate them in the dial's own
+    // vocabulary. They do NOT reach `resolveCommPlacement`, which is where
+    // the dials are actually multiplied onto the frame -- that function
+    // lives in `ImmersiveRenderer.swift`, which this host harness does not
+    // compile, so a caption and a renderer that disagree would NOT fail
+    // here. Honest framing only; see the renderer's own doc and the device
+    // checklist for the thing this cannot check.
     let mid = (elbow + wrist) * 0.5
     assert(near(mid + f.right * 0.05, mid + armAxis * 0.05, 1e-6),
-           "forearm: +Forward slides the unit along the arm toward the hand")
+           "forearm: f.right is the arm axis toward the hand -- what +Forward would ride")
     assert(near(mid + f.forward * 0.01, mid + SIMD3<Float>(0, 0.01, 0), 1e-6),
-           "forearm: +Height lifts the unit off the skin, along the face normal")
+           "forearm: f.forward is the face normal off the skin -- what +Height would ride")
     assert(abs(simd_dot(f.up, armAxis)) < 1e-5,
-           "forearm: +Side runs across the arm, never along it")
+           "forearm: f.up is perpendicular to the arm axis -- what +Side would ride, never along it")
 
     print("forearm frame ok")
 }

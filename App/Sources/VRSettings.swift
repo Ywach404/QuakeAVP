@@ -306,8 +306,8 @@ final class VRSettings: @unchecked Sendable {
     //
     // THE EXISTING KEYS ARE THE ACROSS SET, unrenamed: A.'s current tuning is
     // stored under them and must survive this change untouched, so there is
-    // no migration to get wrong. The `...Along` keys are new and default to
-    // zero offsets with rot = +90.
+    // no migration to get wrong. The along set's keys and defaults are
+    // documented at the versioned block below, where they actually live now.
     private static let commTiltKey = "wristCommTilt"
     private static let commFwdKey = "wristCommFwd"
     private static let commSideKey = "wristCommSide"
@@ -426,8 +426,10 @@ final class VRSettings: @unchecked Sendable {
     }
 
     /// The ACTIVE view's five placement dials in ONE lock take, for the
-    /// render thread: it needs them as a SET (they are applied together by
+    /// render thread: it needs them as a SET (applied together, in
+    /// `ImmersiveRenderer.resolveCommPlacement` -- across via
     /// `WristComm.orientedFrame` + `WristComm.commOrigin` +
+    /// `WristComm.adjustedFrame`, along via `WristComm.forearmFrame` +
     /// `WristComm.adjustedFrame`), and reading them one property at a time
     /// would let a slider drag land between two of the reads and seat the
     /// unit at a placement no dial ever described.
