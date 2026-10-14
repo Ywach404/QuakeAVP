@@ -669,8 +669,16 @@ static void IN_MenuKeyEdge (int wasdown, int isdown, int key, double *timer)
 
 /*
 ================
-IN_MenuKeys -- give the menu (and the console's scrollback) the arrow keys a
-keyboard would send, from the left stick and the dpad.
+IN_MenuKeys -- give the menu the arrow keys a keyboard would send, from the
+left stick and the dpad.
+
+The console gets them too, where keys.c maps up/down to command HISTORY
+(keys.c's Key_Console). It does NOT get scrollback: con_backscroll is written
+only by K_PGUP/K_PGDN, K_HOME/K_END and the mouse wheel, none of which the
+pad produces -- so the boot console panel shows the tail of the buffer and
+there is no controller path back up through it. Mapping the shoulders to
+PGUP/PGDN would fix that and is left for the round that does menu
+interaction properly; it is on the remaining-work list in README.md.
 
 The held state is recomputed EVERY tick, not only while a menu is up: it has
 to fall to false the moment key_dest returns to key_game, or the release

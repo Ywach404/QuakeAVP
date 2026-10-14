@@ -126,6 +126,19 @@ static void test_range (void)
 	   whatever the last frame left behind. */
 	QR_TestEmitScreen2DInto (key_menu, 0, 0, &first, &count, &total, &prefix_x);
 	CHECK (first == 0 && count == 6, "no-world frame emits from vert 0");
+
+	/* scr_con_current must be back at 0 when the emitter returns. It is
+	   live only for the draws inside it, and the reader that matters is in
+	   the engine: sbar.c's Sbar_Draw opens with
+	   `if (scr_con_current == vid.height) return;`, which has never fired
+	   in this port and must not start -- it compares against vid.height
+	   (pinned 720) while the emitter writes glheight (the live drawable),
+	   so a leaked value would blank the vr_hud 1/2 status bar on exactly
+	   the configurations where those two numbers coincide. */
+	scr_con_current = 12345.f;
+	QR_TestEmitScreen2DInto (key_console, 0, 0, &first, &count, &total, &prefix_x);
+	CHECK (FEQ(scr_con_current, 0),
+	       "the emitter leaves scr_con_current at 0 (Sbar_Draw's guard stays dormant)");
 }
 
 /* ------------------------------------------------------------- pic cache

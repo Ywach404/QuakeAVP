@@ -6367,10 +6367,21 @@ thread inside the engine's own frame (GL_BeginRendering claimed the slot,
 GL_EndRendering publishes it), between V_RenderView and V_UpdateBlend, which
 is where upstream's gl_screen.c calls M_Draw and Con_DrawConsole too.
 
-Exactly one of the four draws runs, mirroring upstream's precedence: the menu
-over everything (it lays its own console background and fade wash down
-first), the console over the game, the intermission scoreboard over a
-finished level, and the notify lines over ordinary play.
+Exactly one of the four draws runs: the menu wins over everything (it lays
+its own console background and fade wash down first), then the console, then
+the intermission scoreboard over a finished level, then the notify lines over
+ordinary play.
+
+That is a DEPARTURE from upstream, not a copy of it, and deliberately.
+Upstream LAYERS these: gl_screen.c draws the console and then M_Draw on top
+of it, and shows the notify lines while a menu is open. On a screen that
+reads fine. On one floating panel it does not -- menu text over console text
+over the level is three documents in one rectangle at arm's length, and the
+notify lines land in the middle of the menu. So the panel is single-purpose:
+whatever has the input is what it shows. The visible consequences, both
+intended: pressing MENU at the title screen replaces the boot text with the
+menu (over conback, which M_Draw still draws), and pickup/give messages do
+not appear while a menu is open.
 
 The verts go into the SAME overlay buffer the HUD emitters fill, and the
 sub-range written is published on the packet so the HUD consumers can clip it
@@ -6442,6 +6453,30 @@ static void QR_EmitScreen2DInto (qr_frame_slot_t *slot)
 
 	qr_overlay_slot = NULL;
 	qr_overlay_canvas = CANVAS_DEFAULT;
+
+	/* Hand scr_con_current back to the zero it held for this port's whole
+	   life before this function existed. It is live only for the draws
+	   above, which are its only legitimate readers here.
+
+	   The reader this protects is NOT in this file: sbar.c:899 opens
+	   Sbar_Draw with `if (scr_con_current == vid.height) return;` -- hide
+	   the status bar while the console covers the screen. That guard has
+	   never fired in this port, because nothing ever assigned
+	   scr_con_current. Leaving the assignment standing would wake it, and
+	   wake it inconsistently: the comparison is against vid.height, pinned
+	   at 720 by vid_null.c, while the value written here is glheight, the
+	   LIVE drawable height. So the vr_hud 1/2 status bar would blank itself
+	   whenever the drawable happened to be 720 high (the flat window before
+	   any immersive size is pushed) and not otherwise, one frame late at
+	   that, since the HUD emitters run earlier in the frame than this does
+	   and therefore read the previous frame's value.
+
+	   Restoring 0 is the deliberate decision, not an oversight: upstream's
+	   rule is "hide the bar when the console is full screen", and here the
+	   console is not a full screen -- it is a separate panel 1.2 m away that
+	   does not cover the wrist HUD at all. Hiding the bar would be answering
+	   a question this port does not have. */
+	scr_con_current = 0.f;
 }
 
 void QR_EmitScreen2D (void)

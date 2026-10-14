@@ -658,28 +658,44 @@ void SCR_EndLoadingPlaque (void)
 
 int SCR_ModalMessage (const char *text, float timeout)
 {
-	/* No UI to answer a y/n prompt with: the reply arrives through
+	/* There is no UI to answer a y/n prompt with: the reply arrives through
 	   Char_Event, which this port never calls, so the engine would wait for
-	   a 'y' that cannot be typed. Answering yes keeps the two callers that
-	   exist working -- but note what changed this round, because it is now
-	   reachable where it was not before.
+	   a 'y' that cannot be typed. The answer has to be decided here -- and
+	   it has to be decided per prompt, because the two callers want opposite
+	   defaults and both became reachable the moment the menu became visible.
 
-	   menu.c has exactly two: Single Player -> New Game while a server is
-	   running ("start a new game?"), where yes is what the player just
-	   asked for, and Options -> Reset config, where yes runs resetcfg and
-	   wipes every archived cvar -- including the device-tuned vr_* values --
-	   with no confirmation at all. Before this round the menu was invisible
-	   and neither could be reached; now one button press on the wrong row
-	   does it.
+	   menu.c has exactly two, and they are distinct string literals:
 
-	   Not "fixed" by answering no, because the two want opposite defaults
-	   and declining would silently break restarting a game from the menu,
-	   which is the common path. The real answer is a confirmation the panel
-	   can show and the pad can answer -- menu interaction work, not this
-	   round's. Until then: documented, and on the device checklist. */
+	     - "Are you sure you want to start a new game?" (menu.c, Single
+	       Player -> New Game while a server is running). Yes: the player
+	       just chose New Game from the menu, and declining would make the
+	       commonest path in the whole menu silently do nothing.
+
+	     - "This will reset all controls and stored cvars. Continue?"
+	       (Options -> Reset config, the third row of the first submenu most
+	       people open). NO. Yes here runs resetcfg + exec default.cfg, which
+	       resets every CVAR_ARCHIVE cvar -- the entire device-tuned vr_* set,
+	       months of placement work -- with no confirmation, no undo, and
+	       config.cfg rewritten on quit. A destructive action nobody can
+	       confirm must not default to "do it"; a release build is handed to
+	       people who will press rows to see what they do.
+
+	   Matching on the prompt rather than guessing one answer for both. It is
+	   a literal from the vendored menu.c and an upstream merge that reworded
+	   it would fall back to yes, so the substring is deliberately the stable
+	   middle of the sentence rather than the whole thing, and this comment is
+	   the breadcrumb. The real fix is a confirmation the panel can draw and
+	   the pad can answer, which is menu-interaction work this round left out
+	   on purpose. */
 	(void) timeout;
 	if (text)
 		Con_Printf ("%s", text);
+	if (text && strstr (text, "reset all controls"))
+	{
+		Con_Printf ("Declined: this build cannot ask for confirmation.\n"
+			    "Use `resetcfg` from the console if you mean it.\n");
+		return false;
+	}
 	return true;
 }
 
