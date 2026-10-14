@@ -186,14 +186,10 @@ struct ForearmSample {
 ///     caught, not crashed -- `forearmFrame` returns an invalid frame and
 ///     the panel simply does not draw.
 ///
-/// WHY THE RIGHT HAND IS NEGATED. The two hand skeletons are mirror images,
-/// so one local axis points out of the inner face on one hand and the outer
-/// face on the other -- the same mirroring `PalmPose` already flips with
-/// `if !isLeft { n = -n }` for its palm normal and across-palm axis. The
-/// flip is applied HERE, at publish, so `lateral` means the same anatomical
-/// thing for both hands and ONE Rotate dial serves both sides. Were it left
-/// to the renderer or the dial, a player who switched the panel to the gun
-/// wrist would find it 180 degrees out with no setting that fixed both.
+/// WHY THE RIGHT HAND IS NEGATED: see `HandState.ingest` (HandInput.swift,
+/// where `forearmLateral` is assigned) -- that is where the flip is
+/// actually applied, not here. This type only receives and republishes the
+/// already-mirrored value.
 ///
 /// Invalidated at the same stand-down sites as `FingerTips`: an arm that
 /// has gone must not leave a frozen pose for the renderer to strap a panel

@@ -1553,13 +1553,31 @@ private struct HandState {
         // never once missing across a full session's joint log, so a panel
         // strapped to them cannot wink out in a pose the gun survives.
         //
-        // `lateral` is the `.forearmArm` joint's THIRD COLUMN (local +Z),
-        // negated for the right hand because the two skeletons are mirror
-        // images. Both the column and the sign are documented at length on
-        // `ForearmPose` (HudEditorInput.swift), including the on-device
-        // levers for each -- they are the two things here that cannot be
+        // `lateral` is the `.forearmArm` joint's THIRD COLUMN (local +Z) --
+        // the column pick is the first of two things here that cannot be
         // verified without hardware, and this project's own standing rule
-        // (docs/visionos-hand-gestures.md) is not to trust a derived sign.
+        // (docs/visionos-hand-gestures.md) is not to trust a derived sign;
+        // if the unit's face ever points out of the arm's edge instead of
+        // off its inner face, or the panel refuses to appear at all because
+        // the column came back parallel to the bone, change the column
+        // index here.
+        //
+        // THE FLIP IS APPLIED HERE, at ingest: the two hand skeletons are
+        // mirror images, so this same local column points out of the INNER
+        // forearm face on one hand and the OUTER face on the other -- the
+        // same mirroring `PalmPose` already flips with `if !isLeft { n =
+        // -n }` for its palm normal and across-palm axis. Negating it for
+        // the right hand makes `lateral` mean the same anatomical thing
+        // (off the inner forearm) for BOTH hands, so ONE Rotate dial
+        // (`VRSettings.wristCommRotAlong`) serves both wrists. Were the flip
+        // left to the renderer or the dial instead, a player who switched
+        // the panel to the gun wrist would find it 180 degrees out with no
+        // setting that fixed both at once.
+        //
+        // The sign itself is the second thing that cannot be verified
+        // without hardware -- if it is wrong, the lever is the along
+        // view's Rotate dial (180 is the other face), not this line; see
+        // `ForearmPose` (HudEditorInput.swift) for the on-device checklist.
         if let armPose = pose(.forearmArm), let wristJoint = tip(.forearmWrist) {
             let elbow = SIMD3(armPose.columns.3.x, armPose.columns.3.y, armPose.columns.3.z)
             let lat = SIMD3(armPose.columns.2.x, armPose.columns.2.y, armPose.columns.2.z)

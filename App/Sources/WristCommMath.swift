@@ -66,9 +66,11 @@ enum WristComm {
     ///     |sin t| * gridHalfX + |cos t| * gridHalfY
     ///
     /// -- the supporting half-width of the rotated rectangle in the drop
-    /// direction. At t = 0 that is the two-row short half (`gridHalfY`, the
-    /// across-wrist seating, unchanged); at t = +-90 the three-key long half
-    /// (`gridHalfX`, the along-arm seating, unchanged); in between it sweeps
+    /// direction. This is the ACROSS view's own seating (the along view sits
+    /// on the arm, not under the HUD, and never calls this function -- see
+    /// `forearmFrame`). At t = 0 that is the two-row short half (`gridHalfY`,
+    /// the panel square to the wrist); at t = +-90 the three-key long half
+    /// (`gridHalfX`, the panel turned on its side); in between it sweeps
     /// smoothly, so the unit starts under the HUD at EVERY angle rather than
     /// overlapping the grid part-way through a turn. The absolute values are
     /// why -45 seats exactly like +45: an extent does not care which way the
@@ -105,40 +107,38 @@ enum WristComm {
     /// to hand back the same floats it was given. The across view's default
     /// is therefore literally today's frame.
     ///
-    /// +90 IS THE OLD `alongArm: true` MAPPING, EXACTLY -- `right' = +up`,
-    /// `up' = -right` -- and it is the along view's persisted default, so
-    /// replacing the Bool with a dial moves nothing that was already tuned.
-    /// That sign is the one choice here a reader cannot derive, so:
-    /// handedness forces the two halves to move together (`right' x up' ==
-    /// forward`, or every legend would come out mirrored), which leaves
-    /// exactly two candidates, this and its opposite. `right` is both the
-    /// axis `RendererCore.textQuads` lays glyphs along and the axis the
-    /// three columns run along, so `right' = +up` makes the key run AND the
-    /// legends read from the ELBOW end back up toward the wrist: cell 0
-    /// (cmd0, the first binding) furthest down the forearm, the keys
-    /// counting toward the hand, every legend the right way up for a head
-    /// looking down its own arm.
+    /// +90 WAS THE OLD `alongArm: true` MAPPING, EXACTLY -- `right' = +up`,
+    /// `up' = -right` -- back when this one function also supplied the
+    /// along view's orientation. That history is why the sign-choice
+    /// reasoning below still lives here (handedness forces the two halves
+    /// to move together, `right' x up' == forward`, which leaves exactly
+    /// two candidates, this and its opposite, and `right' = +up` made the
+    /// along-arm key run and its legends read from the elbow end toward the
+    /// wrist): it is DEVICE-DECIDED, not derived, and that is the part worth
+    /// keeping. The mapping itself is no longer reachable from here --
+    /// `orientedFrame` is ACROSS-ONLY now, the along view builds its own
+    /// basis directly in `forearmFrame` below with its own `rollDegrees`
+    /// (its default is 0, not +90; see that function's doc for the sign
+    /// choice it makes on its own terms) -- and the across view's own
+    /// default is 0 (above), so there is no live +90 default anywhere any
+    /// more.
     ///
-    /// The opposite pair (`-up`/`+right`, i.e. -90) is the same unit
-    /// end-for-end, and it is what shipped first: the reasoning was that a
-    /// legend should read "down the forearm the way a spine runs down a
-    /// book". On device it read UPSIDE DOWN -- A. called it off a screenshot
-    /// -- so the sweep direction here is DEVICE-DECIDED, not derived. It is
-    /// now also recoverable without a code change: the dial reaches -90.
+    /// Why a free angle rather than two states, for the ACROSS view: wrist
+    /// mounting is never exactly square to the billboarded panel, and the
+    /// error is a few tens of degrees, not a quarter turn. A quantised flip
+    /// cannot express that; this can, and the seating in `commOrigin`
+    /// follows the angle so the unit stays clear of the HUD all the way
+    /// round. (The along view's forearm strap has the same kind of skew and
+    /// the same fix, but its own: a continuous `rollDegrees` in
+    /// `forearmFrame`, not this one.)
     ///
-    /// Why a free angle rather than the two states: on device the along-arm
-    /// unit sat "at an angle that doesn't make sense" -- the forearm the
-    /// strap is on is not square to the wrist frame the panel is built in,
-    /// and the error is a few tens of degrees, not a quarter turn. A
-    /// quantised flip cannot express that; this can, and the seating in
-    /// `commOrigin` follows the angle so the unit stays clear of the HUD
-    /// all the way round.
-    ///
-    /// Because the rotation lands BEFORE `adjustedFrame`, the user's dials
-    /// then act in the turned unit's own axes: the tilt pitches about the
-    /// new `right`, and the Side/Height offsets run along the turned axes
-    /// too. Deliberate, and stated in the settings caption so the sliders
-    /// cannot read as broken.
+    /// Because the rotation lands BEFORE `adjustedFrame`, the ACROSS view's
+    /// dials then act in the turned unit's own axes: the tilt pitches about
+    /// the new `right`, and the Side/Height offsets run along the turned
+    /// axes too. Deliberate, and stated in the settings caption so the
+    /// sliders cannot read as broken. (The along view's dials run in
+    /// `forearmFrame`'s own axes instead -- see `resolveCommPlacement`,
+    /// the one place that applies either.)
     ///
     /// An invalid (untracked) frame passes through whole, the same contract
     /// `adjustedFrame` keeps: there is no plane to rotate.
@@ -177,9 +177,11 @@ enum WristComm {
     ///    along AND the axis `RendererCore.textQuads` lays glyphs along, so
     ///    this one assignment is what makes the unit a strap: three keys
     ///    long down the forearm, two across, legends reading from the elbow
-    ///    toward the wrist. It is the same reading direction the across
-    ///    view's +90 default gives, so switching views does not relearn the
-    ///    keys.
+    ///    toward the wrist -- a reading direction this view derives on its
+    ///    own, from its own joints, and keeps regardless of what the
+    ///    across view's `rot` dial is set to (its default is 0, a
+    ///    billboarded panel with no elbow to read from, so there is no
+    ///    shared default for this one to match).
     ///  * `forward` = `lateral` orthonormalised against `right`
     ///    (Gram-Schmidt) -- the surface normal off the inner forearm, i.e.
     ///    the face the unit presents to a head looking down at it.
@@ -234,10 +236,20 @@ enum WristComm {
             return HudEditor.WristFrame.invalid
         }
         let right = simd_normalize(bone)
+        // Normalised here, right after the length guard above, rather than
+        // trusted from the caller: the 1e-3 threshold below is a SINE
+        // threshold only when `lateral` is unit-length, and nothing at this
+        // function's boundary enforced that -- it held only because
+        // `ForearmPose`'s joint column happens to arrive unit and the
+        // tracking-space correction applied to it is rigid. Normalising
+        // makes the threshold true BY CONSTRUCTION for any caller, unit or
+        // not. No behavior change for today's caller, which already passes
+        // a unit `lateral`.
+        let lateral = simd_normalize(lateral)
         let perp = lateral - right * simd_dot(lateral, right)
-        // 1e-3 rather than 1e-4: `lateral` arrives unit-length, so this is a
-        // sine threshold -- about 0.06 degrees off the bone. Below it the
-        // normalised result is noise, not a face.
+        // 1e-3: a sine threshold now that `lateral` is normalised above --
+        // about 0.06 degrees off the bone. Below it the normalised result
+        // is noise, not a face.
         guard simd_length(perp) > 1e-3 else { return HudEditor.WristFrame.invalid }
         let forward = simd_normalize(perp)
         let up = simd_cross(forward, right)

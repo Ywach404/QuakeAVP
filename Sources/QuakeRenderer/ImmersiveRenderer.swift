@@ -81,6 +81,11 @@ final class ImmersiveRenderer {
     /// second view would be a second thing to keep in step with the first.
     private var commHeldPose: [CommPose?] = [nil, nil]
     private var commHeldSince: [Double] = [0, 0]
+    /// The view (`dials.alongArm`) the held poses above were taken under,
+    /// so a toggle mid-hold can be caught and the hold dropped rather than
+    /// re-resolved against the OTHER view's dials -- see `updateWristComm`.
+    /// `nil` until the first frame; render-thread only, like the hold itself.
+    private var lastCommAlongArm: Bool?
     /// Per-side index of the fingertip (0 = left, 1 = right) last seen
     /// hovering this side's grid -- the hand the solid index-finger model is
     /// drawn on, latched so the finger stays on that hand for the tail of a
@@ -1420,6 +1425,7 @@ final class ImmersiveRenderer {
         commRevealed = [false, false]
         commHeldPose = [nil, nil]
         commHeldSince = [0, 0]
+        lastCommAlongArm = nil
         // The hovering hand goes with the flash it serves: resuming with a
         // latched hand would draw the finger model on a hand that is no longer
         // anywhere near the panel.
@@ -1556,7 +1562,7 @@ final class ImmersiveRenderer {
     /// exactly what the across path produced before and what the caller's
     /// `frame.valid` guard expects.
     private func resolveCommPlacement(
-        _ pose: CommPose, side: Int,
+        _ pose: CommPose, sideIndex: Int,
         dials: (alongArm: Bool, tilt: Float, fwd: Float, side: Float, up: Float, rot: Float)
     ) -> (frame: HudEditor.WristFrame, origin: SIMD3<Float>) {
         switch pose {
@@ -1568,7 +1574,7 @@ final class ImmersiveRenderer {
                                                            rollDegrees: dials.rot) : .zero,
                 tiltDegrees: dials.tilt, fwd: dials.fwd, side: dials.side, up: dials.up)
         case .along(let arm):
-            let anchor = side == 0 ? Int(QC_HUD_ANCHOR_WRIST_OFF) : Int(QC_HUD_ANCHOR_WRIST_GUN)
+            let anchor = sideIndex == 0 ? Int(QC_HUD_ANCHOR_WRIST_OFF) : Int(QC_HUD_ANCHOR_WRIST_GUN)
             var frame = WristComm.forearmFrame(wrist: arm.wrist, elbow: arm.elbow,
                                                lateral: arm.lateral, rollDegrees: dials.rot)
             guard frame.valid else {
@@ -1675,6 +1681,22 @@ final class ImmersiveRenderer {
         // two reads could strap the unit to an arm using the across view's
         // numbers. Both sides take this one answer.
         let alongArm = dials.alongArm
+        // A view toggle invalidates whatever is held: `commHeldPose` is one
+        // slot per side shared by both `CommPose` cases (see its doc above),
+        // and the hold is keyed only on time, not on which view took it. Left
+        // alone, toggling views inside another view's occlusion window would
+        // hand `resolveCommPlacement` a pose from one view resolved against
+        // the OTHER view's live dials -- a stale forearm pose placed by the
+        // across dials, or vice versa -- for up to `WristComm.occlusionHold`.
+        // Clearing both sides' holds on the transition (not just the side
+        // that happens to be occluded) keeps the one-hold-per-side invariant
+        // honest: the slot may only ever hold a pose taken under the CURRENT
+        // view.
+        if let last = lastCommAlongArm, last != alongArm {
+            commHeldPose = [nil, nil]
+            commHeldSince = [0, 0]
+        }
+        lastCommAlongArm = alongArm
         // The along view's pose source, snapshotted ONCE for both sides, and
         // only when that view is up -- across never looks at an arm. Same
         // class of nonisolated lock-protected read as the dials above.
@@ -1730,7 +1752,7 @@ final class ImmersiveRenderer {
             // AROUND THE ARM and the offsets run in the arm's own axes --
             // Forward along it, Side across it, Height off the skin. The
             // settings captions say both.
-            let adjusted = resolveCommPlacement(resolved, side: side, dials: dials)
+            let adjusted = resolveCommPlacement(resolved, sideIndex: side, dials: dials)
             let frame = adjusted.frame
             let origin = adjusted.origin
 
@@ -1876,8 +1898,9 @@ final class ImmersiveRenderer {
     ///
     /// Every extent here is PANEL-LOCAL -- `gridHalfX` along `frame.right`,
     /// `gridHalfY` along `frame.up`, cell centres as right/up multiples --
-    /// which is what makes the "Along arm" orientation free: the caller
-    /// hands in an already-turned frame (`WristComm.orientedFrame`) and the
+    /// which is what makes either view's rotation free: the caller hands in
+    /// an already-turned frame -- across via `WristComm.orientedFrame`,
+    /// along via `WristComm.forearmFrame`'s own Rodrigues roll -- and the
     /// bezel, the keys and the legends all turn with it, in agreement with
     /// the hover test and the published geometry built from the same frame.
     /// Keep it that way; a world-axis extent here would wrap the rotated

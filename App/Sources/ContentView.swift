@@ -681,7 +681,9 @@ struct ContentView: View {
                            + "arm, two across, legends reading from the elbow toward your "
                            + "hand. Lift your arm and it rides with it; roll your arm and "
                            + "it rolls too. It sits on the inner face, where you can read "
-                           + "it looking down and press it with your other hand."
+                           + "it looking down and press it with your other hand. It follows "
+                           + "your real forearm, so it needs hand tracking and will not "
+                           + "appear while Sense controllers are in hand."
                          : "The unit sits ACROSS the wrist, facing you wherever you turn: "
                            + "three keys wide, two deep, just below the HUD. Switch to "
                            + "Along arm to strap it to the forearm instead.")
