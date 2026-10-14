@@ -293,7 +293,7 @@ final class VRSettings: @unchecked Sendable {
     /// centimetre: enough that the unit's stone clears a sleeve and reads as
     /// sitting ON the arm rather than sunk into it, small enough that it
     /// still reads as strapped rather than hovering. The other three along
-    /// dials default to 0 -- mid-forearm, centred, untilted.
+    /// dials default to 0 -- seated under the HUD, centred, untilted.
     static let commUpAlongDefault: Float = 0.01
 
     // TWO SETS OF THE SAME FIVE DIALS, one per orientation view. On device
@@ -506,8 +506,11 @@ final class VRSettings: @unchecked Sendable {
     /// The along view's two non-zero defaults are both forearm facts, not
     /// taste: Height lifts the unit 1 cm off the skin
     /// (`commUpAlongDefault`), and Rotate is 0 because the frame already
-    /// lands the inner face (`commRotAlongDefault`). Forward 0 is
-    /// mid-forearm.
+    /// lands the inner face (`commRotAlongDefault`). Forward 0 is the
+    /// DERIVED SEAT -- `WristComm.alongSeatDistance` down the arm from the
+    /// wrist joint, just clear of the HUD grid billboarded there -- not a
+    /// point on the bone, so the dial slides from a clearance rather than
+    /// from the forearm midpoint.
     static func wristCommDefaults(alongArm: Bool)
         -> (tilt: Float, fwd: Float, side: Float, up: Float, rot: Float) {
         alongArm ? (0, 0, 0, commUpAlongDefault, commRotAlongDefault) : (0, 0, 0, 0, 0)

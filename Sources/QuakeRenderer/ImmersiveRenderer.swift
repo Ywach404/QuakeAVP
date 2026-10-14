@@ -1545,18 +1545,26 @@ final class ImmersiveRenderer {
     ///
     /// ALONG is the new, forearm-locked chain. `WristComm.forearmFrame`
     /// builds the basis from the two forearm joints with the Rotate dial as
-    /// a roll AROUND THE ARM; the unit is then seated at the FOREARM
-    /// MIDPOINT and moved along that basis -- Forward along the arm, Side
-    /// across it, Height off the skin -- and `adjustedFrame` is called for
-    /// the TILT ALONE, with zero offsets, because the offsets are already
-    /// in the origin. Passing them twice is the one mistake this chain
-    /// invites and `runForearmFrameTests` pins the tilt-only call against
-    /// it.
+    /// a roll AROUND THE ARM; the unit is then seated DOWN THE ARM from the
+    /// wrist joint by `WristComm.alongSeatDistance` and moved along that
+    /// basis -- Forward along the arm, Side across it, Height off the skin
+    /// -- and `adjustedFrame` is called for the TILT ALONE, with zero
+    /// offsets, because the offsets are already in the origin. Passing them
+    /// twice is the one mistake this chain invites and
+    /// `runForearmFrameTests` pins the tilt-only call against it.
     ///
-    /// There is no HUD-relative drop in the along case, and that absence is
-    /// the point: the across unit hangs under a floating HUD grid and has to
-    /// clear it, while this one sits ON the arm, where the only thing worth
-    /// clearing is the sleeve (the Height dial, defaulting to 1 cm).
+    /// BOTH cases now clear the HUD grid by derivation, which is the fix for
+    /// the collision A. hit on device: the along unit was seated at the
+    /// forearm MIDPOINT, off a different thing entirely from the wrist
+    /// tiles, and near the wrist the two always fought -- no placement dial
+    /// could separate them because the dials moved one and not the other.
+    /// One derivation, two drop axes: across drops down the billboarded
+    /// wrist plane (`commOrigin`), along backs away down the arm
+    /// (`alongSeatDistance`). The seat applies in EVERY `vr_hud` mode,
+    /// deliberately -- it is one muscle-memory position, and a unit that
+    /// jumped when the player changed HUD style would be worse than a unit
+    /// seated a little low with the tiles off. Nothing about the HUD's mode
+    /// or its live tiles reaches this chain.
     ///
     /// An invalid pose resolves to an invalid frame at the origin, which is
     /// exactly what the across path produced before and what the caller's
@@ -1582,8 +1590,10 @@ final class ImmersiveRenderer {
                                              up: .zero, forward: .zero, valid: false), .zero)
             }
             frame.anchor = anchor
-            // Mid-forearm, then the dials in the ARM's own axes.
-            var origin = (arm.elbow + arm.wrist) * 0.5
+            // Seated clear of the wrist-billboarded HUD grid, then the dials
+            // in the ARM's own axes -- Forward now slides FROM THE SEAT, so
+            // its 0 is "just below the tiles" rather than "mid-forearm".
+            var origin = arm.wrist - frame.right * WristComm.alongSeatDistance(rollDegrees: dials.rot)
             origin += frame.right * dials.fwd       // along the arm, toward the hand
             origin += frame.up * dials.side         // across the arm
             origin += frame.forward * dials.up      // off the skin

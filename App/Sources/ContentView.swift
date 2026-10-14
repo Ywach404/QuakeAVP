@@ -712,7 +712,8 @@ struct ContentView: View {
                                 .font(.caption2).foregroundStyle(.secondary)
                             if commAlongArm {
                                 Text("On the arm the dials follow the ARM: Forward slides "
-                                     + "the unit along it (0 = mid-forearm), Side moves it "
+                                     + "the unit along it from its seat just below the HUD "
+                                     + "tiles (0 = seated, clear of them), Side moves it "
                                      + "across, Height lifts it off your skin.")
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
