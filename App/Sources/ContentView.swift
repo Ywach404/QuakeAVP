@@ -30,9 +30,11 @@ struct ContentView: View {
     @State private var showComfort = false
     @State private var heightOffset: Float = 0.4
     @State private var rightHanded = true
-    /// vr_hud: 0 off, 1 wrist (default), 2 float, 3 modular. Mirrors the cvar's
-    /// own default since there is no live cvar read-back; matches r_null.c.
-    @State private var hudPanelMode: Int = 1
+    /// vr_hud: 0 off, 1 wrist, 2 float, 3 modular (default). Mirrors the
+    /// cvar's own default since there is no live cvar read-back, so it MUST
+    /// keep matching r_null.c's `vr_hud` -- a mirror that drifted would show
+    /// the picker on a mode the engine is not in.
+    @State private var hudPanelMode: Int = 3
     /// Per-tile vr_hud_<tile>_anchor/_show seeds. Anchors are the four
     /// QC_HUD_ANCHOR_* values (WRIST_OFF 0, WRIST_GUN 1, GUN 2, FLOAT 3).
     /// Mirrors the shipped default layout A in r_null.c: ammo rides the gun
@@ -583,9 +585,11 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    Text("Wrist rides the off hand (falls back to floating if it isn't tracked); "
-                         + "Floating holds ~1.5 m ahead, head-stabilized; "
-                         + "Modular places Ammo/Face/Health+Armor as separate tiles below.")
+                    Text("Modular (the default) places Ammo/Face/Health+Armor as separate "
+                         + "tiles you can anchor and arrange below; "
+                         + "Wrist shows the whole classic bar on the off hand (falls back to "
+                         + "floating if it isn't tracked); "
+                         + "Floating holds that bar ~1.5 m ahead, head-stabilized.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if hudPanelMode == 3 {
