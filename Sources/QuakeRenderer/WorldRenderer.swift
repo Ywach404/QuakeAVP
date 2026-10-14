@@ -125,6 +125,27 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
             core.encode(frame: f, with: encoder, pipelines: pipelines,
                         uniforms: uniforms, phase: phase, amplificationCount: 1,
                         viewmodelViewport: viewports, windowHud: true)
+
+            // The menu/console panel, screen-mapped like the status bar
+            // above it (there is no head pose in this view -- see the file
+            // comment -- so there is no panel to place, just the 320x200
+            // plane stretched to the drawable, classic Quake).
+            //
+            // Drawn HERE and not inside encode() beside the HUD, although
+            // that is where the window's layer order would want it: encode()
+            // returns immediately on a packet with no world geometry, and
+            // that empty packet is the console's primary case -- a fresh
+            // launch with no map, which is exactly when a stranger needs to
+            // see the boot text and the main menu. The one ordering
+            // consequence is that this draws over the comfort vignette
+            // rather than under it, and the vignette cannot be on while a
+            // menu is up: it tracks artificial locomotion, and IN_Move
+            // stops feeding the sticks to the game while key_dest is not
+            // key_game.
+            core.drawScreen2D(frame: f,
+                              viewproj0: RendererCore.overlayWindowOrtho(),
+                              viewproj1: RendererCore.overlayWindowOrtho(),
+                              pipelines: pipelines, encoder: encoder)
         }
         encoder.endEncoding()
 
