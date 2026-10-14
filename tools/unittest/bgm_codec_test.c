@@ -29,6 +29,7 @@
 
 #include "quakedef.h"
 #include "snd_codec.h"
+#include "QuakeCore.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,7 +56,21 @@ static int	failures;
 #define WAV_RATE	11025
 #define WAV_FRAMES	2205			/* 0.2 s */
 
+/* A second synthesized WAV, six channels, for the channel-count guard. */
+#define WAV6_CHANNELS	6
+#define WAV6_FRAMES	64
+
 static short	wav_expect[WAV_FRAMES];
+
+/* Log sink used to silence (and count) the codec's per-open line during the
+   churn loop. Installed through the same QC_SetCallbacks the app uses; with
+   no callback set, sys_avp.c's QAVP_Emit falls back to stderr. */
+static int	log_lines;
+static void BGMTest_CountLog (void *ctx, const char *text)
+{
+	(void) ctx; (void) text;
+	log_lines++;
+}
 
 static byte		bgm_test_hunk[8 * 1024 * 1024];
 static quakeparms_t	bgm_test_parms;
@@ -110,6 +125,55 @@ static qboolean BGMTest_WriteWav (const char *path)
 	BGMTest_WriteLE (f, WAV_FRAMES * 2, 4);
 	for (i = 0; i < WAV_FRAMES; i++)
 		BGMTest_WriteLE (f, (unsigned short) wav_expect[i], 2);
+
+	fclose (f);
+	return true;
+}
+
+/*
+=================
+BGMTest_WriteWav6
+
+Six channels, otherwise a perfectly valid 16-bit PCM RIFF. This exists to
+exercise the hazard that motivates the vorbis codec's own channel guard:
+S_RawSamples only knows the four (channels, width) combinations of mono/stereo
+by 8/16-bit, has no fallback branch, and advances s_rawend only inside them --
+so a >2-channel stream would leave BGM_UpdateStream's while loop spinning on
+the engine thread forever. snd_wave.c refuses such a file at open, and the
+vorbis codec now does the same.
+
+No Ogg equivalent is possible here: ffmpeg's native vorbis encoder (the only
+one on this machine -- no libvorbis, no libsndfile) accepts stereo input and
+nothing else, and the brief forbids downloading a fixture. So this covers the
+mechanism and the in-tree template's discipline; the vorbis guard's own reject
+branch is reviewed, not executed. Said plainly rather than papered over.
+=================
+*/
+static qboolean BGMTest_WriteWav6 (const char *path)
+{
+	FILE	*f;
+	int	i, c;
+
+	f = fopen (path, "wb");
+	if (!f)
+		return false;
+
+	fwrite ("RIFF", 1, 4, f);
+	BGMTest_WriteLE (f, 36 + WAV6_FRAMES * WAV6_CHANNELS * 2, 4);
+	fwrite ("WAVE", 1, 4, f);
+	fwrite ("fmt ", 1, 4, f);
+	BGMTest_WriteLE (f, 16, 4);
+	BGMTest_WriteLE (f, 1, 2);				/* WAV_FORMAT_PCM */
+	BGMTest_WriteLE (f, WAV6_CHANNELS, 2);
+	BGMTest_WriteLE (f, WAV_RATE, 4);
+	BGMTest_WriteLE (f, WAV_RATE * WAV6_CHANNELS * 2, 4);
+	BGMTest_WriteLE (f, WAV6_CHANNELS * 2, 2);		/* block align */
+	BGMTest_WriteLE (f, 16, 2);				/* bits */
+	fwrite ("data", 1, 4, f);
+	BGMTest_WriteLE (f, WAV6_FRAMES * WAV6_CHANNELS * 2, 4);
+	for (i = 0; i < WAV6_FRAMES; i++)
+		for (c = 0; c < WAV6_CHANNELS; c++)
+			BGMTest_WriteLE (f, (unsigned short) (short) (i * 16), 2);
 
 	fclose (f);
 	return true;
@@ -180,6 +244,9 @@ static qboolean BGMTest_BootFilesystem (void)
 	q_snprintf (path, sizeof(path), "%s/id1/music/tone.wav", bgm_test_basedir);
 	if (!BGMTest_WriteWav (path))
 		return false;
+	q_snprintf (path, sizeof(path), "%s/id1/music/six.wav", bgm_test_basedir);
+	if (!BGMTest_WriteWav6 (path))
+		return false;
 
 	argv[0] = (char *) "bgm_codec_test";
 	argv[1] = (char *) "-basedir";
@@ -213,6 +280,43 @@ static qboolean BGMTest_BootFilesystem (void)
 
 /*
 =================
+BGMTest_Cleanup
+
+check-unit.sh is run dozens of times a day and this is the only test that puts
+anything in /tmp; without this they pile up one basedir per run. Best effort
+and order-dependent (files before their directories), and deliberately only
+the paths this test created -- no recursive delete of a path built from a
+template.
+=================
+*/
+static void BGMTest_Cleanup (void)
+{
+	static const char *leaves[] = {
+		"id1/music/sine.ogg", "id1/music/tone.wav", "id1/music/six.wav",
+		"config.cfg"	/* COM_InitFilesystem's userdir side, if it appears */
+	};
+	static const char *dirs[] = { "id1/music", "id1" };
+	char	path[MAX_OSPATH];
+	size_t	i;
+
+	if (!bgm_test_basedir[0])
+		return;
+
+	for (i = 0; i < sizeof(leaves) / sizeof(leaves[0]); i++)
+	{
+		q_snprintf (path, sizeof(path), "%s/%s", bgm_test_basedir, leaves[i]);
+		unlink (path);
+	}
+	for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
+	{
+		q_snprintf (path, sizeof(path), "%s/%s", bgm_test_basedir, dirs[i]);
+		rmdir (path);
+	}
+	rmdir (bgm_test_basedir);
+}
+
+/*
+=================
 BGMTest_Vorbis
 =================
 */
@@ -222,7 +326,7 @@ static void BGMTest_Vorbis (void)
 	byte		first[1024];
 	byte		again[1024];
 	byte		buf[4096];
-	int		res, total, i, peak, nonzero;
+	int		res, total, i, peak, mag, nonzero;
 	short		s;
 
 	stream = S_CodecOpenStreamType ("music/sine.ogg", CODECTYPE_VORBIS, false);
@@ -247,10 +351,10 @@ static void BGMTest_Vorbis (void)
 			memcpy (&s, buf + i, 2);
 			if (s)
 				nonzero++;
-			if (s > peak)
-				peak = s;
-			else if (-s > peak)
-				peak = -s;
+			/* Through int, so SHRT_MIN's magnitude is representable. */
+			mag = (s < 0) ? -(int) s : (int) s;
+			if (mag > peak)
+				peak = mag;
 		}
 		total += res;
 	}
@@ -285,7 +389,16 @@ static void BGMTest_Vorbis (void)
 
 	/* Open/close churn: stb_vorbis holds a malloc'd arena per stream, and
 	   a leak or a double free shows up here rather than an hour into a
-	   level. Worth the hundred iterations; the fixture is 5 KB. */
+	   level. Worth the hundred iterations; the fixture is 5 KB.
+
+	   The codec logs one line per successful open, which at a hundred
+	   iterations buried this test's own twenty-odd result lines in the
+	   suite output. Swapping the engine's log sink for a counter silences
+	   them without shortening the loop -- and the count is then a stronger
+	   assertion than the loop index alone, because it proves each
+	   iteration really reached codec_open rather than being skipped. */
+	log_lines = 0;
+	QC_SetCallbacks (BGMTest_CountLog, NULL, NULL);
 	for (i = 0; i < 100; i++)
 	{
 		stream = S_CodecOpenStreamType ("music/sine.ogg", CODECTYPE_VORBIS, false);
@@ -299,7 +412,9 @@ static void BGMTest_Vorbis (void)
 		}
 		S_CodecCloseStream (stream);
 	}
+	QC_SetCallbacks (NULL, NULL, NULL);
 	CHECK (i == 100, "100 open/read/close cycles survive (reached %d)", i);
+	CHECK (log_lines == 100, "each cycle really opened the codec (%d open lines)", log_lines);
 }
 
 /*
@@ -346,6 +461,15 @@ static void BGMTest_Wave (void)
 	CHECK (stream == NULL, "wave codec refuses an Ogg file");
 	if (stream)
 		S_CodecCloseStream (stream);
+
+	/* The channel-count hazard, through the codec that can be fed a
+	   >2-channel file here. A stream that reaches S_RawSamples with six
+	   channels would hang the engine thread (see BGMTest_WriteWav6); the
+	   only safe answer is a refusal at open. */
+	stream = S_CodecOpenStreamType ("music/six.wav", CODECTYPE_WAV, false);
+	CHECK (stream == NULL, "a 6-channel WAV is refused at open, not handed to S_RawSamples");
+	if (stream)
+		S_CodecCloseStream (stream);
 }
 
 int main (void)
@@ -353,6 +477,7 @@ int main (void)
 	if (!BGMTest_BootFilesystem ())
 	{
 		printf ("FAIL: filesystem bootstrap failed\n");
+		BGMTest_Cleanup ();	/* best effort: whatever got as far as staging */
 		return 1;
 	}
 
@@ -365,6 +490,7 @@ int main (void)
 		BGMTest_Wave ();
 
 	S_CodecShutdown ();
+	BGMTest_Cleanup ();
 
 	printf ("%s\n", failures ? "FAILED" : "all good");
 	return failures ? 1 : 0;
