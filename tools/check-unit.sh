@@ -13,6 +13,13 @@ OUT="${OUT:-${TMPDIR:-/tmp}/quakecore-hostbuild}"
 CFLAGS=(
   -std=gnu99 -O0 -g0
   -DQAVP_PLATFORM -DQAVP_HOSTCHECK
+  # Must match tools/check-core.sh (which builds the objects these link
+  # against) and project.yml -- see the note there.
+  -DUSE_CODEC_WAVE=1 -DUSE_CODEC_VORBIS=1
+  # Committed test data (bgm_codec_test's Ogg fixture). Computed here rather
+  # than written into the test so no absolute path from one machine is
+  # committed and the tests run from any checkout location.
+  -DUNIT_FIXTURE_DIR="\"$ROOT/tools/unittest/fixtures\""
   -I"$ROOT/Sources/QuakeCore/engine"
   -I"$ROOT/Sources/QuakeCore/platform"
   -I"$ROOT/Sources/QuakeCore/include"
