@@ -107,11 +107,19 @@ targets:
       # the resources phase flattens groups into the bundle root, and the
       # engine wants `music/trackNN.ogg` -- a directory, not ten loose files
       # whose names a mission pack's own track02 would collide with.
-      # A folder reference to a path that does not exist is a hard build
-      # failure, not a skipped resource, so the directory is kept alive by a
-      # committed .gitkeep (.gitignore ignores its contents, not the folder)
-      # exactly the way App/DevGameData itself is. `optional` covers a
-      # checkout that deletes even that.
+      #
+      # THE .gitkeep IN HERE IS LOAD-BEARING. A folder reference to a path
+      # that does not exist is a hard build failure ("The file music couldn't
+      # be opened"), not a quietly skipped resource, so the directory has to
+      # exist in a fresh clone even though every file in it is gitignored --
+      # hence .gitignore ignoring the CONTENTS and keeping the folder, exactly
+      # the way App/DevGameData itself is kept. `optional` below only
+      # suppresses xcodegen's generate-time existence check; the reference is
+      # still emitted and CpResource still fails. Measured, with `optional`
+      # already set: xcodebuild exits 65. Do not delete the .gitkeep.
+      #
+      # Cost, for whoever is deciding about the release strip: this folder is
+      # ~79 MB, which is most of the dev .app's ~140 MB.
       - path: App/DevGameData/music
         type: folder
         optional: true
