@@ -841,13 +841,91 @@ final class RendererCore {
         withUnsafeBytes(of: &uniforms) { raw in
             encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
         }
+        // The one thing this draw must now leave alone: the menu/console
+        // range (`screen2d_first_vert`/`vert_count`), which the engine
+        // appends to this SAME buffer after the status bar and which
+        // `drawScreen2D` places on its own head-locked panel. Without the
+        // exclusion a menu would also be painted onto the wrist/float HUD
+        // panel, at HUD scale, under the HUD's transform.
+        //
+        // Clipped, not skipped by batch index, because batches coalesce by
+        // texnum with no flush between the two emitters: the status bar's
+        // last conchars batch and the menu's first conchars quad can be one
+        // batch, so the boundary only exists in vertex space. Same mechanism
+        // `drawHudTiles` uses for a batch straddling two tiles, and the
+        // reason the packet carries a vert range rather than a batch range.
+        let total = Int(frame.num_overlay_verts)
+        let screen2dStart = Int(frame.screen2d_first_vert)
+        let screen2dEnd = screen2dStart + Int(frame.screen2d_vert_count)
         for i in 0..<Int(frame.num_overlay_batches) {
             let b = batches[i]
-            guard let tex = textures[b.texnum] else { continue }
-            encoder.setFragmentTexture(tex, index: 0)
-            encoder.drawPrimitives(type: .triangle,
-                                   vertexStart: Int(b.first_vert),
-                                   vertexCount: Int(b.vert_count))
+            if frame.screen2d_vert_count == 0 {
+                drawOverlayBatch(b, within: 0..<total, encoder: encoder)
+            } else {
+                drawOverlayBatch(b, within: 0..<screen2dStart, encoder: encoder)
+                drawOverlayBatch(b, within: screen2dEnd..<total, encoder: encoder)
+            }
+        }
+    }
+
+    /// Draws the part of one overlay batch that falls inside `range`, under
+    /// whatever transform and pipeline the caller has already bound. The
+    /// intersection is the whole mechanism by which several consumers share
+    /// one coalesced `overlay_verts` run: verts are 6 per quad and every
+    /// published range is quad-aligned, so an intersection is always a whole
+    /// number of quads. An empty intersection draws nothing.
+    private func drawOverlayBatch(_ batch: qc_overlay_batch_t, within range: Range<Int>,
+                                  encoder: MTLRenderCommandEncoder) {
+        let start = max(Int(batch.first_vert), range.lowerBound)
+        let end = min(Int(batch.first_vert) + Int(batch.vert_count), range.upperBound)
+        guard end > start, let tex = textures[batch.texnum] else { return }
+        encoder.setFragmentTexture(tex, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: start, vertexCount: end - start)
+    }
+
+    /// The menu, the console, the intermission scoreboards and the console's
+    /// notify lines — `QR_EmitScreen2D`'s contiguous tail of the same
+    /// `overlay_verts` run the status bar uses, in the same fixed 320x200
+    /// top-left-origin virtual screen and the same 9-float layout, so it
+    /// draws through the same `pipelines.text` + `depthAlways` path.
+    ///
+    /// Its own draw rather than a `hud_mode` of `drawOverlay`'s, because it
+    /// is not a HUD preset: it is up or it is not, it coexists with whatever
+    /// the wrist HUD is doing, and it wants its own placement (a head-locked
+    /// panel, not a wrist). Callers supply the transform, exactly as
+    /// `drawOverlay`'s doc comment describes — the immersive space composes
+    /// `handViewproj * screen2dPanelModel`, the flat window passes the
+    /// screen-mapped ortho.
+    ///
+    /// Draws nothing when the range is empty, which is every ordinary
+    /// playing frame, so an idle frame costs one comparison.
+    func drawScreen2D(frame: qc_frame_t,
+                      viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                      pipelines: RenderPipelines,
+                      encoder: MTLRenderCommandEncoder) {
+        guard frame.screen2d_vert_count >= 3, frame.num_overlay_batches > 0,
+              let verts = frame.overlay_verts, let batches = frame.overlay_batches,
+              let pipeline = pipelines.text
+        else { return }
+        let floatCount = Int(frame.num_overlay_verts) * 9
+        guard let buf = device.makeBuffer(bytes: verts,
+                                          length: floatCount * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
+        var uniforms = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
+        withUnsafeBytes(of: &uniforms) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        // The whole run is uploaded so vertex indices still match the
+        // packet's; only this range is drawn.
+        let start = Int(frame.screen2d_first_vert)
+        let range = start..<(start + Int(frame.screen2d_vert_count))
+        for i in 0..<Int(frame.num_overlay_batches) {
+            drawOverlayBatch(batches[i], within: range, encoder: encoder)
         }
     }
 

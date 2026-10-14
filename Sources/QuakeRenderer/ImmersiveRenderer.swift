@@ -501,6 +501,21 @@ final class ImmersiveRenderer {
                          headPoseAvailable: deviceAnchor != nil)
         }
 
+        // The menu/console panel, resolved once per frame beside the HUD
+        // panel above and shared by both eyes and both pass layouts. nil on
+        // every ordinary playing frame (the engine's range is empty), which
+        // is what keeps an idle frame free.
+        //
+        // Deliberately NOT suppressed while the HUD editor is open, unlike
+        // hudModel: the editor is render-side session state the engine knows
+        // nothing about, so it cannot stop the engine putting a menu up --
+        // and if a menu is up, it is how the player gets out of wherever
+        // they are.
+        let screen2dModel: simd_float4x4? = packet.flatMap {
+            screen2dPanelModel(packet: $0, originFromDevice: originFromDevice,
+                               headPoseAvailable: deviceAnchor != nil)
+        }
+
         // The two wrist-grid frames + the free gun/float anchors, resolved
         // ONCE this frame and shared by the live tiles, the edit-mode grid,
         // and the published hit-test geometry, so all three agree on where a
@@ -508,7 +523,9 @@ final class ImmersiveRenderer {
         let wristFramePair = wristFrames()
         let gunFreeAnchor = gunAnchorFrame()
         let floatAnchor = floatAnchorFrame(originFromDevice: originFromDevice,
-                                           headPoseAvailable: deviceAnchor != nil)
+                                           headPoseAvailable: deviceAnchor != nil,
+                                           distance: Self.floatDistance,
+                                           lowerOffset: Self.floatLowerOffset)
 
         // Modular HUD tiles (vr_hud 3): per-tile model matrices in the SAME
         // corrected tracking space as hudModel above, resolved once and
@@ -608,6 +625,16 @@ final class ImmersiveRenderer {
                 core.drawHandDebug(commFurniture.finger,
                                    viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                    pipelines: pipelines, encoder: encoder)
+                // The menu/console panel LAST, over the HUD and the
+                // communicator both: while it is up it is the thing being
+                // read and operated, and every 2D layer here is
+                // depth-always, so paint order is what decides.
+                if let screen2dModel {
+                    core.drawScreen2D(frame: packet,
+                                      viewproj0: handViewproj[0] * screen2dModel,
+                                      viewproj1: handViewproj[1] * screen2dModel,
+                                      pipelines: pipelines, encoder: encoder)
+                }
             }
             encoder.endEncoding()
         } else {
@@ -656,6 +683,13 @@ final class ImmersiveRenderer {
                     core.drawHandDebug(commFurniture.finger,
                                        viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                        pipelines: pipelines, encoder: encoder)
+                    // The menu/console panel last, as in the single-pass
+                    // branch above.
+                    if let screen2dModel {
+                        let sv = handViewproj[index] * screen2dModel
+                        core.drawScreen2D(frame: packet, viewproj0: sv, viewproj1: sv,
+                                          pipelines: pipelines, encoder: encoder)
+                    }
                 }
                 encoder.endEncoding()
             }
@@ -739,6 +773,23 @@ final class ImmersiveRenderer {
     /// overlapping it. Device-tunable like the other HUD placement
     /// constants above.
     private static let gunTileLift: Float = 0.08
+
+    /// The menu/console panel (`screen2d`). Closer and smaller than the
+    /// float HUD above, and much closer to the sightline, because it is
+    /// something you read and operate rather than glance at: a menu you have
+    /// to look down 0.6 m to use is the wrong object. 0.9 x 0.5625 m keeps
+    /// the overlay plane's 320x200 aspect, so the plaque and the menu items
+    /// are not stretched, and at 1.2 m that is roughly a 40-degree-wide
+    /// panel — a comfortable reading size. All four are device-tune knobs
+    /// like the HUD's.
+    private static let screen2dPanelWidth: Float = 0.9
+    private static let screen2dPanelHeight: Float = 0.5625
+    private static let screen2dDistance: Float = 1.2
+    /// Dropped only slightly below eye level: enough that the panel is not
+    /// dead centre in the view, not so far that reading it means looking at
+    /// the floor (contrast `floatLowerOffset`, which deliberately parks the
+    /// status bar well down).
+    private static let screen2dLowerOffset: Float = 0.15
 
     /// This frame's whole-panel HUD model matrix (overlay-space -> corrected
     /// tracking space), or nil to draw nothing. `hud_mode == 0` is off;
@@ -963,21 +1014,58 @@ final class ImmersiveRenderer {
     /// reused here as its own anchor rather than a wrist fallback. nil when
     /// the head pose is unavailable: there is nothing sane left to anchor to
     /// (Review Focus #3).
+    ///
+    /// `distance`/`lowerOffset` are the caller's so the menu/console panel
+    /// (`screen2dPanelModel`) can take this exact placement at its own
+    /// distance and height instead of keeping a second copy of the maths —
+    /// the two must stay the same CLASS of placement (head-locked, level,
+    /// never pitched) while being free to sit in different places. The
+    /// modular tiles' own call passes the HUD constants it has always used.
     private func floatAnchorFrame(originFromDevice: simd_float4x4,
-                                  headPoseAvailable: Bool) -> RendererCore.HudAnchorFrame? {
+                                  headPoseAvailable: Bool,
+                                  distance: Float,
+                                  lowerOffset: Float) -> RendererCore.HudAnchorFrame? {
         guard headPoseAvailable else { return nil }
         let headPos = originFromDevice.columns.3
         let headForward4 = originFromDevice * SIMD4<Float>(0, 0, -1, 0)
         let flatForward = SIMD3(headForward4.x, 0, headForward4.z)
         let forward = simd_length(flatForward) > 1e-4 ? simd_normalize(flatForward) : SIMD3<Float>(0, 0, -1)
         let origin = SIMD3(headPos.x, headPos.y, headPos.z)
-            + forward * Self.floatDistance
-            - SIMD3<Float>(0, Self.floatLowerOffset, 0)
+            + forward * distance
+            - SIMD3<Float>(0, lowerOffset, 0)
         // toward is horizontal by construction, so billboardBasis's "up"
         // comes out as world-up exactly -- level, no pitch, no roll.
         let basis = RendererCore.billboardBasis(toward: -forward)
         return RendererCore.HudAnchorFrame(origin: origin, right: basis.right, up: basis.up,
                                            forward: -forward)
+    }
+
+    /// This frame's menu/console panel model matrix (overlay space ->
+    /// corrected tracking space), or nil to draw nothing.
+    ///
+    /// Head-locked and level, the same placement class as the float HUD and
+    /// `QR_EmitCenterPrint` — it has to be reachable and readable from
+    /// wherever the player is standing, and it is up while the game is
+    /// paused, so anchoring it to anything in the world (or to a hand that
+    /// is also working the controller) would be wrong.
+    ///
+    /// Gated on the packet's range being non-empty — which is the engine
+    /// saying a menu, console, scoreboard or notify line is actually up —
+    /// and NOT on `hud_mode`: a menu is not a HUD preset, it draws in every
+    /// mode including `vr_hud 0`, and it coexists with the wrist HUD. nil
+    /// without a head pose, for `hudPanelModel`'s reason: there is nothing
+    /// sane left to anchor to.
+    private func screen2dPanelModel(packet: qc_frame_t, originFromDevice: simd_float4x4,
+                                    headPoseAvailable: Bool) -> simd_float4x4? {
+        guard packet.screen2d_vert_count > 0,
+              let frame = floatAnchorFrame(originFromDevice: originFromDevice,
+                                           headPoseAvailable: headPoseAvailable,
+                                           distance: Self.screen2dDistance,
+                                           lowerOffset: Self.screen2dLowerOffset)
+        else { return nil }
+        return RendererCore.hudPanelModel(origin: frame.origin, right: frame.right, up: frame.up,
+                                          widthMeters: Self.screen2dPanelWidth,
+                                          heightMeters: Self.screen2dPanelHeight)
     }
 
     /// GUN anchor frame for modular tiles: the dominant hand's controller
