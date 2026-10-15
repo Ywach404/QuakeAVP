@@ -59,12 +59,13 @@ struct QuakePaths {
         )
     }
 
-    /// DEV ONLY -- strip before release (see project.yml `App/DevGameData`).
-    /// The author's own paks are bundled into the dev build; copy any that are
-    /// missing from Documents/id1 so the game runs without a manual Files copy.
-    /// Only fills gaps -- a real user-supplied pak in Documents always wins and
-    /// is never overwritten. A release build simply has no bundled paks, so
-    /// this no-ops and the Documents/Files flow is unchanged.
+    /// DEV CONVENIENCE -- nothing here needs stripping before a release (see
+    /// project.yml `App/DevGameData`). The author's own paks are bundled into
+    /// a dev build; copy any that are missing from Documents/id1 so the game
+    /// runs without a manual Files copy. Only fills gaps -- a real
+    /// user-supplied pak in Documents always wins and is never overwritten.
+    /// A clean checkout has no bundled paks (they are gitignored), so this
+    /// no-ops and the Documents/Files flow is unchanged.
     ///
     /// Returns whether `pak2.pak` -- the generated test range -- was in the
     /// bundle at all, which is what tells the engine thread whether the dev
@@ -102,7 +103,7 @@ struct QuakePaths {
         return bundledRange
     }
 
-    /// DEV ONLY -- strip with `seedBundledGameData`, which is its only caller.
+    /// DEV CONVENIENCE, like `seedBundledGameData`, which is its only caller.
     /// The CD soundtrack rips ride in the bundle as a folder reference (see
     /// project.yml's `App/DevGameData/music`), because `bgmusic.c` resolves
     /// tracks as `music/trackNN.ogg` and the resources phase would otherwise
