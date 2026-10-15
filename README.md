@@ -1,5 +1,7 @@
 # QuakeAVP
 
+![QuakeAVP](docs/media/header.gif)
+
 Quake for Apple Vision Pro: QuakeSpasm's engine core with a native Metal
 renderer where OpenGL used to be, played with your hands.
 
