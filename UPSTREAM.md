@@ -101,8 +101,13 @@ A gotcha worth knowing before chasing a silent soundtrack: `common.c`'s
 loose-file branch (the `registered.value` test in `COM_FindFile`) skips any
 filename containing a `/` when `registered` is 0. Music lives at
 `music/trackNN.ogg`, so with shareware-only data a loose music folder is
-invisible no matter what the codecs say. Dev and release builds both ship
-`pak1`, which sets `registered` to 1.
+invisible no matter what the codecs say. A dev build seeds the author's own
+`pak1` out of `App/DevGameData` (gitignored, never committed), so `registered`
+is 1 there and loose music plays. A release build ships no game data at all:
+`registered` is whatever the player's own paks make it, so a player running
+shareware `pak0` alone gets `registered` 0 and will not see a loose `music/`
+folder — their soundtrack has to be inside a pak, or they need the registered
+data.
 
 ## Patches applied to vendored files
 
@@ -180,8 +185,13 @@ Everything else that would have needed a patch is instead absorbed by shims in
   immediate-mode calls that `sbar.c` and `view.c` make directly;
   `gl_stubs.c` no-ops them. That pair is the M2 to-do list.
 - **`sdl_rw_shim.h/.c`** reimplements the six `SDL_RWops` calls `common.c`
-  makes to read `quakespasm.pak` (a zip) through miniz. It defines `USE_SDL2`
-  so `common.c` takes the SDL2 branch, which matches what the shim implements.
+  makes, over stdio. They are not for `quakespasm.pak` — that is a classic
+  `PACK` archive (`App/Resources/quakespasm.pak` begins with the magic) read
+  by `COM_LoadPackFile` through ordinary file I/O. The RWops calls are
+  `LOC_LoadFile`'s, which reads the rerelease localization file either loose
+  or out of `QuakeEX.kpf`, a real zip, through miniz — and miniz needs to seek
+  inside it. The shim defines `USE_SDL2` so `common.c` takes the SDL2 branch,
+  which matches what the shim implements.
 
 ## Merging a newer upstream
 
