@@ -48,7 +48,7 @@ struct QuakeAVPApp: App {
         // summon forever ("suppressed: 1 console window(s) already open" while
         // no window existed). Window is unique by construction: openWindow
         // either reopens it or brings it forward, and no counting is needed.
-        Window("Quake", id: Self.consoleWindowID) {
+        Window("QuakeAVP", id: Self.consoleWindowID) {
             ContentView()
                 // One fixed size that fits every control and the log; the
                 // console is a debug surface, not a resizable document, and

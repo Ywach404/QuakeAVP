@@ -1,6 +1,6 @@
 import XCTest
 import simd
-@testable import Quake
+@testable import QuakeAVP
 
 /// Building the palm plane from joints.
 ///

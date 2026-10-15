@@ -434,7 +434,7 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Quake")
+                Text("QuakeAVP")
                     .font(.largeTitle.weight(.semibold))
                 Text("QuakeSpasm \(engine.engineVersion) · Metal world renderer")
                     .font(.caption)
@@ -1392,7 +1392,7 @@ struct ContentView: View {
             Divider()
             Text("Export").font(.caption.weight(.semibold))
             if capture.demos.isEmpty {
-                Text("No demos yet. Record one, or drop a .dem into Files › Quake › id1.")
+                Text("No demos yet. Record one, or drop a .dem into Files › QuakeAVP › id1.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Picker("Demo", selection: $exportDemo) {
@@ -1448,7 +1448,7 @@ struct ContentView: View {
                               || (exportPreset.camera.needsTrack && !hasTrack))
             }
             if case .done(let url) = exporter.state {
-                Text("Saved: Files › Quake › Exports › \(url.lastPathComponent) (+ .csv of per-frame stats)")
+                Text("Saved: Files › QuakeAVP › Exports › \(url.lastPathComponent) (+ .csv of per-frame stats)")
                     .font(.caption)
             }
             if case .failed(let why) = exporter.state {

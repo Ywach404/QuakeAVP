@@ -1,6 +1,6 @@
 import XCTest
 import simd
-@testable import Quake
+@testable import QuakeAVP
 
 /// The prayer sign is the console summon, so its detector has to reject every
 /// pose a player actually holds during play. These cases are the ones that

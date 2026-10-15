@@ -17,8 +17,8 @@ xcodebuild -project QuakeAVP.xcodeproj -scheme QuakeAVP \
 	-derivedDataPath "$DERIVED" \
 	build >/dev/null
 
-APP=$(find "$DERIVED/Build/Products" -name "Quake.app" -type d | head -1)
-if [ -z "$APP" ]; then echo "no Quake.app built"; exit 1; fi
+APP=$(find "$DERIVED/Build/Products" -name "QuakeAVP.app" -type d | head -1)
+if [ -z "$APP" ]; then echo "no QuakeAVP.app built"; exit 1; fi
 echo "built $APP"
 
 # First connected Vision Pro: grab the UUID-shaped identifier from a line that
@@ -33,7 +33,7 @@ if [ -z "${DEV:-}" ]; then
 	xcrun devicectl list devices
 	echo
 	echo "If it is listed but not matched, run its identifier manually:"
-	echo "  xcrun devicectl device install app --device <ID> $DERIVED/.../Quake.app"
+	echo "  xcrun devicectl device install app --device <ID> $DERIVED/.../QuakeAVP.app"
 	echo "  xcrun devicectl device process launch --device <ID> --console $BUNDLE_ID"
 	exit 1
 fi

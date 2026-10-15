@@ -1,6 +1,6 @@
 import XCTest
 import simd
-@testable import Quake
+@testable import QuakeAVP
 
 final class VRTrackTests: XCTestCase {
 

@@ -137,7 +137,7 @@ targets:
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: Quake
+        CFBundleDisplayName: QuakeAVP
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
@@ -157,7 +157,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.acervantez.quakeavp.app
-        PRODUCT_NAME: Quake
+        # The product name is also the Swift module name, which the test
+        # target imports. "Quake" is id's mark; this port ships under its own.
+        PRODUCT_NAME: QuakeAVP
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: "0.1"
         TARGETED_DEVICE_FAMILY: "7"
@@ -190,8 +192,9 @@ targets:
       - target: QuakeAVP
     settings:
       base:
-        # The app's product is Quake.app, not QuakeAVP.app.
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quake.app/Quake"
+        # Spelled out rather than inherited: the host is the app's product,
+        # which is PRODUCT_NAME, not the target name. They match today.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/QuakeAVP.app/QuakeAVP"
         GENERATE_INFOPLIST_FILE: YES
         BUNDLE_LOADER: "$(TEST_HOST)"
 

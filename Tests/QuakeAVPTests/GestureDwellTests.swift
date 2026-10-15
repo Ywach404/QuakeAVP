@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quake
+@testable import QuakeAVP
 
 /// The summon's timing half. A held pose has to fire exactly once, survive a
 /// tracking flicker without accumulating toward a false trigger, and refuse to
