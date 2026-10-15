@@ -1180,8 +1180,38 @@ static void _Datagram_SearchForHosts (qboolean xmit)
 
 		// add it
 		hostCacheCount++;
+#ifdef QAVP_PLATFORM
+		/* Bounded. Upstream copies two MSG_ReadString()s -- up to 2047
+		   attacker-chosen bytes each, from an unauthenticated LAN
+		   broadcast reply -- into these 16-byte fields with Q_strcpy,
+		   which has no bound at all (common.c). A long server name
+		   therefore runs through map, cname, users, maxusers, driver,
+		   ldriver and addr, and on out past hostcache[7].
+
+		   This earns a hunk rather than a shim because the corruption
+		   happens HERE, at its source, inside packet handling that no
+		   platform file can reach or intercept; because the code runs
+		   unconditionally on every reply; and because a bounded copy is
+		   indistinguishable downstream -- the fields are 16 bytes either
+		   way, every consumer already reads them as such, and only a
+		   reply that would have overrun behaves differently.
+
+		   It also stopped being theoretical: the window's Game tab makes
+		   `slist` a one-tap button in the product's main menu, so in a
+		   release build any machine on the same Wi-Fi can reach this line
+		   on demand. The source strings are NUL-terminated by
+		   MSG_ReadString, so q_strlcpy's truncation walk stays inside its
+		   2048-byte static buffer.
+
+		   The version-mismatch branch below needs no guard once these
+		   two are bounded: upstream's own `cname[14] = 0` caps the
+		   "*"-prefixed rebuild at exactly 15 characters plus the NUL. */
+		q_strlcpy(hostcache[n].name, MSG_ReadString(), sizeof(hostcache[n].name));
+		q_strlcpy(hostcache[n].map, MSG_ReadString(), sizeof(hostcache[n].map));
+#else
 		Q_strcpy(hostcache[n].name, MSG_ReadString());
 		Q_strcpy(hostcache[n].map, MSG_ReadString());
+#endif
 		hostcache[n].users = MSG_ReadByte();
 		hostcache[n].maxusers = MSG_ReadByte();
 		if (MSG_ReadByte() != NET_PROTOCOL_VERSION)
@@ -1194,7 +1224,16 @@ static void _Datagram_SearchForHosts (qboolean xmit)
 		Q_memcpy(&hostcache[n].addr, &readaddr, sizeof(struct qsockaddr));
 		hostcache[n].driver = net_driverlevel;
 		hostcache[n].ldriver = net_landriverlevel;
+#ifdef QAVP_PLATFORM
+		/* Same hunk, same reason: the address this formats was parsed
+		   out of the reply (GetAddrFromName above), so its printed form
+		   is reply-derived too. Datagram addresses fit 32 bytes today;
+		   bounding it means a driver whose AddrToString grows cannot
+		   turn into the overrun this hunk just closed. */
+		q_strlcpy(hostcache[n].cname, dfunc.AddrToString(&readaddr), sizeof(hostcache[n].cname));
+#else
 		Q_strcpy(hostcache[n].cname, dfunc.AddrToString(&readaddr));
+#endif
 
 		// check for a name conflict
 		for (i = 0; i < hostCacheCount; i++)

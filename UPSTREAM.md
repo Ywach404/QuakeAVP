@@ -106,7 +106,7 @@ invisible no matter what the codecs say. Dev and release builds both ship
 
 ## Patches applied to vendored files
 
-Kept to an absolute minimum so upstream merges stay cheap. Four files, five
+Kept to an absolute minimum so upstream merges stay cheap. Five files, six
 hunks, all guarded by `#ifdef QAVP_PLATFORM`:
 
 **`quakedef.h`** — the `#include <SDL.h>` / `<SDL_opengl.h>` block is swapped
@@ -152,6 +152,26 @@ was drawn, and so had to fold the shift away again over the first ~96 units;
 the fold was visible as the projectile sliding back to the body line. Doing it
 at the source removed that hunk, two cvars and about 170 lines.
 
+**`net_dgrm.c`** — `_Datagram_SearchForHosts` fills the host cache from
+`CCREP_SERVER_INFO` replies with `Q_strcpy`, which is unbounded
+(`common.c`: `while (*src) *dest++ = *src++;`), out of `MSG_ReadString`'s
+2048-byte buffer and into `hostcache_t`'s 16-byte `name` and `map` and
+32-byte `cname`. A long server name on the LAN therefore runs through the
+rest of the entry and on past `hostcache[7]`. The hunk makes the three
+reply-derived copies `q_strlcpy` with the destination's own size; the
+version-mismatch rebuild just below needs no guard, because upstream's
+`cname[14] = 0` already caps it once `name` is bounded.
+
+It earns a hunk on all three of the usual tests: the corruption happens at
+its *source* inside packet handling, where no `platform/` shim can reach or
+intercept it; the code runs unconditionally on every reply; and a bounded
+copy is indistinguishable downstream, since every consumer already treats
+those fields as 16 and 32 bytes and only a reply that would have overrun
+behaves differently. What moved it from latent to worth patching is that
+`slist` is no longer a console command nobody types — the window's Game tab
+makes it a button in the product's main menu, so in a release build any
+machine on the same Wi-Fi can reach the line on demand.
+
 Everything else that would have needed a patch is instead absorbed by shims in
 `Sources/QuakeCore/platform/`:
 
@@ -167,8 +187,10 @@ Everything else that would have needed a patch is instead absorbed by shims in
 
 1. Diff the new upstream against `.upstream-rev` for the 45 vendored `.c` files
    and 72 headers; copy over.
-2. Re-apply the `quakedef.h`, `miniz.h`, `cl_tent.c` and `pr_cmds.c` hunks
-   (search for `QAVP_PLATFORM`).
+2. Re-apply the `quakedef.h`, `miniz.h`, `cl_tent.c`, `pr_cmds.c` and
+   `net_dgrm.c` hunks (search for `QAVP_PLATFORM`). Check the `net_dgrm.c`
+   one against upstream first: if a newer QuakeSpasm has bounded those
+   host-cache copies itself, drop the hunk rather than re-applying it.
 3. `make check` — a clean link means no new symbols escaped into the renderer
    boundary. New undefined symbols are new renderer entry points that need
    stubbing in `r_null.c`.
