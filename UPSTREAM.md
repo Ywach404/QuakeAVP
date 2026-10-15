@@ -56,7 +56,7 @@ them to both passes. When
 merging a newer upstream, diff those upstream files too and carry relevant
 fixes into the ports (including the shader constants); cvar defaults must
 stay byte-identical.
-| `gl_vidsdl.c` `main_sdl.c` `in_sdl.c` `snd_sdl.c` `cd_sdl.c` `sys_sdl_unix.c` `sys_sdl_win.c` | SDL platform layer. Replaced by `platform/`. |
+| `gl_vidsdl.c` `main_sdl.c` `in_sdl.c` `snd_sdl.c` `cd_sdl.c` `sys_sdl_unix.c` `sys_sdl_win.c` | SDL platform layer. Replaced by `platform/` — except `platform/cd_null.c`, which is not a replacement: it is upstream's own null CD-audio driver (`Quake/cd_null.c`), carried into `platform/` verbatim apart from a header note recording that provenance. |
 | `net_win.c` `net_wins.c` `net_wipx.c` `pl_win.c` | Windows-only. |
 | `pl_linux.c` | X11 clipboard/icon. Replaced by `platform/pl_null.c`. |
 | `pl_osx.m` | AppKit. Not applicable to visionOS, but worth re-reading when the clipboard is wired up. |
@@ -84,8 +84,9 @@ newer commit and record it here.
 
 | File | Source | Pinned at |
 |---|---|---|
-| `Sources/QuakeCore/engine/miniz.h` | came with QuakeSpasm | the QuakeSpasm commit above (patched, see below) |
-| `Sources/QuakeCore/engine/lodepng.c` / `.h` | came with QuakeSpasm | the QuakeSpasm commit above |
+| `Sources/QuakeCore/engine/miniz.h` / `.c` | came with QuakeSpasm, MIT licence (Rich Geldreich, RAD Game Tools and Valve) | the QuakeSpasm commit above (`.h` patched, see below) |
+| `Sources/QuakeCore/engine/lodepng.c` / `.h` | came with QuakeSpasm, zlib licence (Lode Vandevenne) | the QuakeSpasm commit above |
+| `Sources/QuakeCore/engine/stb_image_write.h` | came with QuakeSpasm (trimmed to the JPEG writer only); `github.com/nothings/stb`, dual-licensed MIT / public domain (Sean Barrett), with Jon Olick's public-domain `jo_jpeg.cpp` JPEG writer folded in — see the file's own licence block | the QuakeSpasm commit above |
 | `Sources/QuakeCore/platform/stb_vorbis.c` | `github.com/nothings/stb`, public domain / MIT | last commit touching the file: `1ee679ca2ef753a528db5ba6801e1067b40481b8` (repo master `2c980bb59875b0d32144a71867fbdebb2f77cd20` when taken). SHA-256 `4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636` |
 
 Unlike `lodepng.c`, `stb_vorbis.c` **is** its own translation unit: the codec in

@@ -783,7 +783,8 @@ void Draw_Pic (int x, int y, qpic_t *pic)		{ QR_DrawPic (x, y, pic); }
 void Draw_FadeScreen (void)				{ QR_DrawFadeScreen (); }
 void Draw_String (int x, int y, const char *str)	{ QR_DrawString (x, y, str); }
 
-/* Genuine no-op (see the stub rule in docs/working-notes.md): upstream clears
+/* Genuine no-op (a stub that is allowed to be a true no-op, as opposed to one
+   that still has to consume its input correctly): upstream clears
    the letterbox around a reduced viewsize with a tiled rock texture. There is
    no letterbox here -- the overlay plane is exactly the 2D canvas and the 3D
    view is a headset, not a window inside it -- so there is nothing to clear

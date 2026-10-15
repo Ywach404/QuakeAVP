@@ -217,9 +217,9 @@ schemes:
     run:
       config: Debug
       # Launch WITHOUT lldb attached. The debugger ptraces the process and
-      # disrupts the audio and compositor XPC (AURemoteIO -50, immersive hang) --
-      # see docs/working-notes.md. xcodegen defaults this to true, which re-checked "Debug
-      # executable" on every `xcodegen generate` and undid the manual uncheck.
+      # disrupts the audio and compositor XPC (AURemoteIO -50, immersive hang).
+      # xcodegen defaults this to true, which re-checked "Debug executable" on
+      # every `xcodegen generate` and undid the manual uncheck.
       debugEnabled: false
     test:
       config: Debug

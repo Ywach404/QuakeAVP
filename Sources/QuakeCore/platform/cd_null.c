@@ -1,8 +1,11 @@
 /*
  * SPDX-License-Identifier: GPL-2.0-or-later
- * Copyright (C) 2026 A. Cervantez
  *
  * cd_null.c
+ *
+ * This is QuakeSpasm's own cd_null.c, carried into platform/ unmodified
+ * (see UPSTREAM.md) because that is where the null CD-audio driver was
+ * needed; there is no A.-authored content in this file.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
