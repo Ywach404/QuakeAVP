@@ -119,6 +119,14 @@ final class WristCommStore {
         let cmd = sides[side].commands[cell].trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmd.isEmpty else { return }
         if WristComm.isSummonWindow(cmd) {
+            // Logged the way the prayer path logs (HandInput), and for the
+            // same reason: this and the Sense Options button are now the only
+            // hardware routes into any menu, so the one state where they fail
+            // -- no window has ever appeared, so nothing registered the
+            // closure -- is the state where nobody can see why. A bare print
+            // is invisible on the detached launch the headset is run with.
+            HandDebug.shared.log("[summon] wrist MENU key -> opening console"
+                + (HandInput.summonConsole == nil ? " (NO HANDLER REGISTERED)" : ""))
             HandInput.summonConsole?()
             return
         }

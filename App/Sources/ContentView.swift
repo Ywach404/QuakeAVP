@@ -1107,8 +1107,14 @@ struct ContentView: View {
             } else {
                 ForEach(session.slots) { slot in saveSlotRow(slot, running: running) }
             }
-            Button("Rescan") { session.refreshSlots() }
-                .font(.caption)
+            HStack(spacing: 8) {
+                Button("Rescan") { session.refreshSlots() }
+                    .font(.caption)
+                if session.isSaving {
+                    ProgressView().controlSize(.small)
+                    Text("Saving…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
         .buttonStyle(.bordered)
         .confirmationDialog("Delete this saved game?",
@@ -1143,10 +1149,19 @@ struct ContentView: View {
                          + "version \(SaveGameHeader.version).")
                         .font(.caption2).foregroundStyle(.orange)
                 }
+                if !slot.isAddressable {
+                    // Anything dropped in over Files can be called anything,
+                    // and `load` takes one whitespace-free argument. Say why
+                    // rather than leaving an enabled button that no-ops.
+                    Text("Rename this file (letters, digits, - and _) to load "
+                         + "it — the console cannot take a name with a space "
+                         + "or a dot in it.")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
             }
             Spacer()
             Button("Load") { session.load(slot.name) }
-                .disabled(!running || !slot.isLoadable)
+                .disabled(!running || !slot.isLoadable || !slot.isAddressable)
             Button("Delete", role: .destructive) { slotPendingDelete = slot }
         }
         .font(.caption)
@@ -1164,7 +1179,21 @@ struct ContentView: View {
                     .font(.system(.body, design: .monospaced))
                 Button("Join") { session.connect(to: joinAddress) }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!running || !ConsoleArgument.isValidAddress(joinAddress))
+                    .disabled(!running || session.isConnecting
+                              || !ConsoleArgument.isValidAddress(joinAddress))
+            }
+            if session.isConnecting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting…").font(.caption).foregroundStyle(.secondary)
+                }
+                // Upstream's own behaviour, not a port artefact: NET_Connect
+                // runs a silent search and then spins on NET_Poll, so the
+                // world holds still for a moment and the list below empties.
+                Text("The engine resolves the address before it answers — the "
+                     + "world holds still for about a second and the list "
+                     + "below clears while it does.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             if session.connected {
                 HStack(spacing: 8) {
@@ -1175,6 +1204,21 @@ struct ContentView: View {
                         .disabled(!running)
                 }
             }
+            if session.levelLoaded {
+                // `connect` disconnects first, which shuts the local server
+                // down. Worth saying before the tap, not after.
+                Text("Joining ends the game you have running.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            // A remote server cannot be paused -- IN_ApplyPause returns early
+            // without sv.active -- but the window still holds the pad
+            // suppressed, by GamePause's design. So after joining you are in
+            // a live game and cannot move until Resume. Say it here rather
+            // than letting it be discovered mid-deathmatch.
+            Text("After joining, tap Resume in the header: the remote game is "
+                 + "already running, but your controls stay held while this "
+                 + "window has the game stopped.")
+                .font(.caption2).foregroundStyle(.secondary)
             Divider()
             HStack(spacing: 8) {
                 Button("Find games") { session.searchServers() }
@@ -1222,7 +1266,10 @@ struct ContentView: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(!running)
+        // Disabled while a connect is in flight: NET_Connect holds the engine
+        // thread, so a second tap would queue a connect to a row that the
+        // first one has already cleared out of the list.
+        .disabled(!running || session.isConnecting)
     }
 
     /// Admin tab: single-player cheats/utilities, sent to the console. Disabled

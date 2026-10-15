@@ -77,10 +77,41 @@ final class SessionState {
     /// tab appearing and after a save or a delete -- not on the poll, which
     /// would stat the directory twice a second for nothing.
     private(set) var slots: [SaveGameSlot] = []
+    /// A save has been sent and its slot has not shown up yet. Drives the
+    /// "Saving…" caption and keeps the row from flickering (see `pendingSave`).
+    var isSaving: Bool { pendingSave != nil }
+    /// `connect` has been sent and `cls.state` has not reached ca_connected.
+    /// NET_Connect blocks the engine thread for up to about a second and a
+    /// half while it resolves and handshakes; without a state for that, the
+    /// tap reads as a hang.
+    private(set) var isConnecting = false
 
     var canSave: Bool { saveBlock == .none }
 
     private var timer: Timer?
+
+    /// The save we are waiting to see on disk, what the slot's timestamp was
+    /// before it (nil if the slot is new), and when we asked.
+    ///
+    /// There is no engine signal for "the savegame is written", and guessing
+    /// with a sleep is both a guess and wrong in a specific way:
+    /// `Host_Savegame_f` opens with `fopen(name, "w")`, which TRUNCATES
+    /// immediately, and stdio then buffers the version and comment lines
+    /// until the first `fflush` after edict 0. A scan landing inside that
+    /// window reads a zero-byte file, `readHeader` returns nil, and the slot
+    /// is dropped -- so overwriting an existing save made its row vanish and
+    /// come back, which reads as having destroyed it.
+    ///
+    /// So the poll that is already running does the work: while this is set,
+    /// every tick rescans and the previous row is held in place until the new
+    /// one parses. Bounded, because a write that never lands must not pin the
+    /// poll to the filesystem forever.
+    private var pendingSave: (name: String, previous: Date?, requestedAt: Date)?
+    private static let pendingSaveTimeout: TimeInterval = 10
+    /// How long to wait for `cls.state` before giving up on the badge. The
+    /// engine's own NET_Connect timeout is well inside this.
+    private static let connectTimeout: TimeInterval = 8
+    private var connectRequestedAt: Date?
 
     // MARK: - polling
 
@@ -101,10 +132,20 @@ final class SessionState {
         var state = qc_session_state_t()
         QC_SessionCopyState(&state)
 
-        levelLoaded = state.level_loaded != 0
-        connected = state.connected != 0
-        saveBlock = SaveBlock(rawValue: state.save_block) ?? .noLocalGame
-        isSearching = state.slist_in_progress != 0
+        // Equality-guarded, every one. @Observable's generated setters fire
+        // on assignment, not on change, and this poll runs twice a second for
+        // as long as the window is up -- an unguarded write would re-evaluate
+        // the whole tab 2 Hz forever for values that almost never move.
+        let newLevelLoaded = state.level_loaded != 0
+        if newLevelLoaded != levelLoaded { levelLoaded = newLevelLoaded }
+        let newConnected = state.connected != 0
+        if newConnected != connected { connected = newConnected }
+        let newSaveBlock = SaveBlock(rawValue: state.save_block) ?? .noLocalGame
+        if newSaveBlock != saveBlock { saveBlock = newSaveBlock }
+        let newSearching = state.slist_in_progress != 0
+        if newSearching != isSearching { isSearching = newSearching }
+
+        updateConnecting()
 
         let directory = Self.string(from: &state.gamedir, capacity: Int(QC_GAMEDIR_LEN))
         let url = directory.isEmpty ? nil : URL(fileURLWithPath: directory, isDirectory: true)
@@ -132,12 +173,62 @@ final class SessionState {
                                maxUsers: Int(raw[i].maxusers)))
         }
         if list != servers { servers = list }
+
+        // The one thing the poll does with the filesystem, and only while a
+        // save is actually in flight.
+        if pendingSave != nil { refreshSlots() }
     }
 
     /// Rescan the engine's game directory for savegames.
+    ///
+    /// While a save is pending, a slot that was already there is CARRIED
+    /// OVER if this scan cannot read it: that is the truncate-then-buffer
+    /// window described on `pendingSave`, and showing the row disappear
+    /// during it would say the save had been destroyed.
     func refreshSlots() {
-        guard let gameDirectory else { slots = []; return }
-        slots = SaveGameHeader.list(in: gameDirectory)
+        guard let gameDirectory else {
+            if !slots.isEmpty { slots = [] }
+            return
+        }
+        var scanned = SaveGameHeader.list(in: gameDirectory)
+
+        if let pending = pendingSave {
+            let found = scanned.first { $0.name == pending.name }
+            let landed = found.map { slot in
+                pending.previous.map { slot.modified > $0 } ?? true
+            } ?? false
+
+            if landed {
+                pendingSave = nil
+            } else {
+                if found == nil, let stale = slots.first(where: { $0.name == pending.name }) {
+                    scanned.append(stale)
+                    scanned.sort { $0.modified > $1.modified }
+                }
+                if Date().timeIntervalSince(pending.requestedAt) > Self.pendingSaveTimeout {
+                    // Give up watching rather than scan forever. The list is
+                    // left exactly as the last scan saw it, and Rescan is
+                    // still there.
+                    pendingSave = nil
+                }
+            }
+        }
+
+        if scanned != slots { slots = scanned }
+    }
+
+    /// Clear the connecting badge once the engine says so, or once it has
+    /// plainly not worked. `connect` prints its own failure to the console.
+    private func updateConnecting() {
+        guard isConnecting else { return }
+        if connected {
+            isConnecting = false
+            connectRequestedAt = nil
+        } else if let since = connectRequestedAt,
+                  Date().timeIntervalSince(since) > Self.connectTimeout {
+            isConnecting = false
+            connectRequestedAt = nil
+        }
     }
 
     // MARK: - actions (all of them ordinary console commands)
@@ -148,19 +239,13 @@ final class SessionState {
     /// call, and it prints its own reason.
     func save(_ name: String) {
         guard canSave, ConsoleArgument.isValidSavegameName(name) else { return }
+        // Record what the slot looked like BEFORE the send, so the poll can
+        // tell an overwrite from the file that was already there. Everything
+        // else about waiting for the write is on `pendingSave`.
+        pendingSave = (name: name,
+                       previous: slots.first { $0.name == name }?.modified,
+                       requestedAt: Date())
         QuakeEngineViewModel.shared.send("save \(name)")
-        // The engine writes the file on its next drained frame, so a rescan
-        // here would miss it. Rescan twice: once for the common case, and
-        // again later because the write itself is not instant -- Host_
-        // Savegame_f fflushes after every edict and then syncs the
-        // filesystem, which on a big level is long enough for one 600 ms
-        // rescan to show nothing and leave the player tapping Rescan.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(600))
-            self?.refreshSlots()
-            try? await Task.sleep(for: .milliseconds(2500))
-            self?.refreshSlots()
-        }
     }
 
     /// `load <name>`. Allowed with no level loaded -- that is how a session
@@ -174,16 +259,30 @@ final class SessionState {
     /// Delete a slot. There is no engine command for this; the file is the
     /// engine's, so the only honest thing to do is remove it and rescan.
     func delete(_ slot: SaveGameSlot) {
+        // A delete of the slot being written would fight the poll. Drop the
+        // watch first so the carry-over cannot resurrect the row.
+        if pendingSave?.name == slot.name { pendingSave = nil }
         try? FileManager.default.removeItem(at: slot.url)
         refreshSlots()
     }
 
+    /// `connect <address>`. NET_Connect runs a silent `slist` and then spins
+    /// `while (slistInProgress) NET_Poll();` on the ENGINE thread, so this
+    /// freezes the simulation for up to about a second and a half and empties
+    /// the browser list on the way through (NET_Slist_f zeroes
+    /// hostCacheCount). That is upstream's own behaviour and the menu did the
+    /// same; making it asynchronous is not this round's business. What the
+    /// window owes the player is a state for it, which `isConnecting` is.
     func connect(to address: String) {
         guard ConsoleArgument.isValidAddress(address) else { return }
+        isConnecting = true
+        connectRequestedAt = Date()
         QuakeEngineViewModel.shared.send("connect \(address)")
     }
 
     func disconnect() {
+        isConnecting = false
+        connectRequestedAt = nil
         QuakeEngineViewModel.shared.send("disconnect")
     }
 

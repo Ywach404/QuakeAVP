@@ -112,6 +112,7 @@ final class GameControllerInput {
     private func detach(_ controller: GCController) {
         if isSpatial(controller) {
             spatialControllers.removeAll { $0 === controller }
+            SenseMapper.forgetMenuLatch(controller)
             aggregator.remove(SenseMapper.slice(forLeft:
                 (controller.vendorName ?? "").localizedCaseInsensitiveContains("left")))
         } else {
@@ -260,33 +261,71 @@ final class PadAggregator: @unchecked Sendable {
 
 /// Maps one PSVR2 Sense controller's per-hand profile onto its slice of the
 /// virtual pad. Left hand: movement stick, walk trigger, L1 = weapon wheel,
-/// face buttons cycle weapons, L3 = slow-mo toggle, create = recenter. Right
-/// hand: aim stick, fire trigger, Cross + R1 = jump, Circle = use,
-/// R3 = recenter, Options = summon the window.
+/// face buttons cycle weapons, L3 = slow-mo toggle, Create/Share = recenter.
+/// Right hand: aim stick, fire trigger, Cross + R1 = jump, Circle = use,
+/// R3 = recenter. Options/Menu, on EITHER controller, summons the window.
 private enum SenseMapper {
 
-    /// The right-hand Options press, latched for an edge. `build` runs on
+    /// Options/Menu, latched for an edge, PER CONTROLLER. `build` runs on
     /// GameController's own handler queue and is called again for every
-    /// value change on the profile, so without this the window would be
+    /// value change on the profile, so without a latch the window would be
     /// re-summoned on every stick wobble while the button was held.
     ///
-    /// `nonisolated(unsafe)` with a lock, like `WheelState`'s hold: the
-    /// handler queue is not the main actor, and the only thing crossing is
-    /// one Bool. The grip (wheel) and L3 (slow-mo) take the same route one
-    /// line apart -- an app-side consumer, not a pad bit.
+    /// Per controller and not one shared Bool: both halves of the pair call
+    /// this, and a single flag would be reset by whichever controller
+    /// reported "up" and then re-fire on the next value change from the one
+    /// still holding the button down.
+    ///
+    /// `nonisolated(unsafe)` behind a lock, like `WheelState`'s hold: the
+    /// handler queue is not the main actor, and all that crosses is a Bool
+    /// per device. The grip (wheel) and L3 (slow-mo) take the same route a
+    /// few lines below -- an app-side consumer, not a pad bit.
     private static let menuLock = NSLock()
-    nonisolated(unsafe) private static var menuWasDown = false
+    nonisolated(unsafe) private static var menuWasDown: [ObjectIdentifier: Bool] = [:]
 
-    /// True exactly once per press. The window summon is an app-side action,
-    /// so it must not go through QC_PAD_MENU: in_null.c turns that bit into
-    /// K_ESCAPE for the engine menu, and the engine menu is a console-only
-    /// vestige now. That mapping STAYS for classic gamepads, which have no
-    /// other way in and whose Menu button is not this button.
-    private static func menuPressEdge(_ down: Bool) -> Bool {
+    /// True exactly once per press, for this controller. The window summon is
+    /// an app-side action, so it must not go through QC_PAD_MENU: in_null.c
+    /// turns that bit into K_ESCAPE for the engine menu, and the engine menu
+    /// is a console-only vestige now. That mapping STAYS for classic
+    /// gamepads, which have no other way in and whose Menu button is not
+    /// this button.
+    private static func menuPressEdge(_ down: Bool, _ controller: GCController) -> Bool {
+        let key = ObjectIdentifier(controller)
         menuLock.lock(); defer { menuLock.unlock() }
-        let edge = down && !menuWasDown
-        menuWasDown = down
+        let edge = down && !(menuWasDown[key] ?? false)
+        menuWasDown[key] = down
         return edge
+    }
+
+    /// Forget a detached controller's latch, so a reconnect starts clean and
+    /// the table cannot grow across a session of pairings.
+    static func forgetMenuLatch(_ controller: GCController) {
+        let key = ObjectIdentifier(controller)
+        menuLock.lock(); defer { menuLock.unlock() }
+        menuWasDown[key] = nil
+    }
+
+    /// Options/Menu on whichever controller has it. HAND-AGNOSTIC on purpose:
+    /// a menu button is not a left-hand or right-hand action, and routing it
+    /// through the left/right branches meant that turning on "Swap controller
+    /// hands" silently removed the only Sense way into the product's menu --
+    /// the physical right controller took the left branch, where Options fell
+    /// into the recenter list, and the physical left one has no Options
+    /// element at all. Create/Share keep going to recenter, which is what
+    /// they have always done.
+    private static func routeMenuButton(_ profile: GCPhysicalInputProfile,
+                                        controller: GCController) {
+        let down = ["Options", "Menu"].contains {
+            button(profile, containing: $0)?.isPressed == true
+        }
+        guard menuPressEdge(down, controller) else { return }
+        // Logged like the prayer path (HandInput) and the wrist MENU key: a
+        // nil closure means no window has ever appeared to register one, and
+        // that is precisely the state in which a silent no-op cannot be
+        // diagnosed -- these are the only hardware routes into any menu now.
+        HandDebug.shared.log("[summon] Sense Options -> opening console"
+            + (HandInput.summonConsole == nil ? " (NO HANDLER REGISTERED)" : ""))
+        if let summon = HandInput.summonConsole { Task { @MainActor in summon() } }
     }
 
     static func slice(forLeft left: Bool) -> PadAggregator.Source {
@@ -336,6 +375,9 @@ private enum SenseMapper {
                 return
             }
         }
+        // Before the hand split, because the menu button belongs to neither
+        // hand -- see routeMenuButton.
+        routeMenuButton(profile, controller: controller)
         if left {
             // L1 (grip) is the weapon wheel: hold to open, release to commit
             // the highlighted weapon. It never reaches the engine as a key.
@@ -350,25 +392,17 @@ private enum SenseMapper {
             // Weapon cycle lives on the face buttons now (grip is the wheel).
             set(QC_PAD_LSHOULDER, ["Button X", "Square"])          // prev weapon
             set(QC_PAD_Y, ["Button Y", "Triangle", "Button B"])    // next weapon
-            set(QC_PAD_OPTIONS, ["Create", "Share", "Options", "Menu"])
+            // Recenter. "Options"/"Menu" are NOT in this list any more: they
+            // go to routeMenuButton above, on either hand.
+            set(QC_PAD_OPTIONS, ["Create", "Share"])
         } else {
             // Cross AND R1 (grip) jump; circle uses.
             set(QC_PAD_A, ["Button A", "Cross", "Grip", "Shoulder"])
             set(QC_PAD_B, ["Button B", "Circle"])
             set(QC_PAD_RTHUMB, ["Thumbstick Button", "Thumbstick , Button"])
-            // Options summons the SwiftUI window -- the product's whole
-            // out-of-game surface -- instead of setting QC_PAD_MENU, which
-            // in_null.c turns into K_ESCAPE for the engine menu. Routed
-            // app-side like the grip (WheelState) and L3 (slow-mo) above
-            // rather than through a pad bit, and edge-latched so a held
-            // button summons once. The same closure the prayer gesture and
-            // the gauntlet's MENU key use, so all three pause identically.
-            let menuDown = ["Options", "Menu"].contains {
-                button(profile, containing: $0)?.isPressed == true
-            }
-            if menuPressEdge(menuDown), let summon = HandInput.summonConsole {
-                Task { @MainActor in summon() }
-            }
+            // QC_PAD_MENU is deliberately not set here any more: Options goes
+            // to routeMenuButton above, which summons the window instead of
+            // the K_ESCAPE in_null.c would turn this bit into.
         }
         return slice
     }
