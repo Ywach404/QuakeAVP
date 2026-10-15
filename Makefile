@@ -10,7 +10,24 @@ IPA     := build/QuakeAVP.ipa
 # build runs without a manual Files copy. They are id Software's data and A.'s
 # licensed rips; neither may leave this machine. Excluding them by NAME keeps
 # QuakeSpasm's own quakespasm.pak, which is GPL and has to ship.
-IPA_EXCLUDES := EXCLUDED_SOURCE_FILE_NAMES='pak0.pak pak1.pak pak2.pak music'
+#
+# EXCLUDED_SOURCE_FILE_NAMES has no case-insensitive mode, so the uppercase
+# variants below are cheap partial cover only -- exactly how an original
+# Quake CD spells its data (ID1/PAK0.PAK) would still slip past this list on
+# a case-sensitive volume if a pattern were missing. The find assertion in
+# the `ipa` recipe below is the real backstop: it is case-insensitive and is
+# what the target actually depends on to refuse a dirty payload.
+IPA_EXCLUDES := EXCLUDED_SOURCE_FILE_NAMES='pak0.pak pak1.pak pak2.pak PAK0.PAK PAK1.PAK PAK2.PAK music *.ogg *.OGG *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC'
+
+# Case-insensitive on purpose (see the comment above IPA_EXCLUDES): this is
+# the check that cannot be taken back, so it must not depend on how a pak or
+# a music file happens to be cased. Covers id's own data extensions plus a
+# music directory by name, not just the dev machine's current lowercase
+# files -- deliberately a denylist rather than an allowlist of the expected
+# six payload entries, so a legitimate new payload file Xcode adds later
+# does not start failing `make ipa` on its own.
+PAYLOAD_GUARD := \( -iname 'pak[0-9].pak' -o -iname '*.ogg' -o -iname '*.mp3' \
+	-o -iname '*.wav' -o -iname '*.flac' -o -type d -iname 'music' \)
 
 .PHONY: help gen build device run check ipa clean
 
@@ -72,9 +89,9 @@ ipa: gen
 		archive
 	mkdir -p $(IPA_DIR)/Payload
 	cp -R $(ARCHIVE)/Products/Applications/$(SCHEME).app $(IPA_DIR)/Payload/
-	@if find $(IPA_DIR)/Payload \( -name 'pak[0-9].pak' -o -name '*.ogg' \) | grep -q .; then \
+	@if find $(IPA_DIR)/Payload $(PAYLOAD_GUARD) | grep -q .; then \
 		echo "ipa: REFUSING -- game data in the payload:"; \
-		find $(IPA_DIR)/Payload \( -name 'pak[0-9].pak' -o -name '*.ogg' \); \
+		find $(IPA_DIR)/Payload $(PAYLOAD_GUARD); \
 		exit 1; \
 	fi
 	cd $(IPA_DIR) && zip -qry ../$(notdir $(IPA)) Payload
