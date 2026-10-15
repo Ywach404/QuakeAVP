@@ -39,13 +39,19 @@ vis   build/range/range.bsp
 #    copied. Shareware data skips loose files in subdirectories, so the
 #    map has to travel in a pak alongside it.
 python3 tools/range/genpop.py > build/pop.lmp
-python3 tools/range/mkpak.py <path-to>/id1/pak1.pak \
+python3 tools/range/mkpak.py build/range/pak2.pak \
     gfx/pop.lmp=build/pop.lmp \
     maps/range.bsp=build/range/range.bsp
 ```
 
-Stage `pak1.pak` beside `pak0.pak` in the app's `Documents/id1/`, then
-`map range` from the console.
+`mkpak.py`'s first argument is the OUTPUT path -- it must never point at a
+real pak inside your `<path-to>/id1`, or it overwrites id's own file. Stage
+the result as `Documents/id1/pak2.pak` beside `pak0.pak` (and `pak1.pak`, if
+you have the registered game): `pak2` is the app's own slot for a generated
+range, so it never collides with anything id shipped. If you only have the
+shareware `pak0.pak` and no real `pak1.pak` exists, staging the generated pak
+as `Documents/id1/pak1.pak` instead is also fine -- but never do that once a
+real `pak1.pak` is present. Then `map range` from the console.
 
 ## Verifying without a headset
 
