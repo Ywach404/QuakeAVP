@@ -43,16 +43,30 @@
 #define SESSION_PERIOD	0.25	/* seconds of realtime between idle refreshes */
 
 static pthread_mutex_t		qc_session_lock = PTHREAD_MUTEX_INITIALIZER;
-static qc_session_state_t	qc_session_shared;
+/* Blocked before the first Session_Frame, not QC_SAVE_OK. A zeroed struct
+   would answer "save is fine" with an empty gamedir, and the window is open
+   and asking before the engine's first frame -- the permissive value must
+   never be the one you get by default. */
+static qc_session_state_t	qc_session_shared = { .save_block = QC_SAVE_NO_LOCAL_GAME };
 static double			qc_session_next_refresh;
 
 /*
- * hostcache_t's name/map/cname are fixed-width fields the net drivers fill
- * with q_strlcpy, so they are terminated in practice -- but the destination
- * here is the SAME width, and q_strlcpy's truncation path walks the source
- * looking for a terminator it would not find. Copy the bytes and terminate
- * ourselves instead: a hostile reply that filled the field edge to edge
- * reads as a truncated name, not an overread.
+ * Copy one fixed-width hostcache field without assuming it is terminated.
+ *
+ * The destination is the SAME width as the source (QC_SERVER_*_LEN are
+ * hostcache_t's own widths), so a fixed-length memcpy plus an explicit NUL
+ * is correct whatever the driver left there, and cannot read past the
+ * source field. q_strlcpy would be wrong for exactly that reason: on
+ * truncation it walks the source for a terminator, which an edge-to-edge
+ * field does not have.
+ *
+ * Do not read this as "upstream terminates these". It did not: net_dgrm.c
+ * filled them with an unbounded Q_strcpy out of a network reply, which is
+ * the overrun the sixth QAVP_PLATFORM hunk now closes (see UPSTREAM.md).
+ * With that hunk the source is bounded and terminated as well, so this
+ * function is belt and braces -- kept, because it is the last thing
+ * standing between a network buffer and the window if the hunk is ever
+ * dropped on an upstream merge.
  */
 static void Session_CopyField (char *dst, const char *src, size_t len)
 {

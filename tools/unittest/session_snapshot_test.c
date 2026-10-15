@@ -69,6 +69,16 @@ int main (void)
 	qc_server_t		rows[QC_SERVER_MAX];
 	int			n;
 
+	/* ---- before the engine has run a frame ---- */
+
+	/* The window is open and polling before QC_Frame ever runs, so the
+	   value you get by default must be the blocking one. */
+	QC_SessionCopyState (&st);
+	CHECK (st.save_block == QC_SAVE_NO_LOCAL_GAME,
+	       "the un-refreshed snapshot blocks saving rather than permitting it");
+	CHECK (st.gamedir[0] == '\0' && st.server_count == 0,
+	       "and is otherwise empty");
+
 	/* ---- save guards, in Host_Savegame_f's order ---- */
 
 	reset_world ();
