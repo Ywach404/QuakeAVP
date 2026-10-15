@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 184" width="216" height="184" role="img" aria-label="glance at the off wrist, touch a key">
+  <style>
+    .ln  { stroke:#2f353d; stroke-width:4;   fill:none; stroke-linecap:round; stroke-linejoin:round; }
+    .hi  { stroke:#d6453a; stroke-width:4.5; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+    .arw { stroke:#2f353d; stroke-width:3;   fill:none; stroke-linecap:round; stroke-linejoin:round; opacity:.55; }
+    .gst { stroke:#2f353d; stroke-width:3;   fill:none; stroke-linecap:round; stroke-linejoin:round;
+           stroke-dasharray:5 5; opacity:.6; }
+    @media (prefers-color-scheme: dark) {
+      .ln { stroke:#dfe6ee; } .arw { stroke:#dfe6ee; } .gst { stroke:#dfe6ee; } .hi { stroke:#ff6a5c; }
+    }
+  </style>
+  <path class="ln" d="M 18 34 L 146 34"/>
+  <path class="ln" d="M 18 96 L 146 96"/>
+  <path class="ln" d="M 18 34 Q 6 65 18 96"/>
+  <path class="ln" d="M 146 34 Q 160 65 146 96"/>
+  <path class="gst" d="M 134 38 L 134 92"/>
+  <rect class="arw" x="28" y="42" width="30" height="22" rx="4"/>
+  <rect class="arw" x="64" y="42" width="30" height="22" rx="4"/>
+  <rect class="arw" x="100" y="42" width="30" height="22" rx="4"/>
+  <rect class="arw" x="28" y="70" width="30" height="22" rx="4"/>
+  <rect class="arw" x="64" y="70" width="30" height="22" rx="4"/>
+  <rect class="hi" x="100" y="70" width="30" height="22" rx="4"/>
+  <path class="hi" d="M 108 172 L 108 100 A 6.5 6.5 0 0 1 121 100 L 121 172"/>
+  <path class="hi" d="M 96 168 Q 114 178 133 166"/>
+  <circle class="hi" cx="114" cy="96" r="7.5"/>
+  <path class="arw" d="M 166 24 Q 188 8 210 24 Q 188 40 166 24"/>
+  <circle class="arw" cx="188" cy="24" r="5"/>
+  <path class="gst" d="M 172 36 L 126 58"/>
+</svg>
