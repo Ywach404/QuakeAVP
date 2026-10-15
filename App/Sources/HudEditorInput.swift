@@ -177,8 +177,8 @@ struct ForearmSample {
 ///     unit's face must come off a FACE, not an edge, so the dorsal/palmar
 ///     one is the pick: the third column.
 ///  3. Its SIGN is the half of this that cannot be derived. The two faces
-///     are the inner (where a watch strap's dial sits, and where A. wants
-///     the unit) and the outer.
+///     are the inner (where a watch strap's dial sits, and where the unit
+///     belongs) and the outer.
 ///
 /// ...so, honestly: 1 and 2 are structural and 3 is a guess. This project
 /// has been here before -- the palm normal in

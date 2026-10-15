@@ -268,8 +268,8 @@ final class VRSettings: @unchecked Sendable {
     ///
     /// Persisted directly to `UserDefaults` (NOT through `InputProfile`):
     /// these are a one-time physical fit of the unit to the player's arm, not
-    /// part of a swappable control profile, and A. must not have to re-dial
-    /// them after every launch.
+    /// part of a swappable control profile, and nobody should have to
+    /// re-dial them after every launch.
     static let commTiltLimit: Float = 45        // degrees, either way
     static let commOffsetLimit: Float = 0.10    // metres, either way
     /// The in-plane Rotate dial's range: a full turn either way, because the
@@ -318,12 +318,11 @@ final class VRSettings: @unchecked Sendable {
     // the two layouts want genuinely different seatings -- the across-wrist
     // unit sits on the back of the wrist, the along-arm one runs down a
     // forearm that is not square to it -- and sharing one set meant dialling
-    // the height for one view dragged the other out of place ("changing
-    // height shouldn't effect the other way to view"). So each view owns its
-    // own {tilt, fwd, side, up, rot}.
+    // the height for one view dragged the other out of place. So each view
+    // owns its own {tilt, fwd, side, up, rot}.
     //
-    // THE EXISTING KEYS ARE THE ACROSS SET, unrenamed: A.'s current tuning is
-    // stored under them and must survive this change untouched, so there is
+    // THE EXISTING KEYS ARE THE ACROSS SET, unrenamed: live tuning on device
+    // is stored under them and must survive this change untouched, so there is
     // no migration to get wrong. The along set's keys and defaults are
     // documented at the versioned block below, where they actually live now.
     private static let commTiltKey = "wristCommTilt"
@@ -344,9 +343,9 @@ final class VRSettings: @unchecked Sendable {
     //     (so a stored roll of 90, which used to pick a FACE of the arm, now
     //     stands the key run across it), the offsets ride the billboarded
     //     panel's axes rather than the bone's, and Height is "toward you"
-    //     rather than "off the skin". A. tuned the `...2` values against the
-    //     flat panel; carried over, they would mis-place this one and read
-    //     as the fix not working.
+    //     rather than "off the skin". The `...2` values were tuned against
+    //     the flat panel; carried over, they would mis-place this one and
+    //     read as the fix not working.
     //
     // New keys mean the new view starts from its own documented defaults;
     // the superseded keys are simply left behind, unread and harmless. The

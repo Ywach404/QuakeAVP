@@ -1285,8 +1285,8 @@ void IN_Move (usercmd_t *cmd)
 	/* A menu or the console has the input: the left stick is walking the
 	   menu (IN_MenuKeys), not walking the player. Same shape and the same
 	   absorb as the wheel gate above -- physically walking is real motion
-	   and stays honoured. This did nothing visible before this round
-	   because nothing drew the menu; now that it is on screen, without
+	   and stays honoured. This did nothing visible until the 2D layer
+	   landed, because nothing drew the menu; now that it is on screen, without
 	   this the stick that scrolls the options list also walks you off
 	   whatever ledge the panel is floating over. */
 	if (key_dest != key_game)

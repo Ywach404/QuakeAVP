@@ -273,7 +273,7 @@ final class SessionState {
     /// freezes the simulation for up to about a second and a half and empties
     /// the browser list on the way through (NET_Slist_f zeroes
     /// hostCacheCount). That is upstream's own behaviour and the menu did the
-    /// same; making it asynchronous is not this round's business. What the
+    /// same; making it asynchronous is a separate job. What the
     /// window owes the player is a state for it, which `isConnecting` is.
     func connect(to address: String) {
         guard ConsoleArgument.isValidAddress(address) else { return }

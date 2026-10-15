@@ -3,7 +3,7 @@
 //
 //  TriggerScope.swift
 //
-//  Live scope over the trigger pipeline, for tuning and portfolio capture:
+//  Live scope over the trigger pipeline, for tuning and for capture:
 //  both analog triggers over the last four seconds, the engine's actuation
 //  and release thresholds, fire marks, kickback pulses, and the adaptive
 //  feel zone the active weapon would program into a Sense trigger.

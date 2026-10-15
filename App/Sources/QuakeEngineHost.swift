@@ -60,7 +60,7 @@ struct QuakePaths {
     }
 
     /// DEV CONVENIENCE -- nothing here needs stripping before a release (see
-    /// project.yml `App/DevGameData`). The author's own paks are bundled into
+    /// project.yml `App/DevGameData`). Paks staged locally are bundled into
     /// a dev build; copy any that are missing from Documents/id1 so the game
     /// runs without a manual Files copy. Only fills gaps -- a real
     /// user-supplied pak in Documents always wins and is never overwritten.
@@ -104,7 +104,7 @@ struct QuakePaths {
     }
 
     /// DEV CONVENIENCE, like `seedBundledGameData`, which is its only caller.
-    /// The CD soundtrack rips ride in the bundle as a folder reference (see
+    /// The soundtrack audio rides in the bundle as a folder reference (see
     /// project.yml's `App/DevGameData/music`), because `bgmusic.c` resolves
     /// tracks as `music/trackNN.ogg` and the resources phase would otherwise
     /// flatten them into the bundle root.
