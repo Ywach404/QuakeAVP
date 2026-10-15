@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * qr_bridge.h -- engine-side interface to the Metal world renderer.
  *
  * Included by platform/r_null.c and platform/vid_null.c *after* quakedef.h

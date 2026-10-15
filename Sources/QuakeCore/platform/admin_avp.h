@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * admin_avp.h -- the window's Admin tab, engine side. See admin_avp.c.
  */
 

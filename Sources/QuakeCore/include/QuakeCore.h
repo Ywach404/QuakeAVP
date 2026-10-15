@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * QuakeCore.h -- the entire C surface Swift is allowed to touch.
  *
  * Everything else in this library is QuakeSpasm internals. Keep this header

@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * sprite_axes_test.c -- QR_SpriteBillboardAxes yields the upstream up/right
  * billboard basis per SPR_* type, against the view globals. Pure, map-free.
  */

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 A. Cervantez
 //
 //  ContentView.swift
 //
@@ -437,6 +439,12 @@ struct ContentView: View {
                 Text("QuakeAVP")
                     .font(.largeTitle.weight(.semibold))
                 Text("QuakeSpasm \(engine.engineVersion) · Metal world renderer")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                // The app has no About screen and does not need one; this is
+                // the whole by-line. Same caption styling as the engine
+                // credit above it, so it reads as part of the same block.
+                Text("by A. Cervantez")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Label(inputStatus.text, systemImage: inputStatus.icon)

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 A. Cervantez
 #
 # check-core.sh -- host-compile QuakeCore outside Xcode.
 #

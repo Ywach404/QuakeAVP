@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * fog_test.c -- Fog_Update/GetDensity/GetColor fade lerp, and Fog_Parse-
  * ServerMessage's svc_fog byte decode (density/255, rgb/255, short time/100).
  */

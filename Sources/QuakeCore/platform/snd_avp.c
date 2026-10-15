@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * snd_avp.c -- audio output device, replacing snd_sdl.c (and the M0-M6
  * snd_null.c stub).
  *

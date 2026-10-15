@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * dlight_shim_test.c -- QR_DlightMarkOrigin relocates the local player's
  * dlight (muzzle flash) to the hand under hand aim; everything else is marked
  * from its own origin. Map-free: QR_HandOrigin works off zeroed view state.

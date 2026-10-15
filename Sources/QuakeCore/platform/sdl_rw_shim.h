@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * sdl_rw_shim.h -- the 6 SDL_RWops calls common.c makes, over stdio.
  *
  * LOC_LoadFile reads the rerelease localization file through SDL_RWops so

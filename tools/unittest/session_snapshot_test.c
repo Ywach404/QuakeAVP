@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * session_snapshot_test.c -- the window's Game-tab snapshot (session_avp.c).
  *
  * The engine globals this reads -- sv, svs, cl, cls, hostcache[],

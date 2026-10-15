@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * lightmap_reupload_test.c -- QR_FlushDirtyLightmaps enqueues an upload for
  * each dirty atlas. Map-free guard: with no map (lightmap_count == 0) it
  * enqueues nothing and must not touch the empty atlas array. The

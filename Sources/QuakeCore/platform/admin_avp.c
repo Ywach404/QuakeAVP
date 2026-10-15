@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * admin_avp.c -- engine side of the window's Admin tab.
  *
  * Two single-player cheats that upstream has no console equivalent for, plus

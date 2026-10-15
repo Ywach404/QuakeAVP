@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 A. Cervantez
 # Build, install and launch on the Vision Pro WITHOUT the debugger.
 #
 # The whole audio saga turned on one thing: launching from Xcode attaches lldb,

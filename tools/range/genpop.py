@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 A. Cervantez
+
 """
 genpop.py -- emit gfx/pop.lmp to stdout.
 

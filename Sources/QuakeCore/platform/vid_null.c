@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * vid_null.c -- video mode stub, replacing gl_vidsdl.c.
  *
  * On visionOS there is no "video mode": the drawable geometry is dictated by

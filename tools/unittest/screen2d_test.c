@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * screen2d_test.c -- the menu/console half of the 2D layer: the CANVAS_MENU
  * and CANVAS_CONSOLE affines, the Draw_CachePic wrapper cache, and
  * QR_EmitScreen2D's overlay vertex range.

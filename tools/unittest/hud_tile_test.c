@@ -1,3 +1,8 @@
+/*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ */
+
 #include "quakedef.h"
 #include "qr_bridge.h"
 #include <stdio.h>

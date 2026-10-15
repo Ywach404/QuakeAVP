@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * r_null.c -- the refresh shim.
  *
  * At M0 this file stubbed, in one place, everything QuakeSpasm's OpenGL

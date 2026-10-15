@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * qr_bridge.c -- engine-side half of the Metal world renderer.
  *
  * This file is the C producer the Swift/Metal consumer in Sources/QuakeRenderer
