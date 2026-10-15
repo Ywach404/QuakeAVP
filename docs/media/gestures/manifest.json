@@ -1,0 +1,303 @@
+{
+  "version": 1,
+  "handedness": "Diagrams are drawn for the default right-handed setting: the off hand is the left, the gun hand is the right. Comfort's “Dominant hand” picker swaps both.",
+  "controls": [
+    {
+      "id": "hands-aim",
+      "input": "hands",
+      "hand": "gun",
+      "fingers": "forearm",
+      "motion": "point",
+      "action": "Aim",
+      "blurb": "The gun rides your dominant forearm and fires where the arm points, not where you look. The forearm is used rather than a finger so pinching, fisting or opening the hand never drops the aim.",
+      "diagram": "hands-aim.svg",
+      "source": ["App/Sources/HandInput.swift:348", "Sources/QuakeCore/platform/in_null.c:323"]
+    },
+    {
+      "id": "hands-fire",
+      "input": "hands",
+      "hand": "gun",
+      "fingers": "thumb+index",
+      "motion": "hold",
+      "action": "Fire",
+      "blurb": "Pinch thumb to index on the gun hand to shoot, and hold it for automatic fire. An index curl is the alternative trigger, carried on the input profile.",
+      "diagram": "hands-fire.svg",
+      "source": ["App/Sources/HandInput.swift:424", "App/Sources/VRSettings.swift:125", "Sources/QuakeCore/platform/in_null.c:1502"]
+    },
+    {
+      "id": "hands-move-forward",
+      "input": "hands",
+      "hand": "off",
+      "fingers": "thumb+index",
+      "motion": "hold",
+      "action": "Walk forward",
+      "blurb": "Hold thumb to index on the off hand to walk forward. Forward is where you look; the gun's aim is factored out, so pointing it somewhere else never drags you (vr_moverelative 0 walks the body's forward instead).",
+      "diagram": "hands-move-forward.svg",
+      "source": ["App/Sources/HandInput.swift:410"]
+    },
+    {
+      "id": "hands-move-backward",
+      "input": "hands",
+      "hand": "off",
+      "fingers": "thumb+middle",
+      "motion": "hold",
+      "action": "Walk backward",
+      "blurb": "Hold thumb to middle finger on the off hand to back up.",
+      "diagram": "hands-move-backward.svg",
+      "source": ["App/Sources/HandInput.swift:411"]
+    },
+    {
+      "id": "hands-crouch",
+      "input": "hands",
+      "hand": "off",
+      "fingers": "thumb+pinky",
+      "motion": "hold",
+      "action": "Crouch",
+      "blurb": "Hold thumb to little finger on the off hand to crouch; it is bound to +movedown and releases as soon as you let go.",
+      "diagram": "hands-crouch.svg",
+      "source": ["App/Sources/HandInput.swift:414", "Sources/QuakeCore/platform/in_null.c:1504"]
+    },
+    {
+      "id": "hands-jump",
+      "input": "hands",
+      "hand": "gun",
+      "fingers": "thumb+ring",
+      "motion": "pinch",
+      "action": "Jump",
+      "blurb": "Pinch thumb to ring finger on the gun hand to jump. Ring is the free finger there, since firing lives on the index.",
+      "diagram": "hands-jump.svg",
+      "source": ["App/Sources/HandInput.swift:418", "Sources/QuakeCore/platform/in_null.c:1496"]
+    },
+    {
+      "id": "hands-turn-drag",
+      "input": "hands",
+      "hand": "gun",
+      "fingers": "thumb+middle",
+      "motion": "hold and drag sideways",
+      "action": "Turn",
+      "blurb": "Pinch thumb to middle finger on the gun hand and hold it out to one side: you keep turning for as long as you hold, faster the further you have dragged. With smooth turning off it fires one snap instead.",
+      "diagram": "hands-turn-drag.svg",
+      "source": ["App/Sources/HandInput.swift:510", "Sources/QuakeCore/platform/in_null.c:1389"]
+    },
+    {
+      "id": "hands-turn-flick",
+      "input": "hands",
+      "hand": "gun",
+      "fingers": "open hand",
+      "motion": "whip sideways",
+      "action": "Quick turn",
+      "blurb": "A fast sideways whip of the un-pinched gun hand fires a single turn. The threshold is deliberately high, so ordinary aiming motion cannot trip it.",
+      "diagram": "hands-turn-flick.svg",
+      "source": ["App/Sources/HandInput.swift:539"]
+    },
+    {
+      "id": "hands-turn-body",
+      "input": "hands",
+      "hand": "gun",
+      "fingers": "forearm",
+      "motion": "hold the aim off-centre",
+      "action": "Body turn",
+      "blurb": "Hold the gun past about 18 degrees to one side and your body rotates under it, continuously, until you bring the aim back to centre. It is the body that turns, not your neck: the aim leads and the view follows it round.",
+      "diagram": "hands-turn-body.svg",
+      "source": ["Sources/QuakeCore/platform/in_null.c:1410", "Sources/QuakeCore/platform/in_null.c:309"]
+    },
+    {
+      "id": "hands-teleport",
+      "input": "hands",
+      "hand": "off",
+      "fingers": "thumb+ring",
+      "motion": "hold, then release",
+      "action": "Teleport",
+      "blurb": "Point the gun at the floor, pinch thumb to ring on the off hand to line the spot up, and release to blink there. The landing point is collision-checked, so you cannot blink into a wall or into lava.",
+      "diagram": "hands-teleport.svg",
+      "source": ["App/Sources/HandInput.swift:952", "Sources/QuakeCore/platform/in_null.c:1043", "Sources/QuakeCore/platform/in_null.c:372"]
+    },
+    {
+      "id": "hands-weapon-wheel",
+      "input": "hands",
+      "hand": "off",
+      "fingers": "open palm",
+      "motion": "turn palm up and hold",
+      "action": "Weapon wheel",
+      "blurb": "Turn the off palm up and your owned weapons ring that wrist while the world slows to a crawl. Move the whole hand toward one to highlight it, then drop the palm to take it.",
+      "diagram": "hands-weapon-wheel.svg",
+      "source": ["App/Sources/HandInput.swift:1071", "App/Sources/WheelState.swift:97"]
+    },
+    {
+      "id": "hands-summon",
+      "input": "hands",
+      "hand": "both",
+      "fingers": "palms together",
+      "motion": "hold 0.6 s",
+      "action": "Summon the window",
+      "blurb": "Hold both palms together with the fingers up for 0.6 seconds and the app window comes back without leaving the game. The prayer sign is used because visionOS reserves the open palm for Home View.",
+      "diagram": "hands-summon.svg",
+      "source": ["App/Sources/HandInput.swift:142", "App/Sources/PrayerPose.swift:100", "docs/decisions.md:92"]
+    },
+    {
+      "id": "hands-wristcomm",
+      "input": "hands",
+      "hand": "both",
+      "fingers": "index fingertip",
+      "motion": "glance, then touch",
+      "action": "Wrist communicator",
+      "blurb": "Glance down at your off forearm and a six-key panel fades in; touch a key with the other index fingertip to fire it. MENU, the sixth key, summons the window.",
+      "diagram": "hands-wristcomm.svg",
+      "source": ["App/Sources/WristCommMath.swift:30", "App/Sources/WristCommStore.swift:119", "Sources/QuakeCore/platform/r_null.c:370"]
+    },
+    {
+      "id": "hands-hud-grab",
+      "input": "hands",
+      "hand": "either",
+      "fingers": "thumb+index",
+      "motion": "pinch and drag",
+      "action": "Move a HUD tile",
+      "blurb": "Press “Edit HUD Layout” in the window, then pinch a status tile with either hand and drag it where you want it. Every other gesture is suppressed while you are arranging, so you cannot fire or walk off the anchor.",
+      "diagram": "hands-hud-grab.svg",
+      "source": ["App/Sources/HudEditorInput.swift:46", "App/Sources/HandInput.swift:334"]
+    },
+    {
+      "id": "sense-left-stick",
+      "input": "sense",
+      "hand": "left",
+      "control": "thumbstick",
+      "motion": "push",
+      "action": "Move",
+      "blurb": "Walks where you look, with the aim factored out.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:361"]
+    },
+    {
+      "id": "sense-right-stick",
+      "input": "sense",
+      "hand": "right",
+      "control": "thumbstick",
+      "motion": "push sideways",
+      "action": "Turn",
+      "blurb": "Rotate the body. Smooth by default; snap in 45 degree steps with vr_smoothturn 0.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:361", "Sources/QuakeCore/platform/in_null.c:1389"]
+    },
+    {
+      "id": "sense-left-trigger",
+      "input": "sense",
+      "hand": "left",
+      "control": "trigger",
+      "motion": "hold",
+      "action": "Run",
+      "blurb": "Bound to +speed, so it runs unless cl_alwaysrun is on, in which case it walks.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:370", "Sources/QuakeCore/platform/in_null.c:1503"]
+    },
+    {
+      "id": "sense-right-trigger",
+      "input": "sense",
+      "hand": "right",
+      "control": "trigger",
+      "motion": "hold",
+      "action": "Fire",
+      "blurb": "Bound to +attack. Suppressed while the weapon wheel is open.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:370", "Sources/QuakeCore/platform/in_null.c:766"]
+    },
+    {
+      "id": "sense-left-grip",
+      "input": "sense",
+      "hand": "left",
+      "control": "grip (L1)",
+      "motion": "hold, then release",
+      "action": "Weapon wheel",
+      "blurb": "Hold to open the ring, aim at a weapon, release to take it. It never reaches the engine as a key.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:386", "App/Sources/WheelState.swift:97"]
+    },
+    {
+      "id": "sense-left-stick-click",
+      "input": "sense",
+      "hand": "left",
+      "control": "stick click (L3)",
+      "motion": "press",
+      "action": "Slow motion",
+      "blurb": "Toggles slow motion, routed straight to the engine rather than through a key.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:391"]
+    },
+    {
+      "id": "sense-left-square",
+      "input": "sense",
+      "hand": "left",
+      "control": "Square / X",
+      "motion": "press",
+      "action": "Previous weapon",
+      "blurb": "impulse 12.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:395", "Sources/QuakeCore/platform/in_null.c:1500"]
+    },
+    {
+      "id": "sense-left-triangle",
+      "input": "sense",
+      "hand": "left",
+      "control": "Triangle / Y",
+      "motion": "press",
+      "action": "Next weapon",
+      "blurb": "impulse 10.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:396", "Sources/QuakeCore/platform/in_null.c:1499"]
+    },
+    {
+      "id": "sense-left-create",
+      "input": "sense",
+      "hand": "left",
+      "control": "Create / Share",
+      "motion": "press",
+      "action": "Recenter",
+      "blurb": "Runs vr_recenter directly, so it works even with a wiped config.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:399", "Sources/QuakeCore/platform/in_null.c:762"]
+    },
+    {
+      "id": "sense-right-cross",
+      "input": "sense",
+      "hand": "right",
+      "control": "Cross, or grip (R1)",
+      "motion": "press",
+      "action": "Jump",
+      "blurb": "Both are wired to +jump.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:402", "Sources/QuakeCore/platform/in_null.c:1496"]
+    },
+    {
+      "id": "sense-right-circle",
+      "input": "sense",
+      "hand": "right",
+      "control": "Circle",
+      "motion": "press",
+      "action": "Use",
+      "blurb": "Bound to +use.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:403", "Sources/QuakeCore/platform/in_null.c:1497"]
+    },
+    {
+      "id": "sense-right-stick-click",
+      "input": "sense",
+      "hand": "right",
+      "control": "stick click (R3)",
+      "motion": "press",
+      "action": "Recenter",
+      "blurb": "Bound to vr_recenter.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:404", "Sources/QuakeCore/platform/in_null.c:1505"]
+    },
+    {
+      "id": "sense-options",
+      "input": "sense",
+      "hand": "either",
+      "control": "Options / Menu",
+      "motion": "press",
+      "action": "Summon the window",
+      "blurb": "Hand-agnostic on purpose, so swapping controller hands cannot remove the only Sense route into the menu.",
+      "diagram": null,
+      "source": ["App/Sources/GameControllerInput.swift:318"]
+    }
+  ]
+}

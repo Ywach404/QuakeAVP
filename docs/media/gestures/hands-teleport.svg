@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 212 180" width="212" height="180" role="img" aria-label="off hand, thumb to ring finger, released: teleport">
+  <style>
+    .ln  { stroke:#2f353d; stroke-width:4;   fill:none; stroke-linecap:round; stroke-linejoin:round; }
+    .hi  { stroke:#d6453a; stroke-width:4.5; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+    .arw { stroke:#2f353d; stroke-width:3;   fill:none; stroke-linecap:round; stroke-linejoin:round; opacity:.55; }
+    .gst { stroke:#2f353d; stroke-width:3;   fill:none; stroke-linecap:round; stroke-linejoin:round;
+           stroke-dasharray:5 5; opacity:.6; }
+    @media (prefers-color-scheme: dark) {
+      .ln { stroke:#dfe6ee; } .arw { stroke:#dfe6ee; } .gst { stroke:#dfe6ee; } .hi { stroke:#ff6a5c; }
+    }
+  </style>
+  <g>
+    <path class="ln" d="M 36.5 148 C 30 132 29.5 106 36.5 88 L 36.5 58 A 6.5 6.5 0 0 1 49.5 58 L 49.5 72 Q 51 77 52.5 72 L 52.5 40 A 6.5 6.5 0 0 1 65.5 40 L 65.5 70 Q 67 75 68.5 70 L 68.5 67 A 6.5 6.5 0 0 1 81.5 67 L 81.5 70 Q 83 75 84.5 70 L 84.5 71 A 6.5 6.5 0 0 1 97.5 71 L 97.5 84 C 103 98 104 114 100 126 C 96 140 82 150 66 150 C 50 150 40 152 36.5 148 Z"/>
+    <path class="hi" d="M 52.5 82 L 52.5 40 A 6.5 6.5 0 0 1 65.5 40 L 65.5 82"/>
+    <path class="hi" d="M 102.4 110.1 C 114.23 100.09 92.92 61.01 72.12 46.53"/>
+    <circle class="hi" cx="66" cy="43" r="6.5"/>
+  </g>
+  <ellipse class="gst" cx="166" cy="150" rx="30" ry="11"/>
+  <path class="arw" d="M 112 116 Q 154 96 172 134"/>
+  <path class="arw" d="M 171 126 L 168 139 M 166.46 131.15 L 168 139 L 172.82 132.62"/>
+</svg>

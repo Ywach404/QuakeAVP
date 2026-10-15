@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 184" width="176" height="184" role="img" aria-label="off palm turned up: the weapon wheel">
+  <style>
+    .ln  { stroke:#2f353d; stroke-width:4;   fill:none; stroke-linecap:round; stroke-linejoin:round; }
+    .hi  { stroke:#d6453a; stroke-width:4.5; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+    .arw { stroke:#2f353d; stroke-width:3;   fill:none; stroke-linecap:round; stroke-linejoin:round; opacity:.55; }
+    .gst { stroke:#2f353d; stroke-width:3;   fill:none; stroke-linecap:round; stroke-linejoin:round;
+           stroke-dasharray:5 5; opacity:.6; }
+    @media (prefers-color-scheme: dark) {
+      .ln { stroke:#dfe6ee; } .arw { stroke:#dfe6ee; } .gst { stroke:#dfe6ee; } .hi { stroke:#ff6a5c; }
+    }
+  </style>
+  <path class="gst" d="M 141 150 A 62 21 0 0 1 17 150"/>
+  <circle class="ln" cx="141" cy="150" r="6"/>
+  <circle class="hi" cx="129.16" cy="162.34" r="6"/>
+  <circle class="ln" cx="98.16" cy="169.97" r="6"/>
+  <circle class="ln" cx="59.84" cy="169.97" r="6"/>
+  <circle class="ln" cx="28.84" cy="162.34" r="6"/>
+  <circle class="ln" cx="17" cy="150" r="6"/>
+  <g transform="translate(12,0) translate(134,0) scale(-1,1)">
+    <path class="ln" d="M 36.5 148 C 30 132 29.5 106 36.5 88 L 36.5 58 A 6.5 6.5 0 0 1 49.5 58 L 49.5 72 Q 51 77 52.5 72 L 52.5 40 A 6.5 6.5 0 0 1 65.5 40 L 65.5 70 Q 67 75 68.5 70 L 68.5 33 A 6.5 6.5 0 0 1 81.5 33 L 81.5 70 Q 83 75 84.5 70 L 84.5 41 A 6.5 6.5 0 0 1 97.5 41 L 97.5 84 C 103 98 104 114 100 126 C 96 140 82 150 66 150 C 50 150 40 152 36.5 148 Z"/>
+    <path class="ln" d="M 102.4 110.1 C 117 115 130 102 131 84"/>
+    <path class="arw" d="M 45 108 Q 62 116 82 110"/><path class="arw" d="M 45 122 Q 60 130 74 128"/>
+  </g>
+  <path class="arw" d="M 103.16 140.34 L 120.16 154.34 M 112.45 152.22 L 120.16 154.34 L 116.59 147.18"/>
+</svg>
