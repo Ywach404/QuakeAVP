@@ -9,7 +9,10 @@ The reason this exists: shareware Quake refuses LOOSE files in
 subdirectories (COM_FindFile skips any filename containing a slash unless
 `registered` is set -- id's original anti-piracy check), so a custom map
 can't be dropped in as id1/maps/range.bsp. Files inside a pak are exempt.
-Stage the output as id1/pak1.pak next to the shareware pak0.pak.
+The first argument below is the OUTPUT path -- never point it at a real pak.
+Stage the result as id1/pak2.pak (the app's own slot for a generated pak,
+next to pak0.pak and pak1.pak if you have one), or as id1/pak1.pak only in
+the shareware-only case where no real pak1.pak exists.
 
   python3 tools/range/mkpak.py out.pak maps/range.bsp=path/to/range.bsp ...
 """
