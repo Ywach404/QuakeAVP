@@ -109,9 +109,9 @@ the names on its own buttons. Left is the movement hand, right is the aim hand.
 | Right stick click (R3) | Recenter | Bound to `vr_recenter`. |
 | Options / Menu | Summon the window | Hand-agnostic on purpose, so swapping controller hands cannot remove the only Sense route into the menu. |
 
-A classic extended gamepad maps onto the same virtual pad, with the face
-buttons and triggers on the bindings above and its Menu button opening the
-engine's own menu.
+A classic Bluetooth gamepad happens to map onto the same virtual pad — an
+inheritance from early development, before hands and the Sense pair existed.
+It is not part of the supported input set and goes untested.
 
 ## Install
 
@@ -218,7 +218,7 @@ and torches lit and animating — renders in stereo inside a mixed
 `ImmersiveSpace` with real head tracking, holding the device's 90 Hz
 (single-pass via vertex amplification, foveated).
 
-It plays on hands alone or on a gamepad: locomotion that walks where you look
+It plays on hands alone, or on a PSVR2 Sense pair: locomotion that walks where you look
 with the gun's aim factored out (so pointing it somewhere else never drags
 you), smooth or snap turning of the body, a comfort
 vignette during artificial locomotion, room-scale head follow with real
@@ -226,7 +226,10 @@ collision (you cannot lean through a wall), and seated recenter. The weapon is
 split off the body: the gun lives in your hand and fires where you point (the
 dominant hand's ray, or a PSVR2 Sense controller's), while the camera stays the
 head and movement stays the body — look left while aiming right and the shot
-still goes right. A stylised virtual hand holds the gun while the world is
+still goes right. Left-handed play is first-class: one **Dominant hand**
+picker mirrors every gesture — the aim arm, the wheel's wrist, the
+communicator's forearm, the diagrams' convention — and the Sense pair has its
+own swap for the physical controllers. A stylised virtual hand holds the gun while the world is
 solid and crossfades to your real hand as the phase melt reveals passthrough;
 firing kicks the shooting hand's haptics and recoils the gun.
 
@@ -420,7 +423,7 @@ The stub files are shaped so the next milestones land in one place each:
   `QC_RendererSetDrawableSize` (the immersive layer reports the per-eye view
   size, and the merged culling fov through `QC_RendererSetCullingFov`).
 - `platform/in_null.c` — `IN_Move` fills a `usercmd_t`. Every input source,
-  gamepad and hand alike, arrives through the `QC_Input*` setters and is
+  controller and hand alike, arrives through the `QC_Input*` setters and is
   drained there.
 - `platform/snd_avp.c` — `SNDDMA_*` over a ring buffer that the Swift
   `AVAudioEngine` source node drains. Quake's own mixer does the mixing; the
