@@ -25,7 +25,6 @@ rogue/
 *.wad
 pak1.pak
 pop.lmp
-tools/promo-assets/out/
 
 # Licensed soundtrack rips (A.'s own remaster copies). Never commit audio:
 # the music is not redistributable, same rule as the paks above.
