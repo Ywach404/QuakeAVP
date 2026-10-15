@@ -20,14 +20,14 @@ rogue/
 # macOS
 .DS_Store
 
-# range: generated from the user's own pak0; never commit id-derived data
+# range: generated from a local pak0; never commit id-derived data
 *.bsp
 *.wad
 pak1.pak
 pop.lmp
 
-# Licensed soundtrack rips (A.'s own remaster copies). Never commit audio:
-# the music is not redistributable, same rule as the paks above.
+# Soundtrack audio. Never commit it: the music is not redistributable, same
+# rule as the paks above.
 #
 # The CONTENTS are ignored rather than the directory, so the empty folder can
 # be kept alive by its .gitkeep -- project.yml carries it into the bundle as a
