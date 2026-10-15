@@ -11,13 +11,13 @@
 //
 //  The gesture language (VRChat/Battle-Talent conclusions, adapted to bare
 //  hands). The OFF hand locomotes, the GUN hand aims and turns:
-//    move thumb+middle hold    walk forward (where you look, vr_moverelative)
-//    move thumb+index hold     walk backward
-//    off thumb+ring pinch      teleport (aim off-arm at floor, release)  [test]
+//    move thumb+index hold     walk forward (where you look, vr_moverelative)
+//    move thumb+middle hold    walk backward
+//    off thumb+ring pinch      teleport (gun reticle picks it; release to go)
 //    move thumb+pinky hold     crouch
 //    move palm-up              open the weapon wheel (that hand selects)
 //    gun index pinch           fire (hold for automatic)
-//    gun thumb+ring pinch      jump  [test remap]
+//    gun thumb+ring pinch      jump
 //    gun horizontal flick      quick turn -- a fast un-pinched sideways whip
 //    gun thumb+middle hold+drag  CONTINUOUS turn (Smooth mode): hold out to a
 //                              side to keep turning, rate by drag distance
@@ -926,12 +926,12 @@ final class HandInput: @unchecked Sendable {
     /// the wrist isn't tracked, so the shot falls back to the body aim.
     private var tpRingWas = false
 
-    /// Point-and-blink teleport off the OFF hand (non-gun): aim the forearm at
-    /// a floor and hold an index pinch to arm -- the engine shows the landing
-    /// ring and jumps you there on release. Fed in the SAME body-frame ray form
-    /// as feedAim, so IN_Teleport reconstructs the world ray exactly as it does
-    /// the aim. The forearm ray is used (not the fingers): it survives the pinch
-    /// that arms the teleport, where a finger ray would collapse.
+    /// Point-and-blink teleport off the OFF hand (non-gun): hold a RING pinch
+    /// to line the spot up, release to blink. The GUN reticle picks the spot --
+    /// IN_Teleport traces and validates that ray engine-side -- so all this
+    /// needs to detect is the pinch's release edge. The off-hand ray is still
+    /// fed in the same body-frame form as feedAim and kept in the pipe for a
+    /// future PSVR dual-wield, but nothing reads it yet; see the body below.
     private func teleport(left: HandState, right: HandState) {
         // No locomotion while the HUD editor is open: an off-hand ring pinch is
         // a grab/footprint gesture there, not a teleport commit. Drop any armed
@@ -1023,10 +1023,10 @@ final class HandInput: @unchecked Sendable {
 
     /// Weapon wheel. The OFF-hand palm gesture always holds the ring open; the
     /// ring then LOCKS in place and a wrist is the selector -- move the whole
-    /// hand toward a weapon to highlight it and rest there ~0.28s to swap to it
-    /// live; flip the palm back to close. No finger pointing (it was too fiddly
-    /// on a ring anchored to a wrist); every other gesture stays suppressed
-    /// while it's open.
+    /// hand toward a weapon to highlight it, then drop the palm, which closes
+    /// the ring AND commits the highlight (see WheelState.setHold). No finger
+    /// pointing (too fiddly on a ring anchored to a wrist); every other
+    /// gesture stays suppressed while it's open.
     ///
     /// Which wrist SELECTS is a setting (VRSettings.wheelSelectHand):
     /// - offHand (default): the summoning off hand also selects -- one-handed,
