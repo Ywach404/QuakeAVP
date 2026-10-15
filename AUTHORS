@@ -21,8 +21,10 @@ in the engine's own history; UPSTREAM.md records the exact commit, what was
 taken, what was left behind and every patch applied.
 
 Third-party single-file libraries are credited in UPSTREAM.md with their
-sources and pinned revisions: stb_vorbis (Sean Barrett), lodepng (Lode
-Vandevenne) and miniz (Rich Geldreich, RAD Game Tools, Valve).
+sources and pinned revisions: stb_vorbis and stb_image_write (Sean Barrett,
+the latter's JPEG writer based on Jon Olick's code), lodepng (Lode
+Vandevenne, zlib licence) and miniz (Rich Geldreich, RAD Game Tools, Valve,
+MIT licence).
 
 Quake and the Quake logo are trademarks of id Software LLC. QuakeAVP is an
 unofficial port and ships no game data.
