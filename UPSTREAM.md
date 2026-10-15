@@ -56,7 +56,7 @@ them to both passes. When
 merging a newer upstream, diff those upstream files too and carry relevant
 fixes into the ports (including the shader constants); cvar defaults must
 stay byte-identical.
-| `gl_vidsdl.c` `main_sdl.c` `in_sdl.c` `snd_sdl.c` `cd_sdl.c` `sys_sdl_unix.c` `sys_sdl_win.c` | SDL platform layer. Replaced by `platform/` — except `platform/cd_null.c`, which is not a replacement: it is upstream's own null CD-audio driver (`Quake/cd_null.c`), carried into `platform/` verbatim apart from a header note recording that provenance. |
+| `gl_vidsdl.c` `main_sdl.c` `in_sdl.c` `snd_sdl.c` `cd_sdl.c` `sys_sdl_unix.c` `sys_sdl_win.c` | SDL platform layer. Replaced by `platform/` — except `platform/cd_null.c`, which is not a replacement: it is upstream's own null CD-audio driver (`Quake/cd_null.c`), carried into `platform/` verbatim apart from a header note recording that provenance. (Taken the same way `stb_vorbis.c` below is: placed in `platform/` rather than `engine/`, so it is not one of the "45 `.c` files" counted under **What was taken** above.) |
 | `net_win.c` `net_wins.c` `net_wipx.c` `pl_win.c` | Windows-only. |
 | `pl_linux.c` | X11 clipboard/icon. Replaced by `platform/pl_null.c`. |
 | `pl_osx.m` | AppKit. Not applicable to visionOS, but worth re-reading when the clipboard is wired up. |
