@@ -33,11 +33,11 @@ qbsp build/range/range.map
 light build/range/range.bsp
 vis   build/range/range.bsp
 
-# 3. pack it. Shareware Quake skips loose files in subdirectories and
-#    locks out extra/modified paks unless it sees the "registered" token
-#    gfx/pop.lmp -- whose 256-byte content is published in the engine
-#    source (common.c `pop[]`). mkpak bundles a synthesized pop.lmp so a
-#    custom map loads on shareware data without shipping any id asset.
+# 3. pack it. gfx/pop.lmp is the 256-byte table QuakeSpasm itself carries
+#    in common.c's `pop[]` under the GPL; genpop.py regenerates it from
+#    that source so the test range loads without any id asset being
+#    copied. Shareware data skips loose files in subdirectories, so the
+#    map has to travel in a pak alongside it.
 python3 tools/range/genpop.py > build/pop.lmp
 python3 tools/range/mkpak.py <path-to>/id1/pak1.pak \
     gfx/pop.lmp=build/pop.lmp \

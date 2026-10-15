@@ -6,10 +6,10 @@ ARCHIVE := build/QuakeAVP.xcarchive
 IPA_DIR := build/ipa
 IPA     := build/QuakeAVP.ipa
 
-# The author's own paks and soundtrack rips live in App/DevGameData so a dev
-# build runs without a manual Files copy. They are id Software's data and A.'s
-# licensed rips; neither may leave this machine. Excluding them by NAME keeps
-# QuakeSpasm's own quakespasm.pak, which is GPL and has to ship.
+# Local game data and music live in App/DevGameData so a dev build runs
+# without a manual Files copy. None of it is redistributable and none of it is
+# committed. Excluding them by NAME keeps QuakeSpasm's own quakespasm.pak,
+# which is GPL and has to ship.
 #
 # EXCLUDED_SOURCE_FILE_NAMES has no case-insensitive mode, so the uppercase
 # variants below are cheap partial cover only -- exactly how an original
@@ -68,7 +68,7 @@ run: gen
 # The sideload artifact. Archives Release for a real device with signing off,
 # then wraps the product the way an .ipa is defined: Payload/<app> in a zip.
 # Unsigned on purpose -- whoever installs it signs with their own team, and a
-# build signed with A.'s certificate would only install for A. anyway.
+# signed build only installs for the signer anyway.
 #
 # An archive rather than a plain build because the archive's Products tree is
 # the install-shaped copy of the app, already stripped of the intermediates a

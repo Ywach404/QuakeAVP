@@ -90,7 +90,7 @@ targets:
     sources:
       - path: App/Sources
       - path: App/Resources
-      # DEV CONVENIENCE -- nothing to strip. The author's own game paks,
+      # DEV CONVENIENCE -- nothing to strip. Local game paks, staged here and
       # bundled so a dev build runs without a manual Files copy;
       # QuakeEngineHost seeds them into Documents/id1 on launch only when
       # missing. The .pak files are gitignored and never committed, so a
@@ -105,8 +105,8 @@ targets:
           # Added below as a folder reference instead; see there.
           - "music"
           - "music/**"
-      # DEV CONVENIENCE, same as the paks above. The CD soundtrack rips:
-      # the author's own, gitignored, never committed, absent from a clean
+      # DEV CONVENIENCE, same as the paks above. The soundtrack audio: local
+      # only, gitignored, never committed, absent from a clean
       # checkout. A folder REFERENCE rather than a recursed group because
       # the resources phase flattens groups into the bundle root, and the
       # engine wants `music/trackNN.ogg` -- a directory, not ten loose files
@@ -122,8 +122,8 @@ targets:
       # still emitted and CpResource still fails. Measured, with `optional`
       # already set: xcodebuild exits 65. Do not delete the .gitkeep.
       #
-      # Cost, for whoever is deciding about the release strip: this folder is
-      # ~79 MB, which is most of the dev .app's ~140 MB.
+      # For scale: locally this folder is ~79 MB, which is most of the dev
+      # .app's ~140 MB. It is empty in a clean checkout.
       - path: App/DevGameData/music
         type: folder
         optional: true

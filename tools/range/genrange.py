@@ -18,7 +18,7 @@ The range exists to exercise every M4/M5 system in one room:
   - weapon rack         all seven weapons + ammo: the wheel offers everything
   - firing line         grunts and dogs at known positions: live targets
 
-Textures are extracted from the user's own pak0.pak into range.wad -- id's
+Textures are extracted from a local pak0.pak into range.wad -- id's
 assets are not redistributable, so neither the wad nor the compiled bsp is
 committed; only this generator is. Build:
 

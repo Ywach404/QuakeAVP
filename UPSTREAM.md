@@ -102,8 +102,8 @@ A gotcha worth knowing before chasing a silent soundtrack: `common.c`'s
 loose-file branch (the `registered.value` test in `COM_FindFile`) skips any
 filename containing a `/` when `registered` is 0. Music lives at
 `music/trackNN.ogg`, so with shareware-only data a loose music folder is
-invisible no matter what the codecs say. A dev build seeds the author's own
-`pak1` out of `App/DevGameData` (gitignored, never committed), so `registered`
+invisible no matter what the codecs say. A dev build seeds a local `pak1`
+placed in `App/DevGameData` (gitignored, never committed), so `registered`
 is 1 there and loose music plays. A release build ships no game data at all:
 `registered` is whatever the player's own paks make it, so a player running
 shareware `pak0` alone gets `registered` 0 and will not see a loose `music/`
@@ -134,10 +134,11 @@ to distinguish them downstream.
 **`pr_cmds.c`** — `PF_setorigin` calls `QR_MuzzleSpawn` (in
 `platform/in_null.c`) before writing the origin. Vanilla spawns each weapon's
 missile at a per-weapon offset from the player *origin* — the middle of the
-chest — while the gun is in my hand. This builtin is where that position is
-decided, before `SV_LinkEdict` and before any physics, so correcting it here is
-what makes the shot genuinely leave the barrel: the trail starts there, the
-model is drawn there, and the missile flies a true path from there, with
+chest — while the gun is in the player's hand. This builtin is where that
+position is decided, before `SV_LinkEdict` and before any physics, so
+correcting it here is what makes the shot genuinely leave the barrel: the
+trail starts there, the model is drawn there, and the missile flies a true
+path from there, with
 nothing to fold away afterwards. `QR_MuzzleSpawn` declines for anything that is
 not a launch (not a player-owned missile, not the first placement after
 `ED_ClearEdict`, not near the player, no tracked hand, muzzle implausibly far,
