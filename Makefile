@@ -56,6 +56,11 @@ run: gen
 # An archive rather than a plain build because the archive's Products tree is
 # the install-shaped copy of the app, already stripped of the intermediates a
 # DerivedData path carries around.
+#
+# IPA_EXCLUDES is the mechanism that keeps the dev game data out; the find
+# over the payload below is the check that it worked. Shipping someone else's
+# game data is the one mistake here that cannot be taken back, so a dirty
+# payload fails the target rather than producing a quietly wrong .ipa.
 ipa: gen
 	rm -rf $(ARCHIVE) $(IPA_DIR) $(IPA)
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
@@ -67,10 +72,6 @@ ipa: gen
 		archive
 	mkdir -p $(IPA_DIR)/Payload
 	cp -R $(ARCHIVE)/Products/Applications/$(SCHEME).app $(IPA_DIR)/Payload/
-	# The exclusions above are the mechanism; this is the check that they
-	# worked. Shipping someone else's game data is the one mistake here that
-	# cannot be taken back, so a dirty payload fails the build rather than
-	# producing a quietly wrong .ipa.
 	@if find $(IPA_DIR)/Payload \( -name 'pak[0-9].pak' -o -name '*.ogg' \) | grep -q .; then \
 		echo "ipa: REFUSING -- game data in the payload:"; \
 		find $(IPA_DIR)/Payload \( -name 'pak[0-9].pak' -o -name '*.ogg' \); \

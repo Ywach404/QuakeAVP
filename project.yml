@@ -90,20 +90,24 @@ targets:
     sources:
       - path: App/Sources
       - path: App/Resources
-      # DEV ONLY -- strip before release. The author's own game paks, bundled
-      # so a dev build runs without a manual Files copy; QuakeEngineHost seeds
-      # them into Documents/id1 on launch only when missing. The .pak files are
-      # gitignored (never committed). To strip: delete this source entry, the
-      # App/DevGameData folder, and seedBundledGameData() in QuakeEngineHost.
+      # DEV CONVENIENCE -- nothing to strip. The author's own game paks,
+      # bundled so a dev build runs without a manual Files copy;
+      # QuakeEngineHost seeds them into Documents/id1 on launch only when
+      # missing. The .pak files are gitignored and never committed, so a
+      # clean checkout builds this entry with nothing in it and IS the
+      # release build -- which is why the dev auto-`map range` is gated on
+      # whether pak2 was actually bundled (QuakePaths.hasBundledRangePak)
+      # rather than on someone remembering to delete code. `make ipa`
+      # excludes these by name and then checks the payload for them.
       - path: App/DevGameData
         excludes:
           - ".gitkeep"
           # Added below as a folder reference instead; see there.
           - "music"
           - "music/**"
-      # DEV ONLY -- strip with the rest of DevGameData. The CD soundtrack
-      # rips, same status as the paks: the author's own, gitignored, never
-      # committed. A folder REFERENCE rather than a recursed group because
+      # DEV CONVENIENCE, same as the paks above. The CD soundtrack rips:
+      # the author's own, gitignored, never committed, absent from a clean
+      # checkout. A folder REFERENCE rather than a recursed group because
       # the resources phase flattens groups into the bundle root, and the
       # engine wants `music/trackNN.ogg` -- a directory, not ten loose files
       # whose names a mission pack's own track02 would collide with.
