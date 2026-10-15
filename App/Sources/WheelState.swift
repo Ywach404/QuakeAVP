@@ -72,12 +72,12 @@ final class WheelState: @unchecked Sendable {
 
     // MARK: - Hold / commit
 
-    /// Point-dwell selection (VRChat's gauge idea): resting the pointer on a
-    /// slot for `dwellTime` commits it LIVE -- the weapon swaps while the
-    /// wheel is still open, so you see it happen -- and moving on to another
-    /// slot swaps again. Closing (wrist-flip) does not commit; the swap has
-    /// already happened. This is why brushing past weapons no longer fires
-    /// them: only a slot you rest on for a beat is chosen.
+    /// Selection: move the pointer onto a slot to HIGHLIGHT it, then release
+    /// the hold to commit that slot -- see setHold below. Point-dwell came
+    /// first (VRChat's gauge idea: rest on a slot for `dwellTime` and the
+    /// weapon swaps live, in front of you), but the slightest jitter reset
+    /// the timer and it never fired. `dwellTime` and the three fields under
+    /// it are what is left of that; nothing reads them now.
     private static let dwellTime = 0.28
     private var dwellSlot = -1
     private var dwellSince = 0.0
