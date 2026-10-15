@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * hostmain.c -- host-side driver for tools/check-core.sh. Not part of the app.
  *
  * Exists so the check script can link a real *executable*: shared libraries

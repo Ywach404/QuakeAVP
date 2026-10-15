@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 A. Cervantez
 #
 # check-unit.sh -- compile+link+run host unit tests against the make-check
 # objects. Each tools/unittest/*.c provides its own main(); hostmain.o is

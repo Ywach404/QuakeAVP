@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * pl_null.c -- platform.h services, replacing pl_linux.c (X11) / pl_win.c.
  */
 

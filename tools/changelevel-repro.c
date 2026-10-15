@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * changelevel-repro.c -- headless repro for the start-map -> episode crash.
  * Not part of the app. Boots the engine against a real basedir, loads the
  * `start` hub, then issues `changelevel e1m1` (the server-side path a slipgate

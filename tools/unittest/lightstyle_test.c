@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * lightstyle_test.c -- R_AnimateLight maps cl_lightstyle strings onto
  * d_lightstylevalue. Pure, map-free: set the style and cl.time, call, assert.
  */

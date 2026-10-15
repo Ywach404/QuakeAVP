@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * snd_vorbis_avp.c -- Ogg Vorbis streaming music, on stb_vorbis.
  *
  * Upstream's snd_vorbis.c wants libvorbisfile or libtremor; neither is worth

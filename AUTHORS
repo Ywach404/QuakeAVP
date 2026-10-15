@@ -1,0 +1,28 @@
+QuakeAVP — authors
+
+The port
+--------
+
+A. Cervantez — the visionOS port in its entirety: the SwiftUI app shell and
+engine host, the Metal renderer (Sources/QuakeRenderer, including the shaders
+and the engine-side bridge), the platform layer that replaces SDL and OpenGL
+(Sources/QuakeCore/platform), the capture and export pipeline, and the tools
+under tools/.
+
+Every file listed above carries an SPDX identifier and a copyright line.
+
+The engine
+----------
+
+QuakeAVP carries QuakeSpasm 0.97 under Sources/QuakeCore/engine, vendored
+unmodified apart from six marked hunks. Its authorship is id Software's and
+the QuakeSpasm team's, recorded in the per-file notices in that directory and
+in the engine's own history; UPSTREAM.md records the exact commit, what was
+taken, what was left behind and every patch applied.
+
+Third-party single-file libraries are credited in UPSTREAM.md with their
+sources and pinned revisions: stb_vorbis (Sean Barrett), lodepng (Lode
+Vandevenne) and miniz (Rich Geldreich, RAD Game Tools, Valve).
+
+Quake and the Quake logo are trademarks of id Software LLC. QuakeAVP is an
+unofficial port and ships no game data.

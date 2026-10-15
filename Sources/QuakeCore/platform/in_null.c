@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * in_null.c -- GameController input, replacing in_sdl.c.
  *
  * The Swift layer pushes whole-pad snapshots through QC_InputSetGamepad from

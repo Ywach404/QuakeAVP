@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * sys_avp.c -- system layer for visionOS / Apple platforms.
  *
  * Replaces QuakeSpasm's sys_sdl_unix.c. Plain POSIX where possible; the parts

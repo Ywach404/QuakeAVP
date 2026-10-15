@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * session_avp.h -- the window's Game tab, engine side. See session_avp.c.
  */
 

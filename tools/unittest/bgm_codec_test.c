@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * bgm_codec_test.c -- the background-music codec chain, end to end.
  *
  * The engine's whole BGM path (bgmusic.c -> snd_codec.c -> a codec vtable ->

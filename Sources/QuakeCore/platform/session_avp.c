@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * session_avp.c -- engine side of the window's Game tab (save/load and
  * multiplayer).
  *

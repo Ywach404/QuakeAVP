@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 A. Cervantez
+
 /* sdl_rw_shim.c -- see sdl_rw_shim.h */
 
 #include "sdl_rw_shim.h"

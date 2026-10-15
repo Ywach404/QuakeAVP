@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * rangetest.c -- boot the engine against the make-check objects, load the
  * range, and assert it exercises what it was built to. Deviceless proof
  * the arena is wired: link against ${TMPDIR}/quakecore-hostbuild/*.o minus

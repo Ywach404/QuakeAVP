@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * relight_predicate_test.c -- QR_SurfaceNeedsRelight encodes upstream
  * R_RenderDynamicLightmaps's rebuild decision: rebuild iff
  * (a lightstyle value drifted from cache OR a dlight touches the surface)

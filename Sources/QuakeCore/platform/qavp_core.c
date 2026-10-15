@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * qavp_core.c -- implementation of QuakeCore.h.
  *
  * Replaces main_sdl.c. The critical difference: upstream owns the process and

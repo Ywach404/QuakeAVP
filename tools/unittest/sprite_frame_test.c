@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * sprite_frame_test.c -- QR_SpriteFrameSelect picks the mspriteframe for a
  * frame index, resolving animated groups by time. Pure (no Mod_Extradata /
  * cache), so a hand-rolled msprite_t is safe here.

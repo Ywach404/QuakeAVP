@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * hud_overlay_test.c -- the pure 2D HUD geometry: canvas affine, glyph-cell
  * mapping, and fill/string/pic quad layout. No slot, no textures.
  */

@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 A. Cervantez
+ *
  * gl_stubs.c -- TEMPORARY. Delete at M2.
  *
  * No-op bodies for the GL1 immediate-mode calls that sbar.c and view.c make
