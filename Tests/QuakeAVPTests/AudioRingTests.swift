@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quake
+@testable import QuakeAVP
 
 /// The ring cursor. Sinks usually break here, and the failure is audible
 /// rather than diagnosable, so the arithmetic is pure and pinned.

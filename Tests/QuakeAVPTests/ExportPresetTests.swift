@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quake
+@testable import QuakeAVP
 
 final class ExportPresetTests: XCTestCase {
 

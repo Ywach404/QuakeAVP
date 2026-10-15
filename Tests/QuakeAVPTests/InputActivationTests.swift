@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quake
+@testable import QuakeAVP
 
 /// The rule that decides when bare hands drive the game. It used to live inside
 /// ContentView's onChange, which meant it was only ever evaluated while a
