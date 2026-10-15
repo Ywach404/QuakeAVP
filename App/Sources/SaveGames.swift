@@ -45,6 +45,14 @@ struct SaveGameSlot: Identifiable, Hashable {
     /// a version mismatch, which drops to the console -- worth saying before
     /// the tap, not after.
     var isLoadable: Bool { version == SaveGameHeader.version }
+
+    /// Whether `load <name>` can even be issued. A `.sav` dropped in over the
+    /// Files app can be called anything, including things with a space or a
+    /// semicolon in them, and those cannot survive Cbuf's tokenizer -- see
+    /// ConsoleArgument. Separate from `isLoadable`, which is about the file's
+    /// version: this one is about its NAME, and a button that is enabled and
+    /// then silently does nothing is worse than one that explains itself.
+    var isAddressable: Bool { ConsoleArgument.isValidSavegameName(name) }
 }
 
 /// Parsing and listing. Pure functions over bytes and paths.
@@ -96,10 +104,19 @@ enum SaveGameHeader {
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: headerBytes), !data.isEmpty
         else { return nil }
-        // Savegames are ASCII; a mod's level name could still be anything, so
-        // fall back to a lossy decode rather than dropping the slot.
-        let text = String(data: data, encoding: .utf8)
-            ?? String(decoding: data, as: UTF8.self)
+        // Strip bit 7 before decoding -- upstream's own "dequake". A level
+        // name comes from worldspawn.message, and plenty of maps write it in
+        // Quake's high-bit charset, where 0x80...0xFF are the gold-coloured
+        // twins of 0x00...0x7F. The engine menu drew those as glyphs; decoded
+        // as UTF-8 they are invalid bytes and the row would read as a run of
+        // replacement characters. Everything else in these two lines is ASCII
+        // digits, the comment's own text and a newline, so the mask costs
+        // nothing there.
+        let ascii = Data(data.map { $0 & 0x7f })
+        // Still lossy-decode rather than returning nil: a slot with an odd
+        // name should be loadable, not invisible.
+        let text = String(data: ascii, encoding: .utf8)
+            ?? String(decoding: ascii, as: UTF8.self)
         return parse(text)
     }
 

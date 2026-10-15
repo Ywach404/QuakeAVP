@@ -121,6 +121,30 @@ struct SessionTest {
         check(SaveGameHeader.list(in: dir.appendingPathComponent("nope")).isEmpty,
               "a missing game directory lists as empty, not a crash")
 
+        // A .sav dropped in over the Files app can be called anything. Such a
+        // slot must still list and still show its comment -- it just cannot
+        // be the argument of a `load`, and the row has to say so rather than
+        // offering a button that no-ops.
+        write("my save.sav", version: 5, level: "Dropped In")
+        let withSpace = SaveGameHeader.list(in: dir).first { $0.name == "my save" }
+        check(withSpace != nil, "a save with a space in its name still lists")
+        check(withSpace?.isLoadable == true, "...and its version is fine")
+        check(withSpace?.isAddressable == false,
+              "...but it is not addressable, because `load my save` would not tokenize")
+        check(slots.first { $0.name == "s0" }?.isAddressable == true,
+              "an ordinary slot name is addressable")
+
+        // Quake's high-bit charset: 0x80...0xFF are the gold twins of
+        // 0x00...0x7F. Decoded as UTF-8 they are invalid and the row would be
+        // a run of replacement characters, so bit 7 is stripped first.
+        let gold = Data([0x35, 0x0a]                                  // "5\n"
+                        + "Gold".utf8.map { $0 | 0x80 }               // high-bit text
+                        + [0x0a])
+        try! gold.write(to: dir.appendingPathComponent("gold.sav"))
+        let goldSlot = SaveGameHeader.list(in: dir).first { $0.name == "gold" }
+        check(goldSlot?.displayText == "Gold",
+              "a high-bit level name reads as plain text, not replacement characters")
+
         check(SaveGameHeader.quickSlotNames.first == "s0"
                 && SaveGameHeader.quickSlotNames.last == "s11",
               "quick slots mirror menu.c's s0...s11")
