@@ -1,9 +1,12 @@
 /*
  * sdl_rw_shim.h -- the 6 SDL_RWops calls common.c makes, over stdio.
  *
- * QuakeSpasm reads quakespasm.pak (a zip) through SDL_RWops so miniz can seek
- * inside it. That is the only SDL dependency left anywhere in the vendored
- * core -- everything else was in the SDL video/audio/input drivers we dropped.
+ * LOC_LoadFile reads the rerelease localization file through SDL_RWops so
+ * miniz can seek inside QuakeEX.kpf, which is a zip. (quakespasm.pak is NOT:
+ * it is a classic PACK archive and COM_LoadPackFile reads it over plain
+ * stdio.) Those six calls are the only SDL dependency left anywhere in the
+ * vendored core -- everything else was in the SDL video/audio/input drivers
+ * we dropped.
  * Rather than patch common.c (and re-patch it on every upstream merge), this
  * reimplements the tiny slice of the RWops API it touches.
  *

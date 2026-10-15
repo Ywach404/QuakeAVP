@@ -138,6 +138,13 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: QuakeAVP
+        # XcodeGen writes its own CFBundleShortVersionString/CFBundleVersion
+        # defaults (1.0 / 1) into the plist when they are not named here, and
+        # the plist's literal is what ships -- MARKETING_VERSION below was
+        # being generated right past. Point both at the build settings so
+        # there is one place to bump for a tag.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
@@ -161,7 +168,7 @@ targets:
         # target imports. "Quake" is id's mark; this port ships under its own.
         PRODUCT_NAME: QuakeAVP
         CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: "0.1"
+        MARKETING_VERSION: "0.1.0"
         TARGETED_DEVICE_FAMILY: "7"
         ENABLE_PREVIEWS: YES
         # The world draws twice -- depth prepass, then a colour pass with
