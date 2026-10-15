@@ -381,10 +381,16 @@ def d_weapon_wheel(w, h):
         ring.append('<circle class="%s" cx="%s" cy="%s" r="6"/>'
                     % ("hi" if i == 1 else "ln", f(x), f(y)))
     aim_at = (cx + rx * math.cos(math.radians(36)), cy + ry * math.sin(math.radians(36)))
+    # The ring opens by turning this wrist over, not by raising a palm -- the
+    # shared hand geometry is already drawn back-of-hand-to-viewer (see this
+    # file's module docstring), so no flip is needed, just a forearm for the
+    # twist arrow to wrap.
+    twist = arc_arrow(cx, 214, 34, 202, 338)
     return svg(w, h, ring
-               + [hand(right=True, transform="translate(12,0)", extra=creases),
-                  arrow(aim_at[0] - 26, aim_at[1] - 22, aim_at[0] - 9, aim_at[1] - 8)],
-               "off palm turned up: the weapon wheel")
+               + [hand(right=True, transform="translate(12,0)", extra=creases + FOREARM),
+                  arrow(aim_at[0] - 26, aim_at[1] - 22, aim_at[0] - 9, aim_at[1] - 8),
+                  twist],
+               "off wrist turned over, back of the hand up: the weapon wheel")
 
 
 def d_summon(w, h):
@@ -431,7 +437,7 @@ DIAGRAMS = {
     "hands-turn-flick":    (220, 182, d_turn_flick),
     "hands-turn-body":     (230, 176, d_turn_body),
     "hands-teleport":      (212, 180, d_teleport),
-    "hands-weapon-wheel":  (176, 184, d_weapon_wheel),
+    "hands-weapon-wheel":  (176, 224, d_weapon_wheel),
     "hands-summon":        (204, 186, d_summon),
     "hands-wristcomm":     (216, 184, d_wristcomm),
     "hands-hud-grab":      (PW, PH, d_hud_grab),

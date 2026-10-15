@@ -3,9 +3,9 @@
 //
 //  WheelState.swift
 //
-//  The weapon wheel's input-side brain. Hold sources (palm-up hands, a
-//  held Sense face button) merge here; the wrist anchor arrives in tracking
-//  space and leaves for the engine as body-frame Quake units through
+//  The weapon wheel's input-side brain. Hold sources (the off wrist turned
+//  over, a held Sense face button) merge here; the wrist anchor arrives in
+//  tracking space and leaves for the engine as body-frame Quake units through
 //  QC_InputSetWheel. On open the ring locks at the wrist's opening pose and
 //  the highlight is read from how far the wrist has since travelled in the
 //  ring plane -- reach toward a weapon to pick it. Committing sends

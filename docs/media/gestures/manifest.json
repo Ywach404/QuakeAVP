@@ -116,10 +116,10 @@
       "id": "hands-weapon-wheel",
       "input": "hands",
       "hand": "off",
-      "fingers": "open palm",
-      "motion": "turn palm up and hold",
+      "fingers": "open hand",
+      "motion": "turn the wrist over and hold",
       "action": "Weapon wheel",
-      "blurb": "Turn the off palm up and your owned weapons ring that wrist while the world slows to a crawl. Move the whole hand toward one to highlight it, then drop the palm to take it.",
+      "blurb": "Turn the off wrist over -- palm toward the floor, like checking a watch -- and your owned weapons ring that wrist while the world slows to a crawl. Reach the off hand toward one to highlight it, or point at the ring with the gun hand instead; turn the palm back up to take it.",
       "diagram": "hands-weapon-wheel.svg",
       "source": ["App/Sources/HandInput.swift:1071", "App/Sources/WheelState.swift:97"]
     },

@@ -1021,9 +1021,10 @@ final class HandInput: @unchecked Sendable {
             + mark(l.forward.y >= PrayerPose.fingersUpMin && r.forward.y >= PrayerPose.fingersUpMin))
     }
 
-    /// Weapon wheel. The OFF-hand palm gesture always holds the ring open; the
-    /// ring then LOCKS in place and a wrist is the selector -- move the whole
-    /// hand toward a weapon to highlight it, then drop the palm, which closes
+    /// Weapon wheel. Turning the OFF wrist over -- palm toward the floor, like
+    /// checking a watch -- always holds the ring open; the ring then LOCKS in
+    /// place and a wrist is the selector -- move the whole hand toward a
+    /// weapon to highlight it, then turn the palm back up, which closes
     /// the ring AND commits the highlight (see WheelState.setHold). No finger
     /// pointing (too fiddly on a ring anchored to a wrist); every other
     /// gesture stays suppressed while it's open.
@@ -1034,8 +1035,8 @@ final class HandInput: @unchecked Sendable {
     /// - dominant: the off hand holds the ring open while the GUN hand reaches
     ///   to select -- two-handed, matching the Sense-controller feel. The gun
     ///   visibly follows the reaching hand mid-select (firing is already
-    ///   suppressed while the wheel is open), and the off-hand palm must stay up
-    ///   throughout. Handedness-agnostic via rightHanded.
+    ///   suppressed while the wheel is open), and the off-hand wrist must stay
+    ///   turned over throughout. Handedness-agnostic via rightHanded.
     private func wheel(left: HandState, right: HandState) {
         let rightHanded = VRSettings.shared.rightHanded
         let offHand = rightHanded ? left : right   // off hand holds AND anchors
@@ -1063,10 +1064,13 @@ final class HandInput: @unchecked Sendable {
 
         // The weapon wheel is suppressed while the HUD layout editor is open:
         // the Face/Health tiles live ON the off-hand wrist, so presenting that
-        // wrist to grab a tile IS the palm-up gesture that opens the wheel --
-        // the ring then renders over the grid and slows time right where you're
-        // arranging. Standing the wheel down in edit mode keeps the forearm
-        // clear for grabbing. renderSnapshot() is a lock-protected any-thread read.
+        // wrist to grab a tile IS the wrist-turned-over gesture (palm toward
+        // the floor) that opens the wheel -- the ring then renders over the
+        // grid and slows time right where you're arranging. (The `palmUp`
+        // property below is named for the opposite of what it actually
+        // detects; see its own note.) Standing the wheel down in edit mode
+        // keeps the forearm clear for grabbing. renderSnapshot() is a
+        // lock-protected any-thread read.
         let editing = HudEditor.Session.renderSnapshot().active
         WheelState.shared.setHold(offHand.palmUp && !editing, source: .hands)
         guard offHand.palmUp, !editing else { return }
@@ -1170,15 +1174,19 @@ private struct HandState {
     var wrist: SIMD3<Float>?
     /// Wrist velocity, room frame, metres/sec -- drives the flick snap turn.
     var wristVel: SIMD3<Float>?
+    /// NAME IS INVERTED: true when the wrist is turned over, palm toward the
+    /// floor (the weapon wheel's open gesture) -- not when the palm faces up.
+    /// A rename is deferred; see the wheel()/HUD-editor comments above.
     var palmUp = false
     /// Which probed ARKit joints are untracked, filled only while the palm
     /// plane is missing. Diagnostic, printed by logPrayer.
     var jointDebug = ""
 
     /// The palm PLANE (centroid, outward normal, finger direction), room frame.
-    /// palmUp only answers "does the palm face the sky"; the prayer sign needs
-    /// to compare the two palms to each other. nil when the knuckles that
-    /// define the plane aren't tracked.
+    /// palmUp's NAME claims "does the palm face the sky", but it is inverted
+    /// (see its own note) -- the prayer sign needs to compare the two palms to
+    /// each other regardless. nil when the knuckles that define the plane
+    /// aren't tracked.
     var palmPose: PalmPose?
     var aimOrigin: SIMD3<Float>?      // wrist, room frame
     var aimDir: SIMD3<Float>?         // blended aim, room frame
