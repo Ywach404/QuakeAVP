@@ -150,9 +150,15 @@ final class SessionState {
         guard canSave, ConsoleArgument.isValidSavegameName(name) else { return }
         QuakeEngineViewModel.shared.send("save \(name)")
         // The engine writes the file on its next drained frame, so a rescan
-        // here would miss it. Give the command time to land, then list again.
+        // here would miss it. Rescan twice: once for the common case, and
+        // again later because the write itself is not instant -- Host_
+        // Savegame_f fflushes after every edict and then syncs the
+        // filesystem, which on a big level is long enough for one 600 ms
+        // rescan to show nothing and leave the player tapping Rescan.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
+            self?.refreshSlots()
+            try? await Task.sleep(for: .milliseconds(2500))
             self?.refreshSlots()
         }
     }
