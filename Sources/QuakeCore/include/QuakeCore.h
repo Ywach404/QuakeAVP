@@ -161,7 +161,9 @@ enum {
 	/* The view weapon. View-locked, which is wrong in VR; the consumer
 	   decides (window draws it depth-squished like upstream's
 	   glDepthRange(0, 0.3), immersive skips it).
-	   TODO(M4): decouple the weapon from the view instead. */
+	   The immersive path decouples the weapon from the view entirely: it
+	   draws the gun on the hand or controller instead (see the aim/body
+	   split), so this flag only steers the flat window's fallback. */
 	QC_ENTFLAG_VIEWMODEL = 1 << 0,
 
 	/* Dissolves with the world in the phase effect. Set on brush entities

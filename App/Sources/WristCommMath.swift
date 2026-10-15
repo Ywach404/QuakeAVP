@@ -176,7 +176,7 @@ enum WristComm {
     /// wrist frame and the user's dials.
     ///
     /// ZERO IS A BIT-IDENTICAL EARLY RETURN, not a rotation by zero: the
-    /// across-wrist unit A. tuned on device is the 0 deg case, and
+    /// across-wrist unit tuned on device is the 0 deg case, and
     /// `simd_normalize` of a cos/sin combination at t = 0 is not guaranteed
     /// to hand back the same floats it was given. The across view's default
     /// is therefore literally today's frame.
@@ -256,8 +256,9 @@ enum WristComm {
     ///    differ by as much as atan(0.1445 / 0.45), roughly 18 degrees --
     ///    not the few degrees it would be flattering to claim, and more at
     ///    a dialled-out Forward. Accepted, for two reasons: 18 degrees off
-    ///    square is still a plainly readable panel (the failure this round
-    ///    exists to fix was 80-odd degrees off, an edge-on line), and a face
+    ///    square is still a plainly readable panel (the failure the eye
+    ///    billboard exists to fix was 80-odd degrees off, an edge-on line),
+    ///    and a face
     ///    that chased the dialled centre would rock as the dials moved it,
     ///    turning every placement tweak into a reorientation. Expect a
     ///    visibly non-square panel at wide Forward settings; expect it never

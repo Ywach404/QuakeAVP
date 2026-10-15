@@ -306,7 +306,7 @@ cvar_t	vr_hud_bg = {"vr_hud_bg", "1", CVAR_ARCHIVE};	/* dark panel behind each m
    span_w/span_h the footprint in cells); off_x/y/z are metres in the
    anchor frame; scale is a panel scale multiplier; show is a bool gate
    independent of anchor.
-   The off_y/scale defaults below are device-tuned first guesses (M.
+   The off_y/scale defaults below are device-tuned first guesses (a tester
    reported tiles clumped on the wrist and read too small over the world):
    face sits above the wrist, health/armor below it, so the two wrist tiles
    don't overlap each other or the hand; all three tiles are scaled up for
@@ -703,8 +703,8 @@ int SCR_ModalMessage (const char *text, float timeout)
 	   it would fall back to yes, so the substring is deliberately the stable
 	   middle of the sentence rather than the whole thing, and this comment is
 	   the breadcrumb. The real fix is a confirmation the panel can draw and
-	   the pad can answer, which is menu-interaction work this round left out
-	   on purpose. */
+	   the pad can answer, which is menu-interaction work left out on
+	   purpose and still outstanding. */
 	(void) timeout;
 	if (text)
 		Con_Printf ("%s", text);

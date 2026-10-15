@@ -1315,15 +1315,15 @@ final class ImmersiveRenderer {
     ///
     /// Two earlier attempts are why it is a charset choice and not a tint
     /// at all: a cool near-white, which the light cool stone card swallowed
-    /// for want of hue separation, and then a warm parchment, which A. still
-    /// could not read ("still really hard to read the button titles")
+    /// for want of hue separation, and then a warm parchment, whose button
+    /// titles were still hard to read on device,
     /// because a tint only shifts the hue of ink that is still mid-value.
     /// Red ink with a black outline carries both; alpha is still multiplied
     /// by the side's live opacity at the draw (`faded`).
     private static let commLabelColor = SIMD4<Float>(1.0, 0.98, 0.94, 1.0)
     /// Draw the legends with conchars' SECOND character set -- `char |
-    /// 0x80`, the red/bronze glyphs Quake's menus use. A. asked for "the
-    /// quake font red", and this is the engine's own red rather than a
+    /// 0x80`, the red/bronze glyphs Quake's menus use. The legends wanted
+    /// Quake's own red, and this is the engine's own red rather than a
     /// tinted white: the glyph bitmaps differ, so the ink reads as Quake's
     /// and not as a recolour.
     private static let commLabelAlternate = true
@@ -1332,10 +1332,9 @@ final class ImmersiveRenderer {
     /// along the panel's own right and up, with the fill on top. Four
     /// passes rather than one drop shadow because the outline has to work
     /// in every direction the stone noise happens to go light -- a shadow
-    /// only darkens one side of each stroke, which is what the previous
-    /// round shipped (and it is replaced, not stacked: A. asked for "a
-    /// backing border around the text or shadow", and the border IS the
-    /// stronger of the two).
+    /// only darkens one side of each stroke, which is what the first cut
+    /// shipped (and it is replaced, not stacked: a backing border and a
+    /// shadow do the same job, and the border IS the stronger of the two).
     ///
     /// Fraction of the glyph, not metres, so a legend shrunk to fit its key
     /// (`commGlyphSize`) gets a proportionally thinner outline instead of a
@@ -1669,7 +1668,7 @@ final class ImmersiveRenderer {
     /// position stays on the arm; only the orientation moved to the eye.
     ///
     /// BOTH cases clear the HUD grid by derivation, which is the fix for the
-    /// collision A. hit on device: the along unit was seated at the forearm
+    /// collision seen on device: the along unit was seated at the forearm
     /// MIDPOINT, off a different thing entirely from the wrist tiles, and
     /// near the wrist the two always fought -- no placement dial could
     /// separate them because the dials moved one and not the other. One

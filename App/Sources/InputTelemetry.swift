@@ -9,8 +9,8 @@
 //  queues and the render thread; the scope snapshots under one lock at
 //  display cadence.
 //
-//  The demo generator exists for portfolio capture and deviceless
-//  verification: it plays a canned pull -> actuation -> kickback -> release
+//  The demo generator exists for tuning and for capture without a device:
+//  it plays a canned pull -> actuation -> kickback -> release
 //  trace through the same buffer real input uses, clearly user-invoked.
 //
 

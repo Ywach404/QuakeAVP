@@ -35,6 +35,9 @@ final class EnemyRoster {
             return Self.names[key] ?? key.capitalized
         }
 
+        /// Keys are id Software's own QuakeC classnames, used verbatim so a
+        /// lookup matches what the server sends; the values are the names
+        /// Quake's own manual gives those monsters.
         private static let names: [String: String] = [
             "army": "Grunt", "dog": "Rottweiler", "ogre": "Ogre", "ogre_marksman": "Ogre",
             "knight": "Knight", "zombie": "Zombie", "wizard": "Scrag", "demon1": "Fiend",

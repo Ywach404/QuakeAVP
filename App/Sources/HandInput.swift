@@ -124,7 +124,7 @@ final class HandInput: @unchecked Sendable {
     private static let strobeCount = 12
 
     /// Muzzle status bead: flashes on a successful shot and reports aim health,
-    /// so you can SEE whether curl/hammer register and whether the aim is
+    /// so you can SEE whether pinch/curl register and whether the aim is
     /// dropping out (the likely cause of the weapon popping in the gun pose).
     private var fireStatusVerts: [Float] = []
     private var fireDebugVerts: [Float] = []
@@ -1744,8 +1744,8 @@ private struct HandState {
     /// Two shapes came before this. A thin-quad WIREFRAME of the same chain
     /// was legible on device but read as debug art. A SOLID CAPSULE per
     /// bone, with caps at the joints, fixed that and introduced a worse
-    /// problem: one continuous tapered tube with a rounded end is, in A.'s
-    /// words, "a little phallic", and the off-hand virtual hand right next
+    /// problem: one continuous tapered tube with a rounded end read badly on
+    /// device, and the off-hand virtual hand right next
     /// to it is beads. So the connecting segments are gone rather than
     /// re-proportioned -- the beads read as a finger on their own for the
     /// same reason `buildVirtual`'s read as a hand, and the two now match

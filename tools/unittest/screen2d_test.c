@@ -116,7 +116,7 @@ static void test_range (void)
 	/* key_menu: M_Draw runs. The host fixture has no filesystem, so every
 	   Draw_CachePic misses and the menu's art emits nothing -- the one
 	   thing that does draw is Draw_FadeScreen's single quad, which is
-	   exactly the "now real" body this round added. Six verts, therefore,
+	   exactly the "now real" body Draw_FadeScreen gained. Six verts, therefore,
 	   and the assertion is deterministic for that reason. */
 	QR_TestEmitScreen2DInto (key_menu, 3, 7, &first, &count, &total, &prefix_x);
 	CHECK (first == 18, "screen2d range starts after the HUD prefix");

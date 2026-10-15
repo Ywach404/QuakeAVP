@@ -55,10 +55,10 @@
  * and the per-frame temporaries (temp_alloc -> setup_temp_malloc) all come
  * out of it. Nothing falls back to malloc behind our back.
  *
- * Measured against the ten 44.1 kHz stereo CD rips this port ships with:
- * setup (codebooks) 217,880 bytes at worst, temporaries 4,096. 512 KB is
- * about 2.3x that, which leaves room for a denser codebook than id's rips
- * use without leaving room for the whole file.
+ * Measured against ten 44.1 kHz stereo soundtrack tracks encoded the way a
+ * CD transfer produces them: setup (codebooks) 217,880 bytes at worst,
+ * temporaries 4,096. 512 KB is about 2.3x that, which leaves room for a
+ * denser codebook than those use without leaving room for the whole file.
  */
 #define VORBIS_ARENA_SIZE	(512 * 1024)
 
@@ -132,7 +132,7 @@ static qboolean S_VORBIS_CodecOpenStream (snd_stream_t *stream)
 	 * freezing on level load.
 	 *
 	 * Reachable by an ordinary user, not just by a malformed file:
-	 * UIFileSharingEnabled lets anyone drop a 5.1 rip in as
+	 * UIFileSharingEnabled lets anyone drop a 5.1 track in as
 	 * Documents/id1/music/track02.ogg, and the seeder deliberately leaves
 	 * user-supplied tracks alone. Refusing it costs the music and nothing
 	 * else.

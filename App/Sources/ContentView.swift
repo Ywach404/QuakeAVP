@@ -835,8 +835,8 @@ struct ContentView: View {
                     get: { swapSenseHands },
                     set: { swapSenseHands = $0; VRSettings.shared.swapSenseHands = $0 }))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Off-hand model angle (PSVR controllers)").font(.caption).foregroundStyle(.secondary)
-                    Text("Rotate the rigid off-hand into a handshake. Dial these on device.")
+                    Text("Off-hand model angle (PSVR2 controllers)").font(.caption).foregroundStyle(.secondary)
+                    Text("Rotate the rigid off-hand into a handshake. Adjust these with the headset on.")
                         .font(.caption2).foregroundStyle(.secondary)
                     offHandSlider("Pitch°", $offHandPitchUI, set: { VRSettings.shared.offHandPitch = $0 },
                                   persist: \.offHandPitch)
@@ -1180,7 +1180,7 @@ struct ContentView: View {
         return VStack(alignment: .leading, spacing: 8) {
             Text("Multiplayer").font(.headline)
             HStack {
-                TextField("Address, e.g. 192.168.1.9", text: Binding(
+                TextField("Host address or IP", text: Binding(
                     get: { joinAddress },
                     set: { joinAddress = ConsoleArgument.sanitizedAddress($0) }))
                     .textFieldStyle(.roundedBorder)
@@ -1534,7 +1534,7 @@ struct ContentView: View {
                 get: { debug.strobeDebug }, set: { debug.strobeDebug = $0 }))
             Toggle("Turn trigger meter (stick/clutch/flick)", isOn: Binding(
                 get: { debug.turnDebug }, set: { debug.turnDebug = $0 }))
-            Toggle("Fire threshold meter (pinch/curl/bang)", isOn: Binding(
+            Toggle("Fire threshold meter (pinch/curl)", isOn: Binding(
                 get: { debug.fireDebug }, set: { debug.fireDebug = $0 }))
             // HUD dock placement. Sliders, not typed fields -- typing into a
             // text box in the headset is miserable; dragging is what you want in

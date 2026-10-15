@@ -283,8 +283,8 @@ func runAdjustedFrameTests() {
 
         // Zero adjustments must be the IDENTITY, bit-for-bit as far as these
         // tolerances see it. This is the "unchanged at zero" contract the
-        // whole feature rests on: the communicator A. already tuned on device
-        // must not move a millimetre until he drags a dial.
+        // whole feature rests on: a communicator already tuned on device
+        // must not move a millimetre until a dial is dragged.
         let zero = WristComm.adjustedFrame(wf, origin: o, tiltDegrees: 0, fwd: 0, side: 0, up: 0)
         assert(near(zero.origin, o, 1e-6), "\(name): zero adjust leaves the origin alone")
         assert(near(zero.frame.right, wf.right, 1e-6), "\(name): zero adjust leaves right alone")
@@ -406,8 +406,8 @@ func runHoverPickTests() {
 
 /// Bit-identical component comparison, for the one claim a tolerance cannot
 /// make: `rotate = 0` must be the EARLY-RETURN identity, not a rotation by
-/// zero that happens to land within 1e-7. The across-wrist unit A. already
-/// tuned on device is that path, and it must be untouched to the last bit.
+/// zero that happens to land within 1e-7. The across-wrist unit as tuned on
+/// device is that path, and it must be untouched to the last bit.
 func exact(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
     a.x == b.x && a.y == b.y && a.z == b.z
 }
@@ -421,8 +421,8 @@ func exact(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
 /// This replaces the round-4/5 `alongArm: Bool` pair. The Bool's two states
 /// survive as the two DEFAULTS (across = 0 deg, along = +90 deg) and both
 /// are pinned below against the exact mappings those two states shipped
-/// with, so a continuous dial cannot quietly re-seat or re-orient the unit
-/// A. already tuned.
+/// with, so a continuous dial cannot quietly re-seat or re-orient a unit
+/// already tuned on device.
 func runOrientationTests() {
     let axis = testFrame(origin: SIMD3(0, 1.1, -0.4), toward: SIMD3(0, 0, 1))
     let oblique = testFrame(origin: SIMD3(0.2, 0.9, -0.35), toward: SIMD3(0.3, -0.5, 0.8))
@@ -464,16 +464,16 @@ func runOrientationTests() {
         //    wrist -- cell 0 (cmd0, the first binding) furthest down the
         //    forearm, the keys counting toward the hand, and every legend
         //    reading the way a head looking down its own forearm reads.
-        //    DEVICE-DECIDED: the opposite pair shipped first and A. read it
-        //    off a screenshot as upside down, which is the only test this
-        //    choice has.
+        //    DEVICE-DECIDED: the opposite pair shipped first and read as
+        //    upside down off a device screenshot, which is the only test
+        //    this choice has.
         //  * `up' = -right` then puts the glyph tops toward the wrist
         //    frame's own LEFT, which is what handedness forces once the
         //    glyph advance is pinned -- the pair cannot be mixed.
         //
         // This is also the ALONG view's persisted default, so these two
         // assertions are what guarantee the Bool-to-degrees change is a
-        // no-op for A.'s current along-arm tuning.
+        // no-op for the current along-arm tuning.
         let along = WristComm.orientedFrame(wf, rollDegrees: 90)
         assert(near(along.right, wf.up, 1e-6), "\(name): +90 maps right -> +up (the old along pair)")
         assert(near(along.up, -wf.right, 1e-6), "\(name): +90 maps up -> -right (the old along pair)")
@@ -965,7 +965,7 @@ func runAlongBaseFrameTests() {
     // widens the grid's bounds) and a LEFT-handed triple mirrors every
     // legend while all three dot products still read zero. The spin is the
     // SHARED `orientedFrame`, the same one the across view uses -- the
-    // structural point of this round -- so it is checked through it.
+    // structural point of the shared frame -- so it is checked through it.
     func pinBasis(_ r: HudEditor.WristFrame, _ what: String) {
         assert(near(simd_length(r.right), 1), "\(what): right is unit")
         assert(near(simd_length(r.up), 1), "\(what): up is unit")
@@ -992,7 +992,7 @@ func runAlongBaseFrameTests() {
     // MARK: the panel faces the eye from WHEREVER the eye is
 
     // Swept rather than asserted once, because "faces you" is a claim about
-    // every glance pose, and the failure A. hit was pose-dependent: the old
+    // every glance pose, and the failure seen on device was pose-dependent: the old
     // frame was perfectly face-on in the one contrived pose and edge-on in
     // the natural ones.
     for dx in [Float(-0.6), -0.2, 0, 0.2, 0.6] {
@@ -1134,7 +1134,7 @@ func runAlongBaseFrameTests() {
     let step: Float = 0.03
 
     // FORWARD SLIDES IT ALONG YOUR ARM, toward the hand for a positive dial
-    // -- the dial the caption tells A. to re-seat the unit with.
+    // -- the dial the caption tells the player to re-seat the unit with.
     let dFwd = squareMovedBy(fwd: step)
     assert(near(simd_dot(dFwd, armAxis), step, 1e-6),
            "along dials: +Forward slides the unit ALONG the arm, toward the hand")
@@ -1209,8 +1209,8 @@ func cornerReach(_ centre: SIMD3<Float>, _ frame: HudEditor.WristFrame,
 /// DOWN the billboarded wrist plane; this one backs DOWN THE ARM from the
 /// wrist joint, because the HUD grid is billboarded AT that joint and the
 /// along unit used to be seated mid-forearm with nothing clearing it at all
-/// -- which is the collision A. hit on device, where "no matter the
-/// parameters" the gauntlet fought the modular HUD's wrist tiles.
+/// -- which is the collision seen on device, where no setting of the
+/// parameters stopped the gauntlet fighting the modular HUD's wrist tiles.
 ///
 /// THE REQUIREMENT these pin, in one line: the unit's near edge clears the
 /// HUD grid's long reach by at least `hudGap` at EVERY Rotate angle. The
@@ -1259,7 +1259,7 @@ func runAlongSeatTests() {
         assert(near(WristComm.alongSeatDistance(rollDegrees: deg), diagonal),
                "along seat/\(deg): both halves support the panel at the diagonal")
     }
-    // ...and in metres, the number A. can measure against on device:
+    // ...and in metres, the number to measure against on device:
     // 0.0755 + 0.012 + 0.057.
     assert(near(WristComm.alongSeatDistance(rollDegrees: 0), 0.1445, 1e-5),
            "along seat: the seat is 14.45 cm down the arm at Rotate 0")
