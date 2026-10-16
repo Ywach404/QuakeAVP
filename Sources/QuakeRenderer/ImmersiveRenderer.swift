@@ -64,6 +64,10 @@ final class ImmersiveRenderer {
     /// names them once instead of 90 times a second. Render-thread only.
     private var loggedNoCommandBuffer = false
     private var loggedBarePresent = false
+    /// Last logged drawable count, so a capture starting or stopping
+    /// (built-in alone vs built-in + recorder) shows up once. Render-thread
+    /// only.
+    private var loggedDrawableCount = 0
 
     private var pipelines: RenderPipelines?
     private var singlePassStereo = false
@@ -361,7 +365,26 @@ final class ImmersiveRenderer {
         // start any of the GPU work that depends on the input data", and a
         // drawable query is not GPU work -- and it is the order Apple's own
         // immersive-Metal template uses.
-        guard let drawable = frame.queryDrawables().first else {
+        // EVERY drawable, not just the first. A frame carries more than one
+        // while a Developer Capture is recording -- the built-in display
+        // target and a recorder target -- and the abort family has a
+        // separate variant for each ("...before calling
+        // cp_drawable_encode_present() on the drawable" / "...on the
+        // recorder"). The recorder variant is what the very first capture
+        // error said, days before any of this work; it read as garbled and
+        // was not. Presenting only `.first` left the recorder unpresented
+        // every frame of every capture.
+        //
+        // `cp_drawable_get_target` is the documented way to tell them
+        // apart, and it says what to do with the difference: "When drawing
+        // for the drawable this can be used to alter what is rendered for
+        // different targets. Renderer should always prioritize
+        // cp_drawable_target_built_in target type." Each drawable has its
+        // own textures, views and projections, so each is rendered into --
+        // which is also what puts the game picture in the capture file
+        // rather than whatever the recorder texture last held.
+        let drawables = frame.queryDrawables()
+        guard !drawables.isEmpty else {
             // Nothing started, nothing to close. run()'s state machine
             // parks or exits on the next iteration.
             return
@@ -371,15 +394,24 @@ final class ImmersiveRenderer {
         // the submission for the reason documented above the function: a nil
         // command buffer swallowed by an optional chain between
         // `startSubmission` and `endSubmission` presented nothing and
-        // aborted inside `cp_frame_end_submission`.
-        guard let commandBuffer = core.commandQueue.makeCommandBuffer() else {
-            if !loggedNoCommandBuffer {
-                loggedNoCommandBuffer = true
-                print("[immersive] cannot present (no command buffer) -- layer dying?")
+        // aborted inside `cp_frame_end_submission`. One buffer per drawable,
+        // because `cp_drawable_encode_present`'s note is singular ("Commit
+        // the command buffer after calling present") and sharing one buffer
+        // across two presents is not something the header licenses.
+        var buffers: [MTLCommandBuffer] = []
+        buffers.reserveCapacity(drawables.count)
+        for _ in drawables {
+            guard let buffer = core.commandQueue.makeCommandBuffer() else {
+                if !loggedNoCommandBuffer {
+                    loggedNoCommandBuffer = true
+                    print("[immersive] cannot present (no command buffer) -- layer dying?")
+                }
+                // No submission opened, so nothing illegal; the frame is
+                // left in flight on purpose. See the trade in the note
+                // above. Buffers already made are simply dropped unused.
+                return
             }
-            // No submission opened, so nothing illegal; the frame is left in
-            // flight on purpose. See the trade in the note above.
-            return
+            buffers.append(buffer)
         }
 
         // ---- The submission window. No guard, no early return, no
@@ -391,11 +423,18 @@ final class ImmersiveRenderer {
             // A stale pose is worse than none, so the bare path below sets
             // no anchor at all -- see the coast-vs-skip note on
             // TrackRecorder in `encode`.
-            drawable.deviceAnchor = deviceAnchor
-            reportViewGeometry(for: drawable)
+            for drawable in drawables {
+                drawable.deviceAnchor = deviceAnchor
+            }
+            // The BUILT-IN drawable alone reports geometry to the engine.
+            // The recorder's size is not the refdef's business, and feeding
+            // both would make the engine's drawable size flap every frame
+            // of a capture.
+            reportViewGeometry(for: drawables.first { $0.target == .builtIn } ?? drawables[0])
             consumerHeld = core.withConsumer(.immersive) { () -> Bool in
+                // Mipmaps once per frame, on the first buffer.
                 let mipCandidates = core.drainTextureQueues()
-                if !mipCandidates.isEmpty, let blit = commandBuffer.makeBlitCommandEncoder() {
+                if !mipCandidates.isEmpty, let blit = buffers[0].makeBlitCommandEncoder() {
                     for texture in mipCandidates {
                         blit.generateMipmaps(for: texture)
                     }
@@ -405,29 +444,50 @@ final class ImmersiveRenderer {
                 let packet = QC_RendererAcquireFrame()
                 defer { if packet != nil { QC_RendererReleaseFrame() } }
 
-                encode(packet: packet?.pointee, drawable: drawable,
-                       deviceAnchor: deviceAnchor, pipelines: pipelines,
-                       commandBuffer: commandBuffer)
+                for (index, drawable) in drawables.enumerated() {
+                    // `publishes` for the built-in only: `encode` carries
+                    // per-frame side effects that must not run twice. See
+                    // its doc comment.
+                    encode(packet: packet?.pointee, drawable: drawable,
+                           deviceAnchor: deviceAnchor, pipelines: pipelines,
+                           commandBuffer: buffers[index],
+                           publishes: drawable.target == .builtIn || index == 0)
+                }
 
-                commandBuffer.addCompletedHandler { [weak self] buffer in
+                // GPU time off the first buffer only -- the fps figure is
+                // about the frame the wearer sees, not the capture's extra
+                // pass.
+                buffers[0].addCompletedHandler { [weak self] buffer in
                     self?.recordGPUTime(buffer.gpuEndTime - buffer.gpuStartTime)
                 }
                 return true
             } ?? false
         }
 
-        // ONE present, ONE commit, ONE endSubmission, on every path. If the
-        // block above did not run -- no anchor, no pipelines, or the packet
-        // stream was handed to another consumer mid-frame -- the drawable
-        // goes back bare, which is what the skip path has always been.
-        drawable.encodePresent(commandBuffer: commandBuffer)
-        commandBuffer.commit()
+        // EVERY drawable presented, EVERY buffer committed, ONE
+        // endSubmission, on every path. If the block above did not run --
+        // no anchor, no pipelines, or the packet stream was handed to
+        // another consumer mid-frame -- they all go back bare, which is
+        // what the skip path has always been.
+        for (index, drawable) in drawables.enumerated() {
+            drawable.encodePresent(commandBuffer: buffers[index])
+            buffers[index].commit()
+        }
         frame.endSubmission()
         // ---- End of the submission window.
 
         if consumerHeld {
             recordFrameStats()
-        } else if !loggedBarePresent {
+        }
+        if drawables.count != loggedDrawableCount {
+            // The count changes when a capture starts or stops, and it is
+            // the one thing that distinguishes "recording" from "not" in a
+            // device log.
+            loggedDrawableCount = drawables.count
+            print("[immersive] \(drawables.count) drawable(s) this frame"
+                + " targets=\(drawables.map { $0.target == .builtIn ? "builtIn" : "capture" }.joined(separator: ","))")
+        }
+        if !consumerHeld, !loggedBarePresent {
             // One line per session, on the rare path, so a device stream
             // says WHICH precondition fed a bare present rather than
             // leaving it to be inferred from the absence of fps lines.
@@ -441,11 +501,23 @@ final class ImmersiveRenderer {
 
     // MARK: - Encoding
 
+    /// `publishes` is false for every drawable but the built-in one. A frame
+    /// carries more than one drawable while a Developer Capture is recording
+    /// (display target plus recorder target), and this method is called once
+    /// per drawable — so the things in it that are NOT idempotent have to
+    /// run for exactly one of them. Two matter: `ControllerOutput.frame`
+    /// edge-detects the weapon fire sequence and would double-fire haptics,
+    /// and `TrackRecorder.noteFrame` APPENDS a sidecar sample, so a second
+    /// call would write two samples sharing one `cl.time` — the duplicate
+    /// -clock shape `VRTrack` already has a fixup pass for, and the exact
+    /// corruption the coast-vs-skip decision was taken to avoid. Everything
+    /// else here is a latest-value publish or a C setter and is safe twice.
     private func encode(packet: qc_frame_t?,
                         drawable: LayerRenderer.Drawable,
                         deviceAnchor: DeviceAnchor?,
                         pipelines: RenderPipelines,
-                        commandBuffer: MTLCommandBuffer) {
+                        commandBuffer: MTLCommandBuffer,
+                        publishes: Bool = true) {
         let views = drawable.views
         let rawOriginFromDevice = deviceAnchor?.originFromAnchorTransform ?? matrix_identity_float4x4
 
@@ -474,7 +546,9 @@ final class ImmersiveRenderer {
         // Output channel: haptic pulses (damage rises) and the per-weapon
         // trigger feel follow the packet; the wheel learns what the player
         // owns from the same source of truth the ring is built from.
-        if let packet {
+        // `publishes` only: the fire sequence is edge-detected downstream, so
+        // a second call per frame fires the haptic twice.
+        if let packet, publishes {
             ControllerOutput.shared.frame(damageFlash: packet.damage_flash,
                                           activeWeapon: packet.active_weapon,
                                           fireSeq: packet.weapon_fire_seq)
@@ -591,11 +665,16 @@ final class ImmersiveRenderer {
             quakeFromOrigin = originFromQuake.inverse
             // Sidecar: the head in Quake space from the same late-latched
             // pose the eyes use, keyed on the packet's clock (see VRTrack).
-            TrackRecorder.shared.noteFrame(
-                clTime: packet.time,
-                quakeFromHead: quakeFromOrigin * originFromDevice,
-                worldScale: s, bodyYaw: packet.body_yaw,
-                headOffset: SIMD3(fwd, right, up), heightTrim: heightTrim)
+            // `publishes` only -- this APPENDS, and two samples sharing one
+            // cl.time is the duplicate-clock corruption VRTrack has a fixup
+            // pass for.
+            if publishes {
+                TrackRecorder.shared.noteFrame(
+                    clTime: packet.time,
+                    quakeFromHead: quakeFromOrigin * originFromDevice,
+                    worldScale: s, bodyYaw: packet.body_yaw,
+                    headOffset: SIMD3(fwd, right, up), heightTrim: heightTrim)
+            }
         }
 
         // Dissolve origin: the head itself (the device anchor), mapped into
