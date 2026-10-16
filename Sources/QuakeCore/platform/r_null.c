@@ -641,9 +641,13 @@ double	qr_centertime_until;
 
 void SCR_CenterPrint (const char *str)
 {
-	/* The message still belongs in the console log even with no HUD. */
-	if (str && *str)
-		Con_Printf ("%s\n", str);
+	/* No Con_Printf here: upstream never logs from this function, and the
+	   svc_centerprint handler already routes the string through
+	   Con_LogCenterPrint. A plain print stamps a notify line that
+	   Con_LogCenterPrint only clears the FIRST time it sees a string; a
+	   re-firing trigger_multiple hits its duplicate check and returns
+	   early, so the notify line survived and the 2D panel drew the message
+	   a second time in 8px conchars under the head-locked copy. */
 	scr_centertime_off = 0;
 
 	if (str && *str)
