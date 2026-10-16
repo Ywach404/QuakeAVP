@@ -60,6 +60,11 @@ final class ImmersiveRenderer {
     /// see the `.running` arm of `run()` for why it is not `start()`'s job.
     private var startedAnchors = false
 
+    /// One-shot log latches for the two rare frame paths, so a device stream
+    /// names them once instead of 90 times a second. Render-thread only.
+    private var loggedNoCommandBuffer = false
+    private var loggedBarePresent = false
+
     private var pipelines: RenderPipelines?
     private var singlePassStereo = false
     private var loggedSetup = false
@@ -228,53 +233,61 @@ final class ImmersiveRenderer {
         Thread.sleep(forTimeInterval: 0.0015)
     }
 
-    /// Hand a drawable back with nothing drawn on it: a command buffer
-    /// carrying only the present, and no device anchor set.
-    ///
-    /// This is the frame-skip path, and it is the shape the build ran for
-    /// weeks before any of the interruption work -- see the `!presented`
-    /// fallback below, which has always done exactly this when the packet
-    /// stream was handed over mid-frame. The compositor answers
-    /// "Presenting a drawable without a device anchor. This drawable won't
-    /// be presented.", keeps showing the last frame it has, and RETURNS THE
-    /// FRAME. That warning is the cost of a skip, not a bug: during an
-    /// outage it is expected, it is bounded by the outage, and the wearer
-    /// cannot see it.
-    ///
-    /// Two wrong answers were tried on device first, and both are worth
-    /// keeping written down because the headers do not settle either:
-    ///
-    ///  - Returning without submitting leaks the frame. A frame is in
-    ///    flight from `queryNextFrame` until `cp_frame_end_submission`, the
-    ///    compositor allows three, and after that `queryNextFrame` returns
-    ///    nil for ever ("or has too many frames already in use") and the
-    ///    view never draws again.
-    ///  - An EMPTY submission -- `startSubmission` straight into
-    ///    `endSubmission`, no drawable taken -- aborts the process.
-    ///    SIGABRT, first skipped frame, confirmed on device 2026-10-16.
-    ///    The submission pair is documented only as timing hints, which
-    ///    reads as though a drawable were optional between them. It is not.
-    ///    Ending a submission that presented nothing is a client bug
-    ///    whether or not a drawable was taken.
-    ///
-    /// So every frame that reaches `startSubmission` has a drawable in hand
-    /// and presents it, with no exception — and the cancelled frame is
-    /// recognised BEFORE anything is started, because
-    /// `cp_frame_query_drawables` leaves the frame "invalid to access",
-    /// which means no `endSubmission` is available to close a submission
-    /// opened on it. See the ordering note in `renderFrame`.
-    ///
-    /// Nothing is encoded beyond the present. `cp_drawable_encode_present`
-    /// asks only to be "the last step before committing the specified
-    /// command buffer"; it does not require a render pass, and an empty
-    /// Metal command buffer is legal. A clear pass would also work and
-    /// would cost a full-resolution clear of both eye textures per skipped
-    /// frame for pixels that are thrown away.
-    private func presentWithoutRendering(_ drawable: LayerRenderer.Drawable) {
-        guard let commandBuffer = core.commandQueue.makeCommandBuffer() else { return }
-        drawable.encodePresent(commandBuffer: commandBuffer)
-        commandBuffer.commit()
-    }
+    // MARK: - The submission window
+    //
+    // THE RULE, paid for three times on device in one day:
+    //
+    //   Everything that can fail happens BEFORE `startSubmission`. Between
+    //   `startSubmission` and `endSubmission` there is one straight line
+    //   with no `guard`, no optional chain and no early return, and it ends
+    //   in `encodePresent` + `commit`.
+    //
+    // The three failures, each the same mistake in a different disguise:
+    //
+    //  1. Returning from a queried frame without submitting leaks it. A
+    //     frame is in flight from `queryNextFrame` until
+    //     `cp_frame_end_submission`, three is the limit, and after that
+    //     `queryNextFrame` returns nil for ever ("or has too many frames
+    //     already in use") and the view never draws again.
+    //  2. An EMPTY submission -- `startSubmission` straight into
+    //     `endSubmission`, no drawable -- aborts. SIGABRT on the first
+    //     skipped frame, device-confirmed 2026-10-16. The submission pair is
+    //     documented only as timing hints, which reads as though a drawable
+    //     were optional between them. It is not.
+    //  3. Taking the drawable AFTER `startSubmission` aborts too, because
+    //     an empty `queryDrawables()` array leaves the frame "invalid to
+    //     access" -- there is no `endSubmission` available to close a
+    //     submission already opened on it. Device-confirmed the same day,
+    //     re-entering the space with the headset off.
+    //  4. And the one this structure exists for: a FALLIBLE STEP INSIDE the
+    //     window. `makeCommandBuffer()` returned nil on a dying Metal
+    //     context, an optional-chained `guard ... else { return }` swallowed
+    //     it, nothing was presented, and `endSubmission` ran anyway --
+    //     aborting inside `cp_frame_end_submission` itself
+    //     (QuakeAVP-2026-10-16-120542.ips: __BUG_IN_CLIENT__ <-
+    //     cp_frame_end_submission <- renderFrame, on
+    //     quake.render.immersive). A silent present failure is
+    //     indistinguishable from case 2 from the compositor's side.
+    //
+    // Hence acquire-first. If an acquisition fails we never open the
+    // submission, and the frame is left holding in flight -- deliberately.
+    // That is case 1, bounded: a nil command buffer means the layer is
+    // going away, the next `queryNextFrame` returns nil, `idle()` paces the
+    // loop, and the layer invalidates and the thread exits. Transient
+    // starvation on a layer that is dying anyway is a trade worth making
+    // against an abort on a layer that is merely asleep.
+    //
+    // The bare present itself -- a command buffer carrying only
+    // `encodePresent`, with no device anchor set -- is device-confirmed
+    // working (entry 1, 2026-10-16: five skipped frames on the way in, then
+    // minutes at 90 fps). The compositor answers "Presenting a drawable
+    // without a device anchor. This drawable won't be presented.", keeps
+    // showing the last frame it has, and returns the frame. That warning is
+    // the cost of a skip, bounded by the outage and invisible to the
+    // wearer. Nothing is encoded beyond the present:
+    // `cp_drawable_encode_present` asks only to be "the last step before
+    // committing the specified command buffer", it does not require a
+    // render pass, and an empty Metal command buffer is legal.
 
     private func renderFrame() {
         guard let frame = layerRenderer.queryNextFrame() else { idle(); return }
@@ -354,57 +367,76 @@ final class ImmersiveRenderer {
             return
         }
 
-        // From here the submission is started exactly once and always both
-        // presents and ends. Nothing to draw with, or nothing to draw it
-        // from, presents the drawable bare -- no device anchor set, because
-        // there isn't one and a stale pose is worse than none (see the
-        // coast-vs-skip note on TrackRecorder below).
-        frame.startSubmission()
-        guard let pipelines, let deviceAnchor else {
-            presentWithoutRendering(drawable)
-            frame.endSubmission()
+        // The LAST fallible acquisition, and it is here rather than inside
+        // the submission for the reason documented above the function: a nil
+        // command buffer swallowed by an optional chain between
+        // `startSubmission` and `endSubmission` presented nothing and
+        // aborted inside `cp_frame_end_submission`.
+        guard let commandBuffer = core.commandQueue.makeCommandBuffer() else {
+            if !loggedNoCommandBuffer {
+                loggedNoCommandBuffer = true
+                print("[immersive] cannot present (no command buffer) -- layer dying?")
+            }
+            // No submission opened, so nothing illegal; the frame is left in
+            // flight on purpose. See the trade in the note above.
             return
         }
 
-        drawable.deviceAnchor = deviceAnchor
+        // ---- The submission window. No guard, no early return, no
+        // ---- optional chain from here to `endSubmission`.
+        frame.startSubmission()
 
-        reportViewGeometry(for: drawable)
-
-        let presented = core.withConsumer(.immersive) { () -> Bool in
-            guard let commandBuffer = core.commandQueue.makeCommandBuffer() else { return false }
-
-            let mipCandidates = core.drainTextureQueues()
-            if !mipCandidates.isEmpty, let blit = commandBuffer.makeBlitCommandEncoder() {
-                for texture in mipCandidates {
-                    blit.generateMipmaps(for: texture)
+        var consumerHeld = false
+        if let pipelines, let deviceAnchor {
+            // A stale pose is worse than none, so the bare path below sets
+            // no anchor at all -- see the coast-vs-skip note on
+            // TrackRecorder in `encode`.
+            drawable.deviceAnchor = deviceAnchor
+            reportViewGeometry(for: drawable)
+            consumerHeld = core.withConsumer(.immersive) { () -> Bool in
+                let mipCandidates = core.drainTextureQueues()
+                if !mipCandidates.isEmpty, let blit = commandBuffer.makeBlitCommandEncoder() {
+                    for texture in mipCandidates {
+                        blit.generateMipmaps(for: texture)
+                    }
+                    blit.endEncoding()
                 }
-                blit.endEncoding()
-            }
 
-            let packet = QC_RendererAcquireFrame()
-            defer { if packet != nil { QC_RendererReleaseFrame() } }
+                let packet = QC_RendererAcquireFrame()
+                defer { if packet != nil { QC_RendererReleaseFrame() } }
 
-            encode(packet: packet?.pointee, drawable: drawable,
-                   deviceAnchor: deviceAnchor, pipelines: pipelines,
-                   commandBuffer: commandBuffer)
+                encode(packet: packet?.pointee, drawable: drawable,
+                       deviceAnchor: deviceAnchor, pipelines: pipelines,
+                       commandBuffer: commandBuffer)
 
-            commandBuffer.addCompletedHandler { [weak self] buffer in
-                self?.recordGPUTime(buffer.gpuEndTime - buffer.gpuStartTime)
-            }
-            drawable.encodePresent(commandBuffer: commandBuffer)
-            commandBuffer.commit()
-            return true
-        } ?? false
-
-        if !presented {
-            // Lost the packet stream (handover) or no command buffer: the
-            // drawable must still be presented before the submission ends.
-            // The same bare present the skip path takes, and the reason it
-            // is known to be safe -- this branch has shipped for weeks.
-            presentWithoutRendering(drawable)
+                commandBuffer.addCompletedHandler { [weak self] buffer in
+                    self?.recordGPUTime(buffer.gpuEndTime - buffer.gpuStartTime)
+                }
+                return true
+            } ?? false
         }
+
+        // ONE present, ONE commit, ONE endSubmission, on every path. If the
+        // block above did not run -- no anchor, no pipelines, or the packet
+        // stream was handed to another consumer mid-frame -- the drawable
+        // goes back bare, which is what the skip path has always been.
+        drawable.encodePresent(commandBuffer: commandBuffer)
+        commandBuffer.commit()
         frame.endSubmission()
-        recordFrameStats()
+        // ---- End of the submission window.
+
+        if consumerHeld {
+            recordFrameStats()
+        } else if !loggedBarePresent {
+            // One line per session, on the rare path, so a device stream
+            // says WHICH precondition fed a bare present rather than
+            // leaving it to be inferred from the absence of fps lines.
+            loggedBarePresent = true
+            print("[immersive] bare present"
+                + " anchor=\(deviceAnchor != nil ? 1 : 0)"
+                + " pipelines=\(pipelines != nil ? 1 : 0)"
+                + " consumer=0")
+        }
     }
 
     // MARK: - Encoding
