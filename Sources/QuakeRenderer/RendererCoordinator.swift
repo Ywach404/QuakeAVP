@@ -59,12 +59,17 @@ final class RendererCoordinator {
         core.activate(.immersive)
         onImmersiveChanged?(true)
 
-        var renderer: ImmersiveRenderer!
-        renderer = ImmersiveRenderer(layerRenderer: layerRenderer, core: core) {
+        // The stopping renderer arrives as an ARGUMENT, and the closure
+        // captures nothing. It used to capture a `var renderer` the renderer
+        // itself then stored as `onStop` -- renderer -> closure -> box ->
+        // renderer, a cycle that outlived `immersive = nil` and kept every
+        // ImmersiveRenderer ever opened alive, each with its own ARKit
+        // session and world-tracking provider still running.
+        let renderer = ImmersiveRenderer(layerRenderer: layerRenderer, core: core) { stopped in
             // Called on the immersive render thread when the layer is
             // invalidated (space dismissed); the thread exits right after.
-            Task { @MainActor [renderer] in
-                RendererCoordinator.shared.immersiveDidStop(renderer!)
+            Task { @MainActor in
+                RendererCoordinator.shared.immersiveDidStop(stopped)
             }
         }
         immersive = renderer

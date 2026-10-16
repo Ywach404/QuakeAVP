@@ -36,10 +36,18 @@ final class ImmersiveRenderer {
 
     private let layerRenderer: LayerRenderer
     private let core: RendererCore
-    private let onStop: () -> Void
+    private let onStop: (ImmersiveRenderer) -> Void
 
-    private let arSession = ARKitSession()
-    private let worldTracking = WorldTrackingProvider()
+    /// The world-tracking provider that serves this thread's device anchors,
+    /// behind an owner that can rebuild it. See `DeviceAnchorSource`.
+    private let anchors = DeviceAnchorSource()
+
+    /// Whether the previous frame had a device anchor, so an outage is logged
+    /// on its EDGES only -- a line per frame at 90 Hz is exactly what made
+    /// ARKit's own per-frame complaint unreadable. Starts true so a cold
+    /// start that never gets a pose still says so on its first frame.
+    private var hadAnchor = true
+    private var skippedFrames = 0
 
     private var pipelines: RenderPipelines?
     private var singlePassStereo = false
@@ -114,20 +122,15 @@ final class ImmersiveRenderer {
     private var statGPUWorst = 0.0
     private let gpuStatsLock = NSLock()
 
-    init(layerRenderer: LayerRenderer, core: RendererCore, onStop: @escaping () -> Void) {
+    init(layerRenderer: LayerRenderer, core: RendererCore,
+         onStop: @escaping (ImmersiveRenderer) -> Void) {
         self.layerRenderer = layerRenderer
         self.core = core
         self.onStop = onStop
     }
 
     func start() {
-        Task {
-            do {
-                try await arSession.run([worldTracking])
-            } catch {
-                print("[immersive] ARKitSession failed: \(error)")
-            }
-        }
+        anchors.start()
 
         let thread = Thread { [self] in run() }
         thread.name = "quake.render.immersive"
@@ -178,8 +181,13 @@ final class ImmersiveRenderer {
         // one rising edge off an equally frozen fingertip and ghost-fire a
         // bound command with nothing on screen.
         standDownWristComm()
+        // Stop the ARKit session with the thread that was using it. It used
+        // to be left running: nothing called `stop()`, and the renderer was
+        // kept alive by its own stop closure, so every open/dismiss cycle
+        // leaked a live session with a running WorldTrackingProvider in it.
+        anchors.stop()
         print("[immersive] layer invalidated, render thread exiting")
-        onStop()
+        onStop(self)
     }
 
     private func renderFrame() {
@@ -197,21 +205,61 @@ final class ImmersiveRenderer {
         }
         guard let pipelines else { return }
 
-        frame.startSubmission()
-        guard let drawable = frame.queryDrawables().first else {
-            // The layer is pausing or being torn down mid-frame. There is
-            // nothing to present, and ending a submission that presented
-            // nothing trips CompositorServices' client-bug abort — so leave
-            // it open and bail; the state machine in run() handles the rest.
+        // Late latch: the device pose is sampled here, after the input-time
+        // wait, immediately before matrix composition and encode. This is
+        // where CompositorServices says to do it —
+        // `cp_drawable_set_device_anchor`: "you must predict the device
+        // anchor in advance using available information. The
+        // cp_frame_timing_get_optimal_input_time function provides a good
+        // time to start the prediction for each frame."
+        //
+        // It happens BEFORE the drawable is taken, deliberately. A drawable
+        // whose device anchor is nil is refused by the compositor
+        // ("Presenting a drawable without a device anchor. This drawable
+        // won't be presented."), and the `endSubmission` that has to follow
+        // a taken drawable then trips "BUG IN CLIENT: called
+        // cp_frame_end_submission() before calling
+        // cp_drawable_encode_present()". A frame we cannot pose is a frame
+        // we must not take a drawable for at all. Sampling here costs
+        // nothing in latency: `cp_frame_predict_timing` must be called
+        // before the drawable query anyway ("Don't call this function after
+        // you call cp_frame_query_drawable"), so the input-time wait is
+        // already the last thing ahead of both.
+        let anchorTime = seconds(from: timing.presentationTime)
+        guard let deviceAnchor = anchors.anchor(at: anchorTime) else {
+            // Clean skip. The loop is still paced by the optimalInputTime
+            // wait above, so this is one idle frame, not a spin, and the
+            // compositor holds and reprojects the last frame we did present
+            // — which is the same thing coasting on a stale pose would have
+            // bought, minus a full render from a pose we know is wrong and
+            // minus a run of duplicate `.vrtrack` samples keyed on the
+            // server clock (TrackRecorder.noteFrame, below in encode).
+            skippedFrames += 1
+            if hadAnchor {
+                hadAnchor = false
+                print("[immersive] no device anchor -- skipping frames until tracking returns")
+            }
             return
         }
+        if !hadAnchor {
+            hadAnchor = true
+            print("[immersive] device anchor back after \(skippedFrames) skipped frame(s)")
+            skippedFrames = 0
+        }
 
-        // Late latch: the device pose is sampled here, after the input-time
-        // wait, immediately before matrix composition and encode.
-        let anchorTime = seconds(from: timing.presentationTime)
-        let deviceAnchor = worldTracking.queryDeviceAnchor(atTimestamp: anchorTime)
+        guard let drawable = frame.queryDrawables().first else {
+            // An empty array means the compositor cancelled this frame (the
+            // layer is pausing or being torn down mid-frame):
+            // `cp_frame_query_drawables` — "If array count is 0, the frame
+            // has been cancelled as there are no drawables to draw to and
+            // the frame should be discarded and is invalid to access."
+            // Queried before `startSubmission` so a cancelled frame leaves
+            // no submission open behind it; the state machine in run()
+            // handles the rest.
+            return
+        }
+        frame.startSubmission()
         drawable.deviceAnchor = deviceAnchor
-
 
         reportViewGeometry(for: drawable)
 
@@ -2255,5 +2303,193 @@ final class ImmersiveRenderer {
         print(String(format: "[immersive] %.1f fps over %d frames, gpu avg %.2f ms worst %.2f ms",
                      fps, statFrames, gpuAvgMS, gpuWorstMS))
         statFrames = 0
+    }
+}
+
+// MARK: - Device anchors
+
+/// Owns the ARKit session and the world-tracking provider that serve the
+/// immersive thread's device anchors, and rebuilds them when ARKit stops
+/// them underneath us.
+///
+/// Why this is an object and not two stored properties on the renderer: an
+/// ARKit data provider is single-use. Anything that interrupts tracking —
+/// starting a Reality Composer Pro Developer Capture, a FaceTime call,
+/// Guest Mode — stops every provider on the session, and nothing restarts
+/// them. A stopped `WorldTrackingProvider` cannot be re-run, and querying
+/// one answers nothing while logging "The device_anchor can only be queried
+/// when the world tracking provider is running" on every frame, forever.
+/// Recovery means a NEW provider on a NEW session, so the provider has to be
+/// a `var` that somebody owns and swaps — this.
+///
+/// The hand session survived the same interruption only by accident:
+/// `HandInput.run()` builds a fresh `ARKitSession` and a fresh
+/// `HandTrackingProvider` every time hands are activated, and the immersive
+/// space's teardown and re-creation drives `setActive(false)` then
+/// `setActive(true)` through `InputHost` — a full rebuild, for free. The
+/// world provider got neither: it was created once with the renderer, and
+/// the renderer's own session was never even stopped. That is the whole
+/// difference between "[summon] hand input ACTIVE" and a dead device anchor
+/// in the same log.
+///
+/// Thread contract. `anchor(at:)` is for the render thread alone —
+/// `ar_world_tracking_provider_query_device_anchor_at_timestamp` is
+/// documented "not thread safe", and the render thread is the only caller.
+/// The supervisor task never queries; it only publishes a replacement under
+/// `lock`, so the thread that queries always holds one provider to itself.
+/// The lock protects the reference swap, nothing more.
+final class DeviceAnchorSource: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var session: ARKitSession?
+    private var provider: WorldTrackingProvider?
+    private var live = false
+    private var supervisor: Task<Void, Never>?
+
+    /// Pause between a provider dying and its replacement being run, and the
+    /// unit of the run-failure backoff. Short enough that an interruption
+    /// costs a blink, long enough that a hard failure (no authorization,
+    /// unsupported) cannot spin a core.
+    private static let retryDelay = Duration.milliseconds(250)
+    private static let maxBackoff = 8
+
+    func start() {
+        lock.lock()
+        guard !live else { lock.unlock(); return }
+        live = true
+        lock.unlock()
+
+        guard WorldTrackingProvider.isSupported else {
+            print("[immersive] world tracking unsupported here -- no device anchors")
+            return
+        }
+        let task = Task.detached(priority: .userInitiated) { [weak self] () -> Void in
+            await self?.supervise()
+        }
+        // Under the lock like every other field, and cancelled immediately
+        // if a stand-down beat the assignment -- `stop()` would otherwise
+        // have read nil and left the supervisor running.
+        lock.lock()
+        if live { supervisor = task } else { task.cancel() }
+        lock.unlock()
+    }
+
+    func stop() {
+        lock.lock()
+        guard live else { lock.unlock(); return }
+        live = false
+        let dying = session
+        let task = supervisor
+        session = nil
+        provider = nil
+        supervisor = nil
+        lock.unlock()
+
+        task?.cancel()
+        // Stopping the session also ends its event stream, which is how the
+        // supervisor wakes up from `for await` and sees that it is no longer
+        // live. Cancellation alone would not: the events sequence never
+        // throws and is not documented to honour it.
+        dying?.stop()
+        print("[immersive] world tracking stood down")
+    }
+
+    /// The device anchor predicted for `timestamp`, or nil when there is no
+    /// running provider to ask — during the start-up race, between an
+    /// interruption and its recovery, or on a device without world tracking.
+    /// Render thread only.
+    func anchor(at timestamp: TimeInterval) -> DeviceAnchor? {
+        lock.lock()
+        let current = provider
+        lock.unlock()
+        // Gate on the provider's own state rather than on the query's nil.
+        // Asking a provider that is not running is what produced the
+        // per-frame ARKit error in the capture report, and it answers
+        // nothing either way.
+        guard let current, current.state == .running else { return nil }
+        return current.queryDeviceAnchor(atTimestamp: timestamp)
+    }
+
+    // MARK: - Supervision
+
+    private var isLive: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return live
+    }
+
+    /// Run a provider, park on the session's events until ARKit stops it,
+    /// then build a replacement — for as long as this source is live.
+    private func supervise() async {
+        var backoff = 0
+        while isLive, !Task.isCancelled {
+            let session = ARKitSession()
+            let provider = WorldTrackingProvider()
+            do {
+                try await session.run([provider])
+            } catch {
+                print("[immersive] world tracking failed to run: \(error)")
+                backoff = min(backoff + 1, Self.maxBackoff)
+                try? await Task.sleep(for: Self.retryDelay * backoff)
+                continue
+            }
+            guard adopt(session: session, provider: provider) else {
+                // Stood down while we were starting; don't leave it running.
+                session.stop()
+                return
+            }
+            backoff = 0
+            print("[immersive] world tracking running")
+
+            // Park until ARKit says the provider stopped. The stream also
+            // ends when the session is stopped or deallocated, which is the
+            // stand-down path and is handled by the `isLive` check below.
+            //
+            // EVERY state change is logged, not just the one we act on.
+            // `.paused` makes `anchor(at:)` return nil exactly like `.stopped`
+            // does, and without a line here the only evidence on device would
+            // be "no device anchor" with no cause attached -- which is the
+            // position this whole change exists to get out of. State changes
+            // are rare, so this cannot spam. Only `.stopped` is terminal
+            // enough to rebuild for; a pause ARKit lifts comes back through
+            // the `.running` gate on its own.
+            for await event in session.events {
+                guard case let .dataProviderStateChanged(_, newState, error) = event
+                else { continue }
+                print("[immersive] world tracking \(newState)"
+                    + (error.map { " (\($0))" } ?? ""))
+                guard newState == .stopped, provider.state == .stopped else { continue }
+                print("[immersive] world tracking stopped -- rebuilding provider")
+                break
+            }
+
+            guard isLive, !Task.isCancelled else { break }
+            // Retire the dead provider BEFORE building its replacement, so
+            // the render thread cleanly skips frames in between rather than
+            // querying a corpse.
+            retire(session)
+            try? await Task.sleep(for: Self.retryDelay)
+        }
+    }
+
+    /// Publishes a freshly running session/provider pair. Returns false if
+    /// the source was stood down while the run was in flight, in which case
+    /// the caller owns the orphan.
+    private func adopt(session: ARKitSession, provider: WorldTrackingProvider) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard live else { return false }
+        self.session?.stop()
+        self.session = session
+        self.provider = provider
+        return true
+    }
+
+    private func retire(_ dead: ARKitSession) {
+        lock.lock()
+        if session === dead {
+            session = nil
+            provider = nil
+        }
+        lock.unlock()
+        dead.stop()
     }
 }
