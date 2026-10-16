@@ -228,35 +228,51 @@ final class ImmersiveRenderer {
         Thread.sleep(forTimeInterval: 0.0015)
     }
 
-    /// Close a frame we queried but will not render.
+    /// Hand a drawable back with nothing drawn on it: a command buffer
+    /// carrying only the present, and no device anchor set.
     ///
-    /// A frame stays IN FLIGHT from `queryNextFrame` until
-    /// `cp_frame_end_submission`, and the compositor allows at most three.
-    /// Returning from a queried frame without submitting it is what
-    /// produced "BUG IN CLIENT: We reached more than 3 frames in flight.
-    /// That's too many. Did you forget to call cp_frame_end_submission()?"
-    /// — and once the budget is spent, `queryNextFrame` returns nil for
-    /// ever and the immersive view never draws again. The abort message
-    /// names its own fix.
+    /// This is the frame-skip path, and it is the shape the build ran for
+    /// weeks before any of the interruption work -- see the `!presented`
+    /// fallback below, which has always done exactly this when the packet
+    /// stream was handed over mid-frame. The compositor answers
+    /// "Presenting a drawable without a device anchor. This drawable won't
+    /// be presented.", keeps showing the last frame it has, and RETURNS THE
+    /// FRAME. That warning is the cost of a skip, not a bug: during an
+    /// outage it is expected, it is bounded by the outage, and the wearer
+    /// cannot see it.
     ///
-    /// An EMPTY submission is the legal discard, and the two aborts are
-    /// about different things. `cp_frame_start_submission` /
-    /// `cp_frame_end_submission` are documented purely as timing hints
-    /// ("Compositor uses the time difference to improve its predictions")
-    /// and say nothing about a drawable having to exist between them; the
-    /// other abort, "called cp_frame_end_submission() before calling
-    /// cp_drawable_encode_present()", is specifically about a drawable that
-    /// WAS taken and never presented. So: never take a drawable we cannot
-    /// present, and never leave a queried frame unclosed. Both contracts,
-    /// not one at the expense of the other.
+    /// Two wrong answers were tried on device first, and both are worth
+    /// keeping written down because the headers do not settle either:
     ///
-    /// The one frame that must NOT come here is a cancelled one — an empty
-    /// `queryDrawables()` array, which `cp_frame_query_drawables` says "has
-    /// been cancelled … and the frame should be discarded and is invalid to
-    /// access". That path returns without touching the frame again.
-    private func discard(_ frame: LayerRenderer.Frame) {
-        frame.startSubmission()
-        frame.endSubmission()
+    ///  - Returning without submitting leaks the frame. A frame is in
+    ///    flight from `queryNextFrame` until `cp_frame_end_submission`, the
+    ///    compositor allows three, and after that `queryNextFrame` returns
+    ///    nil for ever ("or has too many frames already in use") and the
+    ///    view never draws again.
+    ///  - An EMPTY submission -- `startSubmission` straight into
+    ///    `endSubmission`, no drawable taken -- aborts the process.
+    ///    SIGABRT, first skipped frame, confirmed on device 2026-10-16.
+    ///    The submission pair is documented only as timing hints, which
+    ///    reads as though a drawable were optional between them. It is not.
+    ///    Ending a submission that presented nothing is a client bug
+    ///    whether or not a drawable was taken.
+    ///
+    /// So every frame that reaches `startSubmission` takes a drawable and
+    /// presents it. There is exactly one exception, and it is licensed by
+    /// name: an empty `queryDrawables()` array, which
+    /// `cp_frame_query_drawables` says "has been cancelled … and the frame
+    /// should be discarded and is invalid to access".
+    ///
+    /// Nothing is encoded beyond the present. `cp_drawable_encode_present`
+    /// asks only to be "the last step before committing the specified
+    /// command buffer"; it does not require a render pass, and an empty
+    /// Metal command buffer is legal. A clear pass would also work and
+    /// would cost a full-resolution clear of both eye textures per skipped
+    /// frame for pixels that are thrown away.
+    private func presentWithoutRendering(_ drawable: LayerRenderer.Drawable) {
+        guard let commandBuffer = core.commandQueue.makeCommandBuffer() else { return }
+        drawable.encodePresent(commandBuffer: commandBuffer)
+        commandBuffer.commit()
     }
 
     private func renderFrame() {
@@ -266,14 +282,20 @@ final class ImmersiveRenderer {
         // No per-frame input to gather until M4.
         frame.endUpdate()
 
-        // Every early return from here on closes the frame -- see discard().
-        guard let timing = frame.predictTiming() else { discard(frame); idle(); return }
+        // A nil timing means the layer is paused or invalidated
+        // (`cp_frame_predict_timing`), which is the SAME condition under
+        // which `cp_frame_query_drawables` returns an empty array and the
+        // frame "has been cancelled … and is invalid to access". So this
+        // frame is already the compositor's again and is not touched
+        // further -- the shape that shipped for weeks. `run()`'s state
+        // machine parks or exits on the next iteration; `idle()` is there
+        // because this return is ahead of the frame's only pacing wait.
+        guard let timing = frame.predictTiming() else { idle(); return }
         LayerRenderer.Clock().wait(until: timing.optimalInputTime)
 
         if pipelines == nil {
             buildPipelines()
         }
-        guard let pipelines else { discard(frame); return }
 
         // Late latch: the device pose is sampled here, after the input-time
         // wait, immediately before matrix composition and encode. This is
@@ -283,63 +305,50 @@ final class ImmersiveRenderer {
         // cp_frame_timing_get_optimal_input_time function provides a good
         // time to start the prediction for each frame."
         //
-        // It happens BEFORE the drawable is taken, deliberately. A drawable
-        // whose device anchor is nil is refused by the compositor
-        // ("Presenting a drawable without a device anchor. This drawable
-        // won't be presented."), and the `endSubmission` that has to follow
-        // a taken drawable then trips "BUG IN CLIENT: called
-        // cp_frame_end_submission() before calling
-        // cp_drawable_encode_present()". A frame we cannot pose is a frame
-        // we must not take a drawable for at all.
-        //
-        // The cost is honest rather than zero: Apple's template and
-        // `world_tracking.h`'s own example both sample AFTER the drawable
-        // query, so whatever time `queryDrawables` spends is now added
-        // prediction distance between sample and present. After the
-        // `optimalInputTime` wait that should be well under a millisecond,
-        // and the alternative -- gate first, sample after -- puts a drawable
-        // back in hand on a frame we might not be able to pose, which is the
-        // bug. Measured on device by looking for new swim on a fast head
-        // turn, not asserted here.
+        // Sampled before the drawable is taken only because the skip
+        // decision needs it; the drawable is taken either way now. That
+        // puts the sample a drawable-query earlier than Apple's template
+        // and `world_tracking.h`'s own example do it, which adds that
+        // query's duration to the prediction distance -- sub-millisecond
+        // after the input-time wait, but measured on device by looking for
+        // new swim on a fast head turn rather than asserted here.
         let anchorTime = seconds(from: timing.presentationTime)
-        guard let deviceAnchor = anchors.anchor(at: anchorTime) else {
-            // Clean skip. The loop is still paced by the optimalInputTime
-            // wait above, so this is one idle frame, not a spin, and the
-            // compositor holds and reprojects the last frame we did present
-            // — which is the same thing coasting on a stale pose would have
-            // bought, minus a full render from a pose we know is wrong and
-            // minus a run of duplicate `.vrtrack` samples keyed on the
-            // server clock (TrackRecorder.noteFrame, below in encode).
+        let deviceAnchor = anchors.anchor(at: anchorTime)
+        if deviceAnchor == nil {
             skippedFrames += 1
             if hadAnchor {
                 hadAnchor = false
                 print("[immersive] no device anchor -- skipping frames until tracking returns")
             }
-            // Closed, not abandoned. Skipping the RENDER is the point; the
-            // frame still has to be handed back or the in-flight budget
-            // runs out after three of them and the compositor stops
-            // issuing frames for the rest of the session.
-            discard(frame)
-            return
-        }
-        if !hadAnchor {
+        } else if !hadAnchor {
             hadAnchor = true
             print("[immersive] device anchor back after \(skippedFrames) skipped frame(s)")
             skippedFrames = 0
         }
 
+        // ONE place takes a drawable and ONE place ends the submission, so
+        // the two cannot get out of step again.
+        frame.startSubmission()
         guard let drawable = frame.queryDrawables().first else {
-            // An empty array means the compositor cancelled this frame (the
-            // layer is pausing or being torn down mid-frame):
-            // `cp_frame_query_drawables` — "If array count is 0, the frame
-            // has been cancelled as there are no drawables to draw to and
-            // the frame should be discarded and is invalid to access."
-            // Queried before `startSubmission` so a cancelled frame leaves
-            // no submission open behind it; the state machine in run()
-            // handles the rest.
+            // Cancelled mid-frame (the layer is pausing or being torn
+            // down): `cp_frame_query_drawables` -- "If array count is 0,
+            // the frame has been cancelled as there are no drawables to
+            // draw to and the frame should be discarded and is invalid to
+            // access." No `endSubmission` on a frame we may not access;
+            // the state machine in run() handles the rest.
             return
         }
-        frame.startSubmission()
+
+        // Nothing to draw with, or nothing to draw it from: present the
+        // drawable bare rather than skip the submission. No device anchor
+        // is set on this path -- there isn't one, and a stale pose is worse
+        // than none (see the coast-vs-skip note on TrackRecorder below).
+        guard let pipelines, let deviceAnchor else {
+            presentWithoutRendering(drawable)
+            frame.endSubmission()
+            return
+        }
+
         drawable.deviceAnchor = deviceAnchor
 
         reportViewGeometry(for: drawable)
@@ -373,10 +382,9 @@ final class ImmersiveRenderer {
         if !presented {
             // Lost the packet stream (handover) or no command buffer: the
             // drawable must still be presented before the submission ends.
-            if let commandBuffer = core.commandQueue.makeCommandBuffer() {
-                drawable.encodePresent(commandBuffer: commandBuffer)
-                commandBuffer.commit()
-            }
+            // The same bare present the skip path takes, and the reason it
+            // is known to be safe -- this branch has shipped for weeks.
+            presentWithoutRendering(drawable)
         }
         frame.endSubmission()
         recordFrameStats()
