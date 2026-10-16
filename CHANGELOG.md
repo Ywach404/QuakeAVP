@@ -48,6 +48,9 @@ compare against.
   FaceTime, Guest Mode): world tracking rebuilds itself, frames skip cleanly
   instead of violating the compositor's contract, and the view re-seats with
   a recenter rather than shoving the player.
+- Developer Capture records the game: every drawable a frame carries is now
+  rendered and presented -- the recorder target included -- so starting a
+  capture neither crashes the session nor produces an empty recording.
 
 ### Known gaps
 
