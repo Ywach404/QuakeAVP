@@ -42,6 +42,13 @@ compare against.
   in HUD and a per-frame `.csv`.
 - `make ipa`, which packages an unsigned sideload build.
 
+### Fixed
+
+- The immersive session survives ARKit interruptions (Developer Capture,
+  FaceTime, Guest Mode): world tracking rebuilds itself, frames skip cleanly
+  instead of violating the compositor's contract, and the view re-seats with
+  a recenter rather than shoving the player.
+
 ### Known gaps
 
 - The rerelease episodes (`dopa`, `mg1`, `mg3`) do not load yet.
