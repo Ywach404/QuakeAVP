@@ -74,6 +74,13 @@ static float			qc_tp_pitch_shared;
    in QuakeCore.h. */
 static int			qc_turn_hold_shared;
 
+/* One-shot recenter request from the renderer (a rebuilt ARKit world-tracking
+   provider). Drained in IN_Commands, NOT in IN_SnapshotInputs -- that runs
+   from both IN_Commands and IN_Move, and the second call would swallow the
+   latch before the first acted on it, the same trap qc_tp_commit_shared
+   documents. See QC_InputRequestRecenter in QuakeCore.h. */
+static int			qc_recenter_req_shared;
+
 void QC_InputSetGamepad (const qc_gamepad_state_t *state)
 {
 	pthread_mutex_lock (&qc_input_lock);
@@ -112,6 +119,13 @@ void QC_SetPaused (int paused)
 {
 	pthread_mutex_lock (&qc_input_lock);
 	qc_paused_shared = paused ? 1 : 0;
+	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_InputRequestRecenter (void)
+{
+	pthread_mutex_lock (&qc_input_lock);
+	qc_recenter_req_shared = 1;
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
@@ -761,6 +775,22 @@ void IN_Commands (void)
 	}
 	if ((changed & QC_PAD_OPTIONS) && (qr_pad.buttons & QC_PAD_OPTIONS))
 		Cbuf_AddText ("vr_recenter\n");
+
+	/* Same command, raised by the renderer instead of a thumb: a rebuilt
+	   ARKit world-tracking provider brings a new tracking origin, and
+	   without a recenter the head feed reads as the player having walked
+	   to it. Drained HERE, the only consumer, for the reason
+	   qc_recenter_req_shared is declared with. */
+	{
+		int recenter_req;
+
+		pthread_mutex_lock (&qc_input_lock);
+		recenter_req = qc_recenter_req_shared;
+		qc_recenter_req_shared = 0;
+		pthread_mutex_unlock (&qc_input_lock);
+		if (recenter_req)
+			Cbuf_AddText ("vr_recenter\n");
+	}
 
 	if (!qr_wheel_open)
 		IN_TriggerEdge (qr_pad.rt, &qr_rt_down, K_RTRIGGER);

@@ -40,7 +40,14 @@ final class ImmersiveRenderer {
 
     /// The world-tracking provider that serves this thread's device anchors,
     /// behind an owner that can rebuild it. See `DeviceAnchorSource`.
-    private let anchors = DeviceAnchorSource()
+    ///
+    /// A rebuild hands the engine a recenter request, not a render-side
+    /// re-zero: the new provider's tracking origin is not the old one's, and
+    /// only `vr_recenter` can move the world under the player without the
+    /// absorption ledger shoving the player box to meet it. An any-thread
+    /// `QC_Input*` producer, drained on the engine thread — the same route
+    /// every other input takes.
+    private let anchors = DeviceAnchorSource { QC_InputRequestRecenter() }
 
     /// Whether the previous frame had a device anchor, so an outage is logged
     /// on its EDGES only -- a line per frame at 90 Hz is exactly what made
@@ -190,14 +197,26 @@ final class ImmersiveRenderer {
         onStop(self)
     }
 
+    /// Yield briefly on an early return that happens BEFORE the frame's
+    /// `optimalInputTime` wait, which is the loop's only pacing. Without it
+    /// those paths spin a `.userInteractive` core flat out:
+    /// `cp_layer_renderer_query_next_frame` returns nil when the layer is
+    /// paused, invalidated "or has too many frames already in use", and the
+    /// header's instruction for that is literally "wait a short time and try
+    /// again". The anchor skip and the cancelled-frame return are both AFTER
+    /// the wait and are paced by it, so they don't take this.
+    private func idle() {
+        Thread.sleep(forTimeInterval: 0.0015)
+    }
+
     private func renderFrame() {
-        guard let frame = layerRenderer.queryNextFrame() else { return }
+        guard let frame = layerRenderer.queryNextFrame() else { idle(); return }
 
         frame.startUpdate()
         // No per-frame input to gather until M4.
         frame.endUpdate()
 
-        guard let timing = frame.predictTiming() else { return }
+        guard let timing = frame.predictTiming() else { idle(); return }
         LayerRenderer.Clock().wait(until: timing.optimalInputTime)
 
         if pipelines == nil {
@@ -220,11 +239,17 @@ final class ImmersiveRenderer {
         // a taken drawable then trips "BUG IN CLIENT: called
         // cp_frame_end_submission() before calling
         // cp_drawable_encode_present()". A frame we cannot pose is a frame
-        // we must not take a drawable for at all. Sampling here costs
-        // nothing in latency: `cp_frame_predict_timing` must be called
-        // before the drawable query anyway ("Don't call this function after
-        // you call cp_frame_query_drawable"), so the input-time wait is
-        // already the last thing ahead of both.
+        // we must not take a drawable for at all.
+        //
+        // The cost is honest rather than zero: Apple's template and
+        // `world_tracking.h`'s own example both sample AFTER the drawable
+        // query, so whatever time `queryDrawables` spends is now added
+        // prediction distance between sample and present. After the
+        // `optimalInputTime` wait that should be well under a millisecond,
+        // and the alternative -- gate first, sample after -- puts a drawable
+        // back in hand on a frame we might not be able to pose, which is the
+        // bug. Measured on device by looking for new swim on a fast head
+        // turn, not asserted here.
         let anchorTime = seconds(from: timing.presentationTime)
         guard let deviceAnchor = anchors.anchor(at: anchorTime) else {
             // Clean skip. The loop is still paced by the optimalInputTime
@@ -2336,8 +2361,10 @@ final class ImmersiveRenderer {
 /// `ar_world_tracking_provider_query_device_anchor_at_timestamp` is
 /// documented "not thread safe", and the render thread is the only caller.
 /// The supervisor task never queries; it only publishes a replacement under
-/// `lock`, so the thread that queries always holds one provider to itself.
-/// The lock protects the reference swap, nothing more.
+/// `lock`. The lock is held across the state check AND the query, so the
+/// onset of an outage cannot slip a query through against a provider that
+/// stopped between the two — that race is a burst of the very ARKit console
+/// error this type exists to silence.
 final class DeviceAnchorSource: @unchecked Sendable {
 
     private let lock = NSLock()
@@ -2346,23 +2373,73 @@ final class DeviceAnchorSource: @unchecked Sendable {
     private var live = false
     private var supervisor: Task<Void, Never>?
 
+    /// Raised when a REBUILT provider comes up (never on the first one), so
+    /// the owner can put the world back under the player — see
+    /// `QC_InputRequestRecenter`. Kept as a closure so this type stays pure
+    /// ARKit and knows nothing about the engine.
+    private let onRebuilt: @Sendable () -> Void
+
     /// Pause between a provider dying and its replacement being run, and the
-    /// unit of the run-failure backoff. Short enough that an interruption
-    /// costs a blink, long enough that a hard failure (no authorization,
-    /// unsupported) cannot spin a core.
+    /// unit of the backoff. Short enough that an interruption costs a blink,
+    /// long enough that a hard failure (no authorization, unsupported)
+    /// cannot spin a core.
     private static let retryDelay = Duration.milliseconds(250)
     private static let maxBackoff = 8
+    /// How long a provider has to stay up before the backoff is forgiven. A
+    /// sustained interruption lets each new provider start and immediately
+    /// stops it again; without this the backoff reset after every successful
+    /// `run` and the rebuild cadence stayed flat at 4 Hz for the whole
+    /// capture — a new session and provider every 250 ms, with log lines to
+    /// match.
+    private static let stableGrace = 2.0
+    /// Engine-tick headroom between asking for the recenter and letting the
+    /// render thread see the new provider. The request is drained on the
+    /// engine thread (~11 ms at 90 Hz) and bumps `recenter_count`; until it
+    /// lands, a head offset fed from the NEW origin would be absorbed
+    /// against the OLD ledger, which is the body shove being prevented.
+    private static let recenterSettle = Duration.milliseconds(50)
+
+    /// The one source allowed to run a world-tracking provider. A
+    /// dismiss/reopen can briefly have two `ImmersiveRenderer`s alive (which
+    /// is why `immersiveDidStop` checks identity at all), and two sources
+    /// would each run a provider and each *auto-rebuild* when the other's
+    /// arrival stopped theirs — they would fight, where the old code merely
+    /// went dead. Claiming stands the previous one down first.
+    private static let registry = NSLock()
+    nonisolated(unsafe) private static weak var current: DeviceAnchorSource?
+
+    init(onRebuilt: @escaping @Sendable () -> Void) {
+        self.onRebuilt = onRebuilt
+    }
+
+    deinit {
+        // Backstop. `[weak self]` on the supervisor is cosmetic -- once
+        // `supervise()` is entered, self is strongly held for the whole
+        // call -- so this only runs when `stop()` already did its work. It
+        // is here so an escaped source can never outlive its owner with a
+        // provider still running.
+        stop()
+    }
 
     func start() {
+        // Before `live`, so an unsupported device does not later announce a
+        // stand-down for something that never stood up.
+        guard WorldTrackingProvider.isSupported else {
+            print("[immersive] world tracking unsupported here -- no device anchors")
+            return
+        }
+
+        Self.registry.lock()
+        let previous = Self.current
+        Self.current = self
+        Self.registry.unlock()
+        if previous !== self { previous?.stop() }
+
         lock.lock()
         guard !live else { lock.unlock(); return }
         live = true
         lock.unlock()
 
-        guard WorldTrackingProvider.isSupported else {
-            print("[immersive] world tracking unsupported here -- no device anchors")
-            return
-        }
         let task = Task.detached(priority: .userInitiated) { [weak self] () -> Void in
             await self?.supervise()
         }
@@ -2375,6 +2452,10 @@ final class DeviceAnchorSource: @unchecked Sendable {
     }
 
     func stop() {
+        Self.registry.lock()
+        if Self.current === self { Self.current = nil }
+        Self.registry.unlock()
+
         lock.lock()
         guard live else { lock.unlock(); return }
         live = false
@@ -2399,15 +2480,21 @@ final class DeviceAnchorSource: @unchecked Sendable {
     /// interruption and its recovery, or on a device without world tracking.
     /// Render thread only.
     func anchor(at timestamp: TimeInterval) -> DeviceAnchor? {
-        lock.lock()
-        let current = provider
-        lock.unlock()
+        // The state check and the query are ONE critical section. Reading
+        // the reference under the lock and then checking state outside it
+        // is a time-of-check/time-of-use gap: the provider can stop in
+        // between and the query prints the per-frame ARKit error anyway,
+        // which would fail a device check on an otherwise correct build.
+        // The section is a reference read plus a prediction, the render
+        // thread is its only caller, and the supervisor contends only on a
+        // rare swap.
+        lock.lock(); defer { lock.unlock() }
         // Gate on the provider's own state rather than on the query's nil.
         // Asking a provider that is not running is what produced the
         // per-frame ARKit error in the capture report, and it answers
         // nothing either way.
-        guard let current, current.state == .running else { return nil }
-        return current.queryDeviceAnchor(atTimestamp: timestamp)
+        guard let provider, provider.state == .running else { return nil }
+        return provider.queryDeviceAnchor(atTimestamp: timestamp)
     }
 
     // MARK: - Supervision
@@ -2421,6 +2508,7 @@ final class DeviceAnchorSource: @unchecked Sendable {
     /// then build a replacement — for as long as this source is live.
     private func supervise() async {
         var backoff = 0
+        var rebuild = false
         while isLive, !Task.isCancelled {
             let session = ARKitSession()
             let provider = WorldTrackingProvider()
@@ -2432,12 +2520,36 @@ final class DeviceAnchorSource: @unchecked Sendable {
                 try? await Task.sleep(for: Self.retryDelay * backoff)
                 continue
             }
+
+            // A REBUILT provider brings a tracking origin that need not be
+            // the old one's. Left alone, the head offset computed against it
+            // is fed to the engine as the player having physically walked
+            // there, and IN_AbsorbHeadOffset sweeps the player box to match
+            // -- metres of uncommanded translation, blocked by the first
+            // wall, with the head yaw and the hand frame stale alongside.
+            // Drive the engine's own recenter instead of re-zeroing the
+            // render-side correction: vr_recenter absorbs the last good
+            // residual, clears the ledger and bumps recenter_count in one
+            // engine-thread step, and the count mismatch keeps absorption
+            // frozen until the renderer echoes it against the new origin. A
+            // render-side re-zero without that bump would walk the body
+            // BACKWARDS by the whole absorbed total.
+            //
+            // Asked for -- and settled -- BEFORE the new provider is
+            // published, so the render thread cannot feed a new-origin
+            // offset while the old count is still current.
+            if rebuild {
+                print("[immersive] world tracking rebuilt -- recentering")
+                onRebuilt()
+                try? await Task.sleep(for: Self.recenterSettle)
+            }
+
             guard adopt(session: session, provider: provider) else {
                 // Stood down while we were starting; don't leave it running.
                 session.stop()
                 return
             }
-            backoff = 0
+            let ranAt = CACurrentMediaTime()
             print("[immersive] world tracking running")
 
             // Park until ARKit says the provider stopped. The stream also
@@ -2448,26 +2560,39 @@ final class DeviceAnchorSource: @unchecked Sendable {
             // `.paused` makes `anchor(at:)` return nil exactly like `.stopped`
             // does, and without a line here the only evidence on device would
             // be "no device anchor" with no cause attached -- which is the
-            // position this whole change exists to get out of. State changes
-            // are rare, so this cannot spam. Only `.stopped` is terminal
-            // enough to rebuild for; a pause ARKit lifts comes back through
-            // the `.running` gate on its own.
+            // position this whole change exists to get out of. Only
+            // `.stopped` is terminal enough to rebuild for; a pause ARKit
+            // lifts comes back through the `.running` gate on its own.
+            //
+            // `newState` alone decides, with no second opinion from
+            // `provider.state`: there is one provider on this session, so
+            // the event is authoritative, and a `state` getter lagging the
+            // event by one hop would have parked this loop forever on a
+            // `.stopped` already delivered -- the exact dead anchor the
+            // type exists to prevent.
             for await event in session.events {
                 guard case let .dataProviderStateChanged(_, newState, error) = event
                 else { continue }
                 print("[immersive] world tracking \(newState)"
                     + (error.map { " (\($0))" } ?? ""))
-                guard newState == .stopped, provider.state == .stopped else { continue }
+                guard newState == .stopped else { continue }
                 print("[immersive] world tracking stopped -- rebuilding provider")
                 break
             }
 
             guard isLive, !Task.isCancelled else { break }
+            // Forgive the backoff only for a provider that actually held.
+            // A sustained interruption starts one and stops it again at
+            // once; resetting on every successful `run` churned a session
+            // and a provider every 250 ms for the capture's whole length.
+            backoff = CACurrentMediaTime() - ranAt >= Self.stableGrace
+                ? 0 : min(backoff + 1, Self.maxBackoff)
+            rebuild = true
             // Retire the dead provider BEFORE building its replacement, so
             // the render thread cleanly skips frames in between rather than
             // querying a corpse.
             retire(session)
-            try? await Task.sleep(for: Self.retryDelay)
+            try? await Task.sleep(for: Self.retryDelay * max(1, backoff))
         }
     }
 
