@@ -56,6 +56,10 @@ final class ImmersiveRenderer {
     private var hadAnchor = true
     private var skippedFrames = 0
 
+    /// Whether world tracking has been asked for yet. Render-thread only;
+    /// see the `.running` arm of `run()` for why it is not `start()`'s job.
+    private var startedAnchors = false
+
     private var pipelines: RenderPipelines?
     private var singlePassStereo = false
     private var loggedSetup = false
@@ -137,8 +141,14 @@ final class ImmersiveRenderer {
     }
 
     func start() {
-        anchors.start()
-
+        // NOT anchors.start() here. This runs from the CompositorLayer's
+        // renderer closure, before the layer has reached `.running` -- and
+        // a world-tracking provider asked for while the space is still
+        // coming up starts and is immediately PAUSED by ARKit. The
+        // supervisor only rebuilt on `.stopped`, so a provider parked in
+        // `.paused` stayed there and every frame skipped for ever. It is
+        // started from the render thread's first `.running` tick instead,
+        // which is the point at which the space is actually presenting.
         let thread = Thread { [self] in run() }
         thread.name = "quake.render.immersive"
         thread.qualityOfService = .userInteractive
@@ -169,6 +179,15 @@ final class ImmersiveRenderer {
                 standDownWristComm()
                 layerRenderer.waitUntilRunning()
             case .running:
+                // World tracking is asked for HERE, once, rather than from
+                // start() -- see the note there. The layer being `.running`
+                // is the app's only signal that the immersive space is
+                // actually up, which is the condition ARKit needs before it
+                // will leave a world-tracking provider running.
+                if !startedAnchors {
+                    startedAnchors = true
+                    anchors.start()
+                }
                 autoreleasepool { renderFrame() }
             @unknown default:
                 break loop
@@ -209,6 +228,37 @@ final class ImmersiveRenderer {
         Thread.sleep(forTimeInterval: 0.0015)
     }
 
+    /// Close a frame we queried but will not render.
+    ///
+    /// A frame stays IN FLIGHT from `queryNextFrame` until
+    /// `cp_frame_end_submission`, and the compositor allows at most three.
+    /// Returning from a queried frame without submitting it is what
+    /// produced "BUG IN CLIENT: We reached more than 3 frames in flight.
+    /// That's too many. Did you forget to call cp_frame_end_submission()?"
+    /// — and once the budget is spent, `queryNextFrame` returns nil for
+    /// ever and the immersive view never draws again. The abort message
+    /// names its own fix.
+    ///
+    /// An EMPTY submission is the legal discard, and the two aborts are
+    /// about different things. `cp_frame_start_submission` /
+    /// `cp_frame_end_submission` are documented purely as timing hints
+    /// ("Compositor uses the time difference to improve its predictions")
+    /// and say nothing about a drawable having to exist between them; the
+    /// other abort, "called cp_frame_end_submission() before calling
+    /// cp_drawable_encode_present()", is specifically about a drawable that
+    /// WAS taken and never presented. So: never take a drawable we cannot
+    /// present, and never leave a queried frame unclosed. Both contracts,
+    /// not one at the expense of the other.
+    ///
+    /// The one frame that must NOT come here is a cancelled one — an empty
+    /// `queryDrawables()` array, which `cp_frame_query_drawables` says "has
+    /// been cancelled … and the frame should be discarded and is invalid to
+    /// access". That path returns without touching the frame again.
+    private func discard(_ frame: LayerRenderer.Frame) {
+        frame.startSubmission()
+        frame.endSubmission()
+    }
+
     private func renderFrame() {
         guard let frame = layerRenderer.queryNextFrame() else { idle(); return }
 
@@ -216,13 +266,14 @@ final class ImmersiveRenderer {
         // No per-frame input to gather until M4.
         frame.endUpdate()
 
-        guard let timing = frame.predictTiming() else { idle(); return }
+        // Every early return from here on closes the frame -- see discard().
+        guard let timing = frame.predictTiming() else { discard(frame); idle(); return }
         LayerRenderer.Clock().wait(until: timing.optimalInputTime)
 
         if pipelines == nil {
             buildPipelines()
         }
-        guard let pipelines else { return }
+        guard let pipelines else { discard(frame); return }
 
         // Late latch: the device pose is sampled here, after the input-time
         // wait, immediately before matrix composition and encode. This is
@@ -264,6 +315,11 @@ final class ImmersiveRenderer {
                 hadAnchor = false
                 print("[immersive] no device anchor -- skipping frames until tracking returns")
             }
+            // Closed, not abandoned. Skipping the RENDER is the point; the
+            // frame still has to be handed back or the in-flight budget
+            // runs out after three of them and the compositor stops
+            // issuing frames for the rest of the session.
+            discard(frame)
             return
         }
         if !hadAnchor {
@@ -2398,6 +2454,13 @@ final class DeviceAnchorSource: @unchecked Sendable {
     /// lands, a head offset fed from the NEW origin would be absorbed
     /// against the OLD ledger, which is the body shove being prevented.
     private static let recenterSettle = Duration.milliseconds(50)
+    /// How often the supervisor looks at the provider's state, and how long
+    /// a `.paused` is tolerated before it is rebuilt like a stop. The grace
+    /// is generous because a pause ARKit lifts by itself costs nothing to
+    /// wait out; it only has to be short enough that a pause ARKit will
+    /// never lift does not outlast the player's patience.
+    private static let pollInterval = Duration.milliseconds(100)
+    private static let pausedGrace = 1.5
 
     /// The one source allowed to run a world-tracking provider. A
     /// dismiss/reopen can briefly have two `ImmersiveRenderer`s alive (which
@@ -2552,35 +2615,23 @@ final class DeviceAnchorSource: @unchecked Sendable {
             let ranAt = CACurrentMediaTime()
             print("[immersive] world tracking running")
 
-            // Park until ARKit says the provider stopped. The stream also
-            // ends when the session is stopped or deallocated, which is the
-            // stand-down path and is handled by the `isLive` check below.
-            //
-            // EVERY state change is logged, not just the one we act on.
-            // `.paused` makes `anchor(at:)` return nil exactly like `.stopped`
-            // does, and without a line here the only evidence on device would
-            // be "no device anchor" with no cause attached -- which is the
-            // position this whole change exists to get out of. Only
-            // `.stopped` is terminal enough to rebuild for; a pause ARKit
-            // lifts comes back through the `.running` gate on its own.
-            //
-            // `newState` alone decides, with no second opinion from
-            // `provider.state`: there is one provider on this session, so
-            // the event is authoritative, and a `state` getter lagging the
-            // event by one hop would have parked this loop forever on a
-            // `.stopped` already delivered -- the exact dead anchor the
-            // type exists to prevent.
-            for await event in session.events {
-                guard case let .dataProviderStateChanged(_, newState, error) = event
-                else { continue }
-                print("[immersive] world tracking \(newState)"
-                    + (error.map { " (\($0))" } ?? ""))
-                guard newState == .stopped else { continue }
-                print("[immersive] world tracking stopped -- rebuilding provider")
-                break
+            // ARKit's own error text for a state change, logged as a side
+            // channel. It is the only place the reason for a stop appears.
+            let errors = Task.detached(priority: .utility) { () -> Void in
+                for await event in session.events {
+                    guard case let .dataProviderStateChanged(_, newState, error) = event,
+                          let error else { continue }
+                    print("[immersive] world tracking \(newState): \(error)")
+                }
             }
+            let reason = await watch(provider)
+            errors.cancel()
 
+            // After the liveness check, not before it: a stand-down also
+            // ends the watch, and announcing a rebuild there would be a
+            // lie -- `stop()` has its own line.
             guard isLive, !Task.isCancelled else { break }
+            print("[immersive] world tracking \(reason) -- rebuilding provider")
             // Forgive the backoff only for a provider that actually held.
             // A sustained interruption starts one and stops it again at
             // once; resetting on every successful `run` churned a session
@@ -2594,6 +2645,47 @@ final class DeviceAnchorSource: @unchecked Sendable {
             retire(session)
             try? await Task.sleep(for: Self.retryDelay * max(1, backoff))
         }
+    }
+
+    /// Watch a running provider until it is no longer usable, logging every
+    /// state change, and return the reason to rebuild for.
+    ///
+    /// A poll rather than a bare `for await session.events`, which is what
+    /// the previous version did and what broke the device: the events
+    /// sequence parks indefinitely, so a provider that went `.paused` and
+    /// never came back parked this loop with it and every frame skipped for
+    /// the rest of the session. `data_provider.h:33-37` defines the states
+    /// as `initialized / running / paused / stopped`, and neither the header
+    /// nor the Swift interface documents a guaranteed transition BACK from
+    /// either of the last two — so `.paused` is given a bounded grace (a
+    /// pause ARKit lifts costs nothing, we just keep watching) and then
+    /// rebuilt like a stop. That is what lets the system actually return to
+    /// `.running` rather than hope.
+    ///
+    /// `.stopped` is immediate: `queryDeviceAnchor` on a stopped provider is
+    /// the per-frame ARKit error this whole type exists to end.
+    private func watch(_ provider: WorldTrackingProvider) async -> String {
+        var last = provider.state
+        var pausedSince: Double?
+        while isLive, !Task.isCancelled {
+            let state = provider.state
+            if state != last {
+                print("[immersive] world tracking \(state)")
+                last = state
+            }
+            switch state {
+            case .stopped:
+                return "stopped"
+            case .paused:
+                let now = CACurrentMediaTime()
+                guard let since = pausedSince else { pausedSince = now; break }
+                if now - since >= Self.pausedGrace { return "paused too long" }
+            default:
+                pausedSince = nil
+            }
+            try? await Task.sleep(for: Self.pollInterval)
+        }
+        return "stood down"
     }
 
     /// Publishes a freshly running session/provider pair. Returns false if
