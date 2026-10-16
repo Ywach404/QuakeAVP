@@ -682,6 +682,19 @@ void QC_InputSetHeightTrim (float units);
 void QC_InputSetHeadOffset (float fwd, float right, float up,
 			    uint32_t recenter_ack);
 
+/* Ask the engine to recenter, exactly as the Options button does -- a
+   one-shot latch drained on the engine thread into `vr_recenter`. The
+   renderer raises it when ARKit hands it a REBUILT world-tracking provider
+   after an interruption: the new provider's tracking origin can sit
+   anywhere, and the head offset fed from it is otherwise read as the player
+   having physically walked there, which IN_AbsorbHeadOffset then sweeps the
+   player box to match. Going through vr_recenter rather than re-zeroing the
+   render-side correction is what makes that safe -- it absorbs the last good
+   residual, clears the ledger and bumps recenter_count in one engine-thread
+   step, and IN_AbsorbHeadOffset stays frozen on the count mismatch until the
+   renderer echoes it against the new origin. Callable from any thread. */
+void QC_InputRequestRecenter (void);
+
 /*
  * ---------------------------------------------------------------------------
  * Admin panel (produced by Sources/QuakeCore/platform/admin_avp.c).
