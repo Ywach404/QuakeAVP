@@ -257,11 +257,12 @@ final class ImmersiveRenderer {
     ///    Ending a submission that presented nothing is a client bug
     ///    whether or not a drawable was taken.
     ///
-    /// So every frame that reaches `startSubmission` takes a drawable and
-    /// presents it. There is exactly one exception, and it is licensed by
-    /// name: an empty `queryDrawables()` array, which
-    /// `cp_frame_query_drawables` says "has been cancelled … and the frame
-    /// should be discarded and is invalid to access".
+    /// So every frame that reaches `startSubmission` has a drawable in hand
+    /// and presents it, with no exception — and the cancelled frame is
+    /// recognised BEFORE anything is started, because
+    /// `cp_frame_query_drawables` leaves the frame "invalid to access",
+    /// which means no `endSubmission` is available to close a submission
+    /// opened on it. See the ordering note in `renderFrame`.
     ///
     /// Nothing is encoded beyond the present. `cp_drawable_encode_present`
     /// asks only to be "the last step before committing the specified
@@ -326,23 +327,39 @@ final class ImmersiveRenderer {
             skippedFrames = 0
         }
 
-        // ONE place takes a drawable and ONE place ends the submission, so
-        // the two cannot get out of step again.
-        frame.startSubmission()
+        // The drawable is taken BEFORE the submission starts, and the
+        // cancelled case is the reason. `cp_frame_query_drawables`: "the
+        // array will have a count of 0 and frame is invalid" when the layer
+        // is in the paused or invalidated state, and "the frame should be
+        // discarded and is invalid to access" -- so there is no
+        // `endSubmission` available on that frame. Querying after
+        // `startSubmission` therefore left a STARTED submission that could
+        // never be closed, and a layer dying under a sleeping device hands
+        // back empty arrays frame after frame: three of them spent the
+        // in-flight budget and aborted the process. Device-confirmed
+        // 2026-10-16, taking the headset off and letting it sleep.
+        //
+        // The license is position-sensitive, which is the whole lesson
+        // here: "discard the frame" is only free while nothing has been
+        // started on it.
+        //
+        // Querying here is within the written contract --
+        // `cp_frame_start_submission` says "Call this function before you
+        // start any of the GPU work that depends on the input data", and a
+        // drawable query is not GPU work -- and it is the order Apple's own
+        // immersive-Metal template uses.
         guard let drawable = frame.queryDrawables().first else {
-            // Cancelled mid-frame (the layer is pausing or being torn
-            // down): `cp_frame_query_drawables` -- "If array count is 0,
-            // the frame has been cancelled as there are no drawables to
-            // draw to and the frame should be discarded and is invalid to
-            // access." No `endSubmission` on a frame we may not access;
-            // the state machine in run() handles the rest.
+            // Nothing started, nothing to close. run()'s state machine
+            // parks or exits on the next iteration.
             return
         }
 
-        // Nothing to draw with, or nothing to draw it from: present the
-        // drawable bare rather than skip the submission. No device anchor
-        // is set on this path -- there isn't one, and a stale pose is worse
-        // than none (see the coast-vs-skip note on TrackRecorder below).
+        // From here the submission is started exactly once and always both
+        // presents and ends. Nothing to draw with, or nothing to draw it
+        // from, presents the drawable bare -- no device anchor set, because
+        // there isn't one and a stale pose is worse than none (see the
+        // coast-vs-skip note on TrackRecorder below).
+        frame.startSubmission()
         guard let pipelines, let deviceAnchor else {
             presentWithoutRendering(drawable)
             frame.endSubmission()
