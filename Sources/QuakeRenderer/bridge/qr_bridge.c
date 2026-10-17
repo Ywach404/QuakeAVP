@@ -4608,11 +4608,14 @@ static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
 
 /*
 ================
-QR_EmitReticle -- an aim mark where the shot lands, in the depth-tested
-particle channel. It lies FLAT ON THE HIT SURFACE (a decal oriented to the
-surface normal), lifted a hair toward the eye -- so on a wall it faces you and
-on the floor it lies flat like a teleport marker, and it no longer clips into
-the geometry when you aim down. In open air (no hit) it billboards to face the
+QR_EmitReticle -- an aim mark where the shot lands, in the particle channel.
+The frame builder records its vertex range and the renderer draws that range
+with the depth test off (see qc_frame_t.reticle_first_vert): the mark sits at
+the first hit, so the only thing the test ever removed was the mark itself --
+an arc gauge billboarded behind a wall seen edge-on, or the whole thing behind
+a sky brush the trace passes through. It lies FLAT ON THE HIT SURFACE (a decal
+oriented to the surface normal), lifted a hair toward the eye -- so on a wall
+it faces you and on the floor it lies flat like a teleport marker. In open air (no hit) it billboards to face the
 eye at a fixed throw. Shape is vr_reticlestyle (cross / circle+dot / dot /
 circle), colour vr_reticlecolor.
 ================
@@ -7181,7 +7184,12 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				   for the shape OR the gauges; QR_EmitReticle draws whichever
 				   their cvars enable. */
 				if (vr_reticle.value || vr_reticle_arcs.value)
+				{
+					slot->frame.reticle_first_vert = slot->frame.num_particle_verts;
 					QR_EmitReticle (slot, lstart, cl.viewangles);
+					slot->frame.reticle_vert_count = slot->frame.num_particle_verts
+						- slot->frame.reticle_first_vert;
+				}
 			}
 
 			/* Visual recoil, purely cosmetic (the shot already left with
@@ -7269,6 +7277,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_entities = 0;
 	slot->frame.num_text_verts = 0;
 	slot->frame.num_particle_verts = 0;
+	slot->frame.reticle_first_vert = 0;
+	slot->frame.reticle_vert_count = 0;
 	slot->frame.num_sprite_verts = 0;
 	slot->frame.num_sprite_batches = 0;
 	slot->frame.num_overlay_verts = 0;
