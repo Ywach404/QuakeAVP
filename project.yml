@@ -158,6 +158,7 @@ targets:
         # tracking + the SpatialGamepad controller profile).
         NSHandsTrackingUsageDescription: Hand tracking drives movement and firing when no controller is connected.
         NSAccessoryTrackingUsageDescription: Tracks PlayStation VR2 Sense controllers for aiming and movement.
+        NSWorldSensingUsageDescription: Plane detection finds your floor so the game floor sits on it.
         GCSupportedGameControllers:
           - ProfileName: SpatialGamepad
           - ProfileName: ExtendedGamepad
