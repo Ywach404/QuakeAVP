@@ -58,6 +58,15 @@ gltexture_t *QR_TexMgr_LoadImage (qmodel_t *owner, const char *name,
 				  byte *data, const char *source_file,
 				  src_offset_t source_offset, unsigned flags);
 void QR_TexMgr_FreeTexturesForOwner (qmodel_t *owner);
+void QR_TexMgr_ReloadImage (gltexture_t *glt, int shirt, int pants);
+
+/* Colormapped player skins (gl_rmisc.c / r_alias.c ports). */
+extern gltexture_t *playertextures[MAX_SCOREBOARD];
+void QR_TranslatePlayerSkin (int playernum);
+void QR_TranslateNewPlayerSkin (int playernum);
+gltexture_t *QR_PlayerSkinTexture (const entity_t *e, gltexture_t *tx);
+void QR_NewGame (void);
+void QR_DrawTransPicTranslate (int x, int y, qpic_t *pic, int top, int bottom);
 
 /* Runtime lighting (gl_rlight.c / gl_rsurf.c ports). */
 extern int d_lightstylevalue[256];	/* 8.8 fraction; defined in qr_bridge.c */
