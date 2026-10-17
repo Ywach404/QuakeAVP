@@ -41,8 +41,12 @@ vis   build/range/range.bsp
 python3 tools/range/genpop.py > build/pop.lmp
 python3 tools/range/mkpak.py build/range/pak2.pak \
     gfx/pop.lmp=build/pop.lmp \
-    maps/range.bsp=build/range/range.bsp
+    maps/range.bsp=build/range/range.bsp \
+    maps/track.bsp=build/track/track.bsp
 ```
+
+The last entry is the running track (`tools/track/README.md`); both maps
+travel in the one pak, so build that first or drop the line.
 
 `mkpak.py`'s first argument is the OUTPUT path -- it must never point at a
 real pak inside your `<path-to>/id1`, or it overwrites id's own file. Stage
@@ -56,6 +60,7 @@ real `pak1.pak` is present. Then `map range` from the console.
 ## Verifying without a headset
 
 `tools/range/rangetest.c` (pattern: link against the `make check` objects
-minus `hostmain.o`) boots the engine, loads the range, and asserts the
-firing line and rack are present, the player spawns on the floor, and the
-weapon wheel rings all eight weapons over it.
+minus `hostmain.o`; the exact command line is in `tools/track/README.md`)
+boots the engine, loads the range, and asserts the firing line and rack are
+present, the player spawns on the floor, and the weapon wheel rings all
+eight weapons over it.

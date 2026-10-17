@@ -46,7 +46,9 @@ NEEDED = {FLOOR, WALL, PILLAR, STAIR, PLAT, SKY, CRATES, CRATET, WATER, LEANWALL
           LAVA, SLIME}
 
 
-def extract_wad(id1: Path, out: Path) -> None:
+def extract_wad(id1: Path, out: Path, needed=NEEDED, wadname="range.wad") -> None:
+    """Lift `needed` miptexes out of the maps in id1/pak0.pak into out/wadname.
+    Shared with tools/track/gentrack.py, so the lifting lives in one place."""
     pak = (id1 / "pak0.pak").read_bytes()
     diroff, dirlen = struct.unpack("<ii", pak[4:12])
     lumps, seen = [], set()
@@ -64,13 +66,13 @@ def extract_wad(id1: Path, out: Path) -> None:
             if o < 0:
                 continue
             tname = tex[o : o + 16].split(b"\0")[0].decode("latin-1")
-            if tname.lower() in seen or tname.lower() not in {t.lower() for t in NEEDED}:
+            if tname.lower() in seen or tname.lower() not in {t.lower() for t in needed}:
                 continue
             w, h = struct.unpack("<ii", tex[o + 16 : o + 24])
             size = 40 + w * h + (w * h) // 4 + (w * h) // 16 + (w * h) // 64
             seen.add(tname.lower())
             lumps.append((tname, tex[o : o + size]))
-    missing = {t.lower() for t in NEEDED} - seen
+    missing = {t.lower() for t in needed} - seen
     if missing:
         sys.exit(f"textures not found in pak0.pak maps: {sorted(missing)}")
 
@@ -83,7 +85,7 @@ def extract_wad(id1: Path, out: Path) -> None:
     for filepos, size, name in entries:
         wad += struct.pack("<iiiBBBB16s", filepos, size, size, 0x44, 0, 0, 0,
                            name.encode("latin-1"))
-    (out / "range.wad").write_bytes(wad)
+    (out / wadname).write_bytes(wad)
 
 
 # ---------------------------------------------------------------- brushes

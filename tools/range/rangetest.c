@@ -4,13 +4,27 @@
  *
  * rangetest.c -- boot the engine against the make-check objects, load the
  * range, and assert it exercises what it was built to. Deviceless proof
- * the arena is wired: link against ${TMPDIR}/quakecore-hostbuild/*.o minus
+ * the arena is wired: link against ${TMPDIR}/quakecore-hostbuild/[star].o minus
  * hostmain.o (see tools/range/README.md).
  */
 
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include <stdio.h>
+
+/* The audio sink is Swift and is not in the host objects; hostmain.c carries
+ * the same four stand-ins for `make check`. Returning 0 from open leaves the
+ * engine with no sound device, which is the right headless answer. */
+int QC_AudioOpen (int speed, int channels, int bits, unsigned char **buffer, int *mono_samples)
+{
+	(void)speed; (void)channels; (void)bits;
+	if (buffer) *buffer = NULL;
+	if (mono_samples) *mono_samples = 0;
+	return 0;
+}
+int  QC_AudioSamplePos (void) { return 0; }
+void QC_AudioClose (void) { }
+void QC_AudioSetRunning (int running) { (void)running; }
 static int failures;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL: " __VA_ARGS__); printf("\n"); } else { printf("ok:   " __VA_ARGS__); printf("\n"); } } while (0)
 static void on_log (void *c, const char *t) { (void)c; fputs (t, stdout); }
