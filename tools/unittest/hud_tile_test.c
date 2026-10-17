@@ -187,6 +187,21 @@ int main (void)
 		QR_ResolveHudLayout (t);
 		CHECK (!QR_HudTileVisible (QC_HUD_TILE_FPS), "scr_showfps 0 hides it");
 
+		/* an autoexec's scr_showfps 1 lands before the first frame: a
+		   nonzero first read is a request, not the cvar's default */
+		{
+			extern void QR_TestForgetShowfps (void);
+			QR_TestForgetShowfps ();
+			Cvar_SetValueQuick (&scr_showfps, 1.f);
+			QR_ResolveHudLayout (t);
+			CHECK (QR_HudTileVisible (QC_HUD_TILE_FPS), "scr_showfps 1 before the first frame shows the tile");
+			QR_TestForgetShowfps ();
+			Cvar_SetValueQuick (&vr_hud_fps_show, 1.f);
+			Cvar_SetValueQuick (&scr_showfps, 0.f);
+			QR_ResolveHudLayout (t);
+			CHECK (QR_HudTileVisible (QC_HUD_TILE_FPS), "a first read of 0 leaves an archived show alone");
+		}
+
 		/* a published rate draws as digits in the fixed 72x24 field */
 		QC_RendererSetPresentedFPS (90.f);
 		QR_TestEmitTileInto (QC_HUD_TILE_FPS, 0, 0, 0, 0, &bw, &bh, &nv);

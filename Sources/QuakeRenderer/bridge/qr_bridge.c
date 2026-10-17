@@ -6063,6 +6063,15 @@ are left at 0 here; the emitter fills those from the overlay range it
 actually wrote.
 ================
 */
+static float	qr_seen_showfps = -1.f;	/* scr_showfps as last mirrored; -1 = never read */
+
+#ifdef QAVP_HOSTCHECK
+void QR_TestForgetShowfps (void)
+{
+	qr_seen_showfps = -1.f;
+}
+#endif
+
 void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 {
 	struct {
@@ -6083,7 +6092,6 @@ void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 		  &vr_hud_fps_span_h, &vr_hud_fps_off_x, &vr_hud_fps_off_y,
 		  &vr_hud_fps_off_z, &vr_hud_fps_scale, &vr_hud_fps_show },
 	};
-	static float	seen_showfps = -1.f;
 	int	i;
 
 	_Static_assert (sizeof (m) / sizeof (m[0]) == QC_HUD_TILE_COUNT,
@@ -6092,13 +6100,19 @@ void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 	/* scr_showfps is upstream's name for the frame-rate readout, so a
 	   change to it is mirrored into the tile's own show gate. Edge-
 	   triggered, not a standing OR: a standing 1 would keep the tile on
-	   after the HUD editor hid it, and the first read must not stamp an
-	   archived show over with the console cvar's default. */
-	if (seen_showfps < 0.f)
-		seen_showfps = scr_showfps.value;
-	else if (scr_showfps.value != seen_showfps)
+	   after the HUD editor hid it. The first read adopts a 0 silently,
+	   since that is only the cvar's default and must not stamp over an
+	   archived show; a nonzero first read is an autoexec asking for the
+	   tile, and is honoured. */
+	if (qr_seen_showfps < 0.f)
 	{
-		seen_showfps = scr_showfps.value;
+		qr_seen_showfps = scr_showfps.value;
+		if (scr_showfps.value != 0.f)
+			Cvar_SetValueQuick (&vr_hud_fps_show, 1.f);
+	}
+	else if (scr_showfps.value != qr_seen_showfps)
+	{
+		qr_seen_showfps = scr_showfps.value;
 		Cvar_SetValueQuick (&vr_hud_fps_show, scr_showfps.value != 0.f ? 1.f : 0.f);
 	}
 
