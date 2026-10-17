@@ -26,7 +26,7 @@ compare against.
 - The weapon wheel: turn the off wrist over and the owned weapons ring that
   wrist as live spinning models while simulation time crawls; reach or point
   to highlight one, then turn the palm back to take it.
-- The wrist communicator and the modular HUD: the status bar whole, or split
+- The power gauntlet and the modular HUD: the status bar whole, or split
   into tiles you place and pin yourself, with a live in-headset editor.
 - The phase dissolve — `phase 1` melts the world to passthrough around you and
   leaves the level's monsters, pickups and doors standing in your room.
