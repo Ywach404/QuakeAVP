@@ -266,6 +266,13 @@ struct ContentView: View {
         .frame(minWidth: 640, minHeight: 560)
         .background(dashMaterial(28))
         .tint(Self.noctuaBurgundy)
+        .task {
+            // World sensing, asked for from the WINDOW. The floor the
+            // immersive space stands on is measured by plane detection,
+            // and its prompt has to be raised somewhere the player can
+            // answer it -- not after they are already inside the space.
+            await FloorSource.prewarmAuthorization()
+        }
         .onAppear {
             engine.boot()
             _ = input          // ensure the app-lifetime input host exists

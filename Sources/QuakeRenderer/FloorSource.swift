@@ -82,11 +82,27 @@ final class FloorSource: @unchecked Sendable {
         stop()
     }
 
+    /// Ask for world sensing once, from the window, before the player ever
+    /// opens the immersive space. The system prompt has to be answerable
+    /// when it is raised, and a prompt raised from inside a fully immersive
+    /// space is not: the first build of this feature asked implicitly on
+    /// the first `run` and simply hung there, looking like a dead feature.
+    /// Safe to call repeatedly; once answered the system does not re-ask.
+    static func prewarmAuthorization() async {
+        guard PlaneDetectionProvider.isSupported else { return }
+        let needed = PlaneDetectionProvider.requiredAuthorizations
+        let granted = await ARKitSession().requestAuthorization(for: needed)
+        for type in needed {
+            print("[floor] world sensing \(granted[type].map(String.init(describing:)) ?? "unknown")")
+        }
+    }
+
     func start() {
         guard PlaneDetectionProvider.isSupported else {
             print("[floor] plane detection unsupported here -- eye-locked mapping stays")
             return
         }
+        print("[floor] starting plane detection")
 
         Self.registry.lock()
         let previous = Self.current
@@ -159,6 +175,23 @@ final class FloorSource: @unchecked Sendable {
         while isLive, !Task.isCancelled {
             let session = ARKitSession()
             let provider = PlaneDetectionProvider(alignments: [.horizontal])
+
+            // Ask for world sensing EXPLICITLY, before running. Letting
+            // `run` prompt implicitly parks this task inside the await for
+            // as long as the prompt goes unanswered, and the prompt is not
+            // answerable if it is raised while the player is already inside
+            // the immersive space -- which looked exactly like the feature
+            // doing nothing at all: no provider, no error, no log line.
+            // Asked for here, the status is known and printed either way.
+            let needed = PlaneDetectionProvider.requiredAuthorizations
+            let granted = await session.requestAuthorization(for: needed)
+            let refused = needed.filter { granted[$0] != .allowed }
+            if !refused.isEmpty {
+                print("[floor] not authorized (\(refused.map(String.init(describing:)).joined(separator: ", "))) -- eye-locked mapping stays")
+                return
+            }
+            print("[floor] world sensing authorized")
+
             do {
                 try await session.run([provider])
             } catch let error as ARKitSession.Error where error.code == .dataProviderNotAuthorized {
