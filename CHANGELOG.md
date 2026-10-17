@@ -26,6 +26,10 @@ compare against.
 - The weapon wheel: turn the off wrist over and the owned weapons ring that
   wrist as live spinning models while simulation time crawls; reach or point
   to highlight one, then turn the palm back to take it.
+- A frame-rate tile in the modular HUD, off by default: `scr_showfps 1` or
+  its own show toggle turns it on. The number is the rate the headset is
+  presenting, from the compositor's own timeline, so it drops when frames
+  drop; the engine's frame count stands in only in the flat window.
 - The wrist communicator and the modular HUD: the status bar whole, or split
   into tiles you place and pin yourself, with a live in-headset editor.
 - The phase dissolve — `phase 1` melts the world to passthrough around you and

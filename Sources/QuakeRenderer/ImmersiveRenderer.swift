@@ -206,6 +206,10 @@ final class ImmersiveRenderer {
         // The engine outlives any number of immersive sessions; hand the
         // packet stream back to the window and drop the layer.
         QC_RendererSetCullingFov(0, 0)
+        QC_RendererSetPresentedFPS(0)
+        fpsLastPresentation = 0
+        fpsSpan = 0
+        fpsCount = 0
         QC_InputSetHeadPitch(0)   // level the aim for a later flat-window session
         // release the hand aim; body-anchored on the flat window
         TrackRecorder.shared.feedAim(valid: false, origin: .zero, yaw: 0, pitch: 0)
@@ -475,6 +479,10 @@ final class ImmersiveRenderer {
         }
         frame.endSubmission()
         // ---- End of the submission window.
+        // Counted here and not at the top: the two returns above this
+        // point hand the frame back unpresented, and only a frame that
+        // reached endSubmission is one the wearer saw.
+        notePresentation(at: anchorTime)
 
         if consumerHeld {
             recordFrameStats()
@@ -1248,7 +1256,7 @@ final class ImmersiveRenderer {
     }
 
     /// This frame's per-tile model matrices for the LIVE modular HUD, one
-    /// entry per `packet.hud_tiles[i]` (fixed order AMMO/FACE/HEALTHARMOR —
+    /// entry per `packet.hud_tiles[i]` (fixed order AMMO/FACE/HEALTHARMOR/FPS —
     /// see `qc_frame_t`'s doc comment), nil where that tile drew nothing this
     /// frame (`vert_count == 0`) or its anchor has no live pose right now.
     /// Placement comes straight from the packet's own anchor/slot/span/scale
@@ -2499,6 +2507,38 @@ final class ImmersiveRenderer {
         statGPUTotal += seconds
         statGPUWorst = max(statGPUWorst, seconds)
         gpuStatsLock.unlock()
+    }
+
+    // Presented frame rate for the HUD's frame-rate tile, from the
+    // compositor's own presentation timeline rather than this loop's wall
+    // clock: successive frames' presentation times are a frame apart when
+    // the cadence holds and two apart when it does not, so their mean over
+    // a short window is frames the wearer sees per second, with a missed
+    // frame counted against it. Published every `fpsWindow` frames through
+    // the any-thread setter; cleared on stop so the tile falls back to the
+    // engine count instead of freezing on the last number.
+    private let fpsWindow = 30
+    private var fpsLastPresentation = 0.0
+    private var fpsSpan = 0.0
+    private var fpsCount = 0
+
+    private func notePresentation(at presentation: Double) {
+        if fpsLastPresentation > 0 {
+            let dt = presentation - fpsLastPresentation
+            if dt > 0, dt < 1 {
+                fpsSpan += dt
+                fpsCount += 1
+            } else {
+                fpsSpan = 0
+                fpsCount = 0
+            }
+        }
+        fpsLastPresentation = presentation
+        if fpsCount >= fpsWindow, fpsSpan > 0 {
+            QC_RendererSetPresentedFPS(Float(Double(fpsCount) / fpsSpan))
+            fpsSpan = 0
+            fpsCount = 0
+        }
     }
 
     private func recordFrameStats() {
