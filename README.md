@@ -372,7 +372,7 @@ runs an export at boot -- the simulator acceptance test, checked with ffprobe.
 |---|---|---|
 | **M0** | engine compiles, boots, ticks; platform stubbed | ✅ done |
 | ~~M1~~ | ~~software renderer~~ — canceled: QuakeSpasm ships no software rasterizer to port | — |
-| **M2** | Metal renderer, mono, flat window (demo playback as the test harness) | 🚧 left: colormapped player skins, texture animation, console text entry and scrollback, `gl_screen.c` overlays |
+| **M2** | Metal renderer, mono, flat window (demo playback as the test harness) | 🚧 left: texture animation, console text entry and scrollback, `gl_screen.c` overlays |
 | **M3** | CompositorServices immersive stereo + head tracking | ✅ done |
 | **M4** | controller input, snap turn, vignette, weapon decoupled from view | ✅ done |
 | **M5** | hands-only input, PSVR2 Sense pair I/O, haptics, adaptive-trigger scaffold | 🚧 input done |
@@ -390,8 +390,6 @@ sections of `platform/r_null.c` and the ports in `Sources/QuakeRenderer/bridge/`
 
 Rest of **M2** (renderer completeness, in rough order):
 
-- Colormapped player skins (`R_TranslatePlayerSkin` / `playertextures`) —
-  deathmatch-only cosmetics; everyone wears the default skin.
 - Sky and liquid leftovers: `r_fastsky`, `skyfog`, lit water (`r_litwater` —
   needs the runtime-lightmap path anyway), Quake 64 skies
   (`Sky_LoadTextureQ64`), and the underwater view warp (`r_waterwarp`).
