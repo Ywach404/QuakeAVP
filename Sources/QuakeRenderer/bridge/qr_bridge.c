@@ -4534,6 +4534,16 @@ static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
 			continue;
 		if (e->model->type != mod_alias && e->model->type != mod_brush)
 			continue;
+		/* Beam segments live in the temp-entity pool, and nothing else
+		   does: CL_UpdateTEnts is the only caller of CL_NewTempEntity.
+		   They are a drawing of the shot, not a thing the shot can hit,
+		   and the lightning's chain starts at the hand and tiles the aim
+		   line in 30-unit steps with 32-unit boxes, so the sweep below
+		   would "hit" the first one a unit past the muzzle and park the
+		   reticle (and the arc gauges with it) inside the beam for as
+		   long as the trigger is held. */
+		if (e >= cl_temp_entities && e < cl_temp_entities + MAX_TEMP_ENTITIES)
+			continue;
 		/* Skip things the shot passes through, so the reticle does too:
 		   gibs and gibbed heads (non-solid), and -- the spazzing bug -- the
 		   player's OWN in-flight projectiles, which fly straight down the aim
@@ -4598,11 +4608,14 @@ static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
 
 /*
 ================
-QR_EmitReticle -- an aim mark where the shot lands, in the depth-tested
-particle channel. It lies FLAT ON THE HIT SURFACE (a decal oriented to the
-surface normal), lifted a hair toward the eye -- so on a wall it faces you and
-on the floor it lies flat like a teleport marker, and it no longer clips into
-the geometry when you aim down. In open air (no hit) it billboards to face the
+QR_EmitReticle -- an aim mark where the shot lands, in the particle channel.
+The frame builder records its vertex range and the renderer draws that range
+with the depth test off (see qc_frame_t.reticle_first_vert): the mark sits at
+the first hit, so the only thing the test ever removed was the mark itself --
+an arc gauge billboarded behind a wall seen edge-on, or the whole thing behind
+a sky brush the trace passes through. It lies FLAT ON THE HIT SURFACE (a decal
+oriented to the surface normal), lifted a hair toward the eye -- so on a wall
+it faces you and on the floor it lies flat like a teleport marker. In open air (no hit) it billboards to face the
 eye at a fixed throw. Shape is vr_reticlestyle (cross / circle+dot / dot /
 circle), colour vr_reticlecolor.
 ================
@@ -7171,7 +7184,12 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				   for the shape OR the gauges; QR_EmitReticle draws whichever
 				   their cvars enable. */
 				if (vr_reticle.value || vr_reticle_arcs.value)
+				{
+					slot->frame.reticle_first_vert = slot->frame.num_particle_verts;
 					QR_EmitReticle (slot, lstart, cl.viewangles);
+					slot->frame.reticle_vert_count = slot->frame.num_particle_verts
+						- slot->frame.reticle_first_vert;
+				}
 			}
 
 			/* Visual recoil, purely cosmetic (the shot already left with
@@ -7259,6 +7277,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_entities = 0;
 	slot->frame.num_text_verts = 0;
 	slot->frame.num_particle_verts = 0;
+	slot->frame.reticle_first_vert = 0;
+	slot->frame.reticle_vert_count = 0;
 	slot->frame.num_sprite_verts = 0;
 	slot->frame.num_sprite_batches = 0;
 	slot->frame.num_overlay_verts = 0;
@@ -7455,12 +7475,13 @@ void QR_RenderView (void)
 			dt = 0;
 		qr_phase_lasttime = cl.time;
 
-		/* Turning the effect OFF is INSTANT -- no lingering melt sphere to
-		   dissolve the stairs you're standing on for a couple of seconds
-		   after `phase 0`. Melting IN still eases for the cinematic sweep. */
-		if (target <= 0.f)
-			qr_phase_value = 0.f;
-		else if (qr_phase_value < target)
+		/* Symmetric: the sweep back honours phase_time too. Phase-off
+		   used to snap to 0 so a shrinking melt sphere could not keep
+		   dissolving the stairs underfoot, but that band was really the
+		   immersive clear letting passthrough through, fixed on its own
+		   since; with the snap the speed presets only ever applied one
+		   way. Map load still snaps, in QR_NewMap. */
+		if (qr_phase_value < target)
 			qr_phase_value = q_min (qr_phase_value + (float)dt / ptime, target);
 		else if (qr_phase_value > target)
 			qr_phase_value = q_max (qr_phase_value - (float)dt / ptime, target);

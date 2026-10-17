@@ -640,21 +640,36 @@ final class RendererCore {
         // quads (7 floats/vert, xyz + rgba) built by the bridge. They reuse
         // the wheel-guide pipeline — colour triangles, no texture — but are
         // DEPTH-TESTED (depthNoWrite) so the world occludes them, unlike the
-        // always-on-top overlays below.
+        // always-on-top overlays below. The one exception is the aim
+        // reticle and its arc gauges, a sub-range of the same run: they sit
+        // at the first thing the aim hits, so the test could only ever
+        // remove them (a gauge billboarded behind a wall seen edge-on, the
+        // whole mark behind a sky brush). That range draws depthAlways.
         if frame.num_particle_verts >= 3, let src = frame.particle_verts {
-            let floatCount = Int(frame.num_particle_verts) * 7
+            let total = Int(frame.num_particle_verts)
+            let floatCount = total * 7
             if let buf = device.makeBuffer(bytes: src,
                                            length: floatCount * MemoryLayout<Float>.size,
                                            options: .storageModeShared) {
-                setPipeline(pipelines.wheelGuide, depth: pipelines.depthNoWrite)
                 var u = GuideUniforms(viewproj0: uniforms.viewproj0,
                                       viewproj1: uniforms.viewproj1)
                 encoder.setVertexBuffer(buf, offset: 0, index: 0)
                 withUnsafeBytes(of: &u) { raw in
                     encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
                 }
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
-                                       vertexCount: Int(frame.num_particle_verts))
+                let rFirst = min(Int(frame.reticle_first_vert), total)
+                let rCount = min(Int(frame.reticle_vert_count), total - rFirst)
+                let rEnd = rFirst + rCount
+                let runs: [(Int, Int, MTLDepthStencilState)] = [
+                    (0, rFirst, pipelines.depthNoWrite),
+                    (rFirst, rCount, pipelines.depthAlways),
+                    (rEnd, total - rEnd, pipelines.depthNoWrite),
+                ]
+                for (start, count, depth) in runs where count >= 3 {
+                    setPipeline(pipelines.wheelGuide, depth: depth)
+                    encoder.drawPrimitives(type: .triangle, vertexStart: start,
+                                           vertexCount: count)
+                }
             }
         }
 
