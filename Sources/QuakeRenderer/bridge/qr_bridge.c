@@ -29,6 +29,7 @@
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include "qr_bridge.h"
+#include "image.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -65,6 +66,8 @@ extern cvar_t vr_hud_bg;		/* background box behind modular tiles, drawn consumer
 extern cvar_t vr_hud_ammo_anchor, vr_hud_ammo_slot, vr_hud_ammo_span_w, vr_hud_ammo_span_h, vr_hud_ammo_off_x, vr_hud_ammo_off_y, vr_hud_ammo_off_z, vr_hud_ammo_scale, vr_hud_ammo_show;
 extern cvar_t vr_hud_face_anchor, vr_hud_face_slot, vr_hud_face_span_w, vr_hud_face_span_h, vr_hud_face_off_x, vr_hud_face_off_y, vr_hud_face_off_z, vr_hud_face_scale, vr_hud_face_show;
 extern cvar_t vr_hud_healtharmor_anchor, vr_hud_healtharmor_slot, vr_hud_healtharmor_span_w, vr_hud_healtharmor_span_h, vr_hud_healtharmor_off_x, vr_hud_healtharmor_off_y, vr_hud_healtharmor_off_z, vr_hud_healtharmor_scale, vr_hud_healtharmor_show;
+extern cvar_t vr_hud_fps_anchor, vr_hud_fps_slot, vr_hud_fps_span_w, vr_hud_fps_span_h, vr_hud_fps_off_x, vr_hud_fps_off_y, vr_hud_fps_off_z, vr_hud_fps_scale, vr_hud_fps_show;
+extern cvar_t scr_showfps;		/* upstream's spelling of vr_hud_fps_show */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
@@ -328,6 +331,59 @@ void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg)
 	pthread_mutex_unlock (&qr_cullfov_lock);
 }
 
+/* Presented frame rate, published by the consumer for the HUD's frame-rate
+   tile; stamped so a consumer that stops publishing (the immersive space
+   closed, the flat window alone) does not leave its last number on screen. */
+static float		qr_present_fps;
+static double		qr_present_fps_stamp;
+static pthread_mutex_t	qr_fps_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void QC_RendererSetPresentedFPS (float fps)
+{
+	pthread_mutex_lock (&qr_fps_lock);
+	qr_present_fps = (fps > 0.f && isfinite (fps)) ? fps : 0.f;
+	qr_present_fps_stamp = Sys_DoubleTime ();
+	pthread_mutex_unlock (&qr_fps_lock);
+}
+
+/* The number the tile shows: the presented rate if one arrived within the
+   last second, else upstream SCR_DrawFPS's own count -- engine frames per
+   wall-clock second, refreshed every 3/4 s on realtime so the weapon
+   wheel's host_timescale cannot distort it. */
+static float QR_HudFPS (void)
+{
+	static double	oldtime, lastfps;
+	static int	oldframecount;
+	double		elapsed, now;
+	float		presented;
+	int		frames;
+
+	pthread_mutex_lock (&qr_fps_lock);
+	presented = qr_present_fps;
+	now = Sys_DoubleTime ();
+	if (now - qr_present_fps_stamp > 1.0)
+		presented = 0.f;
+	pthread_mutex_unlock (&qr_fps_lock);
+	if (presented > 0.f)
+		return presented;
+
+	elapsed = realtime - oldtime;
+	frames = r_framecount - oldframecount;
+	if (elapsed < 0 || frames < 0)
+	{
+		oldtime = realtime;
+		oldframecount = r_framecount;
+		return (float) lastfps;
+	}
+	if (elapsed > 0.75)
+	{
+		lastfps = frames / elapsed;
+		oldtime = realtime;
+		oldframecount = r_framecount;
+	}
+	return (float) lastfps;
+}
+
 /* Read-back for the HUD workbench's enter(): the cvar list is static past
    Host_Init, so an unlocked lookup is fine for this one-shot read. Unknown
    name (typo, or asked before the engine registers it) returns 0 rather
@@ -386,6 +442,11 @@ qboolean QR_ConsumePendingDrawableSize (int *width, int *height)
 static gltexture_t	qr_gltextures[QR_MAX_GLTEXTURES];
 static gltexture_t	*active_gltextures, *free_gltextures;
 static int		numgltextures;
+
+/* up to 16 color translated skins; entity 1+i wears playertextures[i].
+   Defined here, beside the storage, because QR_FreeTexture below has to
+   clear a slot whose texture it is returning to the free list. */
+gltexture_t		*playertextures[MAX_SCOREBOARD];
 static uint32_t		qr_next_texnum = 1;
 
 /*
@@ -718,6 +779,21 @@ static void QR_FreeTexture (gltexture_t *kill)
 		return;
 	}
 
+	/* A player's colormapped skin is owned by the player's model, so a
+	   cache flush or eviction frees it without passing through R_NewGame.
+	   Upstream leaves playertextures[] pointing at the free-listed struct;
+	   the next TexMgr_LoadImage pops that very struct, and the next colour
+	   change then recolours whatever model's skin now lives there. Clear
+	   the slot here, the one seam every free passes through: the player
+	   draws the model skin until the next skin or model update rebuilds
+	   it, which is the benign outcome. */
+	{
+		int i;
+		for (i = 0; i < MAX_SCOREBOARD; i++)
+			if (playertextures[i] == kill)
+				playertextures[i] = NULL;
+	}
+
 	if (active_gltextures == kill)
 	{
 		active_gltextures = kill->next;
@@ -1038,6 +1114,248 @@ gltexture_t *QR_TexMgr_LoadImage (qmodel_t *owner, const char *name,
 	Hunk_FreeToLowMark(mark);
 
 	return glt;
+}
+
+/*
+================================================================================
+
+	COLORMAPPING AND TEXTURE RELOADING -- player skins
+
+Port of gl_texmgr.c's TexMgr_ReloadImage and gl_rmisc.c's
+R_TranslatePlayerSkin / R_TranslateNewPlayerSkin / R_NewGame, plus the
+draw-time rule from r_alias.c. The one departure is structural: upstream
+pads to power-of-two inside LoadImage8, this port never pads, so width is
+always source_width and nothing needs undoing before the translation.
+
+The reload goes to QR_LoadImage8 directly rather than back through
+QR_TexMgr_LoadImage: that path CRCs the UNTRANSLATED indices and, with
+TEXPREF_OVERWRITE, returns early on a match, so a colours-only change would
+never reach the consumer.
+
+================================================================================
+*/
+
+/*
+================
+QR_TexMgr_ReloadImage -- reloads a texture, and colormaps it if needed
+================
+*/
+void QR_TexMgr_ReloadImage (gltexture_t *glt, int shirt, int pants)
+{
+	byte	translation[256];
+	byte	*src, *dst, *data = NULL, *translated;
+	int	mark, size, i;
+
+//
+// get source data
+//
+	mark = Hunk_LowMark ();
+
+	if (glt->source_file[0] && glt->source_offset) {
+		//lump inside file
+		FILE *f;
+		int sz;
+		COM_FOpenFile(glt->source_file, &f, NULL);
+		if (!f) goto invalid;
+		fseek (f, glt->source_offset, SEEK_CUR);
+		size = glt->source_width * glt->source_height;
+		/* should be SRC_INDEXED, but no harm being paranoid:  */
+		if (glt->source_format == SRC_RGBA || glt->source_format == SRC_LIGHTMAP) {
+			size *= 4;
+		}
+		data = (byte *) Hunk_Alloc (size);
+		sz = (int) fread (data, 1, size, f);
+		fclose (f);
+		if (sz != size) {
+			Hunk_FreeToLowMark(mark);
+			Host_Error("Read error for %s", glt->name);
+		}
+	}
+	else if (glt->source_file[0] && !glt->source_offset) {
+		data = Image_LoadImage (glt->source_file, (int *)&glt->source_width, (int *)&glt->source_height); //simple file
+	}
+	else if (!glt->source_file[0] && glt->source_offset) {
+		data = (byte *) glt->source_offset; //image in memory
+	}
+	if (!data) {
+invalid:	Con_Printf ("TexMgr_ReloadImage: invalid source for %s\n", glt->name);
+		Hunk_FreeToLowMark(mark);
+		return;
+	}
+
+	glt->width = glt->source_width;
+	glt->height = glt->source_height;
+//
+// apply shirt and pants colors
+//
+// if shirt and pants are -1,-1, use existing shirt and pants colors
+// if existing shirt and pants colors are -1,-1, don't bother colormapping
+	if (shirt > -1 && pants > -1)
+	{
+		if (glt->source_format == SRC_INDEXED)
+		{
+			glt->shirt = shirt;
+			glt->pants = pants;
+		}
+		else
+			Con_Printf ("TexMgr_ReloadImage: can't colormap a non SRC_INDEXED texture: %s\n", glt->name);
+	}
+	if (glt->shirt > -1 && glt->pants > -1)
+	{
+		//create new translation table
+		for (i = 0; i < 256; i++)
+			translation[i] = i;
+
+		shirt = glt->shirt * 16;
+		if (shirt < 128)
+		{
+			for (i = 0; i < 16; i++)
+				translation[TOP_RANGE+i] = shirt + i;
+		}
+		else
+		{
+			for (i = 0; i < 16; i++)
+				translation[TOP_RANGE+i] = shirt+15-i;
+		}
+
+		pants = glt->pants * 16;
+		if (pants < 128)
+		{
+			for (i = 0; i < 16; i++)
+				translation[BOTTOM_RANGE+i] = pants + i;
+		}
+		else
+		{
+			for (i = 0; i < 16; i++)
+				translation[BOTTOM_RANGE+i] = pants+15-i;
+		}
+
+		//translate texture
+		size = glt->width * glt->height;
+		dst = translated = (byte *) Hunk_Alloc (size);
+		src = data;
+
+		for (i = 0; i < size; i++)
+			*dst++ = translation[*src++];
+
+		data = translated;
+	}
+//
+// upload it
+//
+	switch (glt->source_format)
+	{
+	case SRC_INDEXED:
+		QR_LoadImage8 (glt, data, NULL);
+		break;
+	case SRC_LIGHTMAP:
+	case SRC_RGBA:
+		QR_EnqueueUpload (glt, (unsigned *)data);
+		break;
+	case SRC_INDEXED_PALETTE:
+		QR_LoadImage8Valve (glt, data);
+		break;
+	}
+
+	Hunk_FreeToLowMark(mark);
+}
+
+/*
+===============
+QR_TranslatePlayerSkin -- only handles new colors, not new skins
+===============
+*/
+void QR_TranslatePlayerSkin (int playernum)
+{
+	int			top, bottom;
+
+	top = (cl.scores[playernum].colors & 0xf0)>>4;
+	bottom = cl.scores[playernum].colors &15;
+
+	//FIXME: if gl_nocolors is on, then turned off, the textures may be out of sync with the scoreboard colors.
+	if (!gl_nocolors.value)
+	{
+		if (playertextures[playernum])
+			QR_TexMgr_ReloadImage (playertextures[playernum], top, bottom);
+	}
+}
+
+/*
+===============
+QR_TranslateNewPlayerSkin -- called when the skin or model actually changes,
+instead of just new colors
+===============
+*/
+void QR_TranslateNewPlayerSkin (int playernum)
+{
+	char		name[64];
+	byte		*pixels;
+	aliashdr_t	*paliashdr;
+	entity_t	*e;
+	int		skinnum;
+
+//get correct texture pixels
+	e = &cl_entities[1+playernum];
+
+	if (!e->model || e->model->type != mod_alias)
+		return;
+
+	paliashdr = (aliashdr_t *)Mod_Extradata (e->model);
+
+	skinnum = e->skinnum;
+
+	if (skinnum < 0 || skinnum >= paliashdr->numskins)
+	{
+		Con_DPrintf("(%d): Invalid player skin #%d\n", playernum, skinnum);
+		skinnum = 0;
+	}
+
+	pixels = (byte *)paliashdr + paliashdr->texels[skinnum]; // This is not a persistent place!
+
+//upload new image
+	q_snprintf(name, sizeof(name), "player_%i", playernum);
+	playertextures[playernum] = QR_TexMgr_LoadImage (e->model, name, paliashdr->skinwidth, paliashdr->skinheight,
+		SRC_INDEXED, pixels, paliashdr->gltextures[skinnum][0]->source_file, paliashdr->gltextures[skinnum][0]->source_offset, TEXPREF_PAD | TEXPREF_OVERWRITE);
+
+//now recolor it
+	QR_TranslatePlayerSkin (playernum);
+}
+
+/*
+===============
+QR_PlayerSkinTexture -- r_alias.c's draw-time rule: a player entity that
+carries its own translation table wears its colormapped skin instead of the
+model's, unless gl_nocolors says otherwise. Players are cl_entities[1..
+maxclients]; a texture not built yet (NULL) falls back to the model skin so
+a late svc_updatecolors never draws notexture.
+===============
+*/
+gltexture_t *QR_PlayerSkinTexture (const entity_t *e, gltexture_t *tx)
+{
+	if (e->colormap != vid.colormap && !gl_nocolors.value)
+	{
+		if ((uintptr_t)e >= (uintptr_t)&cl_entities[1] && (uintptr_t)e <= (uintptr_t)&cl_entities[cl.maxclients])
+		{
+			gltexture_t *pt = playertextures[e - cl_entities - 1];
+			if (pt)
+				return pt;
+		}
+	}
+	return tx;
+}
+
+/*
+===============
+QR_NewGame -- handle a game switch
+===============
+*/
+void QR_NewGame (void)
+{
+	int i;
+
+	//clear playertexture pointers (the textures themselves were freed by texmgr_newgame)
+	for (i=0; i<MAX_SCOREBOARD; i++)
+		playertextures[i] = NULL;
 }
 
 void QR_TexMgr_Init (void)
@@ -3787,9 +4105,9 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 	}
 	tx = paliashdr->gltextures[skinnum][anim];
 	fb = paliashdr->fbtextures[skinnum][anim];
+	tx = QR_PlayerSkinTexture (e, tx);	/* fb stays the model's own mask */
 	if (!gl_fullbrights.value)
 		fb = NULL;
-	/* TODO: colormapped player skins (playertextures / gl_nocolors) */
 
 	rec.alpha = entalpha;
 	rec.blend = (lerpdata.pose1 != lerpdata.pose2) ? lerpdata.blend : 0;
@@ -4534,6 +4852,16 @@ static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
 			continue;
 		if (e->model->type != mod_alias && e->model->type != mod_brush)
 			continue;
+		/* Beam segments live in the temp-entity pool, and nothing else
+		   does: CL_UpdateTEnts is the only caller of CL_NewTempEntity.
+		   They are a drawing of the shot, not a thing the shot can hit,
+		   and the lightning's chain starts at the hand and tiles the aim
+		   line in 30-unit steps with 32-unit boxes, so the sweep below
+		   would "hit" the first one a unit past the muzzle and park the
+		   reticle (and the arc gauges with it) inside the beam for as
+		   long as the trigger is held. */
+		if (e >= cl_temp_entities && e < cl_temp_entities + MAX_TEMP_ENTITIES)
+			continue;
 		/* Skip things the shot passes through, so the reticle does too:
 		   gibs and gibbed heads (non-solid), and -- the spazzing bug -- the
 		   player's OWN in-flight projectiles, which fly straight down the aim
@@ -4598,11 +4926,14 @@ static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
 
 /*
 ================
-QR_EmitReticle -- an aim mark where the shot lands, in the depth-tested
-particle channel. It lies FLAT ON THE HIT SURFACE (a decal oriented to the
-surface normal), lifted a hair toward the eye -- so on a wall it faces you and
-on the floor it lies flat like a teleport marker, and it no longer clips into
-the geometry when you aim down. In open air (no hit) it billboards to face the
+QR_EmitReticle -- an aim mark where the shot lands, in the particle channel.
+The frame builder records its vertex range and the renderer draws that range
+with the depth test off (see qc_frame_t.reticle_first_vert): the mark sits at
+the first hit, so the only thing the test ever removed was the mark itself --
+an arc gauge billboarded behind a wall seen edge-on, or the whole thing behind
+a sky brush the trace passes through. It lies FLAT ON THE HIT SURFACE (a decal
+oriented to the surface normal), lifted a hair toward the eye -- so on a wall
+it faces you and on the floor it lies flat like a teleport marker. In open air (no hit) it billboards to face the
 eye at a fixed throw. Shape is vr_reticlestyle (cross / circle+dot / dot /
 circle), colour vr_reticlecolor.
 ================
@@ -5573,6 +5904,31 @@ static uint32_t QR_PicTexnum (qpic_t *pic)
 }
 
 /*
+=============
+QR_DrawTransPicTranslate -- Draw_TransPicTranslate's backing. Only the
+multiplayer setup menu's player preview uses it; the pic was cached with its
+.lmp path and header offset, so a colour change is one re-read and reload of
+the same texture, exactly as upstream does it.
+=============
+*/
+void QR_DrawTransPicTranslate (int x, int y, qpic_t *pic, int top, int bottom)
+{
+	static int oldtop = -2;
+	static int oldbottom = -2;
+
+	if (pic && (top != oldtop || bottom != oldbottom))
+	{
+		qr_glpic_t	gl;
+		memcpy (&gl, pic->data, sizeof(qr_glpic_t));
+		oldtop = top;
+		oldbottom = bottom;
+		if (gl.gltexture)
+			QR_TexMgr_ReloadImage (gl.gltexture, top, bottom);
+	}
+	QR_DrawPic (x, y, pic);
+}
+
+/*
 ================
 Draw_CachePic's backing -- the menu and console .lmp art (gfx/*.lmp, raw
 qpic_t: width, height, indexed pixels), cached by name.
@@ -5982,6 +6338,13 @@ static void QR_EmitHud (qr_frame_slot_t *slot)
    qc_hud_tile_t -- see QR_ResolveHudLayout's declaration. */
 static int qr_hud_tile_visible[QC_HUD_TILE_COUNT];
 
+#ifdef QAVP_HOSTCHECK
+int QR_HudTileVisible (int tile)
+{
+	return (tile >= 0 && tile < QC_HUD_TILE_COUNT) ? qr_hud_tile_visible[tile] : 0;
+}
+#endif
+
 static int32_t clamp_anchor (float v)
 {
 	int	a = (int) v;
@@ -5996,11 +6359,20 @@ QR_ResolveHudLayout -- turn the vr_hud_<tile>_* cvars into per-tile
 placement. Pure except for the cvar reads. Out-of-range anchors clamp to
 WRIST_OFF; a non-positive scale clamps to a sane floor rather than
 disappearing or inverting. slot/span_w/span_h are clamped to stay on the
-2x2 wrist grid regardless of anchor. first_vert/vert_count/bbox_w/bbox_h
+3x2 wrist grid regardless of anchor. first_vert/vert_count/bbox_w/bbox_h
 are left at 0 here; the emitter fills those from the overlay range it
 actually wrote.
 ================
 */
+static float	qr_seen_showfps = -1.f;	/* scr_showfps as last mirrored; -1 = never read */
+
+#ifdef QAVP_HOSTCHECK
+void QR_TestForgetShowfps (void)
+{
+	qr_seen_showfps = -1.f;
+}
+#endif
+
 void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 {
 	struct {
@@ -6017,8 +6389,33 @@ void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 		  &vr_hud_healtharmor_span_w, &vr_hud_healtharmor_span_h, &vr_hud_healtharmor_off_x,
 		  &vr_hud_healtharmor_off_y, &vr_hud_healtharmor_off_z, &vr_hud_healtharmor_scale,
 		  &vr_hud_healtharmor_show },
+		{ QC_HUD_TILE_FPS, &vr_hud_fps_anchor, &vr_hud_fps_slot, &vr_hud_fps_span_w,
+		  &vr_hud_fps_span_h, &vr_hud_fps_off_x, &vr_hud_fps_off_y,
+		  &vr_hud_fps_off_z, &vr_hud_fps_scale, &vr_hud_fps_show },
 	};
 	int	i;
+
+	_Static_assert (sizeof (m) / sizeof (m[0]) == QC_HUD_TILE_COUNT,
+			"every QC_HUD_TILE_* needs a row here");
+
+	/* scr_showfps is upstream's name for the frame-rate readout, so a
+	   change to it is mirrored into the tile's own show gate. Edge-
+	   triggered, not a standing OR: a standing 1 would keep the tile on
+	   after the HUD editor hid it. The first read adopts a 0 silently,
+	   since that is only the cvar's default and must not stamp over an
+	   archived show; a nonzero first read is an autoexec asking for the
+	   tile, and is honoured. */
+	if (qr_seen_showfps < 0.f)
+	{
+		qr_seen_showfps = scr_showfps.value;
+		if (scr_showfps.value != 0.f)
+			Cvar_SetValueQuick (&vr_hud_fps_show, 1.f);
+	}
+	else if (scr_showfps.value != qr_seen_showfps)
+	{
+		qr_seen_showfps = scr_showfps.value;
+		Cvar_SetValueQuick (&vr_hud_fps_show, scr_showfps.value != 0.f ? 1.f : 0.f);
+	}
 
 	for (i = 0; i < QC_HUD_TILE_COUNT; i++)
 	{
@@ -6172,6 +6569,23 @@ static void QR_EmitTile (qr_frame_slot_t *slot, int tile_id, qc_hud_tile_t *desc
 		desc->bbox_w = 72.f; desc->bbox_h = 48.f;
 		break;
 
+	case QC_HUD_TILE_FPS:
+	{
+		/* The same numerals and the same three-digit field as the health
+		   row, so the tile reads as one of the set and never resizes as
+		   the number gains or loses a digit. No unit label: an 8px
+		   conchars "fps" beside 24px digits reads as a different object,
+		   and the tile is opt-in, so whoever turned it on knows what the
+		   number is. */
+		int	fps = (int) (QR_HudFPS () + 0.5f);
+		if (fps > 999) fps = 999;
+		if (fps < 0) fps = 0;
+		QR_SetCanvasOffset (0.f, -24.f);
+		Sbar_DrawNum (0, 0, fps, 3, 0);
+		desc->bbox_w = 72.f; desc->bbox_h = 24.f;
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -6274,6 +6688,14 @@ static void QR_TestEnsureFixtures (void)
 	ready = 1;
 }
 
+/* The texture manager alone, for tests that never draw: hunk, byte order,
+   the gltexture free list. The palette tables stay zeroed for the caller
+   to fill. */
+void QR_TestTexMgrBoot (void)
+{
+	QR_TestEnsureFixtures ();
+}
+
 void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
 			  int stat_ammo, int items,
 			  float *bbox_w, float *bbox_h, int *nverts)
@@ -6305,6 +6727,15 @@ void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
 
 	free (slot.overlay_verts);
 	free (slot.overlay_batches);
+}
+
+/* Age the published frame rate by `seconds`, so a test can see the tile
+   fall back to the engine count once the consumer has gone quiet. */
+void QR_TestAgePresentedFPS (double seconds)
+{
+	pthread_mutex_lock (&qr_fps_lock);
+	qr_present_fps_stamp -= seconds;
+	pthread_mutex_unlock (&qr_fps_lock);
 }
 #endif /* QAVP_HOSTCHECK */
 
@@ -7171,7 +7602,12 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				   for the shape OR the gauges; QR_EmitReticle draws whichever
 				   their cvars enable. */
 				if (vr_reticle.value || vr_reticle_arcs.value)
+				{
+					slot->frame.reticle_first_vert = slot->frame.num_particle_verts;
 					QR_EmitReticle (slot, lstart, cl.viewangles);
+					slot->frame.reticle_vert_count = slot->frame.num_particle_verts
+						- slot->frame.reticle_first_vert;
+				}
 			}
 
 			/* Visual recoil, purely cosmetic (the shot already left with
@@ -7259,6 +7695,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_entities = 0;
 	slot->frame.num_text_verts = 0;
 	slot->frame.num_particle_verts = 0;
+	slot->frame.reticle_first_vert = 0;
+	slot->frame.reticle_vert_count = 0;
 	slot->frame.num_sprite_verts = 0;
 	slot->frame.num_sprite_batches = 0;
 	slot->frame.num_overlay_verts = 0;
@@ -7455,12 +7893,13 @@ void QR_RenderView (void)
 			dt = 0;
 		qr_phase_lasttime = cl.time;
 
-		/* Turning the effect OFF is INSTANT -- no lingering melt sphere to
-		   dissolve the stairs you're standing on for a couple of seconds
-		   after `phase 0`. Melting IN still eases for the cinematic sweep. */
-		if (target <= 0.f)
-			qr_phase_value = 0.f;
-		else if (qr_phase_value < target)
+		/* Symmetric: the sweep back honours phase_time too. Phase-off
+		   used to snap to 0 so a shrinking melt sphere could not keep
+		   dissolving the stairs underfoot, but that band was really the
+		   immersive clear letting passthrough through, fixed on its own
+		   since; with the snap the speed presets only ever applied one
+		   way. Map load still snaps, in QR_NewMap. */
+		if (qr_phase_value < target)
 			qr_phase_value = q_min (qr_phase_value + (float)dt / ptime, target);
 		else if (qr_phase_value > target)
 			qr_phase_value = q_max (qr_phase_value - (float)dt / ptime, target);
