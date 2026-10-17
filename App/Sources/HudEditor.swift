@@ -84,6 +84,10 @@ extension HudEditor {
             tiles[Int(QC_HUD_TILE_FACE)].scale = 1.0                          // fit the cell (not 1.6x)
             tiles[Int(QC_HUD_TILE_HEALTHARMOR)].slot = 3                      // off wrist, bottom-left
             tiles[Int(QC_HUD_TILE_HEALTHARMOR)].scale = 1.0                   // fit the cell (not 1.6x)
+            tiles[Int(QC_HUD_TILE_FPS)].anchor = Int(QC_HUD_ANCHOR_FLOAT)     // in front of the face
+            tiles[Int(QC_HUD_TILE_FPS)].slot = 2                              // top-right, if moved to a wrist
+            tiles[Int(QC_HUD_TILE_FPS)].scale = 3.5                           // float reads like the float preset
+            tiles[Int(QC_HUD_TILE_FPS)].show = false                          // opt-in, like scr_showfps
             return tiles
         }
 
@@ -167,7 +171,7 @@ extension HudEditor {
 
         /// `vr_hud_<tile>_*` cvar name for each `QC_HUD_TILE_*` index, in
         /// index order -- the one place that mapping is spelled out.
-        private static let tileCvarNames = ["ammo", "face", "healtharmor"]
+        private static let tileCvarNames = ["ammo", "face", "healtharmor", "fps"]
 
         /// Writes one `TileEdit` out to its tile's nine `vr_hud_<tile>_*`
         /// cvars -- anchor, the three offset components, scale, show, and the
@@ -200,7 +204,12 @@ extension HudEditor {
             let cvar = Session.tileCvarNames[tileIndex]
             // Ammo rides the gun at 1.6x (pixel-scaled); the wrist tiles fit
             // their cell at 1.0 (contain-fit). Matches r_null.c's defaults.
-            let sc: Float = tileIndex == Int(QC_HUD_TILE_AMMO) ? 1.6 : 1.0
+            let sc: Float
+            switch tileIndex {
+            case Int(QC_HUD_TILE_AMMO): sc = 1.6
+            case Int(QC_HUD_TILE_FPS): sc = 3.5
+            default: sc = 1.0
+            }
             working[tileIndex].scale = sc
             working[tileIndex].spanW = 1
             working[tileIndex].spanH = 1

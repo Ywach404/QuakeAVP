@@ -66,6 +66,8 @@ extern cvar_t vr_hud_bg;		/* background box behind modular tiles, drawn consumer
 extern cvar_t vr_hud_ammo_anchor, vr_hud_ammo_slot, vr_hud_ammo_span_w, vr_hud_ammo_span_h, vr_hud_ammo_off_x, vr_hud_ammo_off_y, vr_hud_ammo_off_z, vr_hud_ammo_scale, vr_hud_ammo_show;
 extern cvar_t vr_hud_face_anchor, vr_hud_face_slot, vr_hud_face_span_w, vr_hud_face_span_h, vr_hud_face_off_x, vr_hud_face_off_y, vr_hud_face_off_z, vr_hud_face_scale, vr_hud_face_show;
 extern cvar_t vr_hud_healtharmor_anchor, vr_hud_healtharmor_slot, vr_hud_healtharmor_span_w, vr_hud_healtharmor_span_h, vr_hud_healtharmor_off_x, vr_hud_healtharmor_off_y, vr_hud_healtharmor_off_z, vr_hud_healtharmor_scale, vr_hud_healtharmor_show;
+extern cvar_t vr_hud_fps_anchor, vr_hud_fps_slot, vr_hud_fps_span_w, vr_hud_fps_span_h, vr_hud_fps_off_x, vr_hud_fps_off_y, vr_hud_fps_off_z, vr_hud_fps_scale, vr_hud_fps_show;
+extern cvar_t scr_showfps;		/* upstream's spelling of vr_hud_fps_show */
 extern float qr_body_yaw;		/* M6 body basis yaw; cl.viewangles is the aim */
 extern float qr_aim_org[3];		/* M6 dominant-hand position, body frame */
 extern int qr_aim_active;		/* M6 hand aim live: anchor the weapon at the hand */
@@ -327,6 +329,59 @@ void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg)
 	qr_cull_fovx = fovx_deg;
 	qr_cull_fovy = fovy_deg;
 	pthread_mutex_unlock (&qr_cullfov_lock);
+}
+
+/* Presented frame rate, published by the consumer for the HUD's frame-rate
+   tile; stamped so a consumer that stops publishing (the immersive space
+   closed, the flat window alone) does not leave its last number on screen. */
+static float		qr_present_fps;
+static double		qr_present_fps_stamp;
+static pthread_mutex_t	qr_fps_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void QC_RendererSetPresentedFPS (float fps)
+{
+	pthread_mutex_lock (&qr_fps_lock);
+	qr_present_fps = (fps > 0.f && isfinite (fps)) ? fps : 0.f;
+	qr_present_fps_stamp = Sys_DoubleTime ();
+	pthread_mutex_unlock (&qr_fps_lock);
+}
+
+/* The number the tile shows: the presented rate if one arrived within the
+   last second, else upstream SCR_DrawFPS's own count -- engine frames per
+   wall-clock second, refreshed every 3/4 s on realtime so the weapon
+   wheel's host_timescale cannot distort it. */
+static float QR_HudFPS (void)
+{
+	static double	oldtime, lastfps;
+	static int	oldframecount;
+	double		elapsed, now;
+	float		presented;
+	int		frames;
+
+	pthread_mutex_lock (&qr_fps_lock);
+	presented = qr_present_fps;
+	now = Sys_DoubleTime ();
+	if (now - qr_present_fps_stamp > 1.0)
+		presented = 0.f;
+	pthread_mutex_unlock (&qr_fps_lock);
+	if (presented > 0.f)
+		return presented;
+
+	elapsed = realtime - oldtime;
+	frames = r_framecount - oldframecount;
+	if (elapsed < 0 || frames < 0)
+	{
+		oldtime = realtime;
+		oldframecount = r_framecount;
+		return (float) lastfps;
+	}
+	if (elapsed > 0.75)
+	{
+		lastfps = frames / elapsed;
+		oldtime = realtime;
+		oldframecount = r_framecount;
+	}
+	return (float) lastfps;
 }
 
 /* Read-back for the HUD workbench's enter(): the cvar list is static past
@@ -6283,6 +6338,13 @@ static void QR_EmitHud (qr_frame_slot_t *slot)
    qc_hud_tile_t -- see QR_ResolveHudLayout's declaration. */
 static int qr_hud_tile_visible[QC_HUD_TILE_COUNT];
 
+#ifdef QAVP_HOSTCHECK
+int QR_HudTileVisible (int tile)
+{
+	return (tile >= 0 && tile < QC_HUD_TILE_COUNT) ? qr_hud_tile_visible[tile] : 0;
+}
+#endif
+
 static int32_t clamp_anchor (float v)
 {
 	int	a = (int) v;
@@ -6297,11 +6359,20 @@ QR_ResolveHudLayout -- turn the vr_hud_<tile>_* cvars into per-tile
 placement. Pure except for the cvar reads. Out-of-range anchors clamp to
 WRIST_OFF; a non-positive scale clamps to a sane floor rather than
 disappearing or inverting. slot/span_w/span_h are clamped to stay on the
-2x2 wrist grid regardless of anchor. first_vert/vert_count/bbox_w/bbox_h
+3x2 wrist grid regardless of anchor. first_vert/vert_count/bbox_w/bbox_h
 are left at 0 here; the emitter fills those from the overlay range it
 actually wrote.
 ================
 */
+static float	qr_seen_showfps = -1.f;	/* scr_showfps as last mirrored; -1 = never read */
+
+#ifdef QAVP_HOSTCHECK
+void QR_TestForgetShowfps (void)
+{
+	qr_seen_showfps = -1.f;
+}
+#endif
+
 void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 {
 	struct {
@@ -6318,8 +6389,33 @@ void QR_ResolveHudLayout (qc_hud_tile_t t[QC_HUD_TILE_COUNT])
 		  &vr_hud_healtharmor_span_w, &vr_hud_healtharmor_span_h, &vr_hud_healtharmor_off_x,
 		  &vr_hud_healtharmor_off_y, &vr_hud_healtharmor_off_z, &vr_hud_healtharmor_scale,
 		  &vr_hud_healtharmor_show },
+		{ QC_HUD_TILE_FPS, &vr_hud_fps_anchor, &vr_hud_fps_slot, &vr_hud_fps_span_w,
+		  &vr_hud_fps_span_h, &vr_hud_fps_off_x, &vr_hud_fps_off_y,
+		  &vr_hud_fps_off_z, &vr_hud_fps_scale, &vr_hud_fps_show },
 	};
 	int	i;
+
+	_Static_assert (sizeof (m) / sizeof (m[0]) == QC_HUD_TILE_COUNT,
+			"every QC_HUD_TILE_* needs a row here");
+
+	/* scr_showfps is upstream's name for the frame-rate readout, so a
+	   change to it is mirrored into the tile's own show gate. Edge-
+	   triggered, not a standing OR: a standing 1 would keep the tile on
+	   after the HUD editor hid it. The first read adopts a 0 silently,
+	   since that is only the cvar's default and must not stamp over an
+	   archived show; a nonzero first read is an autoexec asking for the
+	   tile, and is honoured. */
+	if (qr_seen_showfps < 0.f)
+	{
+		qr_seen_showfps = scr_showfps.value;
+		if (scr_showfps.value != 0.f)
+			Cvar_SetValueQuick (&vr_hud_fps_show, 1.f);
+	}
+	else if (scr_showfps.value != qr_seen_showfps)
+	{
+		qr_seen_showfps = scr_showfps.value;
+		Cvar_SetValueQuick (&vr_hud_fps_show, scr_showfps.value != 0.f ? 1.f : 0.f);
+	}
 
 	for (i = 0; i < QC_HUD_TILE_COUNT; i++)
 	{
@@ -6473,6 +6569,23 @@ static void QR_EmitTile (qr_frame_slot_t *slot, int tile_id, qc_hud_tile_t *desc
 		desc->bbox_w = 72.f; desc->bbox_h = 48.f;
 		break;
 
+	case QC_HUD_TILE_FPS:
+	{
+		/* The same numerals and the same three-digit field as the health
+		   row, so the tile reads as one of the set and never resizes as
+		   the number gains or loses a digit. No unit label: an 8px
+		   conchars "fps" beside 24px digits reads as a different object,
+		   and the tile is opt-in, so whoever turned it on knows what the
+		   number is. */
+		int	fps = (int) (QR_HudFPS () + 0.5f);
+		if (fps > 999) fps = 999;
+		if (fps < 0) fps = 0;
+		QR_SetCanvasOffset (0.f, -24.f);
+		Sbar_DrawNum (0, 0, fps, 3, 0);
+		desc->bbox_w = 72.f; desc->bbox_h = 24.f;
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -6614,6 +6727,15 @@ void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
 
 	free (slot.overlay_verts);
 	free (slot.overlay_batches);
+}
+
+/* Age the published frame rate by `seconds`, so a test can see the tile
+   fall back to the engine count once the consumer has gone quiet. */
+void QR_TestAgePresentedFPS (double seconds)
+{
+	pthread_mutex_lock (&qr_fps_lock);
+	qr_present_fps_stamp -= seconds;
+	pthread_mutex_unlock (&qr_fps_lock);
 }
 #endif /* QAVP_HOSTCHECK */
 

@@ -13,7 +13,7 @@ static int failures;
 
 int main (void)
 {
-	qc_hud_tile_t t[3];
+	qc_hud_tile_t t[QC_HUD_TILE_COUNT];
 
 	/* defaults (layout A): ammo->gun, face+healtharmor->off-hand wrist */
 	extern cvar_t vr_hud_ammo_anchor, vr_hud_face_anchor, vr_hud_healtharmor_anchor;
@@ -139,6 +139,96 @@ int main (void)
 		vr_hud_ammo_anchor.value = QC_HUD_ANCHOR_GUN;	/* registered default, "2" */
 		CHECK (FEQ (QC_CvarValue ("vr_hud_ammo_anchor"), (float) QC_HUD_ANCHOR_GUN), "QC_CvarValue reads the registered default");
 		CHECK (FEQ (QC_CvarValue ("vr_hud_does_not_exist"), 0.f), "QC_CvarValue on an unknown name returns 0");
+	}
+
+	/* The frame-rate tile. It is a status readout like the others, so it
+	   is placed by the same cvars and drawn with the same numerals in the
+	   same fixed field; what differs is the number's source -- the
+	   consumer publishes the presented rate through an any-thread setter,
+	   and the engine's own frame count stands in when nothing has been
+	   published lately (the flat window). */
+	{
+		extern cvar_t vr_hud_fps_anchor, vr_hud_fps_show, scr_showfps, vr_hud_face_show;
+		extern void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
+						 int stat_ammo, int items,
+						 float *bbox_w, float *bbox_h, int *nverts);
+		extern int QR_HudTileVisible (int tile);
+		float	bw, bh;
+		int	nv;
+
+		vr_hud_fps_anchor.value = QC_HUD_ANCHOR_FLOAT;
+		QR_ResolveHudLayout (t);
+		CHECK (t[QC_HUD_TILE_FPS].tile_id == QC_HUD_TILE_FPS, "fps tile resolves under its own id");
+		CHECK (t[QC_HUD_TILE_FPS].anchor == QC_HUD_ANCHOR_FLOAT, "fps tile anchors where its cvar says");
+
+		/* The show gate is the tile's own cvar; scr_showfps is the console
+		   spelling, mirrored on CHANGE so the editor's hide is never undone
+		   by a standing 1. The setter ignores unregistered cvars, so both
+		   are registered here (idempotent) and driven through it. */
+		Cvar_RegisterVariable (&vr_hud_fps_show);
+		Cvar_RegisterVariable (&scr_showfps);
+		vr_hud_face_show.value = 0;	/* unregistered in this binary: set, not defaulted */
+		QR_ResolveHudLayout (t);	/* first read: adopts scr_showfps 0 silently */
+		CHECK (!QR_HudTileVisible (QC_HUD_TILE_FPS), "fps tile hidden by default");
+		Cvar_SetValueQuick (&scr_showfps, 1.f);
+		QR_ResolveHudLayout (t);
+		CHECK (QR_HudTileVisible (QC_HUD_TILE_FPS), "scr_showfps 1 shows the fps tile");
+		CHECK (vr_hud_fps_show.value == 1.f, "...by copying into vr_hud_fps_show");
+		CHECK (!QR_HudTileVisible (QC_HUD_TILE_FACE), "scr_showfps reaches the fps tile only");
+		Cvar_SetValueQuick (&vr_hud_fps_show, 0.f);
+		QR_ResolveHudLayout (t);
+		CHECK (!QR_HudTileVisible (QC_HUD_TILE_FPS), "the editor's hide holds while scr_showfps stays 1");
+		Cvar_SetValueQuick (&scr_showfps, 0.f);
+		QR_ResolveHudLayout (t);	/* a frame with it at 0 ... */
+		Cvar_SetValueQuick (&scr_showfps, 1.f);
+		QR_ResolveHudLayout (t);	/* ... then a frame with it back at 1 */
+		CHECK (QR_HudTileVisible (QC_HUD_TILE_FPS), "a fresh scr_showfps 1 shows it again");
+		Cvar_SetValueQuick (&scr_showfps, 0.f);
+		QR_ResolveHudLayout (t);
+		CHECK (!QR_HudTileVisible (QC_HUD_TILE_FPS), "scr_showfps 0 hides it");
+
+		/* an autoexec's scr_showfps 1 lands before the first frame: a
+		   nonzero first read is a request, not the cvar's default */
+		{
+			extern void QR_TestForgetShowfps (void);
+			QR_TestForgetShowfps ();
+			Cvar_SetValueQuick (&scr_showfps, 1.f);
+			QR_ResolveHudLayout (t);
+			CHECK (QR_HudTileVisible (QC_HUD_TILE_FPS), "scr_showfps 1 before the first frame shows the tile");
+			QR_TestForgetShowfps ();
+			Cvar_SetValueQuick (&vr_hud_fps_show, 1.f);
+			Cvar_SetValueQuick (&scr_showfps, 0.f);
+			QR_ResolveHudLayout (t);
+			CHECK (QR_HudTileVisible (QC_HUD_TILE_FPS), "a first read of 0 leaves an archived show alone");
+		}
+
+		/* a published rate draws as digits in the fixed 72x24 field */
+		QC_RendererSetPresentedFPS (90.f);
+		QR_TestEmitTileInto (QC_HUD_TILE_FPS, 0, 0, 0, 0, &bw, &bh, &nv);
+		CHECK (nv == 12, "90 fps draws two digits (12 verts)");
+		CHECK (FEQ(bw,72) && FEQ(bh,24), "fps bbox is the fixed 72x24");
+		QC_RendererSetPresentedFPS (7.f);
+		QR_TestEmitTileInto (QC_HUD_TILE_FPS, 0, 0, 0, 0, &bw, &bh, &nv);
+		CHECK (nv == 6, "7 fps draws one digit (6 verts)");
+		CHECK (FEQ(bw,72) && FEQ(bh,24), "bbox fixed regardless of digit count");
+		QC_RendererSetPresentedFPS (1234.f);
+		QR_TestEmitTileInto (QC_HUD_TILE_FPS, 0, 0, 0, 0, &bw, &bh, &nv);
+		CHECK (nv == 18, "a rate past three digits clamps to 999 (18 verts), never overruns the field");
+
+		/* nothing published: the engine's own count, which is 0 here */
+		QC_RendererSetPresentedFPS (0.f);
+		QR_TestEmitTileInto (QC_HUD_TILE_FPS, 0, 0, 0, 0, &bw, &bh, &nv);
+		CHECK (nv == 6, "with no presented rate the engine count draws (a single 0)");
+		CHECK (FEQ(bw,72) && FEQ(bh,24), "fallback keeps the same field");
+
+		/* a consumer that went quiet: its last number must not freeze on */
+		{
+			extern void QR_TestAgePresentedFPS (double seconds);
+			QC_RendererSetPresentedFPS (90.f);
+			QR_TestAgePresentedFPS (2.0);
+			QR_TestEmitTileInto (QC_HUD_TILE_FPS, 0, 0, 0, 0, &bw, &bh, &nv);
+			CHECK (nv == 6, "a presented rate older than a second falls back to the engine count");
+		}
 	}
 
 	printf ("\n%s (%d failures)\n", failures?"FAILED":"PASSED", failures);
