@@ -2514,10 +2514,14 @@ final class ImmersiveRenderer {
     // clock: successive frames' presentation times are a frame apart when
     // the cadence holds and two apart when it does not, so their mean over
     // a short window is frames the wearer sees per second, with a missed
-    // frame counted against it. Published every `fpsWindow` frames through
-    // the any-thread setter; cleared on stop so the tile falls back to the
-    // engine count instead of freezing on the last number.
+    // frame counted against it. Published through the any-thread setter
+    // every `fpsWindow` frames or every `fpsPublishSpan` seconds, whichever
+    // comes first: the bridge drops a value older than a second, and a
+    // frame-count-only cadence would cross that line at exactly the low
+    // rates the tile exists to show. Cleared on stop so the tile falls back
+    // to the engine count instead of freezing on the last number.
     private let fpsWindow = 30
+    private let fpsPublishSpan = 0.25
     private var fpsLastPresentation = 0.0
     private var fpsSpan = 0.0
     private var fpsCount = 0
@@ -2534,7 +2538,7 @@ final class ImmersiveRenderer {
             }
         }
         fpsLastPresentation = presentation
-        if fpsCount >= fpsWindow, fpsSpan > 0 {
+        if fpsSpan > 0, fpsCount >= fpsWindow || fpsSpan >= fpsPublishSpan {
             QC_RendererSetPresentedFPS(Float(Double(fpsCount) / fpsSpan))
             fpsSpan = 0
             fpsCount = 0
