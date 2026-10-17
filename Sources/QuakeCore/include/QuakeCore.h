@@ -236,8 +236,8 @@ typedef struct qc_overlay_batch_s {
 } qc_overlay_batch_t;
 
 /* Modular HUD: anchors a tile may be pinned to. */
-#define QC_HUD_ANCHOR_WRIST_OFF	0	/* off-hand wrist 2x2 grid */
-#define QC_HUD_ANCHOR_WRIST_GUN	1	/* gun-hand wrist 2x2 grid */
+#define QC_HUD_ANCHOR_WRIST_OFF	0	/* off-hand wrist 3x2 grid */
+#define QC_HUD_ANCHOR_WRIST_GUN	1	/* gun-hand wrist 3x2 grid */
 #define QC_HUD_ANCHOR_GUN	2	/* free, rides the gun */
 #define QC_HUD_ANCHOR_FLOAT	3	/* free, in front of the face */
 
@@ -245,7 +245,8 @@ typedef struct qc_overlay_batch_s {
 #define QC_HUD_TILE_AMMO		0
 #define QC_HUD_TILE_FACE		1
 #define QC_HUD_TILE_HEALTHARMOR	2
-#define QC_HUD_TILE_COUNT		3
+#define QC_HUD_TILE_FPS		3	/* frame rate: presented, else engine */
+#define QC_HUD_TILE_COUNT		4
 
 /* One modular HUD tile: a sub-range of the overlay vertex run (first_vert/
    vert_count index into overlay_verts, same as qc_overlay_batch_t) plus the
@@ -261,8 +262,8 @@ typedef struct qc_hud_tile_s {
 					   shrink when a number loses a digit) */
 	int32_t		anchor;		/* QC_HUD_ANCHOR_* */
 	float		offset[3];	/* metres, in the anchor frame */
-	int32_t		slot;		/* wrist grid origin cell 0-3: row=slot/2, col=slot%2 (0=TL 1=TR 2=BL 3=BR) */
-	int32_t		span_w;		/* footprint width  in cells, 1-2 (wrist anchors) */
+	int32_t		slot;		/* wrist grid origin cell 0-5 on the 3x2 grid: row=slot/3, col=slot%3 */
+	int32_t		span_w;		/* footprint width  in cells, 1-3 (wrist anchors) */
 	int32_t		span_h;		/* footprint height in cells, 1-2 (wrist anchors) */
 	float		scale;		/* panel scale multiplier */
 } qc_hud_tile_t;
@@ -514,6 +515,15 @@ const char *QC_CvarString (const char *name);
    fov. Pass (0, 0) to clear the override when leaving immersive rendering.
    Callable from any thread. */
 void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg);
+
+/* Report the rate at which the consumer is actually presenting frames, in
+   frames per second, for the HUD's frame-rate tile. The engine's own frame
+   count is not that number: the engine thread paces itself and will read
+   90 while the compositor is dropping or reprojecting frames. A value
+   that stops arriving goes stale after a second and the tile falls back
+   to the engine count, so a consumer leaving should pass 0. Callable from
+   any thread. */
+void QC_RendererSetPresentedFPS (float fps);
 
 /* ========================================================================
  * Input -- any-thread producers, drained on the engine thread.

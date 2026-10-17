@@ -59,6 +59,8 @@ struct ContentView: View {
     @State private var hudFaceShown = true
     @State private var hudHealthArmorAnchor = Int(QC_HUD_ANCHOR_WRIST_OFF)
     @State private var hudHealthArmorShown = true
+    @State private var hudFpsAnchor = Int(QC_HUD_ANCHOR_FLOAT)
+    @State private var hudFpsShown = false
     /// vr_hud_bg seed: the dark panel drawn behind each modular tile.
     /// Mirrors the cvar's own default (on) since there is no live read-back.
     @State private var hudBgEnabled = true
@@ -613,7 +615,7 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    Text("Modular (the default) places Ammo/Face/Health+Armor as separate "
+                    Text("Modular (the default) places Ammo/Face/Health+Armor/Frame rate as separate "
                          + "tiles you can anchor and arrange below; "
                          + "Wrist shows the whole classic bar on the off hand (falls back to "
                          + "floating if it isn't tracked); "
@@ -630,6 +632,8 @@ struct ContentView: View {
                         hudTileControl("Face", anchor: $hudFaceAnchor, shown: $hudFaceShown, cvar: "face")
                         hudTileControl("Health + Armor", anchor: $hudHealthArmorAnchor,
                                        shown: $hudHealthArmorShown, cvar: "healtharmor")
+                        hudTileControl("Frame rate", anchor: $hudFpsAnchor,
+                                       shown: $hudFpsShown, cvar: "fps")
                     }
                     // The workbench owns anchor/show while it's open -- a
                     // Phase 1 picker edit here would race `working` without
@@ -667,6 +671,7 @@ struct ContentView: View {
                         Button("Ammo") { HudEditor.shared.resetSize(tileIndex: Int(QC_HUD_TILE_AMMO)) }
                         Button("Face") { HudEditor.shared.resetSize(tileIndex: Int(QC_HUD_TILE_FACE)) }
                         Button("Health") { HudEditor.shared.resetSize(tileIndex: Int(QC_HUD_TILE_HEALTHARMOR)) }
+                        Button("Frame rate") { HudEditor.shared.resetSize(tileIndex: Int(QC_HUD_TILE_FPS)) }
                     }
                     .font(.caption)
                     .buttonStyle(.bordered)
@@ -2259,6 +2264,8 @@ struct ContentView: View {
         hudFaceShown = committed[Int(QC_HUD_TILE_FACE)].show
         hudHealthArmorAnchor = committed[Int(QC_HUD_TILE_HEALTHARMOR)].anchor
         hudHealthArmorShown = committed[Int(QC_HUD_TILE_HEALTHARMOR)].show
+        hudFpsAnchor = committed[Int(QC_HUD_TILE_FPS)].anchor
+        hudFpsShown = committed[Int(QC_HUD_TILE_FPS)].show
     }
 
     /// Cancel: discards every edit made since `enterHudLayoutEdit()`. The

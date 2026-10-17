@@ -981,9 +981,9 @@ final class RendererCore {
     /// The window's fixed modular-HUD layout (vr_hud 3): no wrist or gun
     /// pose exists in the flat mono debug view (see `WorldRenderer`'s doc
     /// comment — it draws exactly what the packet's own viewproj describes,
-    /// nothing device-tracked), so the three tiles simply stack down the
+    /// nothing device-tracked), so the tiles simply stack down the
     /// left edge of the 320x200 virtual screen, in `hud_tiles[]` order
-    /// (AMMO, FACE, HEALTHARMOR), 4px gaps, ignoring anchor/offset/scale —
+    /// (AMMO, FACE, HEALTHARMOR, FPS), 4px gaps, ignoring anchor/offset/scale —
     /// "a simple fixed screen layout" per the brief, debug-only. One entry
     /// per `frame.hud_tiles[i]`; nil for a tile that emitted nothing this
     /// frame (`vert_count == 0`), same convention `drawHudTiles` expects.
