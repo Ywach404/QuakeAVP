@@ -14,13 +14,13 @@ it. No game data included — bring your own paks.
 
 ![Phase out and occlusion](docs/media/phaseout-occlusion.gif)
 
-Phase melts the level into your room at the rate you set, in the colour you set. Enemies and shots keep rendering through it, and occlusion still holds: what the level hides stays hidden. The invasion is now in your home!
+Phase melts the level into your room at the rate you set, in the color you set. Enemies and shots keep rendering through it, and occlusion still holds: what the level hides stays hidden. The invasion is now in your home!
 
 **Weapon wheel**
 
 ![Weapon wheel](docs/media/weapon-wheel.gif)
 
-Twist the wrist over and the weapon wheel appears while time slows to a crawl, giving you time to choose. Point at a slot with your dominant hand, or enable same-hand selection to pick with the hand the wheel rides on; turn the palm back to take the weapon. The slow motion can be disabled if you prefer the original pacing and tempo of Quake.
+Twist the wrist over and the weapon wheel appears while time slows to a crawl, giving you time to choose. Point at a slot with your dominant hand, or enable same-hand selection to pick with the hand the wheel rides on; turn the palm back to finalize selection of weapon. The slow motion can be disabled if you prefer the original pacing and tempo of Quake.
 
 **Hand viewing modes**
 
@@ -44,13 +44,13 @@ Choose from three distinct HUDs: the classic status bar ahead of you, the classi
 
 ![Power gauntlet](docs/media/power-gauntlet.gif)
 
-The power gauntlet: a six-key panel on the off forearm, hidden until you glance at it. Choose whether to wear it as an along-the-arm communicator or as a wrist-mounted device. Each key fires a console command, and a fingertip appears to guide the press only once the other hand is close to the panel. The final version will be customisable.
+The power gauntlet: a six-key panel on the off forearm, hidden until you glance at it. Choose whether to wear it as an along-the-arm communicator or as a wrist-mounted device. Each key fires a console command, and a fingertip appears to guide the press only once the other hand is close to the panel. The final version will be customizable.
 
 **Crosshair and laser**
 
 ![Crosshair and laser](docs/media/crosshair-laser.gif)
 
-Choose a custom crosshair and change its colour. Enable the health and ammo crosshair for an immersive resource display. Add a laser from the muzzle and pick its colour too. Or go cold turkey, with no assistance of any kind!
+Choose a custom crosshair and change its color. Enable the health and ammo crosshair for an immersive resource display. Add a laser from the muzzle and pick its color too. Or go cold turkey, with no assistance of any kind!
 
 **Your Quake, Your Way!**
 
