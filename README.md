@@ -417,8 +417,9 @@ Rest of **M2** (renderer completeness, in rough order):
   - The multiplayer setup menu's player preview draws untranslated: the
     shirt/trousers color sliders do not recolor it.
   - `gl_screen.c`'s small overlays — crosshair (the VR reticle replaces
-    it), `scr_showfps`, `scr_clock`, `showturtle`, `showpause`, the
-    loading plaque, `Draw_DebugChar`.
+    it), `scr_clock`, `showturtle`, `showpause`, the loading plaque,
+    `Draw_DebugChar`. `scr_showfps` is in, as a modular HUD tile rather
+    than a corner of the screen, and shows the headset's presented rate.
   - `Draw_TileClear` is a genuine no-op and stays one: there is no
     letterbox around the overlay plane to clear.
 
