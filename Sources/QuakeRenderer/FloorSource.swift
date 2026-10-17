@@ -150,6 +150,32 @@ final class FloorSource: @unchecked Sendable {
         return published
     }
 
+    /// Throw away the chosen floor and pick again from the planes that are
+    /// live right now. For a posture change: stand up after playing seated
+    /// and the plane under you may be the sofa, not the carpet. The last
+    /// height stays published until a new one is chosen, so the world does
+    /// not fall back to the eye-locked mapping in between.
+    func remeasure() {
+        lock.lock()
+        selected = nil
+        headAtSelection = SIMD3(.infinity, .infinity, .infinity)
+        let count = planes.count
+        lock.unlock()
+        print("[floor] re-measuring from \(count) live plane(s)")
+    }
+
+    /// The running source, for the window's Re-measure button.
+    static func remeasureCurrent() {
+        registry.lock()
+        let source = current
+        registry.unlock()
+        if let source {
+            source.remeasure()
+        } else {
+            print("[floor] re-measure asked for with no plane detection running")
+        }
+    }
+
     /// The head's raw tracking-frame position, once per frame from the
     /// render thread, so planes can be ranked by distance and clearance.
     func noteHead(_ position: SIMD3<Float>) {

@@ -68,17 +68,19 @@ final class ImmersiveRenderer {
     /// Whether the last frame was floor-anchored, so the switch between
     /// the two mappings is logged and eased on its edges only.
     private var floorAnchored = false
-    /// The anchor's offset from vieworg last frame, the ease's start, and
-    /// the target offset last frame, so any change of target (the mode,
-    /// a re-measured floor, a rebuilt provider's first plane) eases.
-    private var lastAnchorOffset: Float = 0
-    private var lastTargetOffset: Float = 0
+    /// The anchor last frame, and the measured floor it was built from, so
+    /// a change worth easing can be told from one that is not.
+    private var lastAnchorZ: Float = 0
+    private var lastFloorRaw: Float?
     private var composedAnchorBefore = false
-    /// An in-progress switch: where the offset started and when.
-    private var floorSwitch: (from: Float, startedAt: Double)?
+    /// An in-progress ease, as a fixed offset in Quake units decaying to
+    /// zero. Held as an offset, not as endpoints, so it rides whatever the
+    /// target does underneath it -- the target moves with the player.
+    private var floorEase: (offset: Float, startedAt: Double)?
     private static let floorSwitchSeconds = 1.0
-    /// A target change smaller than this, in Quake units, is noise.
-    private static let floorEaseThreshold: Float = 0.5
+    /// A floor re-measurement smaller than this, in metres, is the same
+    /// floor read again.
+    private static let floorEaseThreshold: Float = 0.01
 
     /// One-shot log latches for the two rare frame paths, so a device stream
     /// names them once instead of 90 times a second. Render-thread only.
@@ -710,35 +712,55 @@ final class ImmersiveRenderer {
                 targetZ = FloorMath.fallbackAnchorZ(vieworgZ: packet.vieworg.2, worldScale: s,
                                                     trimMetres: trim)
             }
+            // Ease on what SHOULD move the world -- the mode, and a floor
+            // re-measured somewhere new -- and never on the target alone.
+            // The target also moves when cl.viewheight does, which Quake
+            // drops by 30 units on death and restores on respawn; vieworg
+            // moves with it, so the anchor is unchanged and an ease keyed
+            // on the target would shove the world 0.76 m and back on every
+            // death.
             let now = CACurrentMediaTime()
-            let targetOffset = targetZ - packet.vieworg.2
+            let floorMoved: Bool
+            switch (floorRaw, lastFloorRaw) {
+            case let (new?, old?):  floorMoved = abs(new - old) > Self.floorEaseThreshold
+            case (nil, nil):        floorMoved = false
+            default:                floorMoved = true
+            }
             if !composedAnchorBefore {
                 // First composed frame: nothing to ease from.
                 composedAnchorBefore = true
-                lastAnchorOffset = targetOffset
-                lastTargetOffset = targetOffset
                 floorAnchored = floorRaw != nil
-            } else if abs(targetOffset - lastTargetOffset) > Self.floorEaseThreshold {
-                floorSwitch = (from: lastAnchorOffset, startedAt: now)
+            } else if floorMoved {
+                // The magnitude, in centimetres, is the whole point: for a
+                // standing adult the old hand-tuned eye height and a
+                // measured floor land within a few of each other, and
+                // "nothing moved" is then the right answer rather than a
+                // dead feature. Seated, or for a player of another height,
+                // it is tens of centimetres.
+                let movedCm = (lastAnchorZ - targetZ) * s * 100
+                floorEase = (offset: lastAnchorZ - targetZ, startedAt: now)
                 if (floorRaw != nil) != floorAnchored {
                     floorAnchored = floorRaw != nil
-                    print("[floor] anchor switching to \(floorAnchored ? "floor" : "eye")")
+                    print(String(format: "[floor] anchor switching to %@, world moves %+.1f cm (floor %+.3f m, head %+.2f m)",
+                                 floorAnchored ? "floor" : "eye", -movedCm,
+                                 floorRaw ?? 0, originFromDevice.columns.3.y))
                 } else {
-                    print(String(format: "[floor] anchor target moved %.1f units", targetOffset - lastTargetOffset))
+                    print(String(format: "[floor] floor re-measured, world moves %+.1f cm", -movedCm))
                 }
             }
-            lastTargetOffset = targetOffset
+            lastFloorRaw = floorRaw
             var anchorZ = targetZ
-            if let sw = floorSwitch {
-                let progress = Float((now - sw.startedAt) / Self.floorSwitchSeconds)
+            if let ease = floorEase {
+                let progress = Float((now - ease.startedAt) / Self.floorSwitchSeconds)
                 if progress < 1 {
-                    anchorZ = packet.vieworg.2
-                        + FloorMath.eased(from: sw.from, to: targetZ - packet.vieworg.2, progress: progress)
+                    // The offset decays to zero; the target underneath it
+                    // keeps tracking the player.
+                    anchorZ = targetZ + FloorMath.eased(from: ease.offset, to: 0, progress: progress)
                 } else {
-                    floorSwitch = nil
+                    floorEase = nil
                 }
             }
-            lastAnchorOffset = anchorZ - packet.vieworg.2
+            lastAnchorZ = anchorZ
             // The engine is told how far the rendered eye sits above
             // vieworg: the anchor's offset plus the head's height above the
             // tracking origin. Every engine-side reconstruction of the eye

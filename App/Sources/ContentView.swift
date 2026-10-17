@@ -597,6 +597,10 @@ struct ContentView: View {
                             floorTrim = 0; VRSettings.shared.floorTrim = 0
                         }
                         Spacer()
+                        // Posture changes: the plane under a seated player
+                        // may be the sofa rather than the carpet, and the
+                        // floor is only chosen once per provider life.
+                        Button("Re-measure floor") { FloorSource.remeasureCurrent() }
                         Button("Recenter") { engine.send("vr_recenter") }
                     }
                 }
