@@ -68,11 +68,17 @@ final class ImmersiveRenderer {
     /// Whether the last frame was floor-anchored, so the switch between
     /// the two mappings is logged and eased on its edges only.
     private var floorAnchored = false
-    /// The anchor's offset from vieworg last frame, the ease's start.
+    /// The anchor's offset from vieworg last frame, the ease's start, and
+    /// the target offset last frame, so any change of target (the mode,
+    /// a re-measured floor, a rebuilt provider's first plane) eases.
     private var lastAnchorOffset: Float = 0
+    private var lastTargetOffset: Float = 0
+    private var composedAnchorBefore = false
     /// An in-progress switch: where the offset started and when.
     private var floorSwitch: (from: Float, startedAt: Double)?
     private static let floorSwitchSeconds = 1.0
+    /// A target change smaller than this, in Quake units, is noise.
+    private static let floorEaseThreshold: Float = 0.5
 
     /// One-shot log latches for the two rare frame paths, so a device stream
     /// names them once instead of 90 times a second. Render-thread only.
@@ -553,7 +559,10 @@ final class ImmersiveRenderer {
         // Height is kept whenever a floor has been measured: the floor, not
         // the head at recenter, defines vertical then. Without a floor the
         // correction zeroes all three, which is the eye-locked mapping.
-        let keepHeight = floor.floorYRaw() != nil
+        // Read ONCE per frame: the drain task can publish between two
+        // reads, and the correction and the anchor below must agree.
+        let floorRaw = floor.floorYRaw()
+        let keepHeight = floorRaw != nil
         if deviceAnchor != nil, !zeroedInitialPose {
             zeroedInitialPose = true
             recenterCorrection = FloorMath.correction(zeroing: rawOriginFromDevice, keepHeight: keepHeight)
@@ -689,9 +698,12 @@ final class ImmersiveRenderer {
             // head motion moves the eye from the anchor naturally either
             // way.
             let trim = VRSettings.shared.floorTrim
-            let floorY = floor.floorYRaw()
             let targetZ: Float
-            if let floorY {
+            if let floorRaw {
+                // The floor is measured raw; the correction may still be
+                // zeroing height (it is rebuilt only at recenter), so bring
+                // the floor into the same frame the head offset is in.
+                let floorY = FloorMath.floorYRoom(raw: floorRaw, correction: recenterCorrection)
                 targetZ = FloorMath.anchorZ(vieworgZ: packet.vieworg.2, viewheight: packet.viewheight,
                                             floorYRoom: floorY, worldScale: s, trimMetres: trim)
             } else {
@@ -699,11 +711,23 @@ final class ImmersiveRenderer {
                                                     trimMetres: trim)
             }
             let now = CACurrentMediaTime()
-            if (floorY != nil) != floorAnchored {
-                floorAnchored = floorY != nil
+            let targetOffset = targetZ - packet.vieworg.2
+            if !composedAnchorBefore {
+                // First composed frame: nothing to ease from.
+                composedAnchorBefore = true
+                lastAnchorOffset = targetOffset
+                lastTargetOffset = targetOffset
+                floorAnchored = floorRaw != nil
+            } else if abs(targetOffset - lastTargetOffset) > Self.floorEaseThreshold {
                 floorSwitch = (from: lastAnchorOffset, startedAt: now)
-                print("[floor] anchor switching to \(floorAnchored ? "floor" : "eye")")
+                if (floorRaw != nil) != floorAnchored {
+                    floorAnchored = floorRaw != nil
+                    print("[floor] anchor switching to \(floorAnchored ? "floor" : "eye")")
+                } else {
+                    print(String(format: "[floor] anchor target moved %.1f units", targetOffset - lastTargetOffset))
+                }
             }
+            lastTargetOffset = targetOffset
             var anchorZ = targetZ
             if let sw = floorSwitch {
                 let progress = Float((now - sw.startedAt) / Self.floorSwitchSeconds)
@@ -716,11 +740,13 @@ final class ImmersiveRenderer {
             }
             lastAnchorOffset = anchorZ - packet.vieworg.2
             // The engine is told how far the rendered eye sits above
-            // vieworg. The head's own height already reaches it through
-            // the head offset's `up` fed above, so the trim is the anchor's
-            // offset alone; adding the camera height here would count the
-            // head twice in the wheel and the hands.
-            let heightTrim = FloorMath.effectiveTrim(anchorZ: anchorZ, cameraYRoom: 0,
+            // vieworg: the anchor's offset plus the head's height above the
+            // tracking origin. Every engine-side reconstruction of the eye
+            // adds this to vieworg; the head offset's `up` fed above only
+            // ever enters as hand-minus-head, so the head's height is not
+            // counted anywhere else.
+            let heightTrim = FloorMath.effectiveTrim(anchorZ: anchorZ,
+                                                     cameraYRoom: originFromDevice.columns.3.y,
                                                      vieworgZ: packet.vieworg.2, worldScale: s)
             QC_InputSetHeightTrim(heightTrim)
             let anchor = SIMD3(packet.vieworg.0 - absorbed.x - overLimit.x,

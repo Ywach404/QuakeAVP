@@ -35,6 +35,13 @@ enum FloorMath {
     /// A plane has to be this much lower to replace the current one; the
     /// same floor re-reported a few millimetres off is not a new floor.
     static let replaceBelow: Float = 0.02
+    /// A larger plane counts as the same floor, re-measured, only within
+    /// this of the current height. Beyond it, a bigger plane is a bigger
+    /// table, and the lowest plane wins.
+    static let sameFloorBand: Float = 0.05
+    /// The player's hull bottom below the entity origin: where the feet
+    /// are, in Quake units. vieworg is the origin plus viewheight.
+    static let hullBottom: Float = 24
 
     /// The floor height to use, or nil when nothing qualifies. The caller
     /// keeps the current plane in `candidates` (it is a live anchor like
@@ -53,18 +60,21 @@ enum FloorMath {
         // The current plane is the candidate nearest the current height.
         let currentArea = qualifying.min(by: { abs($0.y - current) < abs($1.y - current) })?.area ?? 0
         if lowest.y < current - replaceBelow { return lowest.y }
-        if let larger = qualifying.max(by: { $0.area < $1.area }), larger.area > currentArea {
+        let sameFloor = qualifying.filter { abs($0.y - current) <= sameFloorBand }
+        if let larger = sameFloor.max(by: { $0.area < $1.area }), larger.area > currentArea {
             return larger.y
         }
         return current
     }
 
     /// The Quake z placed at the tracking origin so the hull bottom sits on
-    /// the measured floor. The eye, not the entity origin, because the
-    /// engine eases vieworg up stairs while the origin snaps.
+    /// the measured floor. Reconstructed from the eye, not read from the
+    /// entity origin, because the engine eases vieworg up stairs while the
+    /// origin snaps: eye minus viewheight is the origin, minus the hull
+    /// bottom is the feet.
     static func anchorZ(vieworgZ: Float, viewheight: Float, floorYRoom: Float,
                         worldScale: Float, trimMetres: Float) -> Float {
-        vieworgZ - viewheight - floorYRoom / worldScale + trimMetres / worldScale
+        vieworgZ - viewheight - hullBottom - floorYRoom / worldScale + trimMetres / worldScale
     }
 
     /// Today's eye-locked mapping, for a session with no measured floor:
@@ -82,6 +92,23 @@ enum FloorMath {
     static func effectiveTrim(anchorZ: Float, cameraYRoom: Float, vieworgZ: Float,
                               worldScale: Float) -> Float {
         anchorZ + cameraYRoom / worldScale - vieworgZ
+    }
+
+    /// The measured floor in the corrected frame. A height-zeroing
+    /// correction carries minus the recenter head height in its
+    /// translation; a height-keeping one carries zero; either way adding
+    /// it puts the raw height in the same frame the head offset is in.
+    static func floorYRoom(raw: Float, correction: simd_float4x4) -> Float {
+        raw + correction.columns.3.y
+    }
+
+    /// Distance from the head to the nearest point of a plane's extent,
+    /// in the extent's own frame (x and z span it). The centre of a big
+    /// room's floor is metres away while you stand on it.
+    static func extentDistance(headInExtent: SIMD3<Float>, halfWidth: Float, halfHeight: Float) -> Float {
+        let dx = max(0, abs(headInExtent.x) - halfWidth)
+        let dz = max(0, abs(headInExtent.z) - halfHeight)
+        return (dx * dx + dz * dz).squareRoot()
     }
 
     /// Smoothstep between two values; progress outside [0, 1] clamps.

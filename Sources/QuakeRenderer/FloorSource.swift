@@ -40,9 +40,19 @@ final class FloorSource: @unchecked Sendable {
     private var live = false
     private var supervisor: Task<Void, Never>?
 
-    /// Live floor-classified horizontal planes from the current provider,
-    /// by anchor id, reduced to what the selection reads.
-    private var planes: [UUID: FloorMath.FloorCandidate] = [:]
+    /// One live floor-classified horizontal plane: its extent frame in the
+    /// tracking origin, so the head's distance to it is measured to the
+    /// nearest point of the extent, not its centre, and re-measured as the
+    /// head moves.
+    private struct Plane {
+        var y: Float
+        var area: Float
+        var extentFromOrigin: simd_float4x4
+        var halfWidth: Float
+        var halfHeight: Float
+    }
+    /// Live floor planes from the current provider, by anchor id.
+    private var planes: [UUID: Plane] = [:]
     /// The height chosen within the current provider's life; nil until its
     /// first qualifying plane.
     private var selected: Float?
@@ -50,10 +60,12 @@ final class FloorSource: @unchecked Sendable {
     /// outlives a rebuild so the world does not jump while the new provider
     /// finds its feet.
     private var published: Float?
-    /// The head's latest horizontal position and height in the raw
-    /// tracking frame, for the distance and clearance rules.
-    private var headXZ = SIMD2<Float>(0, 0)
-    private var headY: Float = 1.6
+    /// The head's latest position in the raw tracking frame, for the
+    /// distance and clearance rules, and where it was when the selection
+    /// last ran, so a head that has moved a step re-ranks the planes.
+    private var head = SIMD3<Float>(0, 1.6, 0)
+    private var headAtSelection = SIMD3<Float>(0, 1.6, 0)
+    private static let reselectAfter: Float = 0.5
 
     private static let retryDelay = Duration.milliseconds(250)
     private static let maxBackoff = 8
@@ -126,9 +138,11 @@ final class FloorSource: @unchecked Sendable {
     /// render thread, so planes can be ranked by distance and clearance.
     func noteHead(_ position: SIMD3<Float>) {
         lock.lock()
-        headXZ = SIMD2(position.x, position.z)
-        headY = position.y
+        head = position
+        let moved = simd_length(position - headAtSelection) > Self.reselectAfter
+        let message = moved ? reselectLocked() : nil
         lock.unlock()
+        if let message { print(message) }
     }
 
     private var isLive: Bool {
@@ -196,9 +210,11 @@ final class FloorSource: @unchecked Sendable {
 
     /// Fold one anchor update into the selection. Only horizontal planes
     /// the system calls floor count; everything else is dropped on sight.
+    /// The log line is built under the lock and printed outside it: the
+    /// render thread takes this lock twice a frame.
     private func ingest(_ update: AnchorUpdate<PlaneAnchor>) {
         let anchor = update.anchor
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         switch update.event {
         case .removed:
             planes.removeValue(forKey: anchor.id)
@@ -209,22 +225,41 @@ final class FloorSource: @unchecked Sendable {
                 break
             }
             let extent = anchor.geometry.extent
-            let world = anchor.originFromAnchorTransform * extent.anchorFromExtentTransform
-            let centre = world.columns.3
-            planes[anchor.id] = FloorMath.FloorCandidate(
-                y: centre.y,
+            let originFromExtent = anchor.originFromAnchorTransform * extent.anchorFromExtentTransform
+            planes[anchor.id] = Plane(
+                y: originFromExtent.columns.3.y,
                 area: extent.width * extent.height,
-                horizontalDistance: simd_length(SIMD2(centre.x, centre.z) - headXZ))
+                extentFromOrigin: originFromExtent.inverse,
+                halfWidth: extent.width * 0.5,
+                halfHeight: extent.height * 0.5)
         @unknown default:
             break
         }
-        let before = selected
-        selected = FloorMath.select(Array(planes.values), current: selected, headY: headY)
-        if let chosen = selected, chosen != before {
-            published = chosen
-            let area = planes.values.min(by: { abs($0.y - chosen) < abs($1.y - chosen) })?.area ?? 0
-            print(String(format: "[floor] floor at %.3f m, area %.2f m²", chosen, area))
+        let message = reselectLocked()
+        lock.unlock()
+        if let message { print(message) }
+    }
+
+    /// Re-rank the live planes against the current head. Caller holds the
+    /// lock. Returns the line to log once the lock is released, if the
+    /// chosen height changed.
+    private func reselectLocked() -> String? {
+        headAtSelection = head
+        let candidates = planes.values.map { plane -> FloorMath.FloorCandidate in
+            let local = plane.extentFromOrigin * SIMD4(head, 1)
+            return FloorMath.FloorCandidate(
+                y: plane.y,
+                area: plane.area,
+                horizontalDistance: FloorMath.extentDistance(
+                    headInExtent: SIMD3(local.x, local.y, local.z),
+                    halfWidth: plane.halfWidth, halfHeight: plane.halfHeight))
         }
+        let before = selected
+        selected = FloorMath.select(candidates, current: selected, headY: head.y)
+        guard let chosen = selected, chosen != before else { return nil }
+        published = chosen
+        let area = planes.values.min(by: { abs($0.y - chosen) < abs($1.y - chosen) })?.area ?? 0
+        return String(format: "[floor] floor at %.3f m, area %.2f m²", chosen, area)
     }
 
     private func watch(_ provider: PlaneDetectionProvider) async -> String {

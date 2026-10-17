@@ -44,6 +44,15 @@ int main (void)
 	QR_TestBobGate (0);
 	CHECK (cl_bob.value == 0.05f, "an autoexec value round-trips");
 
+	/* a console `cl_bob 0.03` while the space is up: re-zeroed on the next
+	   frame, and that newer intent is what comes back on exit */
+	QR_TestBobGate (1);
+	cl_bob.value = 0.03f;
+	QR_TestBobGate (1);
+	CHECK (cl_bob.value == 0.f, "a mid-session cl_bob is re-zeroed on the next immersive frame");
+	QR_TestBobGate (0);
+	CHECK (cl_bob.value == 0.03f, "...and the mid-session value is what exit restores");
+
 	printf ("%s: viewheight_test, %d failure(s)\n", failures ? "FAIL" : "ok  ", failures);
 	return failures ? 1 : 0;
 }

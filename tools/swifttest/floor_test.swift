@@ -54,19 +54,45 @@ struct FloorTest {
         check(FloorMath.select([cand(0.0, 2, 1), cand(-0.05, 1, 1)], current: 0.0, headY: 1.6) == -0.05,
               "select_keepsCurrentUnlessLowerOrLarger: a lower plane does")
         check(FloorMath.select([cand(0.0, 2, 1), cand(0.01, 5, 1)], current: 0.0, headY: 1.6) == 0.01,
-              "select_keepsCurrentUnlessLowerOrLarger: a larger plane does")
+              "select_keepsCurrentUnlessLowerOrLarger: a larger plane at the same height does")
+        check(FloorMath.select([cand(0.0, 2, 1), cand(0.7, 5, 1)], current: 0.0, headY: 1.7) == 0.0,
+              "select_rejectsPlaneAboveHead: a larger 'floor' 0.7 m up never beats the floor under a standing head")
         check(FloorMath.select([cand(0.12, 1, 1)], current: nil, headY: 1.6) == 0.12,
               "select_freshLifeTakesFirstPlane")
+
+        // Distance is to the nearest point of the plane's extent, not its
+        // centre: a big room's floor has its centre metres away while you
+        // stand on it.
+        check(near(FloorMath.extentDistance(headInExtent: SIMD3(0.5, 1.6, 0.2), halfWidth: 3, halfHeight: 2), 0),
+              "extentDistance: a head over the plane is at distance zero")
+        check(near(FloorMath.extentDistance(headInExtent: SIMD3(4, 1.6, 0), halfWidth: 3, halfHeight: 2), 1),
+              "extentDistance: one metre past the edge is one metre")
+        check(near(FloorMath.extentDistance(headInExtent: SIMD3(6, 1.6, 6), halfWidth: 3, halfHeight: 2), 5),
+              "extentDistance: past a corner is the corner distance (3-4-5)")
     }
 
     static func runAnchorTests() {
         let s: Float = 0.0254
-        check(near(FloorMath.anchorZ(vieworgZ: 146, viewheight: 22, floorYRoom: 0, worldScale: s, trimMetres: 0), 124),
-              "anchorZ_usesEyeNotOrigin: eye 146 minus viewheight 22 is the hull bottom at 124")
-        check(near(FloorMath.anchorZ(vieworgZ: 146, viewheight: 22, floorYRoom: -0.0254, worldScale: s, trimMetres: 0), 125),
+        // vieworg is the entity origin plus viewheight; the feet are the
+        // origin minus the hull bottom, 24 units. Eye 146 -> origin 124 ->
+        // feet 100.
+        check(near(FloorMath.anchorZ(vieworgZ: 146, viewheight: 22, floorYRoom: 0, worldScale: s, trimMetres: 0), 100),
+              "anchorZ_usesEyeNotOrigin: eye 146 minus viewheight 22 minus the hull bottom 24 is the feet at 100")
+        check(near(FloorMath.anchorZ(vieworgZ: 146, viewheight: 22, floorYRoom: -0.0254, worldScale: s, trimMetres: 0), 101),
               "anchorZ_usesEyeNotOrigin: a floor one unit below the origin raises the anchor one unit")
-        check(near(FloorMath.anchorZ(vieworgZ: 146, viewheight: 22, floorYRoom: 0, worldScale: s, trimMetres: 0.0254), 125),
+        check(near(FloorMath.anchorZ(vieworgZ: 146, viewheight: 22, floorYRoom: 0, worldScale: s, trimMetres: 0.0254), 101),
               "anchorZ: one unit of trim raises the world one unit")
+        // The floor is measured raw; the anchor works in the corrected
+        // frame. A height-zeroing correction carries minus the recenter
+        // height in its translation; a height-keeping one carries zero.
+        var zeroing = matrix_identity_float4x4
+        zeroing.columns.3 = SIMD4(0.3, -1.6, 0.2, 1)
+        check(near(FloorMath.floorYRoom(raw: 0.05, correction: zeroing), 0.05 - 1.6),
+              "floorYRoom: under a height-zeroing correction the floor is head-relative")
+        var keeping = matrix_identity_float4x4
+        keeping.columns.3 = SIMD4(0.3, 0, 0.2, 1)
+        check(near(FloorMath.floorYRoom(raw: 0.05, correction: keeping), 0.05),
+              "floorYRoom: under a height-keeping correction the floor is its raw height")
         check(near(FloorMath.fallbackAnchorZ(vieworgZ: 100, worldScale: s, trimMetres: 0), 100 + 0.4 / s, 1e-3),
               "fallbackAnchorZ_matchesToday")
         check(near(FloorMath.fallbackAnchorZ(vieworgZ: 100, worldScale: s, trimMetres: 0.1), 100 + 0.5 / s, 1e-3),

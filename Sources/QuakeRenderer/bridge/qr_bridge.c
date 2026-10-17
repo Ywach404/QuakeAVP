@@ -349,7 +349,11 @@ static void QR_BobGate (int omni)
 	static float	saved_bob;
 	static int	bob_zeroed;
 
-	if (omni && !bob_zeroed)
+	/* Re-asserted every immersive frame, not only on the edge: the anchor
+	   is still only while bob is zero, and a console `cl_bob` or an exec
+	   while the space is up would otherwise escape. The value found,
+	   whenever it was set, is what exit restores. */
+	if (omni && (!bob_zeroed || cl_bob.value != 0.f))
 	{
 		saved_bob = cl_bob.value;
 		bob_zeroed = 1;
