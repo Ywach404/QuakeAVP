@@ -326,6 +326,11 @@ final class VRSettings: @unchecked Sendable {
     // no migration to get wrong. The along set's keys and defaults are
     // documented at the versioned block below, where they actually live now.
     private static let commTiltKey = "wristCommTilt"
+    /// The floor trim's own key: the old eye-height slider lived in the
+    /// input profile under a different name and meaning, and its 0.40 m
+    /// default must never be read as a trim.
+    private static let floorTrimKey = "floorTrim.v1"
+    static let floorTrimLimit: Float = 0.3     // metres, either way
     private static let commFwdKey = "wristCommFwd"
     private static let commSideKey = "wristCommSide"
     private static let commUpKey = "wristCommUp"
@@ -360,6 +365,9 @@ final class VRSettings: @unchecked Sendable {
     private static let commAlongArmKey = "wristCommAlongArm"
 
     private var _wristCommTilt: Float = 0
+    /// Metres to raise the world relative to the measured floor (or, with
+    /// no floor, on top of the eye-locked baseline). Default 0.
+    private var _floorTrim: Float = 0
     private var _wristCommFwd: Float = 0
     private var _wristCommSide: Float = 0
     private var _wristCommUp: Float = 0
@@ -383,6 +391,10 @@ final class VRSettings: @unchecked Sendable {
     var wristCommTilt: Float {
         get { lock.lock(); defer { lock.unlock() }; return _wristCommTilt }
         set { store(Self.clamp(newValue, Self.commTiltLimit), Self.commTiltKey) { $0._wristCommTilt = $1 } }
+    }
+    var floorTrim: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _floorTrim }
+        set { store(Self.clamp(newValue, Self.floorTrimLimit), Self.floorTrimKey) { $0._floorTrim = $1 } }
     }
     var wristCommFwd: Float {
         get { lock.lock(); defer { lock.unlock() }; return _wristCommFwd }
@@ -562,6 +574,7 @@ final class VRSettings: @unchecked Sendable {
     private init() {
         let d = UserDefaults.standard
         _wristCommTilt = Self.clamp(Float(d.double(forKey: Self.commTiltKey)), Self.commTiltLimit)
+        _floorTrim = Self.clamp(Float(d.double(forKey: Self.floorTrimKey)), Self.floorTrimLimit)
         _wristCommFwd = Self.clamp(Float(d.double(forKey: Self.commFwdKey)), Self.commOffsetLimit)
         _wristCommSide = Self.clamp(Float(d.double(forKey: Self.commSideKey)), Self.commOffsetLimit)
         _wristCommUp = Self.clamp(Float(d.double(forKey: Self.commUpKey)), Self.commOffsetLimit)
