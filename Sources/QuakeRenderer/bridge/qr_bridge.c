@@ -4534,6 +4534,16 @@ static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
 			continue;
 		if (e->model->type != mod_alias && e->model->type != mod_brush)
 			continue;
+		/* Beam segments live in the temp-entity pool, and nothing else
+		   does: CL_UpdateTEnts is the only caller of CL_NewTempEntity.
+		   They are a drawing of the shot, not a thing the shot can hit,
+		   and the lightning's chain starts at the hand and tiles the aim
+		   line in 30-unit steps with 32-unit boxes, so the sweep below
+		   would "hit" the first one a unit past the muzzle and park the
+		   reticle (and the arc gauges with it) inside the beam for as
+		   long as the trigger is held. */
+		if (e >= cl_temp_entities && e < cl_temp_entities + MAX_TEMP_ENTITIES)
+			continue;
 		/* Skip things the shot passes through, so the reticle does too:
 		   gibs and gibbed heads (non-solid), and -- the spazzing bug -- the
 		   player's OWN in-flight projectiles, which fly straight down the aim
