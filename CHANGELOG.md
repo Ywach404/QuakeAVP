@@ -26,8 +26,15 @@ compare against.
 - The weapon wheel: turn the off wrist over and the owned weapons ring that
   wrist as live spinning models while simulation time crawls; reach or point
   to highlight one, then turn the palm back to take it.
+- A frame-rate tile in the modular HUD, off by default: `scr_showfps 1` or
+  its own show toggle turns it on. The number is the rate the headset is
+  presenting, from the compositor's own timeline, so it drops when frames
+  drop; the engine's frame count stands in only in the flat window.
 - The power gauntlet and the modular HUD: the status bar whole, or split
   into tiles you place and pin yourself, with a live in-headset editor.
+- Colormapped player skins: every player wears their own shirt and trouser
+  colours, and the setup menu's preview follows its sliders, through the
+  same translate-and-reload path upstream uses.
 - The phase dissolve — `phase 1` melts the world to passthrough around you and
   leaves the level's monsters, pickups and doors standing in your room.
 - Sound, including the CD soundtrack, through an `AVAudioEngine` source node
@@ -57,5 +64,5 @@ compare against.
 - The rerelease episodes (`dopa`, `mg1`, `mg3`) do not load yet.
 - Console text entry goes through the window's command bar, not the in-world
   console.
-- Colormapped player skins, texture animation past frame 0, and the small
-  `gl_screen.c` overlays are still stubbed. `README.md` lists the rest.
+- Texture animation past frame 0 and the small `gl_screen.c` overlays are
+  still stubbed. `README.md` lists the rest.

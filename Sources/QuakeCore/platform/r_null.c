@@ -22,8 +22,8 @@
  * and -- emitted from SCR_UpdateScreen below rather than from the frame
  * build, so it works with no world loaded -- the menu, console, notify lines
  * and intermission scoreboards. What is still missing from it is listed in
- * README.md's roadmap (console text entry, the input-line cursor pics, the
- * translated skin preview, gl_screen.c's small overlays).
+ * README.md's roadmap (console text entry, the input-line cursor pics,
+ * gl_screen.c's small overlays).
  *
  * Still honestly stubbed, also in that roadmap: entities (alias/brush/
  * sprite), particles, dynamic light and lightstyle updates, fog rendering.
@@ -207,6 +207,7 @@ void R_Init (void)
 
 void R_NewGame (void)
 {
+	QR_NewGame ();
 }
 
 void R_NewMap (void)
@@ -272,12 +273,12 @@ void R_RenderView (void)
 
 void R_TranslatePlayerSkin (int playernum)
 {
-	(void) playernum;
+	QR_TranslatePlayerSkin (playernum);
 }
 
 void R_TranslateNewPlayerSkin (int playernum)
 {
-	(void) playernum;
+	QR_TranslateNewPlayerSkin (playernum);
 }
 
 /* ========================================================================
@@ -302,14 +303,14 @@ cvar_t	vr_hud_bg = {"vr_hud_bg", "1", CVAR_ARCHIVE};	/* dark panel behind each m
    ammo pins to the gun, face and health/armor pin to the off-hand wrist.
    anchor: QC_HUD_ANCHOR_WRIST_OFF (0), QC_HUD_ANCHOR_WRIST_GUN (1),
    QC_HUD_ANCHOR_GUN (2), or QC_HUD_ANCHOR_FLOAT (3). slot/span_w/span_h
-   place the tile on a wrist anchor's 2x2 grid (slot is the origin cell,
+   place the tile on a wrist anchor's 3x2 grid (slot is the origin cell,
    span_w/span_h the footprint in cells); off_x/y/z are metres in the
    anchor frame; scale is a panel scale multiplier; show is a bool gate
    independent of anchor.
    The off_y/scale defaults below are device-tuned first guesses (a tester
    reported tiles clumped on the wrist and read too small over the world):
    face sits above the wrist, health/armor below it, so the two wrist tiles
-   don't overlap each other or the hand; all three tiles are scaled up for
+   don't overlap each other or the hand; the status tiles are scaled up for
    readability. Expect these to move once tried on device again. */
 cvar_t	vr_hud_ammo_anchor        = {"vr_hud_ammo_anchor", "2", CVAR_ARCHIVE};	/* gun */
 cvar_t	vr_hud_ammo_slot          = {"vr_hud_ammo_slot", "0", CVAR_ARCHIVE};
@@ -340,6 +341,25 @@ cvar_t	vr_hud_healtharmor_off_y  = {"vr_hud_healtharmor_off_y", "-0.035", CVAR_A
 cvar_t	vr_hud_healtharmor_off_z  = {"vr_hud_healtharmor_off_z", "0", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_scale  = {"vr_hud_healtharmor_scale", "1.0", CVAR_ARCHIVE};
 cvar_t	vr_hud_healtharmor_show   = {"vr_hud_healtharmor_show", "1", CVAR_ARCHIVE};
+
+/* The frame-rate readout, a tile like the others so it is placed the same
+   way. Off by default, as upstream's scr_showfps is. scr_showfps is the
+   console's spelling: a CHANGE to it is copied into vr_hud_fps_show, so
+   either name turns the tile on or off and the HUD editor's own hide is
+   never overridden by a stale 1. The tile only draws in modular mode
+   (vr_hud 3), as every tile does. Floats in front of the face so that
+   footage of a head turn keeps the number in frame; the float anchor
+   scales by the wrist's pixel size at 1.5 m, so the default scale is the
+   float preset's ratio (0.8 m / 0.22 m) to read the same as that bar. */
+cvar_t	vr_hud_fps_anchor         = {"vr_hud_fps_anchor", "3", CVAR_ARCHIVE};	/* float */
+cvar_t	vr_hud_fps_slot           = {"vr_hud_fps_slot", "2", CVAR_ARCHIVE};	/* top-right, if moved to a wrist */
+cvar_t	vr_hud_fps_span_w         = {"vr_hud_fps_span_w", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_fps_span_h         = {"vr_hud_fps_span_h", "1", CVAR_ARCHIVE};
+cvar_t	vr_hud_fps_off_x          = {"vr_hud_fps_off_x", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_fps_off_y          = {"vr_hud_fps_off_y", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_fps_off_z          = {"vr_hud_fps_off_z", "0", CVAR_ARCHIVE};
+cvar_t	vr_hud_fps_scale          = {"vr_hud_fps_scale", "3.5", CVAR_ARCHIVE};
+cvar_t	vr_hud_fps_show           = {"vr_hud_fps_show", "0", CVAR_ARCHIVE};
 
 /* Wrist communicator (spy-watch action grid, seated below the HUD).
    Per side: an enable, and six {command,label} pairs for the 2x3 cells
@@ -537,6 +557,15 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&vr_hud_healtharmor_off_z);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_scale);
 	Cvar_RegisterVariable (&vr_hud_healtharmor_show);
+	Cvar_RegisterVariable (&vr_hud_fps_anchor);
+	Cvar_RegisterVariable (&vr_hud_fps_slot);
+	Cvar_RegisterVariable (&vr_hud_fps_span_w);
+	Cvar_RegisterVariable (&vr_hud_fps_span_h);
+	Cvar_RegisterVariable (&vr_hud_fps_off_x);
+	Cvar_RegisterVariable (&vr_hud_fps_off_y);
+	Cvar_RegisterVariable (&vr_hud_fps_off_z);
+	Cvar_RegisterVariable (&vr_hud_fps_scale);
+	Cvar_RegisterVariable (&vr_hud_fps_show);
 	Cvar_RegisterVariable (&vr_wristcomm_off);
 	Cvar_RegisterVariable (&vr_wristcomm_off_cmd0);
 	Cvar_RegisterVariable (&vr_wristcomm_off_cmd1);
@@ -820,16 +849,10 @@ void Draw_ConsoleBackground (void)
 
 void Draw_TransPicTranslate (int x, int y, qpic_t *pic, int top, int bottom)
 {
-	/* Drawn UNTRANSLATED. The only caller is the multiplayer setup menu's
-	   player preview, where the translation recolours the shirt/trousers to
-	   the chosen palette ranges. Doing it properly means a second
-	   palette-translated upload per colour change (upstream keeps a
-	   menuplyr_pixels copy of the raw indices for exactly that); the preview
-	   is a two-slider cosmetic on a menu page this port cannot even host a
-	   game from yet. Showing the default skin is the honest placeholder --
-	   the pic is there, the colours do not follow the sliders. */
-	(void) top; (void) bottom;
-	QR_DrawPic (x, y, pic);
+	/* The multiplayer setup menu's player preview: the shirt and trousers
+	   follow the two sliders through the same reload the in-game skins
+	   use. */
+	QR_DrawTransPicTranslate (x, y, pic, top, bottom);
 }
 
 void GL_SetCanvas (canvastype newcanvas)
@@ -881,6 +904,11 @@ gltexture_t *TexMgr_LoadImage (qmodel_t *owner, const char *name,
 void TexMgr_FreeTexturesForOwner (qmodel_t *owner)
 {
 	QR_TexMgr_FreeTexturesForOwner (owner);
+}
+
+void TexMgr_ReloadImage (gltexture_t *glt, int shirt, int pants)
+{
+	QR_TexMgr_ReloadImage (glt, shirt, pants);
 }
 
 int TexMgr_PadConditional (int s)
