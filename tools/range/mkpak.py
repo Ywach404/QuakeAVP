@@ -14,11 +14,7 @@ Stage the result as id1/pak2.pak (the app's own slot for a generated pak,
 next to pak0.pak and pak1.pak if you have one), or as id1/pak1.pak only in
 the shareware-only case where no real pak1.pak exists.
 
-  python3 tools/range/mkpak.py out.pak gfx/pop.lmp=path/to/pop.lmp \
-      maps/range.bsp=path/to/range.bsp maps/track.bsp=path/to/track.bsp
-
-Every spec after the output is one inner=path pair, so the dev pak carries
-both generated maps (tools/range, tools/track) in a single file.
+  python3 tools/range/mkpak.py out.pak maps/range.bsp=path/to/range.bsp ...
 """
 
 import struct
