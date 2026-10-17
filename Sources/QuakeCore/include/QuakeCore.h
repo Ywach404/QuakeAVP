@@ -427,6 +427,15 @@ typedef struct qc_frame_s {
 	   draws, so no new shader. Depth-tested against the world, no write. */
 	uint32_t	num_particle_verts;
 	const float	*particle_verts;
+	/* The aim reticle and its arc gauges are a sub-range of that run,
+	   [reticle_first_vert, +reticle_vert_count), drawn with the depth test
+	   OFF. They mark where the shot lands, and that should read even when
+	   the eye cannot see the point (the gun poked round a doorframe); what
+	   the test removed in practice was the mark itself, where a billboarded
+	   gauge dipped behind a wall seen edge-on or the trace passed through a
+	   sky brush. Zero count when no reticle. */
+	uint32_t	reticle_first_vert;
+	uint32_t	reticle_vert_count;
 
 	/* Sprite models as 3D billboarded TEXTURED quads (explosions, bubbles).
 	   Five floats per vertex: xyz position (Quake units) and st; six vertices
