@@ -7465,12 +7465,13 @@ void QR_RenderView (void)
 			dt = 0;
 		qr_phase_lasttime = cl.time;
 
-		/* Turning the effect OFF is INSTANT -- no lingering melt sphere to
-		   dissolve the stairs you're standing on for a couple of seconds
-		   after `phase 0`. Melting IN still eases for the cinematic sweep. */
-		if (target <= 0.f)
-			qr_phase_value = 0.f;
-		else if (qr_phase_value < target)
+		/* Symmetric: the sweep back honours phase_time too. Phase-off
+		   used to snap to 0 so a shrinking melt sphere could not keep
+		   dissolving the stairs underfoot, but that band was really the
+		   immersive clear letting passthrough through, fixed on its own
+		   since; with the snap the speed presets only ever applied one
+		   way. Map load still snaps, in QR_NewMap. */
+		if (qr_phase_value < target)
 			qr_phase_value = q_min (qr_phase_value + (float)dt / ptime, target);
 		else if (qr_phase_value > target)
 			qr_phase_value = q_max (qr_phase_value - (float)dt / ptime, target);
