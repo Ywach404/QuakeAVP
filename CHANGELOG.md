@@ -32,7 +32,7 @@ compare against.
   leaves the level's monsters, pickups and doors standing in your room.
 - Sound, including the CD soundtrack, through an `AVAudioEngine` source node
   over the engine's own mixer. Stereo as Quake mixes it; not yet
-  spatialised to the headset.
+  spatialized to the headset.
 - Game menus in the SwiftUI window rather than in the world: new game,
   save and load against the engine's own `.sav` files, direct connect, and a
   LAN server browser.
