@@ -43,6 +43,9 @@ struct InputProfile: Codable, Equatable {
     /// WheelSelectHand.rawValue. Optional so older profiles decode, defaulting
     /// to offHand (today's one-handed wheel).
     var wheelSelectHand: Int? = 0
+    /// Retired 2026-10-17: the floor is measured now and the trim lives in
+    /// VRSettings under its own key. Decoded so old profiles still load;
+    /// never read, and its 0.40 m default must not become a floor trim.
     var heightOffset: Float = 0.4
 
     // On-arm debug HUD placement (VRSettings-consumed).
@@ -311,7 +314,6 @@ final class ProfileStore {
         s.turnStyle = TurnStyle(rawValue: p.turnStyle) ?? .stick
         s.summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         s.wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand
-        s.heightOffset = p.heightOffset
         s.offHandPitch = p.offHandPitch
         s.offHandYaw = p.offHandYaw
         s.offHandRoll = p.offHandRoll

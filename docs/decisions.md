@@ -824,3 +824,31 @@ print "Unknown command". It carries the project prefix so an upstream merge
 cannot collide with it, and both the C cvar default and the Swift constant
 are pinned by tests, because a typo on either side of that contract presents
 as a dead key rather than an error.
+
+## 2026-10-17 — The floor is measured; the anchor is the feet, not the eye
+
+The immersive anchor was the game eye pinned to the headset at the last
+recenter, with a per-profile "eye height" slider defaulting to 0.40 m. The
+Quake floor therefore landed at `H_recenter - 1.57 m` above the real one:
+eight centimetres high for a 1.65 m standing eye, thirty-seven low after a
+seated recenter, and it moved every recenter. With the phase dissolve
+showing the real floor through the virtual one, that offset was the first
+thing anyone saw.
+
+A floor-locked mapping had been tried before and reverted because it
+assumed the ARKit tracking origin was at floor level, which did not hold on
+device. The missing piece was a measured floor. `FloorSource` runs plane
+detection in an ARKit session of its own and publishes the lowest
+floor-classified horizontal plane that is large enough, close enough and
+below the head; `FloorMath.anchorZ` places the hull bottom, reconstructed
+from the eye minus `viewheight` so stairs keep the engine's easing, on that
+height. The recenter correction keeps vertical once a floor is known.
+Without one, or with the permission refused, the old mapping stands with
+0.40 m baked in. The slider became a global floor trim, default zero, under
+a new key so the old 0.40 is never read as a trim. `cl_bob` is held at zero
+while the space is up, since bob rides in `vieworg` and would otherwise bob
+every head-locked overlay.
+
+Its own session, not the world-tracking one, because that supervisor
+retries a failed run forever and plane detection is the first provider in
+this app that needs a permission the player can refuse.

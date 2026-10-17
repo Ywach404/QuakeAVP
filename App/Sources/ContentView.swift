@@ -36,7 +36,7 @@ struct ContentView: View {
     @State private var autoOpened = false
     @State private var showScope = false
     @State private var showComfort = false
-    @State private var heightOffset: Float = 0.4
+    @State private var floorTrim: Float = VRSettings.shared.floorTrim
     @State private var rightHanded = true
     /// vr_hud: 0 off, 1 wrist, 2 float, 3 modular (default). Mirrors the
     /// cvar's own default since there is no live cvar read-back, so it MUST
@@ -577,19 +577,17 @@ struct ContentView: View {
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Eye height  \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm")
+                    Text("Floor trim  \(floorTrim >= 0 ? "+" : "")\(Int((floorTrim * 100).rounded())) cm")
                         .font(.headline)
-                    Text("Raise until the floor sits at your real floor.")
+                    Text("Nudge the floor if it sits above or below your real floor.")
                         .font(.caption).foregroundStyle(.secondary)
                     Slider(value: Binding(
-                        get: { Double(heightOffset) },
-                        set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0)
-                               ProfileStore.shared.current.heightOffset = Float($0) }),
-                        in: -0.6...0.9)
+                        get: { Double(floorTrim) },
+                        set: { floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
+                        in: -Double(VRSettings.floorTrimLimit)...Double(VRSettings.floorTrimLimit))
                     HStack {
                         Button("Reset") {
-                            heightOffset = 0.4; VRSettings.shared.heightOffset = 0.4
-                            ProfileStore.shared.current.heightOffset = 0.4
+                            floorTrim = 0; VRSettings.shared.floorTrim = 0
                         }
                         Spacer()
                         Button("Recenter") { engine.send("vr_recenter") }
@@ -2140,7 +2138,6 @@ struct ContentView: View {
     /// shows what was persisted (called on launch and on a profile switch).
     private func syncFromProfile() {
         let p = ProfileStore.shared.current
-        heightOffset = p.heightOffset
         fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand

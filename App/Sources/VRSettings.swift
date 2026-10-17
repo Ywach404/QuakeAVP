@@ -50,12 +50,6 @@ final class VRSettings: @unchecked Sendable {
 
     private let lock = NSLock()
     private var _rightHanded = true
-    /// Eye-height trim in metres, applied on top of the recenter baseline.
-    /// Calibrated live from the Comfort menu because the right value is a
-    /// matter of feel per player and posture -- floor detection proved
-    /// unreliable, so this is the honest knob. Vertical head motion still
-    /// tracks naturally on top of it (stand up and you rise).
-    private var _heightOffset: Float = 0.4
 
     var rightHanded: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _rightHanded }
@@ -72,11 +66,6 @@ final class VRSettings: @unchecked Sendable {
         set { lock.lock(); _offHandModelOnly = newValue; lock.unlock() }
     }
 
-
-    var heightOffset: Float {
-        get { lock.lock(); defer { lock.unlock() }; return _heightOffset }
-        set { lock.lock(); _heightOffset = newValue; lock.unlock() }
-    }
 
     /// Off-hand controller presence-model rotation offset, degrees, in the
     /// controller-local frame. The rigid hand is modelled reaching forward;
