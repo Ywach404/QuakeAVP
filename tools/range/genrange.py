@@ -17,23 +17,24 @@ The range exists to exercise every M4/M5 system in one room:
   - powerups            Quad (blue) + Pentagram (red) screen tints
   - weapon rack         all seven weapons + ammo: the wheel offers everything
   - firing line         grunts and dogs at known positions: live targets
-  - running track       a 400 m oval around the arena: turning without a
+  - running track       an oval ringing the arena: turning without a
                         controller, and lane lines to read drift against
 
 The track rings the arena rather than living in a second map, so one `map
 range` gives both: the arena sits in the oval's infield, and you walk off
-the arena floor straight onto the lanes. True scale on the oval, 1 Quake
-unit = 1 inch, so a lap is a real 400 m and the distances feel right in the
-headset:
+the arena floor straight onto the lanes. It is sized to the ARENA, not to
+a real track: at true scale a 400 m oval reads in the headset as a huge
+empty field around a small room, so the bends are folded in until the lanes
+hug the arena. 1 Quake unit = 1 inch still, so a lane is a real lane width:
 
-  straights   84.39 m  = 3322 units, along X, centred on the origin
-  bend radius 36.50 m  = 1437 units to lane 1's inner edge
-  8 lanes     1.22 m   =   48 units each -> outer edge at 1821 units
+  straights   47.14 m  = 1856 units, the arena's own length, along X
+  bend radius 18.29 m  =  720 units to lane 1's inner edge (672 + 48 clear)
+  8 lanes      1.22 m  =   48 units each -> outer edge at 1104 units
 
-The arena's 1856 x 1344 footprint fits inside the oval's 3322 x 2874
-infield rectangle with ~730 units to spare on each side, so the bend radius
-is the real one. The enclosure walls and the sky lid moved out to ring the
-whole oval; everything stays inside +-4096, so the map is plain BSP29.
+A lap on lane 1's centre line is therefore 8387 units = 213 m, not 400.
+That is the intent, not a rounding error. The enclosure walls and the sky
+lid ring the track snugly rather than fencing a field; everything stays
+inside +-4096, so the map is plain BSP29.
 
 Textures are extracted from a local pak0.pak into range.wad -- id's
 assets are not redistributable, so neither the wad nor the compiled bsp is
@@ -118,18 +119,21 @@ def extract_wad(id1: Path, out: Path) -> None:
 # infield meet on a shared plane instead of overlapping.
 AX, AY = 928, 672
 
-HALF_STRAIGHT = 1661          # 3322 / 2: the bend centres sit at x = +-1661
-R_IN = 1437                   # lane 1's inner edge
+HALF_STRAIGHT = AX            # 928: the bend centres sit on the arena's own
+                              # half-length, so each straight spans the arena
+R_IN = AY + 48                # 720: lane 1's inner edge, 48 clear of the floor
 LANES, LANE_W = 8, 48
-R_OUT = R_IN + LANES * LANE_W # 1821: lane 8's outer edge
+R_OUT = R_IN + LANES * LANE_W # 1104: lane 8's outer edge
 SEGS = 16                     # brush segments per semicircle (11.25 deg each)
 LINE_W, LINE_H = 4, 2         # lane lines: 4 wide, 2 proud of the floor
 START_W = 8                   # the start/finish line is twice a lane line
 
-# Enclosure, moved out from the arena's old +-928/+-672 to ring the whole
-# oval. Inner faces at +-XW / +-YW, floor top at z = 0, sky at ZC. The
-# outermost brush face is at XW + 32 = 4064, inside the +-4096 BSP29 limit.
-XW, YW, ZC = 4032, 3072, 1024
+# Enclosure, ringing the track rather than a field around it. Inner faces
+# at +-XW / +-YW, floor top at z = 0, sky at ZC. Both are on the 64 grid like
+# every other coordinate here, which leaves ~270 units of apron outside lane
+# 8 -- enough to walk, not a field. The outermost brush face is at
+# XW + 32 = 2336, well inside the +-4096 BSP29 limit.
+XW, YW, ZC = 2304, 1408, 1024
 
 # The bottom straight (y < 0) runs +X, so the bends are left turns, as on a
 # real track, and the start/finish line is at the start of that straight.
@@ -282,10 +286,10 @@ def build_map():
     bends = [Bend(hx, +1), Bend(-hx, -1)]
     b, detail = [], []
 
-    # Structural shell: a slab under everything, four walls, a sky lid, all
-    # of it out beyond the oval now rather than tight around the arena. This
-    # is all qbsp has to seal and vis has to portal; the track's floor
-    # tiling, lines and markers below are func_detail and cannot leak.
+    # Structural shell: a slab under everything, four walls, a sky lid, set
+    # just outside the oval's own footprint. This is all qbsp has to seal and
+    # vis has to portal; the track's floor tiling, lines and markers below
+    # are func_detail and cannot leak.
     fx, fy = XW + 32, YW + 32
     b.append(box(-fx, -fy, -32, fx, fy, -16, OUTSIDE))
     b.append(box(-fx, -fy, ZC, fx, fy, ZC + 16, SKY))
@@ -338,12 +342,16 @@ def build_map():
 
     # --- the track -------------------------------------------------------
     # Floor: one flat plane at z = 0, tiled by region so each gets its own
-    # texture with no overlaps. The infield is four boxes AROUND the arena
+    # texture with no overlaps. The infield is boxes AROUND the arena
     # footprint (the arena keeps its own floor brush), then the straights'
     # lanes and apron, then each bend as a half-disc of infield, 16 lane
     # sectors and 16 outer wedges that reach the walls.
-    detail.append(box(-hx, -R_IN, -16, -AX, R_IN, 0, INFIELD))
-    detail.append(box(AX, -R_IN, -16, hx, R_IN, 0, INFIELD))
+    # The two side strips exist only while the bend centres sit inboard of
+    # the arena's own half-length; at hx == AX the arena floor already reaches
+    # the bends and these boxes would be zero-width.
+    if hx > AX:
+        detail.append(box(-hx, -R_IN, -16, -AX, R_IN, 0, INFIELD))
+        detail.append(box(AX, -R_IN, -16, hx, R_IN, 0, INFIELD))
     detail.append(box(-AX, -R_IN, -16, AX, -AY, 0, INFIELD))
     detail.append(box(-AX, AY, -16, AX, R_IN, 0, INFIELD))
     for s in (1, -1):

@@ -29,7 +29,7 @@ void QC_AudioSetRunning (int running) { (void)running; }
 /* Mirrors the track constants in tools/range/genrange.py: lane 1's inner
  * edge, a lane's width, and how far the lane lines stand proud of the floor.
  * Change both or neither. */
-#define R_IN	1437.0f
+#define R_IN	720.0f
 #define LANE_W	48.0f
 #define LINE_H	2.0f
 #define LANE1_Y	(-(R_IN + LANE_W / 2))
@@ -95,16 +95,17 @@ int main (int argc, char **argv)
 	CHECK (SV_PointContents (pos) == CONTENTS_SOLID, "and floored");
 
 	/* Walkable all the way out: the spawn faces +Y, so holding +back walks
-	 * the player south off the arena floor, across the infield, over the
-	 * inner kerb and into lane 1 -- about 1000 units. Polled rather than
-	 * timed, because host_timescale is still easing back up from the wheel;
-	 * the budget is roughly four times the walk at the server's 320 ups cap.
-	 * Nothing may block the way, so the infield tiling has to meet the
-	 * arena floor flush and the kerb has to be a step, not a wall. */
+	 * the player south off the arena floor, across the infield strip, over
+	 * the inner kerb and into lane 1 -- 296 units, now the track hugs the
+	 * arena rather than ringing a field. Polled rather than timed, because
+	 * host_timescale is still easing back up from the wheel; the budget is
+	 * roughly four times the walk at the server's 320 ups cap. Nothing may
+	 * block the way, so the infield tiling has to meet the arena floor
+	 * flush and the kerb has to be a step, not a wall. */
 	QC_ExecuteCommand ("cl_backspeed 400\n");
 	QC_ExecuteCommand ("+back\n");
 	reached = 0;
-	for (i = 0; i < 600 && !reached; i++)
+	for (i = 0; i < 280 && !reached; i++)
 	{
 		QC_Frame (1.0/72.0);
 		VectorCopy (svs.clients[0].edict->v.origin, pos);
