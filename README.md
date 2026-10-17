@@ -10,28 +10,33 @@ it. No game data included — bring your own paks.
 
 ## See it
 
-*Footage incoming — the five clips below are being captured on device.*
+**Crosshair and laser**
 
-<!--
-MEDIA — drop files in docs/media/ and uncomment the line under each shot.
-These are the five planned captures; all five are DEVICE captures, not
-simulator. Keep them short and loopable.
+![Crosshair and laser](docs/media/crosshair-laser.gif)
 
-  1. hands.gif      — pinch-to-fire, the weapon wheel at the wrist, and the
-                      prayer-sign console summon, in one take.
-  2. phase.gif      — the phase dissolve, from the full world to the room.
-  3. latency.gif    — a fast head turn with the frame counter visible.
-  4. mg3-90hz.gif   — an mg3 map holding 90 Hz, frame rate on screen.
-                      FUTURE: mg3 does not load yet (see the roadmap).
-  5. foveated.gif   — the renderer's single-pass foveated stereo, shown
-                      clearly: one pass, native drawable resolution.
--->
+**Hand viewing modes**
 
-<!-- ![Hands: pinch to fire, the wheel at the wrist, the prayer summon](docs/media/hands.gif) -->
-<!-- ![The phase dissolve, world to room](docs/media/phase.gif) -->
-<!-- ![Head latency, frame counter visible](docs/media/latency.gif) -->
-<!-- ![An mg3 map at 90 Hz](docs/media/mg3-90hz.gif) -->
-<!-- ![Single-pass foveated stereo at native resolution](docs/media/foveated.gif) -->
+![Hand viewing modes](docs/media/hand-viewing-modes.gif)
+
+**HUDs**
+
+![HUDs](docs/media/huds.gif)
+
+**Phase out and occlusion**
+
+![Phase out and occlusion](docs/media/phaseout-occlusion.gif)
+
+**Power gauntlet**
+
+![Power gauntlet](docs/media/power-gauntlet.gif)
+
+**Teleportation**
+
+![Teleportation](docs/media/teleportation.gif)
+
+**Weapon wheel**
+
+![Weapon wheel](docs/media/weapon-wheel.gif)
 
 ## What is different about it
 
