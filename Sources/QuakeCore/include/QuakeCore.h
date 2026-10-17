@@ -314,6 +314,12 @@ typedef struct qc_frame_s {
 					   is pre-compensated in IN_Move so the stick still
 					   walks along the body, not the hand. */
 	float		world_scale;	/* metres per Quake unit (vr_worldscale, clamped) */
+	float		viewheight;	/* cl.viewheight, Quake units: the eye above the
+					   hull bottom (22 standing, -8 dead). vieworg
+					   already includes it; the immersive consumer
+					   subtracts it to find the floor the player stands
+					   on and anchor that to the real floor. 0 with no
+					   world. */
 	uint32_t	sky_solid_texnum;   /* classic sky back layer, 0 = none */
 	uint32_t	sky_alpha_texnum;   /* classic sky cloud layer, 0 = none */
 	uint32_t	skybox_texnums[6];  /* indexed by sky axis (upstream
