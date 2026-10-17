@@ -14,43 +14,45 @@ it. No game data included — bring your own paks.
 
 ![Phase out and occlusion](docs/media/phaseout-occlusion.gif)
 
-Phase melts the level into your room at the rate you set, in the colour you set. Enemies and shots keep rendering through it, and occlusion still holds: what the level hides stays hidden.
+Phase melts the level into your room at the rate you set, in the colour you set. Enemies and shots keep rendering through it, and occlusion still holds: what the level hides stays hidden. The invasion is now in your home!
 
 **Weapon wheel**
 
 ![Weapon wheel](docs/media/weapon-wheel.gif)
 
-Turn the off wrist over and your owned weapons ring it while time slows to a crawl. Point at a slot with either hand and turn the palm back to take it. The slow motion can be switched off.
+Twist the wrist over and the weapon wheel appears while time slows to a crawl, giving you time to choose. Point at a slot with your dominant hand, or enable same-hand selection to pick with the hand the wheel rides on; turn the palm back to take the weapon. The slow motion can be disabled if you prefer the original pacing and tempo of Quake.
 
 **Hand viewing modes**
 
 ![Hand viewing modes](docs/media/hand-viewing-modes.gif)
 
-Your hands can render as nothing at all, as a joint skeleton, as a 3D model or as the bare joint dots, and the gun hand and the off hand can use different modes.
+Your hands can render as nothing at all, as a wireframe debug skeleton of the joints (useful for checking mistriggers and calibration), as a 3D model, or as your real hands! Real hands have their own weapon model placement settings too. You can also show the 3D model on the off hand only, for better immersion and tracking of your non-gun hand.
 
 **Teleportation**
 
 ![Teleportation](docs/media/teleportation.gif)
 
-Point at the floor, pinch, release and blink there. The landing point is collision checked, so you never end up in a wall or in lava. Yes, you can telefrag.
+Point at the floor, watch the crosshair turn blue, pinch, release and blink there. The landing point is collision checked, so you never end up in a wall or in lava. Yes, you can telefrag.
 
 **HUDs**
 
 ![HUDs](docs/media/huds.gif)
 
-Three HUDs: the classic status bar ahead of you, the classic bar strapped to your wrist, or modular tiles. Press **Edit HUD Layout** and a grid of slots lands on the floor; pinch a tile and drop it where you want it.
+Choose from three distinct HUDs: the classic status bar ahead of you, the classic bar strapped to your wrist, or modular tiles unique to this port! Press Edit HUD Layout to edit the placement and size of the HUD elements.
 
 **Power gauntlet**
 
 ![Power gauntlet](docs/media/power-gauntlet.gif)
 
-The power gauntlet: a six-key panel on the off forearm, hidden until you glance at it. Each key fires a console command, the sixth summons the window, and a fingertip appears to guide the press only once the other hand is close.
+The power gauntlet: a six-key panel on the off forearm, hidden until you glance at it. Choose whether to wear it as an along-the-arm communicator or as a wrist-mounted device. Each key fires a console command, and a fingertip appears to guide the press only once the other hand is close to the panel. The final version will be customisable.
 
 **Crosshair and laser**
 
 ![Crosshair and laser](docs/media/crosshair-laser.gif)
 
-A ring reticle lies flat on whatever the shot will hit, with health and ammo arcs around it if you want them. Add a laser from the muzzle, pick a colour for either, or switch both off and shoot cold.
+Choose a custom crosshair and change its colour. Enable the health and ammo crosshair for an immersive resource display. Add a laser from the muzzle and pick its colour too. Or go cold turkey, with no assistance of any kind!
+
+**Your Quake, Your Way!**
 
 ## What is different about it
 
