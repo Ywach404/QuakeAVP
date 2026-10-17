@@ -102,7 +102,7 @@ picker swaps both.
 | <img src="docs/media/gestures/hands-jump.svg" alt="Gun hand, thumb touching the ring finger, an arc leaving the ground" width="120"> | **Jump** | Pinch thumb to ring finger on the gun hand to jump. Ring is the free finger there, since firing lives on the index. |
 | <img src="docs/media/gestures/hands-turn-drag.svg" alt="Gun hand pinched and dragged sideways from an anchor, with a rotation arrow" width="120"> | **Turn** | Pinch thumb to middle finger on the gun hand and hold it out to one side: you keep turning for as long as you hold, faster the further you have dragged. With smooth turning off it fires one snap instead. |
 | <img src="docs/media/gestures/hands-turn-flick.svg" alt="Gun hand whipped sideways, with speed trails" width="120"> | **Quick turn** | A fast sideways whip of the un-pinched gun hand fires a single turn. The threshold is deliberately high, so ordinary aiming motion cannot trip it. |
-| <img src="docs/media/gestures/hands-turn-body.svg" alt="An arm held off the forward axis, with a rotation arrow" width="120"> | **Body turn** | Hold the gun past about 18 degrees to one side and your body rotates under it, continuously, until you bring the aim back to centre. It is the body that turns, not your neck: the aim leads and the view follows it round. |
+| <img src="docs/media/gestures/hands-turn-body.svg" alt="An arm held off the forward axis, with a rotation arrow" width="120"> | **Body turn** | Hold the gun past about 18 degrees to one side and your body rotates under it, continuously, until you bring the aim back to center. It is the body that turns, not your neck: the aim leads and the view follows it round. |
 | <img src="docs/media/gestures/hands-teleport.svg" alt="Off hand, thumb touching the ring finger, an arc to a landing ring" width="120"> | **Teleport** | Point the gun at the floor, pinch thumb to ring on the off hand to line the spot up, and release to blink there. The landing point is collision-checked, so you cannot blink into a wall or into lava. |
 | <img src="docs/media/gestures/hands-weapon-wheel.svg" alt="The off wrist turned over, back of the hand up, with a ring of weapon slots around it" width="120"> | **Weapon wheel** | Turn the off wrist over -- palm toward the floor, like checking a watch -- and your owned weapons ring that wrist while the world slows to a crawl. Reach the off hand toward one to highlight it, or point at the ring with the gun hand instead; turn the palm back up to take it. |
 | <img src="docs/media/gestures/hands-summon.svg" alt="Both palms together, fingers up, with a dwell arc" width="120"> | **Summon the window** | Hold both palms together with the fingers up for 0.6 seconds and the app window comes back without leaving the game. The prayer sign is used because visionOS reserves the open palm for Home View. |
@@ -196,13 +196,13 @@ Where to get the data legitimately:
 - **Your original CD**, or any earlier legitimate copy. The 1996 files work
   unchanged.
 - **The shareware episode**, freely redistributable under its original
-  licence and easy to find. That is `pak0.pak` alone — episode 1, no
+  license and easy to find. That is `pak0.pak` alone — episode 1, no
   `pak1.pak`.
 
 One caveat for shareware-only data: with no `pak1.pak` the engine's
 `registered` cvar stays 0, and in that state `common.c` refuses any loose file
 whose path contains a `/`. A soundtrack dropped in as `id1/music/trackNN.ogg`
-is therefore invisible no matter what the codecs say — upstream behaviour, not
+is therefore invisible no matter what the codecs say — upstream behavior, not
 a bug in this port, and written up in `UPSTREAM.md`. Registered data, or music
 inside a pak, both fix it.
 
@@ -250,7 +250,7 @@ head and movement stays the body — look left while aiming right and the shot
 still goes right. Left-handed play is first-class: one **Dominant hand**
 picker mirrors every gesture — the aim arm, the wheel's wrist, the
 gauntlet's forearm, the diagrams' convention — and the Sense pair has its
-own swap for the physical controllers. A stylised virtual hand holds the gun while the world is
+own swap for the physical controllers. A stylized virtual hand holds the gun while the world is
 solid and crossfades to your real hand as the phase melt reveals passthrough;
 firing kicks the shooting hand's haptics and recoils the gun.
 
@@ -320,7 +320,7 @@ immersive space is open (`RendererCore` arbitrates the handover). The
 immersive thread late-latches the head pose: it samples `deviceAnchor` just
 before encode and composes per-eye matrices from the packet's view basis, so
 head tracking never waits on the engine. The engine keeps its own 90 Hz
-pacer — deliberately: serialising sim and render would let a map-load hitch
+pacer — deliberately: serializing sim and render would let a map-load hitch
 stall the compositor. Neither side waits on the other; the engine never
 touches Metal and never blocks on the GPU.
 
@@ -334,8 +334,8 @@ and water floating exactly where the level put them. `phase 0` reverses it.
 `phase_time` sets the sweep duration.
 
 The trick that makes it hold together: the world is always drawn as a depth
-prepass plus an equal-depth colour pass, and the dissolve only ever touches
-the colour pass. Occlusion comes entirely from the prepass and is identical
+prepass plus an equal-depth color pass, and the dissolve only ever touches
+the color pass. Occlusion comes entirely from the prepass and is identical
 at every phase value, so a grunt two rooms away stays hidden behind a wall
 you can no longer see — walk around where the wall was and there he is. The
 immersive space runs mixed immersion permanently (at `phase 0` the opaque
@@ -371,13 +371,13 @@ runs an export at boot -- the simulator acceptance test, checked with ffprobe.
 | | | |
 |---|---|---|
 | **M0** | engine compiles, boots, ticks; platform stubbed | ✅ done |
-| ~~M1~~ | ~~software renderer~~ — cancelled: QuakeSpasm ships no software rasterizer to port | — |
+| ~~M1~~ | ~~software renderer~~ — canceled: QuakeSpasm ships no software rasterizer to port | — |
 | **M2** | Metal renderer, mono, flat window (demo playback as the test harness) | 🚧 left: colormapped player skins, texture animation, console text entry and scrollback, `gl_screen.c` overlays |
 | **M3** | CompositorServices immersive stereo + head tracking | ✅ done |
 | **M4** | controller input, snap turn, vignette, weapon decoupled from view | ✅ done |
 | **M5** | hands-only input, PSVR2 Sense pair I/O, haptics, adaptive-trigger scaffold | 🚧 input done |
 | **M5.5** | weapon wheel: slow-motion time dilation, ring of owned weapons at the wrist | ✅ done |
-| **M6** | aim/body split (hand- and controller-aimed weapon), spatial audio, world-scale tuning | 🚧 aim/body done; audio in, panned by Quake's own mixer, not yet spatialised |
+| **M6** | aim/body split (hand- and controller-aimed weapon), spatial audio, world-scale tuning | 🚧 aim/body done; audio in, panned by Quake's own mixer, not yet spatialized |
 | **M6.5** | video capture + export: demo + head-track sidecar, offline lock-step render to `.mov` | ✅ done |
 | **R1** | first public build: rerelease episodes, online shown, tagged sideload with an install page | 🚧 next |
 | **Later** | remappable finger and button bindings — the controls manifest above becomes a live rebinding UI in the window | 📋 planned |
@@ -397,7 +397,7 @@ Rest of **M2** (renderer completeness, in rough order):
   (`Sky_LoadTextureQ64`), and the underwater view warp (`r_waterwarp`).
   The surfaces themselves draw: sky as two scrolling cloud layers or a
   skybox, liquids warped in the fragment shader with the `r_wateralpha`
-  family (and their worldspawn overrides) honoured.
+  family (and their worldspawn overrides) honored.
 - Texture animation uses the world entity's frame 0 only.
 - Underwater view warp (the full-screen sine distortion) — deliberately
   omitted in VR: it needs render-to-texture and is nausea-inducing in a
@@ -417,7 +417,7 @@ Rest of **M2** (renderer completeness, in rough order):
   - The insert/overwrite cursor pics (`pic_ovr`/`pic_ins`) are still the
     dummy pic, so the console's input line has no blinking cursor.
   - The multiplayer setup menu's player preview draws untranslated: the
-    shirt/trousers colour sliders do not recolour it.
+    shirt/trousers color sliders do not recolor it.
   - `gl_screen.c`'s small overlays — crosshair (the VR reticle replaces
     it), `scr_showfps`, `scr_clock`, `showturtle`, `showpause`, the
     loading plaque, `Draw_DebugChar`.
@@ -450,7 +450,7 @@ The stub files are shaped so the next milestones land in one place each:
   `AVAudioEngine` source node drains. Quake's own mixer does the mixing; the
   platform half owns the ring and the play cursor and nothing else.
 - `App/Sources/QuakeEngineHost.swift` — owns the engine's frame clock (a
-  plain 90 Hz pacer). An earlier plan to retire it in favour of
+  plain 90 Hz pacer). An earlier plan to retire it in favor of
   `LayerRenderer.queryNextFrame()` was rejected: the compositor clocks
   *rendering* only, and coupling the sim to it would turn any sim hitch into
   a compositor stall inside a headset.
@@ -471,11 +471,11 @@ The stub files are shaped so the next milestones land in one place each:
   this is an unofficial port.
 - **stb_vorbis** and **stb_image_write** — Sean Barrett (public domain / MIT),
   the latter's JPEG writer based on Jon Olick's `jo_jpeg.cpp`.
-  **lodepng** — Lode Vandevenne (zlib licence).
-  **miniz** — Rich Geldreich, RAD Game Tools and Valve (MIT licence).
+  **lodepng** — Lode Vandevenne (zlib license).
+  **miniz** — Rich Geldreich, RAD Game Tools and Valve (MIT license).
 - The port itself — A. Cervantez. See `AUTHORS`.
 
-## Licence
+## License
 
 GPL-2.0-or-later, inherited from QuakeSpasm. See `LICENSE.txt` and
 `UPSTREAM.md`. Every original file in this repository carries an SPDX
