@@ -26,13 +26,13 @@ compare against.
 - The weapon wheel: turn the off wrist over and the owned weapons ring that
   wrist as live spinning models while simulation time crawls; reach or point
   to highlight one, then turn the palm back to take it.
-- The wrist communicator and the modular HUD: the status bar whole, or split
+- The power gauntlet and the modular HUD: the status bar whole, or split
   into tiles you place and pin yourself, with a live in-headset editor.
 - The phase dissolve — `phase 1` melts the world to passthrough around you and
   leaves the level's monsters, pickups and doors standing in your room.
 - Sound, including the CD soundtrack, through an `AVAudioEngine` source node
   over the engine's own mixer. Stereo as Quake mixes it; not yet
-  spatialised to the headset.
+  spatialized to the headset.
 - Game menus in the SwiftUI window rather than in the world: new game,
   save and load against the engine's own `.sav` files, direct connect, and a
   LAN server browser.
