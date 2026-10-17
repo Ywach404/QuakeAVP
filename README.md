@@ -14,29 +14,43 @@ it. No game data included — bring your own paks.
 
 ![Crosshair and laser](docs/media/crosshair-laser.gif)
 
+A ring reticle lies flat on whatever the shot will hit, with health and ammo arcs around it if you want them. Add a laser from the muzzle, pick a colour for either, or switch both off and shoot cold.
+
 **Hand viewing modes**
 
 ![Hand viewing modes](docs/media/hand-viewing-modes.gif)
+
+Your hands can render as nothing at all, as a joint skeleton, as a 3D model or as the bare joint dots, and the gun hand and the off hand can use different modes.
 
 **HUDs**
 
 ![HUDs](docs/media/huds.gif)
 
+Three HUDs: the classic status bar ahead of you, the classic bar strapped to your wrist, or modular tiles. Press **Edit HUD Layout** and a grid of slots lands on the floor; pinch a tile and drop it where you want it.
+
 **Phase out and occlusion**
 
 ![Phase out and occlusion](docs/media/phaseout-occlusion.gif)
+
+Phase melts the level into your room at the rate you set, in the colour you set. Enemies and shots keep rendering through it, and occlusion still holds: what the level hides stays hidden.
 
 **Power gauntlet**
 
 ![Power gauntlet](docs/media/power-gauntlet.gif)
 
+The wrist communicator, as a gauntlet: a six-key panel on the off forearm, hidden until you glance at it. Each key fires a console command, the sixth summons the window, and a fingertip appears to guide the press only once the other hand is close.
+
 **Teleportation**
 
 ![Teleportation](docs/media/teleportation.gif)
 
+Point at the floor, pinch, release and blink there. The landing point is collision checked, so you never end up in a wall or in lava. Yes, you can telefrag.
+
 **Weapon wheel**
 
 ![Weapon wheel](docs/media/weapon-wheel.gif)
+
+Turn the off wrist over and your owned weapons ring it while time slows to a crawl. Point at a slot with either hand and turn the palm back to take it. The slow motion can be switched off.
 
 ## What is different about it
 
