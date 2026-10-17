@@ -29,6 +29,7 @@
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include "qr_bridge.h"
+#include "image.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -386,6 +387,11 @@ qboolean QR_ConsumePendingDrawableSize (int *width, int *height)
 static gltexture_t	qr_gltextures[QR_MAX_GLTEXTURES];
 static gltexture_t	*active_gltextures, *free_gltextures;
 static int		numgltextures;
+
+/* up to 16 color translated skins; entity 1+i wears playertextures[i].
+   Defined here, beside the storage, because QR_FreeTexture below has to
+   clear a slot whose texture it is returning to the free list. */
+gltexture_t		*playertextures[MAX_SCOREBOARD];
 static uint32_t		qr_next_texnum = 1;
 
 /*
@@ -718,6 +724,21 @@ static void QR_FreeTexture (gltexture_t *kill)
 		return;
 	}
 
+	/* A player's colormapped skin is owned by the player's model, so a
+	   cache flush or eviction frees it without passing through R_NewGame.
+	   Upstream leaves playertextures[] pointing at the free-listed struct;
+	   the next TexMgr_LoadImage pops that very struct, and the next colour
+	   change then recolours whatever model's skin now lives there. Clear
+	   the slot here, the one seam every free passes through: the player
+	   draws the model skin until the next skin or model update rebuilds
+	   it, which is the benign outcome. */
+	{
+		int i;
+		for (i = 0; i < MAX_SCOREBOARD; i++)
+			if (playertextures[i] == kill)
+				playertextures[i] = NULL;
+	}
+
 	if (active_gltextures == kill)
 	{
 		active_gltextures = kill->next;
@@ -1038,6 +1059,248 @@ gltexture_t *QR_TexMgr_LoadImage (qmodel_t *owner, const char *name,
 	Hunk_FreeToLowMark(mark);
 
 	return glt;
+}
+
+/*
+================================================================================
+
+	COLORMAPPING AND TEXTURE RELOADING -- player skins
+
+Port of gl_texmgr.c's TexMgr_ReloadImage and gl_rmisc.c's
+R_TranslatePlayerSkin / R_TranslateNewPlayerSkin / R_NewGame, plus the
+draw-time rule from r_alias.c. The one departure is structural: upstream
+pads to power-of-two inside LoadImage8, this port never pads, so width is
+always source_width and nothing needs undoing before the translation.
+
+The reload goes to QR_LoadImage8 directly rather than back through
+QR_TexMgr_LoadImage: that path CRCs the UNTRANSLATED indices and, with
+TEXPREF_OVERWRITE, returns early on a match, so a colours-only change would
+never reach the consumer.
+
+================================================================================
+*/
+
+/*
+================
+QR_TexMgr_ReloadImage -- reloads a texture, and colormaps it if needed
+================
+*/
+void QR_TexMgr_ReloadImage (gltexture_t *glt, int shirt, int pants)
+{
+	byte	translation[256];
+	byte	*src, *dst, *data = NULL, *translated;
+	int	mark, size, i;
+
+//
+// get source data
+//
+	mark = Hunk_LowMark ();
+
+	if (glt->source_file[0] && glt->source_offset) {
+		//lump inside file
+		FILE *f;
+		int sz;
+		COM_FOpenFile(glt->source_file, &f, NULL);
+		if (!f) goto invalid;
+		fseek (f, glt->source_offset, SEEK_CUR);
+		size = glt->source_width * glt->source_height;
+		/* should be SRC_INDEXED, but no harm being paranoid:  */
+		if (glt->source_format == SRC_RGBA || glt->source_format == SRC_LIGHTMAP) {
+			size *= 4;
+		}
+		data = (byte *) Hunk_Alloc (size);
+		sz = (int) fread (data, 1, size, f);
+		fclose (f);
+		if (sz != size) {
+			Hunk_FreeToLowMark(mark);
+			Host_Error("Read error for %s", glt->name);
+		}
+	}
+	else if (glt->source_file[0] && !glt->source_offset) {
+		data = Image_LoadImage (glt->source_file, (int *)&glt->source_width, (int *)&glt->source_height); //simple file
+	}
+	else if (!glt->source_file[0] && glt->source_offset) {
+		data = (byte *) glt->source_offset; //image in memory
+	}
+	if (!data) {
+invalid:	Con_Printf ("TexMgr_ReloadImage: invalid source for %s\n", glt->name);
+		Hunk_FreeToLowMark(mark);
+		return;
+	}
+
+	glt->width = glt->source_width;
+	glt->height = glt->source_height;
+//
+// apply shirt and pants colors
+//
+// if shirt and pants are -1,-1, use existing shirt and pants colors
+// if existing shirt and pants colors are -1,-1, don't bother colormapping
+	if (shirt > -1 && pants > -1)
+	{
+		if (glt->source_format == SRC_INDEXED)
+		{
+			glt->shirt = shirt;
+			glt->pants = pants;
+		}
+		else
+			Con_Printf ("TexMgr_ReloadImage: can't colormap a non SRC_INDEXED texture: %s\n", glt->name);
+	}
+	if (glt->shirt > -1 && glt->pants > -1)
+	{
+		//create new translation table
+		for (i = 0; i < 256; i++)
+			translation[i] = i;
+
+		shirt = glt->shirt * 16;
+		if (shirt < 128)
+		{
+			for (i = 0; i < 16; i++)
+				translation[TOP_RANGE+i] = shirt + i;
+		}
+		else
+		{
+			for (i = 0; i < 16; i++)
+				translation[TOP_RANGE+i] = shirt+15-i;
+		}
+
+		pants = glt->pants * 16;
+		if (pants < 128)
+		{
+			for (i = 0; i < 16; i++)
+				translation[BOTTOM_RANGE+i] = pants + i;
+		}
+		else
+		{
+			for (i = 0; i < 16; i++)
+				translation[BOTTOM_RANGE+i] = pants+15-i;
+		}
+
+		//translate texture
+		size = glt->width * glt->height;
+		dst = translated = (byte *) Hunk_Alloc (size);
+		src = data;
+
+		for (i = 0; i < size; i++)
+			*dst++ = translation[*src++];
+
+		data = translated;
+	}
+//
+// upload it
+//
+	switch (glt->source_format)
+	{
+	case SRC_INDEXED:
+		QR_LoadImage8 (glt, data, NULL);
+		break;
+	case SRC_LIGHTMAP:
+	case SRC_RGBA:
+		QR_EnqueueUpload (glt, (unsigned *)data);
+		break;
+	case SRC_INDEXED_PALETTE:
+		QR_LoadImage8Valve (glt, data);
+		break;
+	}
+
+	Hunk_FreeToLowMark(mark);
+}
+
+/*
+===============
+QR_TranslatePlayerSkin -- only handles new colors, not new skins
+===============
+*/
+void QR_TranslatePlayerSkin (int playernum)
+{
+	int			top, bottom;
+
+	top = (cl.scores[playernum].colors & 0xf0)>>4;
+	bottom = cl.scores[playernum].colors &15;
+
+	//FIXME: if gl_nocolors is on, then turned off, the textures may be out of sync with the scoreboard colors.
+	if (!gl_nocolors.value)
+	{
+		if (playertextures[playernum])
+			QR_TexMgr_ReloadImage (playertextures[playernum], top, bottom);
+	}
+}
+
+/*
+===============
+QR_TranslateNewPlayerSkin -- called when the skin or model actually changes,
+instead of just new colors
+===============
+*/
+void QR_TranslateNewPlayerSkin (int playernum)
+{
+	char		name[64];
+	byte		*pixels;
+	aliashdr_t	*paliashdr;
+	entity_t	*e;
+	int		skinnum;
+
+//get correct texture pixels
+	e = &cl_entities[1+playernum];
+
+	if (!e->model || e->model->type != mod_alias)
+		return;
+
+	paliashdr = (aliashdr_t *)Mod_Extradata (e->model);
+
+	skinnum = e->skinnum;
+
+	if (skinnum < 0 || skinnum >= paliashdr->numskins)
+	{
+		Con_DPrintf("(%d): Invalid player skin #%d\n", playernum, skinnum);
+		skinnum = 0;
+	}
+
+	pixels = (byte *)paliashdr + paliashdr->texels[skinnum]; // This is not a persistent place!
+
+//upload new image
+	q_snprintf(name, sizeof(name), "player_%i", playernum);
+	playertextures[playernum] = QR_TexMgr_LoadImage (e->model, name, paliashdr->skinwidth, paliashdr->skinheight,
+		SRC_INDEXED, pixels, paliashdr->gltextures[skinnum][0]->source_file, paliashdr->gltextures[skinnum][0]->source_offset, TEXPREF_PAD | TEXPREF_OVERWRITE);
+
+//now recolor it
+	QR_TranslatePlayerSkin (playernum);
+}
+
+/*
+===============
+QR_PlayerSkinTexture -- r_alias.c's draw-time rule: a player entity that
+carries its own translation table wears its colormapped skin instead of the
+model's, unless gl_nocolors says otherwise. Players are cl_entities[1..
+maxclients]; a texture not built yet (NULL) falls back to the model skin so
+a late svc_updatecolors never draws notexture.
+===============
+*/
+gltexture_t *QR_PlayerSkinTexture (const entity_t *e, gltexture_t *tx)
+{
+	if (e->colormap != vid.colormap && !gl_nocolors.value)
+	{
+		if ((uintptr_t)e >= (uintptr_t)&cl_entities[1] && (uintptr_t)e <= (uintptr_t)&cl_entities[cl.maxclients])
+		{
+			gltexture_t *pt = playertextures[e - cl_entities - 1];
+			if (pt)
+				return pt;
+		}
+	}
+	return tx;
+}
+
+/*
+===============
+QR_NewGame -- handle a game switch
+===============
+*/
+void QR_NewGame (void)
+{
+	int i;
+
+	//clear playertexture pointers (the textures themselves were freed by texmgr_newgame)
+	for (i=0; i<MAX_SCOREBOARD; i++)
+		playertextures[i] = NULL;
 }
 
 void QR_TexMgr_Init (void)
@@ -3787,9 +4050,9 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 	}
 	tx = paliashdr->gltextures[skinnum][anim];
 	fb = paliashdr->fbtextures[skinnum][anim];
+	tx = QR_PlayerSkinTexture (e, tx);	/* fb stays the model's own mask */
 	if (!gl_fullbrights.value)
 		fb = NULL;
-	/* TODO: colormapped player skins (playertextures / gl_nocolors) */
 
 	rec.alpha = entalpha;
 	rec.blend = (lerpdata.pose1 != lerpdata.pose2) ? lerpdata.blend : 0;
@@ -5586,6 +5849,31 @@ static uint32_t QR_PicTexnum (qpic_t *pic)
 }
 
 /*
+=============
+QR_DrawTransPicTranslate -- Draw_TransPicTranslate's backing. Only the
+multiplayer setup menu's player preview uses it; the pic was cached with its
+.lmp path and header offset, so a colour change is one re-read and reload of
+the same texture, exactly as upstream does it.
+=============
+*/
+void QR_DrawTransPicTranslate (int x, int y, qpic_t *pic, int top, int bottom)
+{
+	static int oldtop = -2;
+	static int oldbottom = -2;
+
+	if (pic && (top != oldtop || bottom != oldbottom))
+	{
+		qr_glpic_t	gl;
+		memcpy (&gl, pic->data, sizeof(qr_glpic_t));
+		oldtop = top;
+		oldbottom = bottom;
+		if (gl.gltexture)
+			QR_TexMgr_ReloadImage (gl.gltexture, top, bottom);
+	}
+	QR_DrawPic (x, y, pic);
+}
+
+/*
 ================
 Draw_CachePic's backing -- the menu and console .lmp art (gfx/*.lmp, raw
 qpic_t: width, height, indexed pixels), cached by name.
@@ -6285,6 +6573,14 @@ static void QR_TestEnsureFixtures (void)
 
 	Sbar_LoadPics ();
 	ready = 1;
+}
+
+/* The texture manager alone, for tests that never draw: hunk, byte order,
+   the gltexture free list. The palette tables stay zeroed for the caller
+   to fill. */
+void QR_TestTexMgrBoot (void)
+{
+	QR_TestEnsureFixtures ();
 }
 
 void QR_TestEmitTileInto (int tile_id, int stat_health, int stat_armor,
