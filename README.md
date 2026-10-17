@@ -10,11 +10,17 @@ it. No game data included — bring your own paks.
 
 ## See it
 
-**Crosshair and laser**
+**Phase out and occlusion**
 
-![Crosshair and laser](docs/media/crosshair-laser.gif)
+![Phase out and occlusion](docs/media/phaseout-occlusion.gif)
 
-A ring reticle lies flat on whatever the shot will hit, with health and ammo arcs around it if you want them. Add a laser from the muzzle, pick a colour for either, or switch both off and shoot cold.
+Phase melts the level into your room at the rate you set, in the colour you set. Enemies and shots keep rendering through it, and occlusion still holds: what the level hides stays hidden.
+
+**Weapon wheel**
+
+![Weapon wheel](docs/media/weapon-wheel.gif)
+
+Turn the off wrist over and your owned weapons ring it while time slows to a crawl. Point at a slot with either hand and turn the palm back to take it. The slow motion can be switched off.
 
 **Hand viewing modes**
 
@@ -22,35 +28,29 @@ A ring reticle lies flat on whatever the shot will hit, with health and ammo arc
 
 Your hands can render as nothing at all, as a joint skeleton, as a 3D model or as the bare joint dots, and the gun hand and the off hand can use different modes.
 
-**HUDs**
-
-![HUDs](docs/media/huds.gif)
-
-Three HUDs: the classic status bar ahead of you, the classic bar strapped to your wrist, or modular tiles. Press **Edit HUD Layout** and a grid of slots lands on the floor; pinch a tile and drop it where you want it.
-
-**Phase out and occlusion**
-
-![Phase out and occlusion](docs/media/phaseout-occlusion.gif)
-
-Phase melts the level into your room at the rate you set, in the colour you set. Enemies and shots keep rendering through it, and occlusion still holds: what the level hides stays hidden.
-
-**Power gauntlet**
-
-![Power gauntlet](docs/media/power-gauntlet.gif)
-
-The wrist communicator, as a gauntlet: a six-key panel on the off forearm, hidden until you glance at it. Each key fires a console command, the sixth summons the window, and a fingertip appears to guide the press only once the other hand is close.
-
 **Teleportation**
 
 ![Teleportation](docs/media/teleportation.gif)
 
 Point at the floor, pinch, release and blink there. The landing point is collision checked, so you never end up in a wall or in lava. Yes, you can telefrag.
 
-**Weapon wheel**
+**HUDs**
 
-![Weapon wheel](docs/media/weapon-wheel.gif)
+![HUDs](docs/media/huds.gif)
 
-Turn the off wrist over and your owned weapons ring it while time slows to a crawl. Point at a slot with either hand and turn the palm back to take it. The slow motion can be switched off.
+Three HUDs: the classic status bar ahead of you, the classic bar strapped to your wrist, or modular tiles. Press **Edit HUD Layout** and a grid of slots lands on the floor; pinch a tile and drop it where you want it.
+
+**Power gauntlet**
+
+![Power gauntlet](docs/media/power-gauntlet.gif)
+
+The power gauntlet: a six-key panel on the off forearm, hidden until you glance at it. Each key fires a console command, the sixth summons the window, and a fingertip appears to guide the press only once the other hand is close.
+
+**Crosshair and laser**
+
+![Crosshair and laser](docs/media/crosshair-laser.gif)
+
+A ring reticle lies flat on whatever the shot will hit, with health and ammo arcs around it if you want them. Add a laser from the muzzle, pick a colour for either, or switch both off and shoot cold.
 
 ## What is different about it
 
@@ -104,7 +104,7 @@ picker swaps both.
 | <img src="docs/media/gestures/hands-teleport.svg" alt="Off hand, thumb touching the ring finger, an arc to a landing ring" width="120"> | **Teleport** | Point the gun at the floor, pinch thumb to ring on the off hand to line the spot up, and release to blink there. The landing point is collision-checked, so you cannot blink into a wall or into lava. |
 | <img src="docs/media/gestures/hands-weapon-wheel.svg" alt="The off wrist turned over, back of the hand up, with a ring of weapon slots around it" width="120"> | **Weapon wheel** | Turn the off wrist over -- palm toward the floor, like checking a watch -- and your owned weapons ring that wrist while the world slows to a crawl. Reach the off hand toward one to highlight it, or point at the ring with the gun hand instead; turn the palm back up to take it. |
 | <img src="docs/media/gestures/hands-summon.svg" alt="Both palms together, fingers up, with a dwell arc" width="120"> | **Summon the window** | Hold both palms together with the fingers up for 0.6 seconds and the app window comes back without leaving the game. The prayer sign is used because visionOS reserves the open palm for Home View. |
-| <img src="docs/media/gestures/hands-wristcomm.svg" alt="A six-key panel on the forearm, one key pressed by a fingertip, an eye glancing at it" width="120"> | **Wrist communicator** | Glance down at your off forearm and a six-key panel fades in; touch a key with the other index fingertip to fire it. `MENU`, the sixth key, summons the window. |
+| <img src="docs/media/gestures/hands-wristcomm.svg" alt="A six-key panel on the forearm, one key pressed by a fingertip, an eye glancing at it" width="120"> | **Power gauntlet** | Glance down at your off forearm and a six-key panel fades in; touch a key with the other index fingertip to fire it. `MENU`, the sixth key, summons the window. |
 | <img src="docs/media/gestures/hands-hud-grab.svg" alt="A pinch dragging a tile to a new position" width="120"> | **Move a HUD tile** | Press **Edit HUD Layout** in the window, then pinch a status tile with either hand and drag it where you want it. Every other gesture is suppressed while you are arranging, so you cannot fire or walk off the anchor. |
 
 ### PSVR2 Sense
@@ -247,7 +247,7 @@ dominant hand's ray, or a PSVR2 Sense controller's), while the camera stays the
 head and movement stays the body — look left while aiming right and the shot
 still goes right. Left-handed play is first-class: one **Dominant hand**
 picker mirrors every gesture — the aim arm, the wheel's wrist, the
-communicator's forearm, the diagrams' convention — and the Sense pair has its
+gauntlet's forearm, the diagrams' convention — and the Sense pair has its
 own swap for the physical controllers. A stylised virtual hand holds the gun while the world is
 solid and crossfades to your real hand as the phase melt reveals passthrough;
 firing kicks the shooting hand's haptics and recoils the gun.
