@@ -164,6 +164,23 @@ final class FloorSource: @unchecked Sendable {
         print("[floor] re-measuring from \(count) live plane(s)")
     }
 
+    /// The head's height above the measured floor, in metres, or nil when
+    /// nothing has been measured. This is the window's PROOF of the
+    /// measurement, and the reason it is a height rather than the floor's
+    /// own number: the raw height is in a tracking frame that means
+    /// nothing to a player, but everyone knows roughly how tall they are.
+    /// Standing, this should read close to your own height. Far off and
+    /// plane detection has found a table or a bed, not the carpet.
+    static func headAboveFloor() -> Float? {
+        registry.lock()
+        let source = current
+        registry.unlock()
+        guard let source else { return nil }
+        source.lock.lock(); defer { source.lock.unlock() }
+        guard let floor = source.published else { return nil }
+        return source.head.y - floor
+    }
+
     /// The running source, for the window's Re-measure button.
     static func remeasureCurrent() {
         registry.lock()

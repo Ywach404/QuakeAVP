@@ -588,6 +588,18 @@ struct ContentView: View {
                         .font(.headline)
                     Text("Nudge the floor if it sits above or below your real floor.")
                         .font(.caption).foregroundStyle(.secondary)
+                    // The measurement, in terms a person can check against
+                    // themselves. Nobody knows where the tracking origin
+                    // is; everybody knows their own height.
+                    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                        if let above = FloorSource.headAboveFloor() {
+                            Text(String(format: "Floor found. Your head is %.2f m above it.", above))
+                                .font(.caption).foregroundStyle(.green)
+                        } else {
+                            Text("No floor measured. Open the immersive space, then re-measure.")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
                     Slider(value: Binding(
                         get: { Double(floorTrim) },
                         set: { floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
