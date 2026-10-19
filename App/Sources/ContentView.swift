@@ -624,6 +624,21 @@ struct ContentView: View {
                         // may be the sofa rather than the carpet, and the
                         // floor is only chosen once per provider life.
                         Button("Re-measure floor") { FloorSource.remeasureCurrent() }
+                        // Into the CONSOLE, not a caption. Hunting for small
+                        // text in a headset is a poor way to read a number
+                        // you are trying to trust, and the console pane is
+                        // already open beside this panel.
+                        Button("Log floor") {
+                            if let raw = FloorSource.rawReadout() {
+                                let chosen = raw.floorY.map { String(format: "%+.2f", $0) } ?? "none"
+                                let lowest = raw.lowest.map { String(format: "%+.2f", $0) } ?? "none"
+                                engine.send(String(
+                                    format: "echo FLOOR head %+.2f chosen %@ lowest %@ planes %d",
+                                    raw.headY, chosen, lowest, raw.planes))
+                            } else {
+                                engine.send("echo FLOOR plane detection not running")
+                            }
+                        }
                         Button("Recenter") { engine.send("vr_recenter") }
                     }
                 }
