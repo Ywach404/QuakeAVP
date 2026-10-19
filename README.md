@@ -10,6 +10,9 @@ it. No game data included — bring your own paks.
 
 ## See it
 
+**[Watch the devlog](https://www.youtube.com/watch?v=-G4lDuGikJI)** — the port in
+motion, and how it was built.
+
 **Phase out and occlusion**
 
 ![Phase out and occlusion](docs/media/phaseout-occlusion.gif)
