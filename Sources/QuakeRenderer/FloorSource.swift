@@ -32,6 +32,29 @@ import Foundation
 import QuartzCore
 import simd
 
+/// What the anchor actually did this frame, for the window's calibration
+/// panel. The floor source says where the real floor is; this says where
+/// the GAME floor ended up and how tall you are standing on it. If the two
+/// disagree the fault is in the anchor, not the measurement, and that is a
+/// distinction no log line on a Mac can make while the headset is on.
+enum FloorReadout {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var gameFloorAboveReal: Float?
+    nonisolated(unsafe) private static var headAboveGameFloor: Float?
+
+    static func publish(gameFloorAboveReal: Float?, headAboveGameFloor: Float?) {
+        lock.lock()
+        self.gameFloorAboveReal = gameFloorAboveReal
+        self.headAboveGameFloor = headAboveGameFloor
+        lock.unlock()
+    }
+
+    static func read() -> (gameFloorAboveReal: Float?, headAboveGameFloor: Float?) {
+        lock.lock(); defer { lock.unlock() }
+        return (gameFloorAboveReal, headAboveGameFloor)
+    }
+}
+
 final class FloorSource: @unchecked Sendable {
 
     private let lock = NSLock()

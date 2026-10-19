@@ -592,12 +592,24 @@ struct ContentView: View {
                     // themselves. Nobody knows where the tracking origin
                     // is; everybody knows their own height.
                     TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                        if let above = FloorSource.headAboveFloor() {
-                            Text(String(format: "Floor found. Your head is %.2f m above it.", above))
-                                .font(.caption).foregroundStyle(.green)
-                        } else {
-                            Text("No floor measured. Open the immersive space, then re-measure.")
-                                .font(.caption).foregroundStyle(.orange)
+                        let readout = FloorReadout.read()
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let above = FloorSource.headAboveFloor() {
+                                Text(String(format: "Real floor found. Your head is %.2f m above it.", above))
+                                    .font(.caption).foregroundStyle(.green)
+                            } else {
+                                Text("No floor measured. Open the immersive space, then re-measure.")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
+                            if let head = readout.headAboveGameFloor {
+                                Text(String(format: "Game floor: your head is %.2f m above it.", head))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let gap = readout.gameFloorAboveReal {
+                                Text(String(format: "Game floor sits %+.2f m from your real floor.", gap))
+                                    .font(.caption)
+                                    .foregroundStyle(abs(gap) < 0.1 ? .green : .orange)
+                            }
                         }
                     }
                     Slider(value: Binding(
