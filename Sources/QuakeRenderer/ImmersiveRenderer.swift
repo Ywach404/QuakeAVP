@@ -103,6 +103,14 @@ final class ImmersiveRenderer {
     /// is echoed back through QC_InputSetHeadOffset so the engine knows
     /// which generation the feed belongs to.
     private var recenterCorrection = matrix_identity_float4x4
+    /// The pose the correction was built from, kept so the height half can
+    /// be rebuilt without re-zeroing yaw and position. Re-zeroing those
+    /// mid-session would snap the world sideways to wherever you happen to
+    /// be looking.
+    private var zeroingPose: simd_float4x4?
+    /// Whether the live correction keeps height. It cannot keep height
+    /// before a floor is measured, and must once one is.
+    private var correctionKeepsHeight = false
     private var recenterSeen: UInt32 = 0
     private var zeroedInitialPose = false
 
@@ -567,13 +575,30 @@ final class ImmersiveRenderer {
         let keepHeight = floorRaw != nil
         if deviceAnchor != nil, !zeroedInitialPose {
             zeroedInitialPose = true
+            zeroingPose = rawOriginFromDevice
+            correctionKeepsHeight = keepHeight
             recenterCorrection = FloorMath.correction(zeroing: rawOriginFromDevice, keepHeight: keepHeight)
             TrackingSpace.setCorrection(recenterCorrection)
         }
         if let packet, packet.recenter_count != recenterSeen {
             recenterSeen = packet.recenter_count
+            zeroingPose = rawOriginFromDevice
+            correctionKeepsHeight = keepHeight
             recenterCorrection = FloorMath.correction(zeroing: rawOriginFromDevice, keepHeight: keepHeight)
             TrackingSpace.setCorrection(recenterCorrection)
+        }
+        // The floor almost always arrives AFTER the space has opened, so the
+        // correction in hand was built height-zeroing and carries the head
+        // height from whenever the space happened to open -- mid-donning,
+        // seated, looking at the floor. Compensating for that frozen number
+        // puts the game floor wherever your head was at that instant. Rebuild
+        // the correction from the SAME pose with height kept instead, which
+        // leaves yaw and position alone and makes the floor live.
+        if keepHeight != correctionKeepsHeight, let pose = zeroingPose {
+            correctionKeepsHeight = keepHeight
+            recenterCorrection = FloorMath.correction(zeroing: pose, keepHeight: keepHeight)
+            TrackingSpace.setCorrection(recenterCorrection)
+            print("[floor] correction rebuilt, height now \(keepHeight ? "kept" : "zeroed")")
         }
         if deviceAnchor != nil {
             let raw = rawOriginFromDevice.columns.3
