@@ -10,7 +10,7 @@ it. No game data included — bring your own paks.
 
 ## See it
 
-[Watch the devlog](https://www.youtube.com/watch?v=-G4lDuGikJI)
+[![Watch the devlog](https://img.youtube.com/vi/-G4lDuGikJI/maxresdefault.jpg)](https://www.youtube.com/watch?v=-G4lDuGikJI)
 
 **Phase out and occlusion**
 
