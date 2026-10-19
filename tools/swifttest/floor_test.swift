@@ -60,6 +60,19 @@ struct FloorTest {
         check(FloorMath.select([cand(0.12, 1, 1)], current: nil, headY: 1.6) == 0.12,
               "select_freshLifeTakesFirstPlane")
 
+        // "Lowest wins" is only true among surfaces you could be standing
+        // on. A plane metres below the head is another storey, a stairwell
+        // or a detection artefact, and taking it drops the whole world.
+        check(FloorMath.select([cand(0.0, 4, 1), cand(-8.0, 4, 1)], current: nil, headY: 1.78) == 0.0,
+              "select_rejectsImplausiblyDeepPlane: 9.8 m below the head is not your floor")
+        check(FloorMath.select([cand(-8.0, 4, 1)], current: nil, headY: 1.78) == nil,
+              "select_rejectsImplausiblyDeepPlane: alone, it is rejected outright")
+        check(FloorMath.select([cand(0.0, 4, 1), cand(-8.0, 4, 1)], current: -8.0, headY: 1.78) == 0.0,
+              "select_rejectsImplausiblyDeepPlane: and a deep plane already chosen is abandoned")
+        // Seated on the floor still leaves the head well inside the band.
+        check(FloorMath.select([cand(0.0, 4, 1)], current: nil, headY: 0.9) == 0.0,
+              "select: a floor is still found from a low seated head")
+
         // Distance is to the nearest point of the plane's extent, not its
         // centre: a big room's floor has its centre metres away while you
         // stand on it.

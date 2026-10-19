@@ -32,6 +32,11 @@ enum FloorMath {
     /// A floor is never within this of the head: that is a table or a
     /// mis-read, and a seated head is still half a metre above the seat.
     static let headClearance: Float = 0.5
+    /// Nor is it further below than this. "Lowest wins" holds only among
+    /// surfaces you could be standing on; a plane metres down is another
+    /// storey, a stairwell, or an artefact, and choosing it drops the whole
+    /// world by that much. Generous enough for a tall player on a step.
+    static let maximumDrop: Float = 2.5
     /// A plane has to be this much lower to replace the current one; the
     /// same floor re-reported a few millimetres off is not a new floor.
     static let replaceBelow: Float = 0.02
@@ -53,9 +58,20 @@ enum FloorMath {
             $0.area >= minimumArea
                 && $0.horizontalDistance <= maximumDistance
                 && $0.y <= headY - headClearance
+                && $0.y >= headY - maximumDrop
         }
         guard let lowest = qualifying.min(by: { $0.y < $1.y }) else { return nil }
         guard let current else { return lowest.y }
+
+        // A choice is only worth keeping while a qualifying plane still
+        // sits at that height. Without this a plane that was chosen and
+        // then stopped qualifying -- it shrank, you walked away from it,
+        // or the rules tightened under it -- is kept for ever, because
+        // every other test below only ever replaces it with something
+        // LOWER.
+        guard qualifying.contains(where: { abs($0.y - current) <= sameFloorBand }) else {
+            return lowest.y
+        }
 
         // The current plane is the candidate nearest the current height.
         let currentArea = qualifying.min(by: { abs($0.y - current) < abs($1.y - current) })?.area ?? 0
