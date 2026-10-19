@@ -592,23 +592,22 @@ struct ContentView: View {
                     // themselves. Nobody knows where the tracking origin
                     // is; everybody knows their own height.
                     TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                        let readout = FloorReadout.read()
                         VStack(alignment: .leading, spacing: 2) {
-                            if let above = FloorSource.headAboveFloor() {
-                                Text(String(format: "Real floor found. Your head is %.2f m above it.", above))
-                                    .font(.caption).foregroundStyle(.green)
-                            } else {
-                                Text("No floor measured. Open the immersive space, then re-measure.")
-                                    .font(.caption).foregroundStyle(.orange)
-                            }
-                            if let head = readout.headAboveGameFloor {
-                                Text(String(format: "Game floor: your head is %.2f m above it.", head))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            if let gap = readout.gameFloorAboveReal {
-                                Text(String(format: "Game floor sits %+.2f m from your real floor.", gap))
+                            if let raw = FloorSource.rawReadout(), let floorY = raw.floorY {
+                                let standing = raw.headY - floorY
+                                Text(String(format: "Your head is %.2f m above the floor it chose.", standing))
                                     .font(.caption)
-                                    .foregroundStyle(abs(gap) < 0.1 ? .green : .orange)
+                                    .foregroundStyle(standing > 1.3 ? .green : .orange)
+                                Text(String(format: "head %+.2f · chosen %+.2f · lowest %+.2f · %d plane(s)",
+                                            raw.headY, floorY, raw.lowest ?? floorY, raw.planes))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            } else if let raw = FloorSource.rawReadout() {
+                                Text(String(format: "No floor chosen yet. head %+.2f · %d plane(s)",
+                                            raw.headY, raw.planes))
+                                    .font(.caption).foregroundStyle(.orange)
+                            } else {
+                                Text("Plane detection not running. Open the immersive space.")
+                                    .font(.caption).foregroundStyle(.orange)
                             }
                         }
                     }

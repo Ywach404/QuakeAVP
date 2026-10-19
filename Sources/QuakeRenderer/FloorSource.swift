@@ -204,6 +204,22 @@ final class FloorSource: @unchecked Sendable {
         return source.head.y - floor
     }
 
+    /// The raw numbers behind the choice, for the calibration panel. A
+    /// derived height can look wrong for two completely different reasons
+    /// -- the wrong surface was picked, or the tracking origin is not where
+    /// it is assumed to be -- and only the raw values tell them apart.
+    /// `lowest` is the lowest plane that qualified, so a pick that is not
+    /// the lowest is visible at a glance.
+    static func rawReadout() -> (headY: Float, floorY: Float?, lowest: Float?, planes: Int)? {
+        registry.lock()
+        let source = current
+        registry.unlock()
+        guard let source else { return nil }
+        source.lock.lock(); defer { source.lock.unlock() }
+        let lowest = source.planes.values.map(\.y).min()
+        return (source.head.y, source.published, lowest, source.planes.count)
+    }
+
     /// The running source, for the window's Re-measure button.
     static func remeasureCurrent() {
         registry.lock()
