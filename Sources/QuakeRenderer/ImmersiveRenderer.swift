@@ -855,6 +855,39 @@ final class ImmersiveRenderer {
             let scale = simd_float4x4(diagonal: SIMD4(s, s, s, 1))
             originFromQuake = scale * quakeView
             quakeFromOrigin = originFromQuake.inverse
+
+            // The measured floor's boundary, in Quake world units, so the
+            // ground grid can be drawn where the real floor ends. Done
+            // here because this is where the world-to-room mapping is
+            // composed, and republished every frame because a boundary has
+            // a position: the mapping is rebuilt from the player's own
+            // position, so these numbers are only true for this frame. A
+            // direction would have survived; a rectangle does not.
+            if let b = floor.floorBoundsRaw() {
+                let centre = quakeFromOrigin
+                    * (recenterCorrection * SIMD4(b.center, 1))
+                var bounds = qc_floor_bounds_t()
+                bounds.center.0 = centre.x
+                bounds.center.1 = centre.y
+                // Metres to units. The rectangle's axes are not scaled by
+                // the anchor, only by the world scale.
+                bounds.half.0 = b.halfWidth / s
+                bounds.half.1 = b.halfHeight / s
+                // The axis through the correction's ROTATION first -- a
+                // direction has no position -- then read as a bearing the
+                // way every heading in this port is read, then into the
+                // world by adding the body heading. Exactly the wall
+                // directions' rule, for exactly the same reason.
+                let r = recenterCorrection
+                let axis = simd_float3x3(
+                    SIMD3(r.columns.0.x, r.columns.0.y, r.columns.0.z),
+                    SIMD3(r.columns.1.x, r.columns.1.y, r.columns.1.z),
+                    SIMD3(r.columns.2.x, r.columns.2.y, r.columns.2.z)) * b.axis
+                bounds.yaw = atan2(-axis.x, -axis.z) * 180 / .pi + packet.body_yaw
+                QC_SetFloorBounds(&bounds)
+            } else {
+                QC_SetFloorBounds(nil)
+            }
             // Sidecar: the head in Quake space from the same late-latched
             // pose the eyes use, keyed on the packet's clock (see VRTrack).
             // `publishes` only -- this APPENDS, and two samples sharing one

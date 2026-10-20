@@ -2375,6 +2375,9 @@ struct ContentView: View {
     /// How solid the ground stays while the world melts. Mirrors
     /// `phase_floor`; see that cvar for why a ghost floor is there at all.
     @State private var phaseFloor = 0.5
+    /// Mirrors phase_grid's own default, like every other dial here: the
+    /// window has no live cvar read-back.
+    @State private var phaseGrid = 1.0
     /// The default molten orange: the cvar's (1.5, 0.93, 0.27) glow with
     /// the 1.5x intensity factored out for the 0-1 picker.
     private static let defaultPhaseColor = Color(red: 1.0, green: 0.62, blue: 0.18)
@@ -2431,6 +2434,22 @@ struct ContentView: View {
                     .frame(width: 110)
                     .onChange(of: phaseFloor) { _, value in
                         engine.send(String(format: "phase_floor %.2f", value))
+                    }
+            }
+            .fixedSize()
+            // The grid at the real floor's EDGE, on its own dial. It rode
+            // the Ground slider and the two are not one thing: the ghost
+            // floor is a dark lit floor texture that reads as absent at
+            // low values while the grid is white lines with the depth test
+            // off, plainly visible at the same number -- so turning the
+            // floor down looked as though it had done nothing to the grid.
+            VStack(spacing: 2) {
+                Text("Edge grid \(Int((phaseGrid * 100).rounded()))%")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Slider(value: $phaseGrid, in: 0...1)
+                    .frame(width: 110)
+                    .onChange(of: phaseGrid) { _, value in
+                        engine.send(String(format: "phase_grid %.2f", value))
                     }
             }
             .fixedSize()

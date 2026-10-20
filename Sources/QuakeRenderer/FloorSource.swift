@@ -71,8 +71,27 @@ final class FloorSource: @unchecked Sendable {
         var y: Float
         var area: Float
         var extentFromOrigin: simd_float4x4
+        /// The extent frame IN the tracking origin -- the un-inverted
+        /// matrix, kept because the grid needs the rectangle's centre and
+        /// the bearing of its axes, not just the head's distance to it.
+        var originFromExtent: simd_float4x4
         var halfWidth: Float
         var halfHeight: Float
+    }
+
+    /// The chosen floor's rectangle, in the raw tracking frame: where it
+    /// is, how big, and which way its axes run. Metres and radians.
+    struct FloorBounds {
+        var center: SIMD3<Float>
+        var halfWidth: Float
+        var halfHeight: Float
+        /// The rectangle's first axis as a VECTOR, not a bearing, and in
+        /// the raw frame like the centre. The recentre correction carries
+        /// a yaw, so a bearing computed here would be in the wrong frame
+        /// the moment anybody recentred -- the same trap the wall
+        /// directions fell into. The consumer rotates it and reads the
+        /// bearing off, because the consumer owns the frame.
+        var axis: SIMD3<Float>
     }
     /// Live floor planes from the current provider, by anchor id.
     private var planes: [UUID: Plane] = [:]
@@ -107,6 +126,11 @@ final class FloorSource: @unchecked Sendable {
     /// outlives a rebuild so the world does not jump while the new provider
     /// finds its feet.
     private var published: Float?
+    /// The rectangle of whichever plane `published` came from, so the
+    /// ground grid can be drawn where the real floor ends. Published
+    /// together with the height and in the same frame, so the two cannot
+    /// describe different planes.
+    private var publishedBounds: FloorBounds?
     /// The head's latest position in the raw tracking frame, for the
     /// distance and clearance rules, and where it was when the selection
     /// last ran, so a head that has moved a step re-ranks the planes.
@@ -205,6 +229,13 @@ final class FloorSource: @unchecked Sendable {
     func floorYRaw() -> Float? {
         lock.lock(); defer { lock.unlock() }
         return published
+    }
+
+    /// The chosen floor's rectangle in the raw tracking frame, or nil when
+    /// nothing has been measured. Any thread.
+    func floorBoundsRaw() -> FloorBounds? {
+        lock.lock(); defer { lock.unlock() }
+        return published == nil ? nil : publishedBounds
     }
 
     /// Hand the engine the room's wall directions, expressed through the
@@ -458,6 +489,7 @@ final class FloorSource: @unchecked Sendable {
                 y: originFromExtent.columns.3.y,
                 area: extent.width * extent.height,
                 extentFromOrigin: originFromExtent.inverse,
+                originFromExtent: originFromExtent,
                 halfWidth: extent.width * 0.5,
                 halfHeight: extent.height * 0.5)
         @unknown default:
@@ -486,7 +518,20 @@ final class FloorSource: @unchecked Sendable {
         selected = FloorMath.select(candidates, current: selected, headY: head.y)
         guard let chosen = selected, chosen != before else { return nil }
         published = chosen
-        let area = planes.values.min(by: { abs($0.y - chosen) < abs($1.y - chosen) })?.area ?? 0
+        // The plane the height came from, found the same way the log line
+        // below finds it: nearest to the chosen height. Its rectangle is
+        // what the grid draws the edge of.
+        let plane = planes.values.min(by: { abs($0.y - chosen) < abs($1.y - chosen) })
+        if let plane {
+            let c = plane.originFromExtent.columns.3
+            let ax = plane.originFromExtent.columns.0
+            publishedBounds = FloorBounds(
+                center: SIMD3(c.x, c.y, c.z),
+                halfWidth: plane.halfWidth,
+                halfHeight: plane.halfHeight,
+                axis: SIMD3(ax.x, ax.y, ax.z))
+        }
+        let area = plane?.area ?? 0
         return String(format: "[floor] floor at %.3f m, area %.2f m²", chosen, area)
     }
 

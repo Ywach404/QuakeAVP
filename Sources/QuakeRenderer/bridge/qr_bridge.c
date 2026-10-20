@@ -43,7 +43,7 @@ extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farc
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
 extern cvar_t r_dynamic, r_flatlightstyles;	/* registered in r_null.c */
-extern cvar_t phase, phase_time, phase_color, phase_floor;
+extern cvar_t phase, phase_time, phase_color, phase_floor, phase_grid;
 extern cvar_t cl_bob;			/* view.c; held at zero while immersive, see QR_BobGate */
 extern cvar_t vr_vignette, vr_vignette_threshold;
 
@@ -88,6 +88,8 @@ extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nud
 /* The held gun's own placement, pulled from the table the UI publishes; 0
    means untuned and the cvars above are the answer (in_null.c). */
 extern int QR_WeaponPlacement (int slot, float *back, float *up, float *side);
+/* in_null.c, the engine-thread reader for QC_SetFloorBounds. */
+extern int QR_FloorBounds (qc_floor_bounds_t *out);
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
 extern cvar_t vr_laserpitch, vr_laseryaw;			/* M6 laser beam tilt */
 extern cvar_t vr_weapontint;					/* debug: green hand weapon */
@@ -7463,16 +7465,32 @@ consumer.
    boundary. Close in the real floor is plainly visible and a grid there
    would only cross the gun; past the boundary the world is still solid
    and must not be drawn over. */
-static float QR_GroundFade (float d, float nearfade, float nearfull, float outer)
+/* Alpha from the signed distance INSIDE the real floor's boundary:
+   brightest on the line itself, out over `band` going in and `outband`
+   going out. A soft wall painted on the floor rather than a field. */
+static float QR_EdgeFade (float inside, float band, float outband)
 {
-	float	in, out;
-
-	if (d >= outer || d <= nearfade)
+	if (inside > band || inside < -outband)
 		return 0.f;
-	in = (d >= nearfull) ? 1.f : (d - nearfade) / (nearfull - nearfade);
-	out = (outer <= nearfull) ? 1.f
-	    : CLAMP (0.f, (outer - d) / (outer - nearfull), 1.f);
-	return in * out;
+	if (inside >= 0.f)
+		return 1.f - inside / band;
+	return 1.f + inside / outband;
+}
+
+/* How far a world point lies inside the boundary rectangle, in units;
+   negative is outside. The rectangle has its own yaw, so this is the
+   point in its frame and then the nearest edge. */
+static float QR_InsideFloorBounds (const qc_floor_bounds_t *b, float px, float py)
+{
+	float	rad = b->yaw * M_PI / 180.f;
+	float	c = cosf (rad), s = sinf (rad);
+	float	ex = px - b->center[0], ey = py - b->center[1];
+	float	lx =  c * ex + s * ey;
+	float	ly = -s * ex + c * ey;
+	float	dx = b->half[0] - fabsf (lx);
+	float	dy = b->half[1] - fabsf (ly);
+
+	return dx < dy ? dx : dy;
 }
 
 /*
@@ -7491,10 +7509,25 @@ covered the whole room would say you can walk where the level forbids;
 the ghost floor's EDGE is information, and this must not be mistaken for
 it.
 
-Faded out within arm's reach, up to full a few metres away, and off again
-at the melt boundary: close in the real floor is plainly visible and a
-grid there would only cross the gun, and outside the melt the world is
-still solid and must not be drawn over.
+Only at the EDGE of the measured floor. It began as a field around the
+player faded in a ring, and a field is present the whole time you are
+phased -- which is most of the time the effect is interesting -- so it
+stopped reading as information and became something to look past. The
+one thing a grid on a passthrough floor is genuinely needed for is where
+the real floor RUNS OUT, which is also the one thing no amount of ghost
+floor can tell you. With no measurement it draws nothing at all: there
+is no edge to warn anybody about, and that includes the flat window and
+every export, where there is no room.
+
+Still clipped to the melt boundary, because outside it the world is
+solid and must not be drawn over, and still held off the few units
+around the player's own feet.
+
+Its own dial (phase_grid), not the ghost floor's. The two were on one
+slider and they are not one thing: the ghost floor is a dark lit floor
+texture that reads as absent at low values, while these lines are white,
+depth-tested off, and plainly visible at the same number -- so turning
+"the floor" down left the grid looking untouched.
 ================
 */
 static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
@@ -7502,14 +7535,19 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 	const float	spacing = 32.f;		/* ~0.8 m at an inch a unit */
 	const float	extent = 320.f;		/* ~8 m out */
 	const float	halfwidth = 1.f;	/* ~5 cm of line */
-	const float	nearfade = 60.f;	/* clear of the player's own gun */
-	const float	nearfull = 170.f;	/* full strength by ~4 m out */
+	const float	nearfade = 20.f;	/* off the player's own feet */
+	const float	band = 48.f;		/* ~1.2 m of grid inside the edge */
+	const float	outband = 20.f;		/* and a little past it */
+	qc_floor_bounds_t bounds;
 	float		z, cx, cy, gx, gy, strength, outer;
 	int		i, seg, steps, axis;
 
-	strength = slot->frame.phase * phase_floor.value;
+	strength = slot->frame.phase * phase_grid.value;
 	outer = slot->frame.phase_radius;
 	if (strength <= 0.01f || outer <= nearfade || !cl.worldmodel)
+		return;
+	/* No measured floor, no edge, nothing to draw. */
+	if (!QR_FloorBounds (&bounds))
 		return;
 	if (outer > extent)
 		outer = extent;
@@ -7538,7 +7576,7 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 	{
 		vec3_t	q[4];
 		float	along0, along1, across, da, db;
-		float	a0, a1, d0, d1;
+		float	a0, a1, d0, d1, e0, e1;
 
 		/* A flat quad lying ON the ground, not billboarded: this is a
 		   floor marking, and a line that turned to face the eye would
@@ -7557,6 +7595,8 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 			d0 = sqrtf (da * da + db * db);
 			db = along1 - cy;
 			d1 = sqrtf (da * da + db * db);
+			e0 = QR_InsideFloorBounds (&bounds, across, along0);
+			e1 = QR_InsideFloorBounds (&bounds, across, along1);
 		}
 		else
 		{
@@ -7571,11 +7611,18 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 			d0 = sqrtf (da * da + db * db);
 			db = along1 - cx;
 			d1 = sqrtf (da * da + db * db);
+			e0 = QR_InsideFloorBounds (&bounds, along0, across);
+			e1 = QR_InsideFloorBounds (&bounds, along1, across);
 		}
 		q[0][2] = q[1][2] = q[2][2] = q[3][2] = z;
 
-		a0 = QR_GroundFade (d0, nearfade, nearfull, outer) * strength;
-		a1 = QR_GroundFade (d1, nearfade, nearfull, outer) * strength;
+		/* Edge proximity decides the brightness; the radial distance
+		   only ever takes it away -- off the feet, and at the melt
+		   boundary where the world is still solid. */
+		a0 = QR_EdgeFade (e0, band, outband) * strength;
+		a1 = QR_EdgeFade (e1, band, outband) * strength;
+		if (d0 <= nearfade || d0 >= outer) a0 = 0.f;
+		if (d1 <= nearfade || d1 >= outer) a1 = 0.f;
 		if (a0 <= 0.004f && a1 <= 0.004f)
 			continue;
 

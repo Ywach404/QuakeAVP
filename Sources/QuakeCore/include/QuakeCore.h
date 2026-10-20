@@ -740,6 +740,34 @@ typedef struct {
 
 void QC_SetRoomWalls (const qc_wall_dir_t *dirs, int count);
 
+/* The measured floor's BOUNDARY, so the ground grid can be drawn where
+   the real floor ends instead of as a field under the player's feet.
+
+   In QUAKE WORLD UNITS, already through the recentre correction and the
+   world scale, because the consumer owns the frame and the conversion
+   into it -- the same rule as the wall directions above, and the reason
+   the engine needs neither the tracking origin nor the metres-per-unit
+   scale. A rectangle, not a polygon: it is what plane detection reports,
+   and a chaperone does not need more.
+
+   Unlike a direction, a boundary has a POSITION, so it does not survive
+   the player moving: the world-to-room mapping is recomposed every frame
+   from the player's own position, so these numbers are only true for the
+   frame they were published in. Publish every frame. The engine reads
+   whatever it last got, and a frame of lag on a line painted across the
+   floor is not visible.
+
+   Pass NULL when no floor has been measured -- the grid then draws
+   nothing at all, which is correct: with no measurement there is no edge
+   to warn anybody about. Callable from any thread. */
+typedef struct {
+	float	center[2];	/* world x, y */
+	float	half[2];	/* half extents along the rectangle's own axes */
+	float	yaw;		/* bearing of the rectangle's first axis, degrees */
+} qc_floor_bounds_t;
+
+void QC_SetFloorBounds (const qc_floor_bounds_t *bounds);
+
 /* The eye-height trim (vr comfort slider) in QUAKE UNITS, fed by the render
    thread which applies the same trim to the camera. Head/wrist-locked
    overlays -- the weapon wheel -- add it so they rise with the raised

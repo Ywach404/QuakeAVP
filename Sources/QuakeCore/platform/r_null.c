@@ -115,6 +115,13 @@ cvar_t	phase_color = {"phase_color", "1.5 0.93 0.27", CVAR_NONE};
    level, which is what a horizon is. Leaving the floor as a ghost gives
    the eye a plane to measure distance against. 0 melts it like the rest. */
 cvar_t	phase_floor = {"phase_floor", "0.5", CVAR_ARCHIVE};
+/* The ground grid at the real floor's edge. Its own dial, not
+   phase_floor's: the ghost floor is a dark lit floor texture that reads
+   as absent at low values, while the grid is white lines with the depth
+   test off and is plainly visible at the same number -- so one slider for
+   both meant turning "the floor" down appeared to do nothing to the
+   grid. See QR_EmitPhaseGround. */
+cvar_t	phase_grid = {"phase_grid", "1", CVAR_ARCHIVE};
 
 /* Comfort vignette: periphery fade strength while artificial locomotion
    exceeds the threshold (Quake units/sec; walking is ~200). Zero disables. */
@@ -193,6 +200,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&phase_time);
 	Cvar_RegisterVariable (&phase_color);
 	Cvar_RegisterVariable (&phase_floor);
+	Cvar_RegisterVariable (&phase_grid);
 	Cvar_RegisterVariable (&vr_vignette);
 	Cvar_RegisterVariable (&vr_vignette_threshold);
 

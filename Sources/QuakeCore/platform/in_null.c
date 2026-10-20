@@ -53,6 +53,11 @@ static qc_weapon_placement_t	qc_place_shared[QC_WEAPON_SLOTS];
 static pthread_mutex_t		qc_walls_lock = PTHREAD_MUTEX_INITIALIZER;
 static qc_wall_dir_t		qc_walls_shared[QC_MAX_WALL_DIRS];
 static int			qc_walls_count_shared;
+
+/* The measured floor's boundary, same idiom again. */
+static pthread_mutex_t		qc_floor_lock = PTHREAD_MUTEX_INITIALIZER;
+static qc_floor_bounds_t	qc_floor_shared;
+static int			qc_floor_valid_shared;
 static uint32_t			qc_head_ack;		/* recenter echo */
 static int			qc_wheel_open_shared;
 static int			qc_wheel_anchor_shared;
@@ -168,6 +173,29 @@ void QC_SetRoomWalls (const qc_wall_dir_t *dirs, int count)
 		memcpy (qc_walls_shared, dirs, count * sizeof (qc_wall_dir_t));
 	qc_walls_count_shared = dirs ? count : 0;
 	pthread_mutex_unlock (&qc_walls_lock);
+}
+
+void QC_SetFloorBounds (const qc_floor_bounds_t *bounds)
+{
+	pthread_mutex_lock (&qc_floor_lock);
+	if (bounds)
+		qc_floor_shared = *bounds;
+	qc_floor_valid_shared = bounds ? 1 : 0;
+	pthread_mutex_unlock (&qc_floor_lock);
+}
+
+/* Engine thread. Copy under the lock into the caller's local, the mirror
+   of the setter above. */
+int QR_FloorBounds (qc_floor_bounds_t *out)
+{
+	int valid;
+
+	pthread_mutex_lock (&qc_floor_lock);
+	valid = qc_floor_valid_shared;
+	if (valid)
+		*out = qc_floor_shared;
+	pthread_mutex_unlock (&qc_floor_lock);
+	return valid;
 }
 
 void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots)
