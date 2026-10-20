@@ -343,6 +343,10 @@ static cvar_t	vr_smoothturn = {"vr_smoothturn", "1", CVAR_ARCHIVE};
 static cvar_t	vr_edgeturn = {"vr_edgeturn", "1", CVAR_ARCHIVE};
 static cvar_t	vr_edgeturn_dz = {"vr_edgeturn_dz", "18", CVAR_ARCHIVE};
 static cvar_t	vr_edgeturn_speed = {"vr_edgeturn_speed", "90", CVAR_ARCHIVE};
+/* Measure the edge-turn gesture from where the player is FACING rather
+   than from the room. 0 restores the room-relative reading, which spins
+   forever the moment you turn your real body. See IN_Move. */
+static cvar_t	vr_edgeturn_head = {"vr_edgeturn_head", "1", CVAR_ARCHIVE};
 /* Freeze body turning while the sim is paused (i.e. the console is up). The
    summon pauses the game and head tracking keeps running, so the aim-hand edge
    turn would otherwise whip the view as you reach for a parked console. Default
@@ -1767,7 +1771,37 @@ void IN_Move (usercmd_t *cmd)
 	   stick/flick (rx), so a controller's right stick still wins. */
 	if (vr_edgeturn.value && qr_aim_active && !qr_turn_hold && fabsf (rx) < 0.2f)
 	{
+		/* Measured from the HEAD, not from the room.
+
+		   aim_yaw_rel is the hand ray's yaw in the room, and the body
+		   frame's zero is the room direction you last recentred to, so
+		   a room-relative reading is also the gun's offset from the
+		   body -- which is exactly what this gesture wants while the
+		   player's real body stays put. It does not stay put. Turn
+		   your real body 20 degrees and your arm goes with it: the
+		   offset is past the deadzone with no gesture made, nothing
+		   brings it back, and the body sweeps at vr_edgeturn_speed
+		   until you physically turn back. The feature is on by
+		   default, so this was every player who turned around.
+
+		   Subtracting the head yaw makes it the arm's offset from
+		   where you are LOOKING, which is what "hold your arm out to
+		   a side" means and is invariant to turning your whole body,
+		   because the head turns with it. It also matches the frame
+		   movement already uses a few lines below (qr_head_yaw), so
+		   walking and turning finally agree about which way is
+		   forward. What it gives up is sweeping the body toward an
+		   off-axis target you are both pointing at and looking at --
+		   there the arm is along the gaze and the offset is zero. The
+		   gun aims independently of the body anyway, so nothing stops
+		   you shooting there; the body just will not follow. */
 		float a = aim_yaw_rel, dz = vr_edgeturn_dz.value;
+		if (vr_edgeturn_head.value)
+		{
+			a -= qr_head_yaw;
+			while (a >  180.f) a -= 360.f;
+			while (a < -180.f) a += 360.f;
+		}
 		if (fabsf (a) > dz)
 		{
 			float frac = (fabsf (a) - dz) / 40.f;	/* ramp to full over 40 deg */
@@ -1799,6 +1833,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_edgeturn);
 	Cvar_RegisterVariable (&vr_edgeturn_dz);
 	Cvar_RegisterVariable (&vr_edgeturn_speed);
+	Cvar_RegisterVariable (&vr_edgeturn_head);
 	Cvar_RegisterVariable (&vr_turn_while_paused);
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_headaim);
