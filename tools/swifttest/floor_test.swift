@@ -85,6 +85,48 @@ struct FloorTest {
         check(FloorMath.select([cand(0.0, 4, 1)], current: nil, headY: 0.9) == 0.0,
               "select: a floor is still found from a low seated head")
 
+        // THE PLANE YOU ARE STANDING OVER WINS, even when a lower one
+        // qualifies. Lowest-wins alone made a step down to a hallway, a
+        // sunken room or a stair landing take the floor from under you:
+        // legitimately classified floor, within the distance gate, lower,
+        // so it won outright -- and then it could never be given back,
+        // because every replacement rule only ever went lower.
+        check(FloorMath.select([cand(0.0, 6, 0), cand(-0.6, 4, 2.4)], current: nil, headY: 1.65) == 0.0,
+              "select_prefersUnderfoot: the floor you stand on beats a lower one across the room")
+        check(FloorMath.select([cand(0.0, 6, 0), cand(-0.6, 4, 2.4)], current: -0.6, headY: 1.65) == 0.0,
+              "select_prefersUnderfoot: and a lower one already chosen is given back")
+        check(FloorMath.select([cand(0.0, 6, 0.1), cand(-0.6, 4, 0.2)], current: nil, headY: 1.65) == -0.6,
+              "select_prefersUnderfoot: standing over BOTH, the lower still wins")
+        check(FloorMath.select([cand(0.0, 6, 1.2), cand(-0.6, 4, 2.4)], current: nil, headY: 1.65) == -0.6,
+              "select_prefersUnderfoot: over neither, lowest-wins is still the rule")
+
+        // The chosen plane's LIVE height, not the height it had when it was
+        // chosen. ARKit refines a plane's y by centimetres for as long as
+        // the room is being scanned, and keeping the first reading made the
+        // floor a ratchet: refinements downward were tracked, upward ones
+        // inside the same-floor band were not, so the error only ever grew.
+        check(FloorMath.select([cand(0.03, 4, 0)], current: 0.0, headY: 1.65) == 0.03,
+              "select_followsRefinement: a plane that refines 3 cm up is followed")
+        check(FloorMath.select([cand(-0.03, 4, 0)], current: 0.0, headY: 1.65) == -0.03,
+              "select_followsRefinement: and 3 cm down")
+        check(FloorMath.select([cand(0.0, 4, 0)], current: 0.0, headY: 1.65) == 0.0,
+              "select_followsRefinement: an unchanged plane is unchanged")
+
+        // A floor already in use is still checked for plausibility. The
+        // plane session and the device session rebuild independently, and
+        // either one carrying a new tracking origin leaves two numbers
+        // that are each individually fine and no longer comparable.
+        check(FloorMath.believable(floorY: 0.0, headY: 1.65),
+              "believable: a standing head 1.65 m up is fine")
+        check(FloorMath.believable(floorY: 0.0, headY: 0.9),
+              "believable: so is a head seated on the floor")
+        check(!FloorMath.believable(floorY: 0.0, headY: 0.3),
+              "believable: 30 cm is not a person standing on it")
+        check(!FloorMath.believable(floorY: -8.0, headY: 1.65),
+              "believable: a floor 9.65 m down is a frame mismatch, not a floor")
+        check(!FloorMath.believable(floorY: 2.0, headY: 1.65),
+              "believable: nor is one above the head")
+
         // Distance is to the nearest point of the plane's extent, not its
         // centre: a big room's floor has its centre metres away while you
         // stand on it.

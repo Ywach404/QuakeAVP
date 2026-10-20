@@ -44,6 +44,14 @@ enum FloorMath {
     /// this of the current height. Beyond it, a bigger plane is a bigger
     /// table, and the lowest plane wins.
     static let sameFloorBand: Float = 0.05
+    /// Within this of a plane's extent you count as standing ON it, and a
+    /// plane you are standing on outranks every plane you are not --
+    /// however much lower the others are. Without that rank, lowest-wins
+    /// handed the floor to a step down into a hallway, a sunken room or a
+    /// stair landing: legitimately classified floor, inside the distance
+    /// gate, lower, so it won outright. And it could never be given back,
+    /// because every replacement rule below only ever goes lower.
+    static let standingTolerance: Float = 0.3
     /// The player's hull bottom below the entity origin: where the feet
     /// are, in Quake units. vieworg is the origin plus viewheight.
     static let hullBottom: Float = 24
@@ -60,7 +68,16 @@ enum FloorMath {
                 && $0.y <= headY - headClearance
                 && $0.y >= headY - maximumDrop
         }
-        guard let lowest = qualifying.min(by: { $0.y < $1.y }) else { return nil }
+        // The planes you are standing on, if any. Everything below is
+        // decided within this pool, so a lower plane you are NOT standing
+        // on cannot take the floor from one you are. Over nothing -- off
+        // the edge of what has been scanned -- the whole qualifying set is
+        // the pool and lowest-wins is still the rule, because height is
+        // then the only thing protecting you from a counter top.
+        let underfoot = qualifying.filter { $0.horizontalDistance <= standingTolerance }
+        let pool = underfoot.isEmpty ? qualifying : underfoot
+
+        guard let lowest = pool.min(by: { $0.y < $1.y }) else { return nil }
         guard let current else { return lowest.y }
 
         // A choice is only worth keeping while a qualifying plane still
@@ -69,18 +86,27 @@ enum FloorMath {
         // or the rules tightened under it -- is kept for ever, because
         // every other test below only ever replaces it with something
         // LOWER.
-        guard qualifying.contains(where: { abs($0.y - current) <= sameFloorBand }) else {
+        guard let nearest = pool.min(by: {
+            abs($0.y - current) < abs($1.y - current)
+        }), abs(nearest.y - current) <= sameFloorBand else {
             return lowest.y
         }
 
         // The current plane is the candidate nearest the current height.
-        let currentArea = qualifying.min(by: { abs($0.y - current) < abs($1.y - current) })?.area ?? 0
+        let currentArea = nearest.area
         if lowest.y < current - replaceBelow { return lowest.y }
-        let sameFloor = qualifying.filter { abs($0.y - current) <= sameFloorBand }
+        let sameFloor = pool.filter { abs($0.y - current) <= sameFloorBand }
         if let larger = sameFloor.max(by: { $0.area < $1.area }), larger.area > currentArea {
             return larger.y
         }
-        return current
+        // The plane's LIVE height, not the height it had when it was
+        // chosen. ARKit refines a plane's y by centimetres for as long as
+        // the room is being scanned; returning `current` here tracked a
+        // refinement downward (the rule above) but not one upward inside
+        // the band, which made the floor a ratchet -- a running minimum of
+        // every reading the plane ever gave, drifting low over a session
+        // and popping back whenever it crossed the band edge.
+        return nearest.y
     }
 
     /// The Quake z placed at the tracking origin so the hull bottom sits on
@@ -108,6 +134,27 @@ enum FloorMath {
     static func effectiveTrim(anchorZ: Float, cameraYRoom: Float, vieworgZ: Float,
                               worldScale: Float) -> Float {
         anchorZ + cameraYRoom / worldScale - vieworgZ
+    }
+
+    /// The head is never this close above a floor it is standing on, nor
+    /// this far above one. Not a selection rule -- the selector already
+    /// has those -- but a sanity check on a height that is already in use,
+    /// for the cases where the number stops meaning anything: a plane
+    /// provider rebuilt with a new tracking origin leaves the last
+    /// measurement readable in a frame it no longer belongs to, and the
+    /// head comes from a SECOND session that can rebuild on its own
+    /// schedule. Either way the two stop being comparable and nothing
+    /// downstream can tell, because each number is individually fine.
+    static let minimumStandingHeight: Float = 0.5
+    static let maximumStandingHeight: Float = 2.4
+
+    /// Whether a measured floor still puts the head at a height a person
+    /// could be. False means fall back to the eye-locked mapping: a wrong
+    /// floor is worse than no floor, because the player cannot tell it is
+    /// wrong, only that the world sits oddly.
+    static func believable(floorY: Float, headY: Float) -> Bool {
+        let standing = headY - floorY
+        return standing >= minimumStandingHeight && standing <= maximumStandingHeight
     }
 
     /// The measured floor in the corrected frame. A height-zeroing

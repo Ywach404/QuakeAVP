@@ -268,10 +268,17 @@ final class FloorSource: @unchecked Sendable {
     func remeasure() {
         lock.lock()
         selected = nil
-        headAtSelection = SIMD3(.infinity, .infinity, .infinity)
+        // Re-rank HERE rather than leaving it to the next head report. A
+        // settled room produces no anchor updates, and reselectLocked
+        // rewrites headAtSelection on every call, so in a room that is
+        // still being scanned the moved-head trigger never fires either:
+        // between them the button could look dead for as long as the
+        // player stood still.
         let count = planes.count
+        let message = reselectLocked()
         lock.unlock()
         print("[floor] re-measuring from \(count) live plane(s)")
+        if let message { print(message) }
     }
 
     /// The head's height above the measured floor, in metres, or nil when

@@ -78,6 +78,11 @@ final class ImmersiveRenderer {
     /// target does underneath it -- the target moves with the player.
     private var floorEase: (offset: Float, startedAt: Double)?
     private static let floorSwitchSeconds = 1.0
+    /// Whether the measured floor is currently being ignored as
+    /// implausible, so the log line fires once per episode rather than
+    /// every frame.
+    private var floorDisbelieved = false
+
     /// A floor re-measurement smaller than this, in metres, is the same
     /// floor read again.
     private static let floorEaseThreshold: Float = 0.01
@@ -571,7 +576,28 @@ final class ImmersiveRenderer {
         // correction zeroes all three, which is the eye-locked mapping.
         // Read ONCE per frame: the drain task can publish between two
         // reads, and the correction and the anchor below must agree.
-        let floorRaw = floor.floorYRaw()
+        var floorRaw = floor.floorYRaw()
+        // A measurement in use is still checked. The plane provider and
+        // the device provider are separate ARKit sessions that rebuild on
+        // their own schedules, and either one coming back with a new
+        // tracking origin leaves the floor and the head in frames that no
+        // longer line up -- each number fine on its own, the pair
+        // meaningless, and nothing downstream able to tell. Falling back
+        // to the eye-locked mapping is the honest answer: a wrong floor is
+        // worse than no floor, because the player cannot see that it is
+        // wrong, only that the world sits oddly.
+        if let f = floorRaw, deviceAnchor != nil,
+           !FloorMath.believable(floorY: f, headY: rawOriginFromDevice.columns.3.y) {
+            if !floorDisbelieved {
+                floorDisbelieved = true
+                print(String(format: "[floor] ignoring %.3f m: it puts the head %.2f m above it",
+                             f, rawOriginFromDevice.columns.3.y - f))
+            }
+            floorRaw = nil
+        } else if floorDisbelieved, floorRaw != nil {
+            floorDisbelieved = false
+            print("[floor] measurement plausible again")
+        }
         let keepHeight = floorRaw != nil
         if deviceAnchor != nil, !zeroedInitialPose {
             zeroedInitialPose = true
@@ -582,6 +608,13 @@ final class ImmersiveRenderer {
         }
         if let packet, packet.recenter_count != recenterSeen {
             recenterSeen = packet.recenter_count
+            // Recenter is the reflex when something sits wrong, and on its
+            // own it cannot touch the floor at all: with a floor measured
+            // the correction is built height-keeping, so recentring is a
+            // deliberate vertical no-op. Re-measuring here is what makes
+            // the gesture mean "fix this" rather than "fix everything
+            // except the thing I am looking at".
+            floor.remeasure()
             zeroingPose = rawOriginFromDevice
             correctionKeepsHeight = keepHeight
             recenterCorrection = FloorMath.correction(zeroing: rawOriginFromDevice, keepHeight: keepHeight)
