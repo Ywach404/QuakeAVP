@@ -660,14 +660,28 @@ final class RendererCore {
                 withUnsafeBytes(of: &u) { raw in
                     encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
                 }
-                let rFirst = min(Int(frame.reticle_first_vert), total)
-                let rCount = min(Int(frame.reticle_vert_count), total - rFirst)
-                let rEnd = rFirst + rCount
-                let runs: [(Int, Int, MTLDepthStencilState)] = [
-                    (0, rFirst, pipelines.depthNoWrite),
-                    (rFirst, rCount, pipelines.depthAlways),
-                    (rEnd, total - rEnd, pipelines.depthNoWrite),
-                ]
+                // Two sub-ranges want the depth test off: the aim mark and
+                // the phase ground grid. Melted geometry still writes depth,
+                // which is what keeps occlusion honest through a dissolve,
+                // so anything meant to be seen THROUGH a melted wall cannot
+                // be depth tested. Walk the run in order and flip the state
+                // at each boundary, rather than hard-coding three spans.
+                var always: [(Int, Int)] = []
+                for (first, count) in [(frame.ground_first_vert, frame.ground_vert_count),
+                                       (frame.reticle_first_vert, frame.reticle_vert_count)] {
+                    let f = min(Int(first), total)
+                    let c = min(Int(count), total - f)
+                    if c >= 3 { always.append((f, c)) }
+                }
+                always.sort { $0.0 < $1.0 }
+                var runs: [(Int, Int, MTLDepthStencilState)] = []
+                var cursor = 0
+                for (f, c) in always where f >= cursor {
+                    runs.append((cursor, f - cursor, pipelines.depthNoWrite))
+                    runs.append((f, c, pipelines.depthAlways))
+                    cursor = f + c
+                }
+                runs.append((cursor, total - cursor, pipelines.depthNoWrite))
                 for (start, count, depth) in runs where count >= 3 {
                     setPipeline(pipelines.wheelGuide, depth: depth)
                     encoder.drawPrimitives(type: .triangle, vertexStart: start,

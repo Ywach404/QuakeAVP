@@ -452,6 +452,15 @@ typedef struct qc_frame_s {
 	   sky brush. Zero count when no reticle. */
 	uint32_t	reticle_first_vert;
 	uint32_t	reticle_vert_count;
+	/* The phase ground grid, another sub-range of the same run, also
+	   drawn with the depth test off. Melted geometry still writes depth
+	   -- that is what keeps occlusion honest through the dissolve -- so
+	   a grid meant to be seen THROUGH a melted wall cannot be depth
+	   tested. It is faded out close to the player instead, where the
+	   real floor is visible anyway and where it would otherwise paint
+	   over the gun. Zero count when the world is solid. */
+	uint32_t	ground_first_vert;
+	uint32_t	ground_vert_count;
 
 	/* Sprite models as 3D billboarded TEXTURED quads (explosions, bubbles).
 	   Five floats per vertex: xyz position (Quake units) and st; six vertices

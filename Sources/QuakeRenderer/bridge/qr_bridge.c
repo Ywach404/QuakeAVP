@@ -4605,6 +4605,17 @@ static void QR_ParticleVert (qr_frame_slot_t *slot, const vec3_t p,
 	slot->frame.num_particle_verts = n + 1;
 }
 
+/* As QR_ParticleVert, with an alpha. The channel blends src-alpha over
+   one-minus-src-alpha, and every other writer wants 1, so the plain form
+   stays the common case and this is the exception. */
+static void QR_ParticleVertA (qr_frame_slot_t *slot, const vec3_t p,
+			      float r, float g, float b, float a)
+{
+	QR_ParticleVert (slot, p, r, g, b);
+	if (slot->frame.num_particle_verts > 0)
+		slot->particle_verts[(slot->frame.num_particle_verts - 1) * 7 + 6] = a;
+}
+
 /*
 ================
 QR_EmitLaser -- an aiming laser from the muzzle down the aim (vr_laser). A
@@ -7448,9 +7459,126 @@ records index ranges, entity records, and texture handles for the
 consumer.
 ================
 */
+/* Off within arm's reach, full a few metres out, off again at the melt
+   boundary. Close in the real floor is plainly visible and a grid there
+   would only cross the gun; past the boundary the world is still solid
+   and must not be drawn over. */
+static float QR_GroundFade (float d, float nearfade, float nearfull, float outer)
+{
+	float	in, out;
+
+	if (d >= outer || d <= nearfade)
+		return 0.f;
+	in = (d >= nearfull) ? 1.f : (d - nearfade) / (nearfull - nearfade);
+	out = (outer <= nearfull) ? 1.f
+	    : CLAMP (0.f, (outer - d) / (outer - nearfull), 1.f);
+	return in * out;
+}
+
+/*
+================
+QR_EmitPhaseGround -- a grid on the ground while the world is melted.
+
+The dissolve takes every depth cue with it, and on a bare passthrough
+room anything more than a few metres off then reads as floating: a figure
+standing on a flat floor at distance sits near eye level, because that is
+what a horizon is, and the eye compares it against the real wall a few
+metres away instead. The ghost floor (phase_floor) answers that wherever
+the level has floor brushes. This fills the gaps beyond them.
+
+Deliberately a sparse grid rather than more texture. A ground plane that
+covered the whole room would say you can walk where the level forbids;
+the ghost floor's EDGE is information, and this must not be mistaken for
+it.
+
+Faded out within arm's reach, up to full a few metres away, and off again
+at the melt boundary: close in the real floor is plainly visible and a
+grid there would only cross the gun, and outside the melt the world is
+still solid and must not be drawn over.
+================
+*/
+static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
+{
+	const float	spacing = 32.f;		/* ~0.8 m at an inch a unit */
+	const float	extent = 320.f;		/* ~8 m out */
+	const float	halfwidth = 1.f;	/* ~5 cm of line */
+	const float	nearfade = 60.f;	/* clear of the player's own gun */
+	const float	nearfull = 170.f;	/* full strength by ~4 m out */
+	float		z, cx, cy, strength, outer;
+	int		i, seg, steps, axis;
+
+	strength = slot->frame.phase * phase_floor.value;
+	outer = slot->frame.phase_radius;
+	if (strength <= 0.01f || outer <= nearfade || !cl.worldmodel)
+		return;
+	if (outer > extent)
+		outer = extent;
+
+	/* The ground the player stands on: the hull bottom, found from the
+	   eye rather than the entity origin so it eases up stairs with the
+	   view instead of snapping. A unit proud, so it does not fight a
+	   real floor brush at the same height. */
+	z = r_refdef.vieworg[2] - cl.viewheight - 24.f + 1.f;
+	cx = r_refdef.vieworg[0];
+	cy = r_refdef.vieworg[1];
+
+	steps = (int) (extent / spacing);
+	for (i = -steps; i <= steps; i++)
+	for (axis = 0; axis < 2; axis++)
+	for (seg = -steps; seg < steps; seg++)
+	{
+		vec3_t	q[4];
+		float	off = i * spacing, s0 = seg * spacing, s1 = s0 + spacing;
+		float	a0, a1, d0, d1;
+
+		/* A flat quad lying ON the ground, not billboarded: this is a
+		   floor marking, and a line that turned to face the eye would
+		   read as a wire in the air. Broken into cells so the fade can
+		   be radial -- across one long quad it could only be linear. */
+		if (axis == 0)
+		{
+			q[0][0] = cx + off - halfwidth; q[0][1] = cy + s0;
+			q[1][0] = cx + off + halfwidth; q[1][1] = cy + s0;
+			q[2][0] = cx + off + halfwidth; q[2][1] = cy + s1;
+			q[3][0] = cx + off - halfwidth; q[3][1] = cy + s1;
+			d0 = sqrtf (off * off + s0 * s0);
+			d1 = sqrtf (off * off + s1 * s1);
+		}
+		else
+		{
+			q[0][0] = cx + s0; q[0][1] = cy + off - halfwidth;
+			q[1][0] = cx + s0; q[1][1] = cy + off + halfwidth;
+			q[2][0] = cx + s1; q[2][1] = cy + off + halfwidth;
+			q[3][0] = cx + s1; q[3][1] = cy + off - halfwidth;
+			d0 = sqrtf (s0 * s0 + off * off);
+			d1 = sqrtf (s1 * s1 + off * off);
+		}
+		q[0][2] = q[1][2] = q[2][2] = q[3][2] = z;
+
+		a0 = QR_GroundFade (d0, nearfade, nearfull, outer) * strength;
+		a1 = QR_GroundFade (d1, nearfade, nearfull, outer) * strength;
+		if (a0 <= 0.004f && a1 <= 0.004f)
+			continue;
+
+		QR_ParticleVertA (slot, q[0], 1.f, 1.f, 1.f, a0);
+		QR_ParticleVertA (slot, q[1], 1.f, 1.f, 1.f, a0);
+		QR_ParticleVertA (slot, q[2], 1.f, 1.f, 1.f, a1);
+		QR_ParticleVertA (slot, q[0], 1.f, 1.f, 1.f, a0);
+		QR_ParticleVertA (slot, q[2], 1.f, 1.f, 1.f, a1);
+		QR_ParticleVertA (slot, q[3], 1.f, 1.f, 1.f, a1);
+	}
+}
+
 static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 {
 	int i;
+
+	/* First among the particle writes, so its range starts at zero and
+	   the consumer's depth-always split stays two simple spans. */
+	slot->frame.ground_first_vert = slot->frame.num_particle_verts;
+	QR_EmitPhaseGround (slot);
+	slot->frame.ground_vert_count = slot->frame.num_particle_verts
+		- slot->frame.ground_first_vert;
 
 	QR_EmitTextureChains (slot, cl.worldmodel, chain_world, QC_ENTITY_NONE,
 			      1.0f, 0, QR_PHASE_SKY | QR_PHASE_OPAQUE);
@@ -7745,6 +7873,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_particle_verts = 0;
 	slot->frame.reticle_first_vert = 0;
 	slot->frame.reticle_vert_count = 0;
+	slot->frame.ground_first_vert = 0;
+	slot->frame.ground_vert_count = 0;
 	slot->frame.num_sprite_verts = 0;
 	slot->frame.num_sprite_batches = 0;
 	slot->frame.num_overlay_verts = 0;
