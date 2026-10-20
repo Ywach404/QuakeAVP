@@ -708,6 +708,24 @@ typedef struct {
 
 void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots);
 
+/* Room alignment: the wall directions the headset can see, so the engine
+   can turn the player until the level's walls run the way the room's do.
+   `degrees` is the compass angle of the wall's normal in the CORRECTED
+   tracking frame -- the consumer applies its own recentre correction
+   first, because that is the frame the body heading maps into, and the
+   engine has no way to undo it. `weight` is how much wall there is to
+   believe, in square metres. Walls are square to each other far more often
+   than not, so only the direction modulo 90 degrees is meaningful.
+   Pass count 0 when nothing is detected. Callable from any thread. */
+typedef struct {
+	float	degrees;
+	float	weight;
+} qc_wall_dir_t;
+
+#define QC_MAX_WALL_DIRS	16
+
+void QC_SetRoomWalls (const qc_wall_dir_t *dirs, int count);
+
 /* The eye-height trim (vr comfort slider) in QUAKE UNITS, fed by the render
    thread which applies the same trim to the camera. Head/wrist-locked
    overlays -- the weapon wheel -- add it so they rise with the raised

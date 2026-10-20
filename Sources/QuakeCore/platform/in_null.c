@@ -46,6 +46,11 @@ static float			qc_head_shared[3];	/* fwd, right, up */
    a dropped command. See QC_SetWeaponPlacement in QuakeCore.h. */
 static pthread_mutex_t		qc_place_lock = PTHREAD_MUTEX_INITIALIZER;
 static qc_weapon_placement_t	qc_place_shared[QC_WEAPON_SLOTS];
+
+/* Room walls, same idiom: whole table under a lock, replaced outright. */
+static pthread_mutex_t		qc_walls_lock = PTHREAD_MUTEX_INITIALIZER;
+static qc_wall_dir_t		qc_walls_shared[QC_MAX_WALL_DIRS];
+static int			qc_walls_count_shared;
 static uint32_t			qc_head_ack;		/* recenter echo */
 static int			qc_wheel_open_shared;
 static int			qc_wheel_anchor_shared;
@@ -148,6 +153,19 @@ void QC_InputSetSlowmo (int pressed)
 	pthread_mutex_lock (&qc_input_lock);
 	qc_slowmo_shared = pressed ? 1 : 0;
 	pthread_mutex_unlock (&qc_input_lock);
+}
+
+void QC_SetRoomWalls (const qc_wall_dir_t *dirs, int count)
+{
+	if (count < 0)
+		count = 0;
+	if (count > QC_MAX_WALL_DIRS)
+		count = QC_MAX_WALL_DIRS;
+	pthread_mutex_lock (&qc_walls_lock);
+	if (dirs && count > 0)
+		memcpy (qc_walls_shared, dirs, count * sizeof (qc_wall_dir_t));
+	qc_walls_count_shared = dirs ? count : 0;
+	pthread_mutex_unlock (&qc_walls_lock);
 }
 
 void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots)
