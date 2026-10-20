@@ -2337,6 +2337,9 @@ struct ContentView: View {
 
     @State private var phaseLevel = 0.0
     @State private var phaseSpeed = 2.0
+    /// How solid the ground stays while the world melts. Mirrors
+    /// `phase_floor`; see that cvar for why a ghost floor is there at all.
+    @State private var phaseFloor = 0.5
     /// The default molten orange: the cvar's (1.5, 0.93, 0.27) glow with
     /// the 1.5x intensity factored out for the 0-1 picker.
     private static let defaultPhaseColor = Color(red: 1.0, green: 0.62, blue: 0.18)
@@ -2382,6 +2385,20 @@ struct ContentView: View {
             .onChange(of: phaseLevel) { _, level in
                 engine.send(String(format: "phase %.2f", level))
             }
+            // Ground opacity through the melt. A dial rather than a fixed
+            // value because how much floor you need to read distance is a
+            // matter of the room you are standing in: a cluttered one gives
+            // the eye plenty to measure against, a bare one almost nothing.
+            VStack(spacing: 2) {
+                Text("Ground \(Int((phaseFloor * 100).rounded()))%")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Slider(value: $phaseFloor, in: 0...1)
+                    .frame(width: 110)
+                    .onChange(of: phaseFloor) { _, value in
+                        engine.send(String(format: "phase_floor %.2f", value))
+                    }
+            }
+            .fixedSize()
             Menu {
                 ForEach(Self.phaseSpeeds, id: \.seconds) { speed in
                     Button {

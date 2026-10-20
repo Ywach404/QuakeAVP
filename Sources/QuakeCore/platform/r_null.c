@@ -114,7 +114,7 @@ cvar_t	phase_color = {"phase_color", "1.5 0.93 0.27", CVAR_NONE};
    than a few metres off reads as floating in the air -- it sits near eye
    level, which is what a horizon is. Leaving the floor as a ghost gives
    the eye a plane to measure distance against. 0 melts it like the rest. */
-cvar_t	phase_floor = {"phase_floor", "0.35", CVAR_ARCHIVE};
+cvar_t	phase_floor = {"phase_floor", "0.5", CVAR_ARCHIVE};
 
 /* Comfort vignette: periphery fade strength while artificial locomotion
    exceeds the threshold (Quake units/sec; walking is ~200). Zero disables. */
