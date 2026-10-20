@@ -2523,6 +2523,38 @@ struct ContentView: View {
                 .onSubmit(submit)
             Button("Send", action: submit)
                 .disabled(commandText.isEmpty || engine.status != .running)
+            // Reading numbers off a console pane through a headset, by eye,
+            // is how a digit gets misread and an afternoon gets spent on the
+            // wrong bug. This writes the pane to a file the Mac can pull:
+            // tools/pull-console.sh.
+            Button("Save") { saveConsole() }
+                .disabled(engine.consoleLines.isEmpty)
+        }
+    }
+
+    /// Write the console pane to Documents, where the Mac can fetch it.
+    /// Documents because the game directory is NOT writable on device --
+    /// paks are read through the platform file layer, not a real path, so
+    /// the engine's own `condump` writes nothing there.
+    private func saveConsole() {
+        guard let docs = FileManager.default.urls(for: .documentDirectory,
+                                                  in: .userDomainMask).first else { return }
+        let url = docs.appendingPathComponent("console.log")
+        var text = "=== console saved \(Date().formatted(.iso8601)) ===\n"
+        if let raw = FloorSource.rawReadout() {
+            let chosen = raw.floorY.map { String(format: "%+.2f", $0) } ?? "none"
+            let lowest = raw.lowest.map { String(format: "%+.2f", $0) } ?? "none"
+            text += String(format: "FLOOR head %+.2f chosen %@ lowest %@ planes %d\n",
+                           raw.headY, chosen, lowest, raw.planes)
+        } else {
+            text += "FLOOR plane detection not running\n"
+        }
+        text += engine.consoleLines.joined(separator: "\n") + "\n"
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            engine.send("echo console saved to Documents/console.log")
+        } catch {
+            engine.send("echo console save FAILED: \(error.localizedDescription)")
         }
     }
 
