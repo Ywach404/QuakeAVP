@@ -25,6 +25,7 @@
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include "admin_avp.h"
+#include "align_math.h"
 
 #include <pthread.h>
 
@@ -32,6 +33,7 @@
 extern cvar_t cl_maxpitch, cl_minpitch;
 /* defined in host.c; no header declares it */
 extern cvar_t host_timescale;
+extern cvar_t phase;		/* the melt, r_null.c -- room alignment rides its edge */
 
 /* ========================================================================
  * any-thread producers
@@ -1240,6 +1242,214 @@ static void IN_SnapTurn (float degrees)
 	qr_body_yaw += degrees;
 }
 
+/*
+================
+Room alignment -- turn the player until the level's local walls run the way
+the real room's walls do, so a melted world reads as mapped onto the room
+instead of lying across it at a random angle.
+
+Rotation only, and deliberately so. Matching a wall's POSITION means moving
+the player, which is a teleport chosen by a heuristic, and cannot succeed
+anyway because a Quake room dwarfs a living room. Matching SCALE needs far
+more than the twenty percent vr_worldscale allows. See
+docs/designs/2026-10-20-room-alignment.md.
+
+The turn goes through IN_SnapTurn, which is the one sanctioned writer of a
+deliberate body heading: it settles the body under the head and rotates the
+absorption ledger with it. Writing qr_body_yaw directly would either be
+mistaken for a server setangle by IN_Move's adopt guard or desynchronise
+that ledger.
+================
+*/
+cvar_t		vr_align_room  = {"vr_align_room",  "0", CVAR_ARCHIVE};
+cvar_t		vr_align_debug = {"vr_align_debug", "0", 0};
+
+/* 24 rays at 15 degrees. Enough that a long wall is hit by several and
+   outvotes a short one by hit count alone, which is why the level side
+   needs no area term. */
+#define QR_ALIGN_RAYS		24
+/* ~4 m at an inch per unit: the walls of the room you are standing in, not
+   the level's far side. Local geometry is what has to match. */
+#define QR_ALIGN_RANGE		160.f
+#define QR_ALIGN_MIN_HITS	6
+/* Square metres of detected wall. One short partition is not a room. */
+#define QR_ALIGN_MIN_AREA	2.f
+/* Below this the evidence is cancelling itself -- a round room, or two
+   directions of equal strength 45 degrees apart. Both mean: do nothing. */
+#define QR_ALIGN_MIN_CONF	0.5f
+
+/* The room's dominant wall direction, as a Quake world yaw. The published
+   angles are anchor-frame (see QC_SetRoomWalls), so the body heading is the
+   whole conversion; because that is a rotation it commutes with the mean,
+   and taking it once after is the same answer as rotating every wall. */
+static int IN_RoomWallYaw (float *out_yaw, float *out_conf, float *out_area)
+{
+	qc_wall_dir_t	walls[QC_MAX_WALL_DIRS];
+	align_dir_t	dirs[QC_MAX_WALL_DIRS];
+	int		count, i;
+	float		area = 0.f;
+
+	pthread_mutex_lock (&qc_walls_lock);
+	count = qc_walls_count_shared;
+	if (count > 0)
+		memcpy (walls, qc_walls_shared, count * sizeof (qc_wall_dir_t));
+	pthread_mutex_unlock (&qc_walls_lock);
+
+	for (i = 0; i < count; i++)
+	{
+		dirs[i].degrees = walls[i].degrees;
+		dirs[i].weight = walls[i].weight;
+		if (walls[i].weight > 0.f)
+			area += walls[i].weight;
+	}
+	*out_area = area;
+	if (!Align_Dominant (dirs, count, out_yaw, out_conf))
+		return 0;
+	*out_yaw += qr_body_yaw;
+	return 1;
+}
+
+/* The level's dominant wall direction around the player, from a fan of
+   world-only traces. Upright surfaces only: a ramp, a stair riser's lip or
+   a sloped ceiling all have normals that are not a wall's, and left in they
+   drag the mean somewhere no wall is. */
+static int IN_LevelWallYaw (float *out_yaw, float *out_conf, int *out_hits)
+{
+	align_dir_t	dirs[QR_ALIGN_RAYS];
+	edict_t		*player;
+	vec3_t		start, end;
+	trace_t		tr;
+	int		i, n = 0;
+
+	*out_hits = 0;
+	if (!sv.active || !svs.clients || !svs.clients[0].active)
+		return 0;
+	player = svs.clients[0].edict;
+
+	VectorCopy (player->v.origin, start);
+	/* Mid-torso rather than the origin: low enough to stay under a
+	   railing, high enough that a step riser is not the nearest thing in
+	   every direction. */
+	start[2] += 16.f;
+
+	for (i = 0; i < QR_ALIGN_RAYS; i++)
+	{
+		float a = (float) i * (360.f / QR_ALIGN_RAYS) * M_PI / 180.f;
+
+		end[0] = start[0] + QR_ALIGN_RANGE * cosf (a);
+		end[1] = start[1] + QR_ALIGN_RANGE * sinf (a);
+		end[2] = start[2];
+
+		tr = SV_Move (start, vec3_origin, vec3_origin, end,
+			      MOVE_NOMONSTERS, player);
+		if (tr.startsolid || tr.allsolid || tr.fraction >= 1.f)
+			continue;
+		if (fabsf (tr.plane.normal[2]) > 0.3f)
+			continue;
+
+		dirs[n].degrees = atan2f (tr.plane.normal[1],
+					  tr.plane.normal[0]) * 180.f / M_PI;
+		dirs[n].weight = 1.f;
+		n++;
+	}
+
+	*out_hits = n;
+	if (n < QR_ALIGN_MIN_HITS)
+		return 0;
+	return Align_Dominant (dirs, n, out_yaw, out_conf);
+}
+
+/* `loud` reports a refusal; the automatic path stays quiet unless
+   vr_align_debug is on, because a refusal every melt is the normal case in
+   a round room and nobody needs it printed. */
+static void IN_AlignRoom (int loud)
+{
+	float	room_yaw, room_conf, room_area;
+	float	lvl_yaw, lvl_conf;
+	float	turn;
+	int	hits = 0;
+
+	loud = loud || vr_align_debug.value != 0.f;
+
+	if (!IN_RoomWallYaw (&room_yaw, &room_conf, &room_area))
+	{
+		if (loud)
+			Con_Printf ("align: no room walls detected\n");
+		return;
+	}
+	if (room_area < QR_ALIGN_MIN_AREA || room_conf < QR_ALIGN_MIN_CONF)
+	{
+		if (loud)
+			Con_Printf ("align: room unclear (%.1f m2, conf %.2f)\n",
+				    room_area, room_conf);
+		return;
+	}
+	if (!IN_LevelWallYaw (&lvl_yaw, &lvl_conf, &hits))
+	{
+		if (loud)
+			Con_Printf ("align: no level walls here (%d hit%s)\n",
+				    hits, hits == 1 ? "" : "s");
+		return;
+	}
+	if (lvl_conf < QR_ALIGN_MIN_CONF)
+	{
+		if (loud)
+			Con_Printf ("align: level unclear (%d hits, conf %.2f)\n",
+				    hits, lvl_conf);
+		return;
+	}
+
+	/* The level is fixed in the world; the room is fixed in the tracking
+	   frame; body_yaw is the hinge between them (world = anchor + body).
+	   A level wall's direction as SEEN IN THE ROOM is lvl_yaw - body_yaw,
+	   and we want that to read as the real wall's anchor-frame direction,
+	   so the body must end up at lvl_yaw - room_anchor -- which is a turn
+	   of lvl_yaw - room_yaw. Derived, not guessed: the reduction mod 90
+	   makes an inverted sign agree at exactly 0 and 45 degrees and be
+	   wrong by twice the angle everywhere else, so it cannot be found by
+	   trying it in a square room. */
+	turn = Align_Reduce90 (lvl_yaw - room_yaw);
+	if (vr_align_debug.value)
+		Con_Printf ("align: room %.1f (%.1f m2 conf %.2f) level %.1f "
+			    "(%d hits conf %.2f) body %.1f turn %+.1f\n",
+			    room_yaw, room_area, room_conf, lvl_yaw, hits,
+			    lvl_conf, qr_body_yaw, turn);
+	if (fabsf (turn) < 0.5f)
+		return;			/* already aligned */
+	IN_SnapTurn (turn);
+}
+
+static void IN_AlignRoom_f (void)
+{
+	IN_AlignRoom (1);
+}
+
+/* The melt's rising edge is the only moment a turn this large is tolerable:
+   it is already a two second transition with a dissolve over it. Outside it
+   the player would turn in the game and drift back out of alignment within
+   seconds, and correcting that continuously spins the room underfoot, which
+   is worse than no alignment at all. Rephasing does not turn you back -- the
+   alignment is a turn like any other and the world is where you left it.
+
+   Seeded from the live value on the first call so a config.cfg that saved
+   `phase 1` does not read as an edge at boot. */
+static void IN_AlignEdge (void)
+{
+	static float	prev;
+	static int	seeded;
+	float		now = phase.value;
+
+	if (!seeded)
+	{
+		seeded = 1;
+		prev = now;
+		return;
+	}
+	if (now > 0.01f && prev <= 0.01f && vr_align_room.value)
+		IN_AlignRoom (0);
+	prev = now;
+}
+
 /* vr_recenter: current head pose becomes neutral. Absorb what we can so
    the body is under the head, zero the ledger, and bump the generation;
    the renderer captures a correction that zeroes the pose against it and
@@ -1468,6 +1678,10 @@ void IN_Move (usercmd_t *cmd)
 	}
 	}
 
+	/* Room alignment rides the melt's edge. Placed before the compose so a
+	   turn it makes is folded into this frame's aim like any other. */
+	IN_AlignEdge ();
+
 	/* Compose the aim yaw from the (possibly just-turned) body plus the hand
 	   ray, and remember it so next frame's adopt-guard can tell a server
 	   setangle from our own write. */
@@ -1532,8 +1746,13 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_slowmo);
 	Cvar_RegisterVariable (&vr_fullmenu);
 	Cvar_RegisterVariable (&vr_lean_limit);
+	Cvar_RegisterVariable (&vr_align_room);
+	Cvar_RegisterVariable (&vr_align_debug);
 	Cvar_RegisterVariable (&wheel_timescale);
 	Cmd_AddCommand ("vr_recenter", IN_Recenter_f);
+	/* Align on demand, so the turn can be tried and the refusals read
+	   without phasing in and out to provoke an edge. */
+	Cmd_AddCommand ("align_room", IN_AlignRoom_f);
 	Admin_Init ();
 	Cmd_AddCommand ("+wheel", IN_WheelDown_f);
 	Cmd_AddCommand ("-wheel", IN_WheelUp_f);

@@ -710,13 +710,27 @@ void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots);
 
 /* Room alignment: the wall directions the headset can see, so the engine
    can turn the player until the level's walls run the way the room's do.
-   `degrees` is the compass angle of the wall's normal in the CORRECTED
-   tracking frame -- the consumer applies its own recentre correction
-   first, because that is the frame the body heading maps into, and the
-   engine has no way to undo it. `weight` is how much wall there is to
-   believe, in square metres. Walls are square to each other far more often
-   than not, so only the direction modulo 90 degrees is meaningful.
-   Pass count 0 when nothing is detected. Callable from any thread. */
+
+   `degrees` is the direction of the wall's normal in the ANCHOR frame --
+   the frame the consumer places the world in, which is the Quake world
+   frame rotated by body_yaw. Spelled out, because the word for it is
+   ambiguous and the error is invisible: atan2(-x, -z) in degrees over the
+   RECENTRE-CORRECTED tracking frame, so zero is straight ahead (-Z) and it
+   increases to the left, the same sense as a Quake yaw. That makes the
+   engine's whole conversion one addition: world_yaw = degrees + body_yaw. The consumer owns the frame
+   and therefore owns the conversion into it; it already composes that
+   matrix every frame, and duplicating the axis and sign conventions in C
+   is how the two halves would drift apart. Publishing in the anchor frame
+   rather than the world frame also means the numbers do not go stale when
+   the player turns: a real wall does not move, so its anchor-frame
+   direction is fixed, while its world yaw changes with every turn.
+
+   `weight` is how much wall there is to believe, in square metres. Walls
+   are square to each other far more often than not, so only the direction
+   modulo 90 degrees carries information. Sort heaviest first: the table is
+   clamped to QC_MAX_WALL_DIRS and a cluttered room can overflow it, so the
+   walls worth keeping should be the ones that survive. Pass count 0 when
+   nothing is detected. Callable from any thread. */
 typedef struct {
 	float	degrees;
 	float	weight;
