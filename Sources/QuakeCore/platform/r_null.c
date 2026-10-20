@@ -109,6 +109,12 @@ cvar_t	phase_time = {"phase_time", "2", CVAR_NONE};
 /* Ember rim colour, linear "r g b" (values may exceed 1 for glow);
    the default is the molten orange. */
 cvar_t	phase_color = {"phase_color", "1.5 0.93 0.27", CVAR_NONE};
+/* How solid the ground stays while the world melts, 0..1. The melt takes
+   every depth cue with it, and on a bare passthrough room anything more
+   than a few metres off reads as floating in the air -- it sits near eye
+   level, which is what a horizon is. Leaving the floor as a ghost gives
+   the eye a plane to measure distance against. 0 melts it like the rest. */
+cvar_t	phase_floor = {"phase_floor", "0.35", CVAR_ARCHIVE};
 
 /* Comfort vignette: periphery fade strength while artificial locomotion
    exceeds the threshold (Quake units/sec; walking is ~200). Zero disables. */
@@ -186,6 +192,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&phase);
 	Cvar_RegisterVariable (&phase_time);
 	Cvar_RegisterVariable (&phase_color);
+	Cvar_RegisterVariable (&phase_floor);
 	Cvar_RegisterVariable (&vr_vignette);
 	Cvar_RegisterVariable (&vr_vignette_threshold);
 

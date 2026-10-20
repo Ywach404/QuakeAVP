@@ -158,7 +158,8 @@ struct PhaseFragUniforms {
     // (float3 + float pads to 32 bytes in MSL, 20 in Swift — the debug
     // layer caught exactly that).
     float4 headorg_radius;
-    // Ember rim colour, linear rgb (may exceed 1 for glow); w unused.
+    // Ember rim colour, linear rgb (may exceed 1 for glow); w carries
+    // phase_floor, how solid up-facing surfaces stay inside the melt.
     float4 rimcolor;
 };
 
@@ -183,8 +184,32 @@ fragment float4 world_phase_fragment(WorldVaryings in [[stage_in]],
         // ~11-unit noise features, +-30 units of edge break-up
         float threshold = phase.headorg_radius.w
             + (qavp_noise3(in.worldpos * 0.09) - 0.5) * 60.0;
-        if (d < threshold)
+        if (d < threshold) {
+            // The ground survives the melt as a ghost, when asked for.
+            // Dissolving everything removes every depth cue at once, and
+            // on a bare passthrough room anything more than a few metres
+            // off then reads as floating: it sits near eye level, which is
+            // what a horizon is. A faint floor gives the eye a plane to
+            // measure against, and shows where the level's ground runs
+            // past the walls of the real room.
+            //
+            // The face normal comes from screen-space derivatives of the
+            // world position rather than a vertex attribute -- a BSP face
+            // is flat, so this is its exact normal, and it costs no change
+            // to the vertex format. Quake's up is +Z. abs() because the
+            // derivative cross product's sign follows the winding.
+            float ghost = phase.rimcolor.w;
+            if (ghost > 0.0) {
+                float3 n = normalize(cross(dfdx(in.worldpos), dfdy(in.worldpos)));
+                if (abs(n.z) > 0.7) {
+                    // Premultiplied: the pass is unblended, so the alpha
+                    // written here is what the compositor reveals through.
+                    float4 lit = qavp_out(float4(rgb, 1.0));
+                    return float4(lit.rgb * ghost, ghost);
+                }
+            }
             return float4(0.0, 0.0, 0.0, 0.0);  // melt to passthrough (transparent)
+        }
         // ember rim in a ~14-unit band outside the boundary
         float rim = 1.0 - saturate((d - threshold) * (1.0 / 14.0));
         rgb = min(rgb + rim * rim * phase.rimcolor.rgb, 1.0);

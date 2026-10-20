@@ -35,6 +35,9 @@ compare against.
 - Colormapped player skins: every player wears their own shirt and trouser
   colours, and the setup menu's preview follows its sliders, through the
   same translate-and-reload path upstream uses.
+- The game floor sits on your real floor, measured by plane detection, in
+  every posture and across recenters; the eye-height slider is now a small
+  floor trim. One new permission prompt, world sensing, on first launch.
 - The phase dissolve — `phase 1` melts the world to passthrough around you and
   leaves the level's monsters, pickups and doors standing in your room.
 - Sound, including the CD soundtrack, through an `AVAudioEngine` source node

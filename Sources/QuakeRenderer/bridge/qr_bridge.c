@@ -43,7 +43,8 @@ extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farc
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
 extern cvar_t r_dynamic, r_flatlightstyles;	/* registered in r_null.c */
-extern cvar_t phase, phase_time, phase_color;
+extern cvar_t phase, phase_time, phase_color, phase_floor;
+extern cvar_t cl_bob;			/* view.c; held at zero while immersive, see QR_BobGate */
 extern cvar_t vr_vignette, vr_vignette_threshold;
 
 /* head-follow ledger, owned by in_null.c on the engine thread */
@@ -330,6 +331,53 @@ void QC_RendererSetCullingFov (float fovx_deg, float fovy_deg)
 	qr_cull_fovy = fovy_deg;
 	pthread_mutex_unlock (&qr_cullfov_lock);
 }
+
+/*
+================
+QR_BobGate -- hold cl_bob at zero while the immersive space is up.
+
+The immersive anchor is the player's feet on the measured real floor, and
+bob rides in vieworg, so with bob live the wheel, the hands and every
+head-locked overlay would rise and fall with each step. The value found on
+entry (an autoexec may have set it) is restored on exit. Engine thread,
+once per frame from the omni read in QR_RenderView; the host test drives
+it through QR_TestBobGate.
+================
+*/
+static void QR_BobGate (int omni)
+{
+	static float	saved_bob;
+	static int	bob_zeroed;
+
+	/* Re-asserted every immersive frame, not only on the edge: the anchor
+	   is still only while bob is zero, and a console `cl_bob` or an exec
+	   while the space is up would otherwise escape. The value found,
+	   whenever it was set, is what exit restores. */
+	if (omni && (!bob_zeroed || cl_bob.value != 0.f))
+	{
+		saved_bob = cl_bob.value;
+		bob_zeroed = 1;
+		if (cl_bob.flags & CVAR_REGISTERED)
+			Cvar_SetValueQuick (&cl_bob, 0.f);
+		else
+			cl_bob.value = 0.f;	/* the host test binary never runs V_Init */
+	}
+	else if (!omni && bob_zeroed)
+	{
+		bob_zeroed = 0;
+		if (cl_bob.flags & CVAR_REGISTERED)
+			Cvar_SetValueQuick (&cl_bob, saved_bob);
+		else
+			cl_bob.value = saved_bob;
+	}
+}
+
+#ifdef QAVP_HOSTCHECK
+void QR_TestBobGate (int omni)
+{
+	QR_BobGate (omni);
+}
+#endif
 
 /* Presented frame rate, published by the consumer for the HUD's frame-rate
    tile; stamped so a consumer that stops publishing (the immersive space
@@ -7719,6 +7767,7 @@ void QR_BeginFrame (void)
 	slot->frame.time = 0;
 	slot->frame.phase = 0;
 	slot->frame.phase_radius = 0;
+	slot->frame.phase_floor = 0.f;
 	slot->frame.phase_color[0] = 1.5f;
 	slot->frame.phase_color[1] = 0.93f;
 	slot->frame.phase_color[2] = 0.27f;
@@ -7741,6 +7790,7 @@ void QR_BeginFrame (void)
 	   handshake can't wedge at the console or during demos */
 	slot->frame.recenter_count = qr_recenter_count;
 	memset (slot->frame.vieworg, 0, sizeof(slot->frame.vieworg));
+	slot->frame.viewheight = 0.f;
 	memset (slot->frame.viewangles, 0, sizeof(slot->frame.viewangles));
 	slot->frame.body_yaw = 0;
 	slot->frame.world_scale = QR_WORLDSCALE_DEFAULT;
@@ -7830,6 +7880,7 @@ void QR_RenderView (void)
 		   render the whole PVS, no frustum. Still build a valid frustum for
 		   any consumer of the planes; R_CullBox short-circuits on the flag. */
 		qr_cull_omni = (cullx >= 359.f || cully >= 359.f);
+		QR_BobGate (qr_cull_omni);
 		if (qr_cull_omni)
 		{
 			/* keep the planes valid (R_CullBox ignores them anyway) */
@@ -7870,6 +7921,7 @@ void QR_RenderView (void)
 	slot->frame.vieworg[0] = r_origin[0];
 	slot->frame.vieworg[1] = r_origin[1];
 	slot->frame.vieworg[2] = r_origin[2];
+	slot->frame.viewheight = cl.viewheight;
 	slot->frame.viewangles[0] = r_refdef.viewangles[0];
 	slot->frame.viewangles[1] = r_refdef.viewangles[1];
 	slot->frame.viewangles[2] = r_refdef.viewangles[2];
@@ -7925,6 +7977,7 @@ void QR_RenderView (void)
 
 		/* rim colour from the cvar string; malformed input keeps the
 		   molten-orange default rather than going black */
+		slot->frame.phase_floor = CLAMP (0.f, phase_floor.value, 1.f);
 		slot->frame.phase_color[0] = 1.5f;
 		slot->frame.phase_color[1] = 0.93f;
 		slot->frame.phase_color[2] = 0.27f;

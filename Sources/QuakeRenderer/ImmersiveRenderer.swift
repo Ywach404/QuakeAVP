@@ -60,6 +60,28 @@ final class ImmersiveRenderer {
     /// see the `.running` arm of `run()` for why it is not `start()`'s job.
     private var startedAnchors = false
 
+    /// The real floor, measured by plane detection in a session of its
+    /// own. While it has a height, the anchor is the player's feet on that
+    /// floor; until then, or if the permission is refused, the mapping is
+    /// the eye-locked one this port has always had. See `FloorSource`.
+    private let floor = FloorSource()
+    /// Whether the last frame was floor-anchored, so the switch between
+    /// the two mappings is logged and eased on its edges only.
+    private var floorAnchored = false
+    /// The anchor last frame, and the measured floor it was built from, so
+    /// a change worth easing can be told from one that is not.
+    private var lastAnchorZ: Float = 0
+    private var lastFloorRaw: Float?
+    private var composedAnchorBefore = false
+    /// An in-progress ease, as a fixed offset in Quake units decaying to
+    /// zero. Held as an offset, not as endpoints, so it rides whatever the
+    /// target does underneath it -- the target moves with the player.
+    private var floorEase: (offset: Float, startedAt: Double)?
+    private static let floorSwitchSeconds = 1.0
+    /// A floor re-measurement smaller than this, in metres, is the same
+    /// floor read again.
+    private static let floorEaseThreshold: Float = 0.01
+
     /// One-shot log latches for the two rare frame paths, so a device stream
     /// names them once instead of 90 times a second. Render-thread only.
     private var loggedNoCommandBuffer = false
@@ -81,6 +103,14 @@ final class ImmersiveRenderer {
     /// is echoed back through QC_InputSetHeadOffset so the engine knows
     /// which generation the feed belongs to.
     private var recenterCorrection = matrix_identity_float4x4
+    /// The pose the correction was built from, kept so the height half can
+    /// be rebuilt without re-zeroing yaw and position. Re-zeroing those
+    /// mid-session would snap the world sideways to wherever you happen to
+    /// be looking.
+    private var zeroingPose: simd_float4x4?
+    /// Whether the live correction keeps height. It cannot keep height
+    /// before a floor is measured, and must once one is.
+    private var correctionKeepsHeight = false
     private var recenterSeen: UInt32 = 0
     private var zeroedInitialPose = false
 
@@ -196,6 +226,7 @@ final class ImmersiveRenderer {
                 if !startedAnchors {
                     startedAnchors = true
                     anchors.start()
+                    floor.start()
                 }
                 autoreleasepool { renderFrame() }
             @unknown default:
@@ -225,6 +256,7 @@ final class ImmersiveRenderer {
         // kept alive by its own stop closure, so every open/dismiss cycle
         // leaked a live session with a running WorldTrackingProvider in it.
         anchors.stop()
+        floor.stop()
         print("[immersive] layer invalidated, render thread exiting")
         onStop(self)
     }
@@ -534,15 +566,43 @@ final class ImmersiveRenderer {
         // the tracking origin's arbitrary placement (metres away, in the
         // simulator) feeds in as a giant head offset and drags the player
         // across the map the moment the space opens.
+        // Height is kept whenever a floor has been measured: the floor, not
+        // the head at recenter, defines vertical then. Without a floor the
+        // correction zeroes all three, which is the eye-locked mapping.
+        // Read ONCE per frame: the drain task can publish between two
+        // reads, and the correction and the anchor below must agree.
+        let floorRaw = floor.floorYRaw()
+        let keepHeight = floorRaw != nil
         if deviceAnchor != nil, !zeroedInitialPose {
             zeroedInitialPose = true
-            recenterCorrection = Self.correction(zeroing: rawOriginFromDevice)
+            zeroingPose = rawOriginFromDevice
+            correctionKeepsHeight = keepHeight
+            recenterCorrection = FloorMath.correction(zeroing: rawOriginFromDevice, keepHeight: keepHeight)
             TrackingSpace.setCorrection(recenterCorrection)
         }
         if let packet, packet.recenter_count != recenterSeen {
             recenterSeen = packet.recenter_count
-            recenterCorrection = Self.correction(zeroing: rawOriginFromDevice)
+            zeroingPose = rawOriginFromDevice
+            correctionKeepsHeight = keepHeight
+            recenterCorrection = FloorMath.correction(zeroing: rawOriginFromDevice, keepHeight: keepHeight)
             TrackingSpace.setCorrection(recenterCorrection)
+        }
+        // The floor almost always arrives AFTER the space has opened, so the
+        // correction in hand was built height-zeroing and carries the head
+        // height from whenever the space happened to open -- mid-donning,
+        // seated, looking at the floor. Compensating for that frozen number
+        // puts the game floor wherever your head was at that instant. Rebuild
+        // the correction from the SAME pose with height kept instead, which
+        // leaves yaw and position alone and makes the floor live.
+        if keepHeight != correctionKeepsHeight, let pose = zeroingPose {
+            correctionKeepsHeight = keepHeight
+            recenterCorrection = FloorMath.correction(zeroing: pose, keepHeight: keepHeight)
+            TrackingSpace.setCorrection(recenterCorrection)
+            print("[floor] correction rebuilt, height now \(keepHeight ? "kept" : "zeroed")")
+        }
+        if deviceAnchor != nil {
+            let raw = rawOriginFromDevice.columns.3
+            floor.noteHead(SIMD3(raw.x, raw.y, raw.z))
         }
         let originFromDevice = recenterCorrection * rawOriginFromDevice
 
@@ -655,16 +715,103 @@ final class ImmersiveRenderer {
                 ? excess * ((excessLen - packet.lean_limit) / excessLen)
                 : SIMD2<Float>(0, 0)
 
-            // Eye-locked baseline: the anchor (Quake point at the tracking
-            // origin) is the game eye, trimmed up/down by the live height
-            // knob. Vertical head motion moves the eye from here naturally.
-            // + raises the viewpoint (taller), - lowers it. Fed to the
-            // engine too, so the wrist-locked wheel rises with the camera.
-            let heightTrim = VRSettings.shared.heightOffset / s
+            // The anchor is the Quake point at the tracking origin. With a
+            // measured floor it is the hull bottom, placed on the real
+            // floor, and the camera's height is the head's real height
+            // above it; without one it is the game eye plus the old 0.40 m,
+            // the eye-locked mapping this port has always had. The switch
+            // between the two eases over a second, as an offset from
+            // vieworg so the ease survives the player walking. Vertical
+            // head motion moves the eye from the anchor naturally either
+            // way.
+            let trim = VRSettings.shared.floorTrim
+            let targetZ: Float
+            if let floorRaw {
+                // The floor is measured raw; the correction may still be
+                // zeroing height (it is rebuilt only at recenter), so bring
+                // the floor into the same frame the head offset is in.
+                let floorY = FloorMath.floorYRoom(raw: floorRaw, correction: recenterCorrection)
+                targetZ = FloorMath.anchorZ(vieworgZ: packet.vieworg.2, viewheight: packet.viewheight,
+                                            floorYRoom: floorY, worldScale: s, trimMetres: trim)
+            } else {
+                targetZ = FloorMath.fallbackAnchorZ(vieworgZ: packet.vieworg.2, worldScale: s,
+                                                    trimMetres: trim)
+            }
+            // Ease on what SHOULD move the world -- the mode, and a floor
+            // re-measured somewhere new -- and never on the target alone.
+            // The target also moves when cl.viewheight does, which Quake
+            // drops by 30 units on death and restores on respawn; vieworg
+            // moves with it, so the anchor is unchanged and an ease keyed
+            // on the target would shove the world 0.76 m and back on every
+            // death.
+            let now = CACurrentMediaTime()
+            let floorMoved: Bool
+            switch (floorRaw, lastFloorRaw) {
+            case let (new?, old?):  floorMoved = abs(new - old) > Self.floorEaseThreshold
+            case (nil, nil):        floorMoved = false
+            default:                floorMoved = true
+            }
+            if !composedAnchorBefore {
+                // First composed frame: nothing to ease from.
+                composedAnchorBefore = true
+                floorAnchored = floorRaw != nil
+            } else if floorMoved {
+                // The magnitude, in centimetres, is the whole point: for a
+                // standing adult the old hand-tuned eye height and a
+                // measured floor land within a few of each other, and
+                // "nothing moved" is then the right answer rather than a
+                // dead feature. Seated, or for a player of another height,
+                // it is tens of centimetres.
+                let movedCm = (lastAnchorZ - targetZ) * s * 100
+                floorEase = (offset: lastAnchorZ - targetZ, startedAt: now)
+                if (floorRaw != nil) != floorAnchored {
+                    floorAnchored = floorRaw != nil
+                    print(String(format: "[floor] anchor switching to %@, world moves %+.1f cm (floor %+.3f m, head %+.2f m)",
+                                 floorAnchored ? "floor" : "eye", -movedCm,
+                                 floorRaw ?? 0, originFromDevice.columns.3.y))
+                } else {
+                    print(String(format: "[floor] floor re-measured, world moves %+.1f cm", -movedCm))
+                }
+            }
+            lastFloorRaw = floorRaw
+            var anchorZ = targetZ
+            if let ease = floorEase {
+                let progress = Float((now - ease.startedAt) / Self.floorSwitchSeconds)
+                if progress < 1 {
+                    // The offset decays to zero; the target underneath it
+                    // keeps tracking the player.
+                    anchorZ = targetZ + FloorMath.eased(from: ease.offset, to: 0, progress: progress)
+                } else {
+                    floorEase = nil
+                }
+            }
+            lastAnchorZ = anchorZ
+
+            // Calibration readout. The game floor is the player's hull
+            // bottom; where it lands in the room is the one number this
+            // whole feature exists to control, so publish it rather than
+            // trusting that the arithmetic above did what it claims.
+            let gameFloorZ = packet.vieworg.2 - packet.viewheight - FloorMath.hullBottom
+            let gameFloorRoomY = (gameFloorZ - anchorZ) * s
+            let realFloorRoomY = floorRaw.map {
+                FloorMath.floorYRoom(raw: $0, correction: recenterCorrection)
+            }
+            FloorReadout.publish(
+                gameFloorAboveReal: realFloorRoomY.map { gameFloorRoomY - $0 },
+                headAboveGameFloor: originFromDevice.columns.3.y - gameFloorRoomY)
+            // The engine is told how far the rendered eye sits above
+            // vieworg: the anchor's offset plus the head's height above the
+            // tracking origin. Every engine-side reconstruction of the eye
+            // adds this to vieworg; the head offset's `up` fed above only
+            // ever enters as hand-minus-head, so the head's height is not
+            // counted anywhere else.
+            let heightTrim = FloorMath.effectiveTrim(anchorZ: anchorZ,
+                                                     cameraYRoom: originFromDevice.columns.3.y,
+                                                     vieworgZ: packet.vieworg.2, worldScale: s)
             QC_InputSetHeightTrim(heightTrim)
             let anchor = SIMD3(packet.vieworg.0 - absorbed.x - overLimit.x,
                                packet.vieworg.1 - absorbed.y - overLimit.y,
-                               packet.vieworg.2 + heightTrim)
+                               anchorZ)
             let quakeView = RendererCore.quakeViewMatrix(
                 origin: anchor,
                 angles: SIMD3(0, packet.body_yaw, 0))
@@ -695,7 +842,8 @@ final class ImmersiveRenderer {
             radius: packet?.phase_radius ?? 0,
             skyFade: 1 - (packet?.phase ?? 0),
             rimColor: packet.map { SIMD3($0.phase_color.0, $0.phase_color.1, $0.phase_color.2) }
-                ?? SIMD3(1.5, 0.93, 0.27))
+                ?? SIMD3(1.5, 0.93, 0.27),
+            floorGhost: packet?.phase_floor ?? 0)
 
         var eyeViewproj: [simd_float4x4] = []
         var eyeOrigin: [SIMD4<Float>] = []
@@ -2473,25 +2621,6 @@ final class ImmersiveRenderer {
         // ~100 deg binocular fov each frame here used to overwrite that back
         // to a body-forward cone, which is what made the world drop out on
         // move/turn/climb. The drawable size is all this needs to publish.
-    }
-
-    /// The correction that maps `pose`'s yaw and position to neutral —
-    /// pitch and roll are left alone, they are genuinely the head's. This
-    /// zeroes the head fully at recenter, so the baseline eye is the game
-    /// eye (vieworg) and vertical head motion tracks from there (stand up
-    /// and you rise). A floor-locked variant that preserved height and
-    /// pinned the game floor to the real floor was tried and reverted: it
-    /// depended on the tracking origin being at floor level, which did not
-    /// hold on device and left the height wrong in both postures. Eye
-    /// height is now trimmed live from the Comfort menu instead.
-    private static func correction(zeroing pose: simd_float4x4) -> simd_float4x4 {
-        // Device forward is -Z; its XZ heading is the yaw to undo.
-        let f = -pose.columns.2
-        let yaw = atan2(-f.x, -f.z)
-        let rotation = simd_float4x4(simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)))
-        var neutral = rotation
-        neutral.columns.3 = pose.columns.3
-        return neutral.inverse
     }
 
     // MARK: - Timing

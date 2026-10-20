@@ -36,7 +36,7 @@ struct ContentView: View {
     @State private var autoOpened = false
     @State private var showScope = false
     @State private var showComfort = false
-    @State private var heightOffset: Float = 0.4
+    @State private var floorTrim: Float = VRSettings.shared.floorTrim
     @State private var rightHanded = true
     /// vr_hud: 0 off, 1 wrist, 2 float, 3 modular (default). Mirrors the
     /// cvar's own default since there is no live cvar read-back, so it MUST
@@ -280,6 +280,13 @@ struct ContentView: View {
         .frame(minWidth: 640, minHeight: 560)
         .background(dashMaterial(28))
         .tint(Self.noctuaBurgundy)
+        .task {
+            // World sensing, asked for from the WINDOW. The floor the
+            // immersive space stands on is measured by plane detection,
+            // and its prompt has to be raised somewhere the player can
+            // answer it -- not after they are already inside the space.
+            await FloorSource.prewarmAuthorization()
+        }
         .onAppear {
             engine.boot()
             _ = input          // ensure the app-lifetime input host exists
@@ -591,21 +598,61 @@ struct ContentView: View {
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Eye height  \(heightOffset >= 0 ? "+" : "")\(Int(heightOffset * 100)) cm")
+                    Text("Floor trim  \(floorTrim >= 0 ? "+" : "")\(Int((floorTrim * 100).rounded())) cm")
                         .font(.headline)
-                    Text("Raise until the floor sits at your real floor.")
+                    Text("Nudge the floor if it sits above or below your real floor.")
                         .font(.caption).foregroundStyle(.secondary)
+                    // The measurement, in terms a person can check against
+                    // themselves. Nobody knows where the tracking origin
+                    // is; everybody knows their own height.
+                    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let raw = FloorSource.rawReadout(), let floorY = raw.floorY {
+                                let standing = raw.headY - floorY
+                                Text(String(format: "Your head is %.2f m above the floor it chose.", standing))
+                                    .font(.caption)
+                                    .foregroundStyle(standing > 1.3 ? .green : .orange)
+                                Text(String(format: "head %+.2f · chosen %+.2f · lowest %+.2f · %d plane(s)",
+                                            raw.headY, floorY, raw.lowest ?? floorY, raw.planes))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            } else if let raw = FloorSource.rawReadout() {
+                                Text(String(format: "No floor chosen yet. head %+.2f · %d plane(s)",
+                                            raw.headY, raw.planes))
+                                    .font(.caption).foregroundStyle(.orange)
+                            } else {
+                                Text("Plane detection not running. Open the immersive space.")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                    }
                     Slider(value: Binding(
-                        get: { Double(heightOffset) },
-                        set: { heightOffset = Float($0); VRSettings.shared.heightOffset = Float($0)
-                               ProfileStore.shared.current.heightOffset = Float($0) }),
-                        in: -0.6...0.9)
+                        get: { Double(floorTrim) },
+                        set: { floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
+                        in: -Double(VRSettings.floorTrimLimit)...Double(VRSettings.floorTrimLimit))
                     HStack {
                         Button("Reset") {
-                            heightOffset = 0.4; VRSettings.shared.heightOffset = 0.4
-                            ProfileStore.shared.current.heightOffset = 0.4
+                            floorTrim = 0; VRSettings.shared.floorTrim = 0
                         }
                         Spacer()
+                        // Posture changes: the plane under a seated player
+                        // may be the sofa rather than the carpet, and the
+                        // floor is only chosen once per provider life.
+                        Button("Re-measure floor") { FloorSource.remeasureCurrent() }
+                        // Into the CONSOLE, not a caption. Hunting for small
+                        // text in a headset is a poor way to read a number
+                        // you are trying to trust, and the console pane is
+                        // already open beside this panel.
+                        Button("Log floor") {
+                            if let raw = FloorSource.rawReadout() {
+                                let chosen = raw.floorY.map { String(format: "%+.2f", $0) } ?? "none"
+                                let lowest = raw.lowest.map { String(format: "%+.2f", $0) } ?? "none"
+                                engine.send(String(
+                                    format: "echo FLOOR head %+.2f chosen %@ lowest %@ planes %d",
+                                    raw.headY, chosen, lowest, raw.planes))
+                            } else {
+                                engine.send("echo FLOOR plane detection not running")
+                            }
+                        }
                         Button("Recenter") { engine.send("vr_recenter") }
                     }
                 }
@@ -2154,7 +2201,6 @@ struct ContentView: View {
     /// shows what was persisted (called on launch and on a profile switch).
     private func syncFromProfile() {
         let p = ProfileStore.shared.current
-        heightOffset = p.heightOffset
         fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand
@@ -2491,6 +2537,38 @@ struct ContentView: View {
                 .onSubmit(submit)
             Button("Send", action: submit)
                 .disabled(commandText.isEmpty || engine.status != .running)
+            // Reading numbers off a console pane through a headset, by eye,
+            // is how a digit gets misread and an afternoon gets spent on the
+            // wrong bug. This writes the pane to a file the Mac can pull:
+            // tools/pull-console.sh.
+            Button("Save") { saveConsole() }
+                .disabled(engine.consoleLines.isEmpty)
+        }
+    }
+
+    /// Write the console pane to Documents, where the Mac can fetch it.
+    /// Documents because the game directory is NOT writable on device --
+    /// paks are read through the platform file layer, not a real path, so
+    /// the engine's own `condump` writes nothing there.
+    private func saveConsole() {
+        guard let docs = FileManager.default.urls(for: .documentDirectory,
+                                                  in: .userDomainMask).first else { return }
+        let url = docs.appendingPathComponent("console.log")
+        var text = "=== console saved \(Date().formatted(.iso8601)) ===\n"
+        if let raw = FloorSource.rawReadout() {
+            let chosen = raw.floorY.map { String(format: "%+.2f", $0) } ?? "none"
+            let lowest = raw.lowest.map { String(format: "%+.2f", $0) } ?? "none"
+            text += String(format: "FLOOR head %+.2f chosen %@ lowest %@ planes %d\n",
+                           raw.headY, chosen, lowest, raw.planes)
+        } else {
+            text += "FLOOR plane detection not running\n"
+        }
+        text += engine.consoleLines.joined(separator: "\n") + "\n"
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            engine.send("echo console saved to Documents/console.log")
+        } catch {
+            engine.send("echo console save FAILED: \(error.localizedDescription)")
         }
     }
 
