@@ -43,7 +43,7 @@ extern cvar_t gl_fullbrights, gl_overbright, r_oldskyleaf, r_clearcolor, gl_farc
 extern cvar_t r_skyalpha, r_skyfog, vr_worldscale;
 extern cvar_t r_lerpmodels, r_lerpmove, gl_overbright_models;
 extern cvar_t r_dynamic, r_flatlightstyles;	/* registered in r_null.c */
-extern cvar_t phase, phase_time, phase_color;
+extern cvar_t phase, phase_time, phase_color, phase_floor;
 extern cvar_t cl_bob;			/* view.c; held at zero while immersive, see QR_BobGate */
 extern cvar_t vr_vignette, vr_vignette_threshold;
 
@@ -7767,6 +7767,7 @@ void QR_BeginFrame (void)
 	slot->frame.time = 0;
 	slot->frame.phase = 0;
 	slot->frame.phase_radius = 0;
+	slot->frame.phase_floor = 0.f;
 	slot->frame.phase_color[0] = 1.5f;
 	slot->frame.phase_color[1] = 0.93f;
 	slot->frame.phase_color[2] = 0.27f;
@@ -7976,6 +7977,7 @@ void QR_RenderView (void)
 
 		/* rim colour from the cvar string; malformed input keeps the
 		   molten-orange default rather than going black */
+		slot->frame.phase_floor = CLAMP (0.f, phase_floor.value, 1.f);
 		slot->frame.phase_color[0] = 1.5f;
 		slot->frame.phase_color[1] = 0.93f;
 		slot->frame.phase_color[2] = 0.27f;

@@ -335,6 +335,15 @@ typedef struct qc_frame_s {
 	   the head with no added latency. */
 	float		phase;		/* eased 0..1; sky fades by 1 - phase */
 	float		phase_radius;	/* dissolve sphere radius, Quake units */
+	float		phase_floor;	/* phase_floor: how solid up-facing surfaces
+					   stay inside the melt, 0..1. The melt
+					   removes every depth cue at once, and
+					   without a ground plane anything far
+					   away reads as floating -- it sits near
+					   eye level, because that is what a
+					   horizon is. A ghost floor gives the
+					   eye something to measure against. 0
+					   melts floors like everything else. */
 	float		phase_color[3];	/* ember rim, linear rgb (may exceed 1
 					   for glow); the `phase_color` cvar */
 

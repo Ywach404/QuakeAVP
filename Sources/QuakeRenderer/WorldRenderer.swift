@@ -119,7 +119,8 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
                 headorg: SIMD3(f.vieworg.0, f.vieworg.1, f.vieworg.2),
                 radius: f.phase_radius,
                 skyFade: 1 - f.phase,
-                rimColor: SIMD3(f.phase_color.0, f.phase_color.1, f.phase_color.2))
+                rimColor: SIMD3(f.phase_color.0, f.phase_color.1, f.phase_color.2),
+                floorGhost: f.phase_floor)
             // windowHud: the 2D status bar draws inside encode(), right
             // before the comfort vignette, so it dims with the rest of the
             // frame during a snap-turn/locomotion vignette instead of

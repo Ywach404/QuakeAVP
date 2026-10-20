@@ -842,7 +842,8 @@ final class ImmersiveRenderer {
             radius: packet?.phase_radius ?? 0,
             skyFade: 1 - (packet?.phase ?? 0),
             rimColor: packet.map { SIMD3($0.phase_color.0, $0.phase_color.1, $0.phase_color.2) }
-                ?? SIMD3(1.5, 0.93, 0.27))
+                ?? SIMD3(1.5, 0.93, 0.27),
+            floorGhost: packet?.phase_floor ?? 0)
 
         var eyeViewproj: [simd_float4x4] = []
         var eyeOrigin: [SIMD4<Float>] = []
