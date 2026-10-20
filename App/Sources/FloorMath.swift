@@ -134,6 +134,68 @@ enum FloorMath {
         return a + (b - a) * s
     }
 
+    /// One detected vertical plane as the room-alignment publisher sees
+    /// it: the plane's normal and its area, both in the RAW tracking
+    /// frame the provider reports. Stored raw on purpose -- the recenter
+    /// correction's rotation changes under the player's feet whenever
+    /// they recentre, and a direction baked at detection time would go
+    /// stale there with nothing to invalidate it.
+    struct WallPlane {
+        var normal: SIMD3<Float>
+        var area: Float
+    }
+
+    /// A wall direction in the form the engine is told it: see
+    /// QC_SetRoomWalls.
+    struct WallDirection {
+        var degrees: Float
+        var weight: Float
+    }
+
+    /// Below this, in square metres, a detected plane is a door frame's
+    /// edge or a picture, not a wall worth steering a room by.
+    static let minimumWallArea: Float = 0.5
+
+    /// How far a wall's normal may lean off horizontal before it is
+    /// something else. A real wall's normal has essentially no vertical
+    /// component; a ramp or a ceiling slope does, and left in they drag
+    /// the mean somewhere no wall is.
+    static let maximumWallTilt: Float = 0.3
+
+    /// The wall directions to publish, newest correction applied.
+    ///
+    /// This function IS the frame contract. The engine adds body_yaw to
+    /// what comes out of here and does nothing else, so the sign and
+    /// origin of the angle are decided in this one place: atan2(-x, -z)
+    /// over the corrected normal, which puts zero straight ahead (-Z) and
+    /// increases to the left, the same sense as a Quake yaw. That matches
+    /// how every other heading in this port is read off a transform.
+    ///
+    /// Heaviest first, because the engine's table is a fixed size and a
+    /// cluttered room overflows it; the walls that survive the clamp
+    /// should be the ones there is most of.
+    static func wallDirections(_ walls: [WallPlane],
+                               rotation: simd_float3x3,
+                               limit: Int) -> [WallDirection] {
+        var out: [WallDirection] = []
+        out.reserveCapacity(min(walls.count, limit))
+        for wall in walls {
+            guard wall.area >= minimumWallArea else { continue }
+            let n = rotation * wall.normal
+            let horizontal = (n.x * n.x + n.z * n.z).squareRoot()
+            guard horizontal > 1e-5,
+                  abs(n.y) <= maximumWallTilt * horizontal else { continue }
+            out.append(WallDirection(
+                degrees: atan2(-n.x, -n.z) * 180 / .pi,
+                weight: wall.area))
+        }
+        out.sort { $0.weight > $1.weight }
+        if out.count > limit {
+            out.removeSubrange(limit..<out.count)
+        }
+        return out
+    }
+
     /// The correction that maps `pose`'s yaw and horizontal position to
     /// neutral. Pitch and roll are left alone, they are genuinely the
     /// head's. With `keepHeight` the vertical translation is left alone

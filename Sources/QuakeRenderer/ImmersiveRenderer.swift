@@ -604,6 +604,10 @@ final class ImmersiveRenderer {
             let raw = rawOriginFromDevice.columns.3
             floor.noteHead(SIMD3(raw.x, raw.y, raw.z))
         }
+        // The room's wall directions, through the correction just settled
+        // above so they are in the same frame the camera is. Rate-limited
+        // inside; room alignment reads them at most once per melt.
+        floor.publishWalls(correction: recenterCorrection)
         let originFromDevice = recenterCorrection * rawOriginFromDevice
 
         // Publish the eye position (corrected-tracking space, same frame as the

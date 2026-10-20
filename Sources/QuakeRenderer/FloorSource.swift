@@ -76,6 +76,23 @@ final class FloorSource: @unchecked Sendable {
     }
     /// Live floor planes from the current provider, by anchor id.
     private var planes: [UUID: Plane] = [:]
+    /// Live vertical planes from the current provider, by anchor id, with
+    /// their normals in the RAW tracking frame. Raw because the recenter
+    /// correction they have to be expressed through changes whenever the
+    /// player recentres, and a wall anchor can sit untouched for minutes:
+    /// a direction baked at detection time would go stale with nothing to
+    /// invalidate it. See FloorMath.wallDirections.
+    private var walls: [UUID: FloorMath.WallPlane] = [:]
+    /// What was last handed to the engine, so the log line fires on a
+    /// change rather than twice a second forever.
+    private var publishedWalls = 0
+    private var wallsPublishedAt = 0.0
+    /// How often the table is rebuilt and re-published. The correction
+    /// changes only on a recenter and the walls change only as the room is
+    /// scanned, so this is a staleness bound, not a sample rate -- and
+    /// alignment only reads it on a melt, which no player reaches inside a
+    /// quarter of a second of recentring.
+    private static let wallPublishInterval = 0.25
     /// The height chosen within the current provider's life; nil until its
     /// first qualifying plane.
     private var selected: Float?
@@ -173,6 +190,54 @@ final class FloorSource: @unchecked Sendable {
         return published
     }
 
+    /// Hand the engine the room's wall directions, expressed through the
+    /// recenter correction in force right now. Called from the render loop
+    /// every frame and rate-limited inside, because the engine's copy is a
+    /// whole-table replacement under a lock and the alignment that reads it
+    /// fires at most once per melt.
+    ///
+    /// The correction's ROTATION is what matters here, not its translation:
+    /// a direction has no position. It is taken from the caller rather than
+    /// from TrackingSpace so the walls are expressed through the same
+    /// correction the camera used this frame.
+    func publishWalls(correction: simd_float4x4) {
+        let now = CACurrentMediaTime()
+        lock.lock()
+        guard now - wallsPublishedAt >= Self.wallPublishInterval else {
+            lock.unlock()
+            return
+        }
+        wallsPublishedAt = now
+        let detected = Array(walls.values)
+        let was = publishedWalls
+        lock.unlock()
+
+        let rotation = simd_float3x3(
+            SIMD3(correction.columns.0.x, correction.columns.0.y, correction.columns.0.z),
+            SIMD3(correction.columns.1.x, correction.columns.1.y, correction.columns.1.z),
+            SIMD3(correction.columns.2.x, correction.columns.2.y, correction.columns.2.z))
+        let dirs = FloorMath.wallDirections(detected, rotation: rotation,
+                                            limit: Int(QC_MAX_WALL_DIRS))
+
+        var table = [qc_wall_dir_t](repeating: qc_wall_dir_t(degrees: 0, weight: 0),
+                                    count: max(dirs.count, 1))
+        for (i, d) in dirs.enumerated() {
+            table[i] = qc_wall_dir_t(degrees: d.degrees, weight: d.weight)
+        }
+        table.withUnsafeBufferPointer { QC_SetRoomWalls($0.baseAddress, Int32(dirs.count)) }
+
+        guard dirs.count != was else { return }
+        lock.lock()
+        publishedWalls = dirs.count
+        lock.unlock()
+        if dirs.isEmpty {
+            print("[walls] none usable of \(detected.count) vertical plane(s)")
+        } else {
+            print(String(format: "[walls] %d of %d, heaviest %.1f m² facing %.0f deg",
+                         dirs.count, detected.count, dirs[0].weight, dirs[0].degrees))
+        }
+    }
+
     /// Throw away the chosen floor and pick again from the planes that are
     /// live right now. For a posture change: stand up after playing seated
     /// and the plane under you may be the sofa, not the carpet. The last
@@ -256,7 +321,12 @@ final class FloorSource: @unchecked Sendable {
         var rebuild = false
         while isLive, !Task.isCancelled {
             let session = ARKitSession()
-            let provider = PlaneDetectionProvider(alignments: [.horizontal])
+            // Vertical planes as well as horizontal: the floor is one
+            // number off the horizontal ones, and room alignment reads the
+            // direction the vertical ones face. One provider, because a
+            // second one would be a second permission prompt for a
+            // permission the player has already given.
+            let provider = PlaneDetectionProvider(alignments: [.horizontal, .vertical])
 
             // Ask for world sensing EXPLICITLY, before running. Letting
             // `run` prompt implicitly parks this task inside the await for
@@ -333,7 +403,21 @@ final class FloorSource: @unchecked Sendable {
         switch update.event {
         case .removed:
             planes.removeValue(forKey: anchor.id)
+            walls.removeValue(forKey: anchor.id)
         case .added, .updated:
+            if anchor.alignment == .vertical {
+                let extent = anchor.geometry.extent
+                // Y of a plane anchor's own frame is its normal; x and z
+                // span the plane, which is why extentDistance treats those
+                // two as in-plane for the floor.
+                let n = anchor.originFromAnchorTransform.columns.1
+                walls[anchor.id] = FloorMath.WallPlane(
+                    normal: SIMD3(n.x, n.y, n.z),
+                    area: extent.width * extent.height)
+                planes.removeValue(forKey: anchor.id)
+                break
+            }
+            walls.removeValue(forKey: anchor.id)
             guard anchor.alignment == .horizontal,
                   anchor.surfaceClassification == .floor else {
                 planes.removeValue(forKey: anchor.id)
@@ -409,7 +493,10 @@ final class FloorSource: @unchecked Sendable {
         self.provider = provider
         // A new provider's planes live in its own frame: start the
         // selection over, keep the last published height until it lands.
+        // The walls go with them -- a stale wall in a new frame points
+        // somewhere arbitrary, and alignment would act on it.
         planes = [:]
+        walls = [:]
         selected = nil
         return true
     }
