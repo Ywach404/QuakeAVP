@@ -467,13 +467,30 @@ final class FloorSource: @unchecked Sendable {
         case .added, .updated:
             if anchor.alignment == .vertical {
                 let extent = anchor.geometry.extent
-                // Y of a plane anchor's own frame is its normal; x and z
-                // span the plane, which is why extentDistance treats those
-                // two as in-plane for the floor.
-                let n = anchor.originFromAnchorTransform.columns.1
-                walls[anchor.id] = FloorMath.WallPlane(
-                    normal: SIMD3(n.x, n.y, n.z),
-                    area: extent.width * extent.height)
+                let m = anchor.originFromAnchorTransform
+                // ANY horizontal axis of a wall's own frame will do, so
+                // take the most horizontal one rather than assuming which
+                // column is the normal.
+                //
+                // A vertical plane's frame has exactly one vertical axis
+                // -- up the wall -- and two horizontal ones: the normal,
+                // and the direction the wall runs. Those two are 90
+                // degrees apart, and this whole feature works modulo 90
+                // because walls are square to each other. So the two are
+                // the SAME answer, and which column holds the normal
+                // stops mattering. That assumption was the one thing in
+                // this chain nothing could verify, and getting it wrong
+                // was silent in the worst way: pick the vertical axis and
+                // the tilt filter drops every wall, leaving "no room walls
+                // detected" with planes arriving perfectly well.
+                let axes = [m.columns.0, m.columns.1, m.columns.2].map {
+                    SIMD3($0.x, $0.y, $0.z)
+                }
+                if let flattest = FloorMath.horizontalAxis(axes) {
+                    walls[anchor.id] = FloorMath.WallPlane(
+                        normal: flattest,
+                        area: extent.width * extent.height)
+                }
                 planes.removeValue(forKey: anchor.id)
                 break
             }

@@ -209,6 +209,23 @@ enum FloorMath {
     /// the mean somewhere no wall is.
     static let maximumWallTilt: Float = 0.3
 
+    /// A horizontal axis of a vertical plane's own frame, whichever one
+    /// that turns out to be.
+    ///
+    /// A wall's frame has exactly one vertical axis -- up the wall -- and
+    /// two horizontal ones: the normal, and the direction the wall runs.
+    /// Those two are ninety degrees apart, and room alignment works
+    /// modulo ninety because walls are square to each other, so the two
+    /// are the SAME answer and which column holds the normal stops
+    /// mattering. Picking the flattest axis is therefore not a guess, it
+    /// removes the guess: the alternative was assuming a column, and
+    /// assuming the wrong one fails silently in the worst way, because
+    /// the vertical axis is dropped by the tilt filter and the room reads
+    /// as having no walls while planes arrive perfectly well.
+    static func horizontalAxis(_ axes: [SIMD3<Float>]) -> SIMD3<Float>? {
+        axes.min { abs($0.y) < abs($1.y) }
+    }
+
     /// The wall directions to publish, newest correction applied.
     ///
     /// This function IS the frame contract. The engine adds body_yaw to

@@ -1466,8 +1466,14 @@ static void IN_AlignRoom (int loud)
 	   anchor figure reads zero modulo 90; recentre off square and it
 	   reads the angle you turned, with left and right giving different
 	   signs. An inverted convention anywhere in the consumer chain swaps
-	   those two, and nothing downstream can tell. */
-	if (vr_align_debug.value)
+	   those two, and nothing downstream can tell.
+
+	   Printed whenever anyone is listening, not only under the debug
+	   cvar. Detecting the room and turning the player are two different
+	   things and the first one succeeding says nothing about the second;
+	   with only this line to go on, a refusal further down reads as "it
+	   detected the room" and the absence of a turn reads as a bug. */
+	if (loud)
 		Con_Printf ("align: room %d wall%s, %.1f m2, anchor %.1f, "
 			    "world %.1f, conf %.2f (body %.1f)\n",
 			    room_count, room_count == 1 ? "" : "s", room_area,
@@ -1520,17 +1526,36 @@ static void IN_AlignRoom (int loud)
 			Con_Printf ("align: refused, the numbers are not finite\n");
 		return;
 	}
-	if (vr_align_debug.value)
-		Con_Printf ("align: level %.1f (%d hits conf %.2f) turn %+.1f\n",
-			    lvl_yaw, hits, lvl_conf, turn);
+	if (loud)
+		Con_Printf ("align: level %.1f (%d hits, conf %.2f)\n",
+			    lvl_yaw, hits, lvl_conf);
+
+	/* One line that says what HAPPENED, always. Every path out of this
+	   function now ends in a sentence about the turn, because the only
+	   question anyone has when they press the button is whether they
+	   were turned, and silence answered it wrong in both directions. */
 	if (fabsf (turn) < 0.5f)
-		return;			/* already aligned */
+	{
+		if (loud)
+			Con_Printf ("align: already aligned, no turn needed "
+				    "(%+.1f)\n", turn);
+		return;
+	}
 	IN_SnapTurn (turn);
+	if (loud)
+		Con_Printf ("align: TURNED %+.1f degrees\n", turn);
 }
 
 static void IN_AlignRoom_f (void)
 {
 	IN_AlignRoom (1);
+	/* The button aligns once, here and now. Whether the MELT will do it
+	   on its own is a separate switch, and conflating the two is the
+	   easiest mistake to make with this feature -- so say which one you
+	   just used. */
+	if (!vr_align_room.value)
+		Con_Printf ("align: (vr_align_room is 0 -- phasing out will "
+			    "not do this on its own)\n");
 }
 
 /* The melt's rising edge is the only moment to spend a turn this large.

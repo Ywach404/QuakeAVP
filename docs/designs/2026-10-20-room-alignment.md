@@ -137,18 +137,23 @@ sees poorly, can produce a 45 degree turn that makes things worse. The
 confidence threshold is there for that, and doing nothing must always be
 the fallback.
 
-## The one assumption nothing verifies
+## The assumption that was removed
 
-A vertical plane anchor's normal is taken to be the Y axis of its own
-frame, which is consistent with how the floor path already treats those
-anchors (its extent maths spans the plane in x and z) but is not
-established anywhere in this repository. If it is the wrong column the
-published directions are garbage that still passes every gate, because
-the mean at 4x is invariant to the normal's sign and cannot tell a real
-direction from a plausible one.
+An earlier draft took a vertical plane anchor's normal to be the Y axis
+of its own frame, consistent with how the floor path treats those anchors
+but established nowhere in this repository. That assumption is gone.
 
-The device check below is what proves it, which is why that check reads
-the published number directly rather than watching for a swing.
+A wall's frame has exactly one vertical axis -- up the wall -- and two
+horizontal ones: the normal, and the direction the wall runs. Those two
+are ninety degrees apart, and this feature works modulo ninety because
+walls are square to each other, so the two are the SAME answer. Taking
+the flattest of the three axes therefore cannot be wrong, whichever
+convention the platform uses.
+
+That mattered more than a tidy-up. Picking the vertical axis by mistake
+fails silently in the worst possible way: the tilt filter drops every
+wall, and the room reports having no walls at all while plane detection
+is working perfectly.
 
 ## Verification
 

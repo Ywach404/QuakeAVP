@@ -248,6 +248,38 @@ struct FloorTest {
         check(dirs.count == 1 && nearAngle(dirs[0].degrees, 40, 0.01),
               "walls: the correction's rotation is applied (got \(dirs.first?.degrees ?? -999))")
 
+        // The flattest axis of a wall's frame, whichever column that is.
+        // Getting this backwards picks the axis running UP the wall, which
+        // the tilt filter then drops -- so the room reads as having no
+        // walls at all while plane detection is working perfectly.
+        do {
+            // A wall facing -Z: normal -Z, runs along X, up is Y.
+            let axes = [SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, 0, -1)]
+            let pick = FloorMath.horizontalAxis(axes)
+            check(pick != nil && abs(pick!.y) < 0.01,
+                  "horizontalAxis: the vertical axis is never the answer")
+            // Either horizontal axis is the same answer modulo 90, which is
+            // the whole reason this is allowed to not care which.
+            let a = FloorMath.wallDirections(
+                [FloorMath.WallPlane(normal: SIMD3(1, 0, 0), area: 6)],
+                rotation: r, limit: 16)[0].degrees
+            let b = FloorMath.wallDirections(
+                [FloorMath.WallPlane(normal: SIMD3(0, 0, -1), area: 6)],
+                rotation: r, limit: 16)[0].degrees
+            let d = abs(a - b).truncatingRemainder(dividingBy: 90)
+            check(d < 0.01 || d > 89.99,
+                  "horizontalAxis: the two horizontal axes agree modulo 90 (got \(a) and \(b))")
+        }
+        do {
+            // Columns in a different order: still never the vertical one.
+            let axes = [SIMD3<Float>(0, -1, 0), SIMD3<Float>(0, 0, 1), SIMD3<Float>(1, 0, 0)]
+            let pick = FloorMath.horizontalAxis(axes)
+            check(pick != nil && abs(pick!.y) < 0.01,
+                  "horizontalAxis: order does not matter")
+        }
+        check(FloorMath.horizontalAxis([]) == nil,
+              "horizontalAxis: no axes is no answer")
+
         // Floors and ceilings are not walls, however large.
         dirs = FloorMath.wallDirections(
             [FloorMath.WallPlane(normal: SIMD3(0, 1, 0), area: 20),
