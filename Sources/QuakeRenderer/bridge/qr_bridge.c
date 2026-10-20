@@ -7504,7 +7504,7 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 	const float	halfwidth = 1.f;	/* ~5 cm of line */
 	const float	nearfade = 60.f;	/* clear of the player's own gun */
 	const float	nearfull = 170.f;	/* full strength by ~4 m out */
-	float		z, cx, cy, strength, outer;
+	float		z, cx, cy, gx, gy, strength, outer;
 	int		i, seg, steps, axis;
 
 	strength = slot->frame.phase * phase_floor.value;
@@ -7522,13 +7522,22 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 	cx = r_refdef.vieworg[0];
 	cy = r_refdef.vieworg[1];
 
+	/* Snapped to the WORLD grid, not centred on the player. A grid that
+	   travels with you is wallpaper: it gives no parallax, so walking
+	   across it looks identical to standing still, and the one thing it
+	   exists to do -- let you judge distance and motion -- it cannot do.
+	   Pinned to absolute multiples of the spacing, the lines pass beneath
+	   you instead, and the visible set shifts a cell at a time. */
+	gx = floorf (cx / spacing) * spacing;
+	gy = floorf (cy / spacing) * spacing;
+
 	steps = (int) (extent / spacing);
 	for (i = -steps; i <= steps; i++)
 	for (axis = 0; axis < 2; axis++)
 	for (seg = -steps; seg < steps; seg++)
 	{
 		vec3_t	q[4];
-		float	off = i * spacing, s0 = seg * spacing, s1 = s0 + spacing;
+		float	along0, along1, across, da, db;
 		float	a0, a1, d0, d1;
 
 		/* A flat quad lying ON the ground, not billboarded: this is a
@@ -7537,21 +7546,31 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 		   be radial -- across one long quad it could only be linear. */
 		if (axis == 0)
 		{
-			q[0][0] = cx + off - halfwidth; q[0][1] = cy + s0;
-			q[1][0] = cx + off + halfwidth; q[1][1] = cy + s0;
-			q[2][0] = cx + off + halfwidth; q[2][1] = cy + s1;
-			q[3][0] = cx + off - halfwidth; q[3][1] = cy + s1;
-			d0 = sqrtf (off * off + s0 * s0);
-			d1 = sqrtf (off * off + s1 * s1);
+			across = gx + i * spacing;
+			along0 = gy + seg * spacing;
+			along1 = along0 + spacing;
+			q[0][0] = across - halfwidth; q[0][1] = along0;
+			q[1][0] = across + halfwidth; q[1][1] = along0;
+			q[2][0] = across + halfwidth; q[2][1] = along1;
+			q[3][0] = across - halfwidth; q[3][1] = along1;
+			da = across - cx; db = along0 - cy;
+			d0 = sqrtf (da * da + db * db);
+			db = along1 - cy;
+			d1 = sqrtf (da * da + db * db);
 		}
 		else
 		{
-			q[0][0] = cx + s0; q[0][1] = cy + off - halfwidth;
-			q[1][0] = cx + s0; q[1][1] = cy + off + halfwidth;
-			q[2][0] = cx + s1; q[2][1] = cy + off + halfwidth;
-			q[3][0] = cx + s1; q[3][1] = cy + off - halfwidth;
-			d0 = sqrtf (s0 * s0 + off * off);
-			d1 = sqrtf (s1 * s1 + off * off);
+			across = gy + i * spacing;
+			along0 = gx + seg * spacing;
+			along1 = along0 + spacing;
+			q[0][0] = along0; q[0][1] = across - halfwidth;
+			q[1][0] = along0; q[1][1] = across + halfwidth;
+			q[2][0] = along1; q[2][1] = across + halfwidth;
+			q[3][0] = along1; q[3][1] = across - halfwidth;
+			da = across - cy; db = along0 - cx;
+			d0 = sqrtf (da * da + db * db);
+			db = along1 - cx;
+			d1 = sqrtf (da * da + db * db);
 		}
 		q[0][2] = q[1][2] = q[2][2] = q[3][2] = z;
 
