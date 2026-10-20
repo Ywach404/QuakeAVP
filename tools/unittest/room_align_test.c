@@ -118,6 +118,34 @@ int main (void)
 		       deg, conf);
 	}
 
+	/* Nothing that is not a finite positive number may vote. The end of
+	   that road is a NaN in the body heading, which is unrecoverable:
+	   IN_Move's adopt guard compares the yaw against what it last wrote,
+	   and a NaN fails that compare forever, so no spawn, teleport or
+	   recenter brings the view back. Every gate downstream is a
+	   less-than compare, which a NaN passes. */
+	{
+		align_dir_t bad[1] = { { NAN, 3.f } };
+		CHECK (!Align_Dominant (bad, 1, &deg, &conf),
+		       "a NaN direction is refused outright");
+	}
+	{
+		align_dir_t bad[1] = { { 10.f, INFINITY } };
+		CHECK (!Align_Dominant (bad, 1, &deg, &conf),
+		       "an infinite weight is refused (it makes the ratio a NaN)");
+	}
+	{
+		/* One bad entry must not poison the good ones. */
+		align_dir_t mixed[3] = {
+			{ 31.f, 5.f }, { NAN, 9.f }, { 10.f, INFINITY },
+		};
+		CHECK (Align_Dominant (mixed, 3, &deg, &conf),
+		       "a finite wall still answers beside bad ones");
+		CHECK (isfinite (deg) && isfinite (conf) && near90 (deg, 31.f, 0.5f),
+		       "...and the answer is the finite one, finite (got %.2f conf %.3f)",
+		       deg, conf);
+	}
+
 	/* The reduction: the short way round, and the boundary resolved up. */
 	CHECK (near (Align_Reduce90 (0.f), 0.f, 0.001f), "0 reduces to 0");
 	CHECK (near (Align_Reduce90 (10.f), 10.f, 0.001f), "10 reduces to 10");

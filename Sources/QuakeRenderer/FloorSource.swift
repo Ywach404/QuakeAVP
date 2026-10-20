@@ -183,6 +183,11 @@ final class FloorSource: @unchecked Sendable {
         session = nil
         provider = nil
         supervisor = nil
+        // Dropped here as well as cleared engine-side below, because a
+        // drain task cancelled a moment ago can still have an ingest in
+        // flight, and a render frame can still call publishWalls -- either
+        // would put the stale table straight back.
+        walls = [:]
         lock.unlock()
 
         task?.cancel()
@@ -215,6 +220,9 @@ final class FloorSource: @unchecked Sendable {
     func publishWalls(correction: simd_float4x4) {
         let now = CACurrentMediaTime()
         lock.lock()
+        // Nothing to publish once this source is down; stop() has already
+        // told the engine there are no walls and must stay the last word.
+        guard live else { lock.unlock(); return }
         let moved = wallsCorrection != correction
         guard moved || now - wallsPublishedAt >= Self.wallPublishInterval else {
             lock.unlock()
