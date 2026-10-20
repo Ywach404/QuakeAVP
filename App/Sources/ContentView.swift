@@ -37,6 +37,11 @@ struct ContentView: View {
     @State private var showScope = false
     @State private var showComfort = false
     @State private var floorTrim: Float = VRSettings.shared.floorTrim
+    // Room alignment is an experiment with a known exit, so it is off
+    // until asked for and nothing remembers it here -- vr_align_room is
+    // archived engine-side, which is the one copy worth having.
+    @State private var alignRoom = false
+    @State private var alignDebug = false
     @State private var rightHanded = true
     /// vr_hud: 0 off, 1 wrist, 2 float, 3 modular (default). Mirrors the
     /// cvar's own default since there is no live cvar read-back, so it MUST
@@ -654,6 +659,35 @@ struct ContentView: View {
                             }
                         }
                         Button("Recenter") { engine.send("vr_recenter") }
+                    }
+                }
+                Divider()
+                // Turn the level to run the way the room does. Rotation
+                // only: matching a wall's POSITION means teleporting the
+                // player on a heuristic, and a Quake room dwarfs a living
+                // room anyway, so the far wall would not line up wherever
+                // you stood. See docs/designs/2026-10-20-room-alignment.md.
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(isOn: Binding(
+                        get: { alignRoom },
+                        set: { alignRoom = $0; engine.send("vr_align_room \($0 ? 1 : 0)") })) {
+                        Text("Align the level to the room").font(.headline)
+                    }
+                    Text("When the world melts away, turn so the walls around "
+                         + "you run the way your real walls do. Needs a few "
+                         + "square metres of wall detected, and does nothing "
+                         + "in a round room.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        // On demand, because provoking a melt edge to test a
+                        // turn means phasing out and back, and the numbers
+                        // worth reading are the ones from where you stand.
+                        Button("Align now") { engine.send("align_room") }
+                        Spacer()
+                        Toggle("Log every attempt", isOn: Binding(
+                            get: { alignDebug },
+                            set: { alignDebug = $0; engine.send("vr_align_debug \($0 ? 1 : 0)") }))
+                            .font(.caption)
                     }
                 }
                 Divider()

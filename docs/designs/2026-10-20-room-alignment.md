@@ -1,6 +1,7 @@
 # Aligning the level to the room — design
 
-Status: proposed, 2026-10-20. Not built. An experiment with a known exit.
+Status: built on `feat/room-align`, 2026-10-20. Not proven on device. An
+experiment with a known exit; see "Failsafes" and "The risk, stated plainly".
 
 ## Intent
 
@@ -146,11 +147,68 @@ corridor at a visible angle to the room, phase out, and watch the corridor
 swing to run with the room. Then do it in a round room or the open, and
 watch nothing happen, with the log saying why.
 
-## Left to the builder
+**That angle must be near 20 or 30 degrees, not 0 and not 45.** The turn
+is taken modulo 90, so an inverted sign is indistinguishable from a
+correct one at both of those, and a test run in a corridor that happens to
+sit square or diagonal to the room passes either way. With
+`vr_align_debug 1` the room direction, the level direction, the body
+heading and the turn are all printed, so the first device run should read
+those rather than trust the swing.
 
-- Ray count and spacing, bin width, the confidence threshold.
-- Whether to ease the turn across the sweep or apply it at the start.
+## Settled by the builder
+
+- 24 rays at 15 degrees, out to 160 units (~4 m). A long wall is hit by
+  several and outvotes a short one by hit count alone, which is why the
+  level side needs no area term.
+- Only rays whose hit normal is within 0.3 of horizontal vote. Ramps,
+  stair lips and sloped ceilings all have normals that are not a wall's.
+  The fan starts 16 units above the player's origin: under a railing,
+  above a step riser.
+- No bins. A weighted circular mean taken at FOUR TIMES the angle, since
+  the period of "which way does this room run" is 90 degrees and not 360.
+  Binning splits a plain rectangle between two bins and then has to decide
+  a tie; at 4x a rectangle is the maximally confident case, which is what
+  it should be. The confidence is the resultant's length over the total
+  weight.
+- Thresholds: 2 square metres of detected wall, 6 ray hits, and 0.5
+  confidence on each side. The last one is what refuses a round room and
+  a 45-degree tie, both of which cancel to zero.
+- Applied at the start of the melt, in one `IN_SnapTurn`. Easing it across
+  the sweep would mean a per-frame heading correction competing with the
+  player's own turning, for a motion the dissolve is already covering.
+- Refusals print under `vr_align_debug`, and always for the manual
+  `align_room` console command. `vr_align_debug 1` also prints all five
+  numbers on every attempt, which is how the sign gets checked.
+
+## Decided while building
+
+**The frame contract lives on the consumer side.** The engine is handed
+angles in the ANCHOR frame -- the Quake world rotated by `body_yaw` -- so
+its whole conversion is one addition. Swift owns the matrix that defines
+the frame and already composes it every frame; a second statement of the
+axis and sign conventions in C is how the two halves drift apart. The
+formula is spelled out on `QC_SetRoomWalls` rather than named, because
+"compass angle" is ambiguous in exactly the way that matters.
+
+**Normals are stored raw and corrected at publish time.** The recenter
+correction carries a yaw, and it changes whenever the player recentres,
+while a wall anchor can sit untouched for minutes. A direction baked at
+detection time goes stale there with nothing to invalidate it.
+
+**The turn's sign is derived, not tried.** The reduction modulo 90 makes
+an inverted sign agree at exactly 0 and 45 degrees and be wrong by twice
+the angle everywhere else, so a square room cannot tell the two apart.
+This also raises the bar on the device criterion below.
+
+**A level change does not re-align.** Nothing writes the phase cvar on a
+map load -- `QR_NewMap` snaps the published scalar instead -- so no edge
+fires on arrival. The alignment is a turn like any other and it survives,
+which is the behaviour this document already asked for.
 
 ## For A.
 
-- Whether a refusal should say so visibly in the headset, or only log.
+- Whether a refusal should say so visibly in the headset, or only log. It
+  logs today, and the window has an "Align now" button that always says
+  why it refused.
+- Whether "Align now" should stay in the shipped panel or be a debug-only
+  control once the automatic path is trusted.
