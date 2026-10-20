@@ -1227,6 +1227,15 @@ static void IN_SnapTurn (float degrees)
 {
 	float rad, c, s, ax, ay;
 
+	/* The chokepoint for every deliberate turn, so the one guard that
+	   cannot be skipped lives here. A non-finite angle written into
+	   qr_body_yaw is not a glitch to ride out: the adopt guard in IN_Move
+	   compares the yaw against what it last wrote, and a NaN fails that
+	   compare forever, so neither a spawn, a teleport nor a recenter gets
+	   the view back. Relaunching is the only way out. */
+	if (!isfinite (degrees))
+		return;
+
 	IN_AbsorbHeadOffset ();
 
 	rad = degrees * M_PI / 180.f;
@@ -1261,19 +1270,34 @@ mistaken for a server setangle by IN_Move's adopt guard or desynchronise
 that ledger.
 ================
 */
-cvar_t		vr_align_room  = {"vr_align_room",  "0", CVAR_ARCHIVE};
+/* NOT archived, deliberately. The window has no way to read a cvar back,
+   so a toggle there can only mirror the cvar's DEFAULT -- and an archived
+   cvar that came back on would leave the panel showing off while melts
+   turned the player, with no way to switch it off but flicking it on
+   first. An experiment with a known exit can afford to be asked for each
+   session; `vr_align_room 1` in an autoexec is the way to make it stick. */
+cvar_t		vr_align_room  = {"vr_align_room",  "0", CVAR_NONE};
 cvar_t		vr_align_debug = {"vr_align_debug", "0", 0};
 
 /* 24 rays at 15 degrees. Enough that a long wall is hit by several and
    outvotes a short one by hit count alone, which is why the level side
    needs no area term. */
 #define QR_ALIGN_RAYS		24
-/* ~4 m at an inch per unit: the walls of the room you are standing in, not
-   the level's far side. Local geometry is what has to match. */
-#define QR_ALIGN_RANGE		160.f
+/* ~13 m at an inch per unit. Four metres sounded like "the room you are
+   standing in" and is not: a Quake room runs 300 to 1000 units across, so
+   a 160-unit fan finds nothing but corridors and the feature reads as
+   doing nothing at all in every arena. The distance weighting below is
+   what keeps this from becoming "the level's far side" instead. */
+#define QR_ALIGN_RANGE		512.f
 #define QR_ALIGN_MIN_HITS	6
-/* Square metres of detected wall. One short partition is not a room. */
+/* Square metres of detected wall, and how many separate planes it took.
+   The area alone cannot refuse furniture: one 2 m2 wardrobe front standing
+   off-square is a single direction, and a single direction's circular mean
+   is fully confident by construction, so the confidence gate never sees
+   it. Two planes is the cheapest thing that means "a room" and not "a
+   thing in a room". */
 #define QR_ALIGN_MIN_AREA	2.f
+#define QR_ALIGN_MIN_WALLS	2
 /* Below this the evidence is cancelling itself -- a round room, or two
    directions of equal strength 45 degrees apart. Both mean: do nothing. */
 #define QR_ALIGN_MIN_CONF	0.5f
@@ -1282,7 +1306,8 @@ cvar_t		vr_align_debug = {"vr_align_debug", "0", 0};
    angles are anchor-frame (see QC_SetRoomWalls), so the body heading is the
    whole conversion; because that is a rotation it commutes with the mean,
    and taking it once after is the same answer as rotating every wall. */
-static int IN_RoomWallYaw (float *out_yaw, float *out_conf, float *out_area)
+static int IN_RoomWallYaw (float *out_yaw, float *out_conf, float *out_area,
+			   int *out_count, float *out_anchor_yaw)
 {
 	qc_wall_dir_t	walls[QC_MAX_WALL_DIRS];
 	align_dir_t	dirs[QC_MAX_WALL_DIRS];
@@ -1303,9 +1328,18 @@ static int IN_RoomWallYaw (float *out_yaw, float *out_conf, float *out_area)
 			area += walls[i].weight;
 	}
 	*out_area = area;
-	if (!Align_Dominant (dirs, count, out_yaw, out_conf))
+	*out_count = count;
+	*out_conf = 0.f;
+	*out_anchor_yaw = 0.f;
+	if (!Align_Dominant (dirs, count, out_anchor_yaw, out_conf))
 		return 0;
-	*out_yaw += qr_body_yaw;
+	/* The ANCHOR-frame mean is reported separately because it is the one
+	   number that checks the whole consumer chain on its own: recentre
+	   square to a real wall and it reads zero modulo 90, whatever level
+	   you are standing in and whether or not the level side can be
+	   called. Without it a refusal on the level side teaches nothing
+	   about whether the walls arriving are right. */
+	*out_yaw = *out_anchor_yaw + qr_body_yaw;
 	return 1;
 }
 
@@ -1319,10 +1353,17 @@ static int IN_LevelWallYaw (float *out_yaw, float *out_conf, int *out_hits)
 	edict_t		*player;
 	vec3_t		start, end;
 	trace_t		tr;
+	float		horizontal;
 	int		i, n = 0;
 
 	*out_hits = 0;
-	if (!sv.active || !svs.clients || !svs.clients[0].active)
+	/* `spawned`, not `active`: between SV_SpawnServer and PutClientInServer
+	   the client is active with an origin still at the map's zero, and the
+	   fan would read whatever geometry happens to surround that point. The
+	   teleport path settles for `active` because it needs a deliberate
+	   gesture to reach; this fires on its own. */
+	if (!sv.active || !svs.clients || !svs.clients[0].active
+	    || !svs.clients[0].spawned)
 		return 0;
 	player = svs.clients[0].edict;
 
@@ -1344,12 +1385,25 @@ static int IN_LevelWallYaw (float *out_yaw, float *out_conf, int *out_hits)
 			      MOVE_NOMONSTERS, player);
 		if (tr.startsolid || tr.allsolid || tr.fraction >= 1.f)
 			continue;
-		if (fabsf (tr.plane.normal[2]) > 0.3f)
+		/* Against the horizontal magnitude, not the raw component, so
+		   this is the same rule as FloorMath.maximumWallTilt on the
+		   room side rather than one that merely looks like it. */
+		horizontal = sqrtf (tr.plane.normal[0] * tr.plane.normal[0]
+				  + tr.plane.normal[1] * tr.plane.normal[1]);
+		if (horizontal < 1e-5f
+		    || fabsf (tr.plane.normal[2]) > 0.3f * horizontal)
 			continue;
 
 		dirs[n].degrees = atan2f (tr.plane.normal[1],
 					  tr.plane.normal[0]) * 180.f / M_PI;
-		dirs[n].weight = 1.f;
+		/* Weighted by DISTANCE, not one vote per ray. A fixed angular
+		   fan gives a near surface more rays than a far one -- a crate
+		   two metres away subtends more of the circle than the walls
+		   behind it -- so counting hits steers the level by the
+		   nearest clutter. The wall length a ray stands for grows with
+		   its distance, which is exactly tr.fraction here, so this
+		   weights each hit by how much wall it is evidence of. */
+		dirs[n].weight = tr.fraction;
 		n++;
 	}
 
@@ -1364,24 +1418,43 @@ static int IN_LevelWallYaw (float *out_yaw, float *out_conf, int *out_hits)
    a round room and nobody needs it printed. */
 static void IN_AlignRoom (int loud)
 {
-	float	room_yaw, room_conf, room_area;
+	float	room_yaw = 0.f, room_conf = 0.f, room_area = 0.f, room_anchor = 0.f;
 	float	lvl_yaw, lvl_conf;
 	float	turn;
-	int	hits = 0;
+	int	hits = 0, room_count = 0;
+	int	have_room;
 
 	loud = loud || vr_align_debug.value != 0.f;
 
-	if (!IN_RoomWallYaw (&room_yaw, &room_conf, &room_area))
+	have_room = IN_RoomWallYaw (&room_yaw, &room_conf, &room_area,
+				    &room_count, &room_anchor);
+
+	/* The room's side, printed BEFORE anything can refuse. This is the
+	   check that needs no level: recentre square to a real wall and the
+	   anchor figure reads zero modulo 90; recentre off square and it
+	   reads the angle you turned, with left and right giving different
+	   signs. An inverted convention anywhere in the consumer chain swaps
+	   those two, and nothing downstream can tell. */
+	if (vr_align_debug.value)
+		Con_Printf ("align: room %d wall%s, %.1f m2, anchor %.1f, "
+			    "world %.1f, conf %.2f (body %.1f)\n",
+			    room_count, room_count == 1 ? "" : "s", room_area,
+			    room_anchor, room_yaw, room_conf, qr_body_yaw);
+
+	if (!have_room)
 	{
 		if (loud)
 			Con_Printf ("align: no room walls detected\n");
 		return;
 	}
-	if (room_area < QR_ALIGN_MIN_AREA || room_conf < QR_ALIGN_MIN_CONF)
+	if (room_count < QR_ALIGN_MIN_WALLS || room_area < QR_ALIGN_MIN_AREA
+	    || room_conf < QR_ALIGN_MIN_CONF)
 	{
 		if (loud)
-			Con_Printf ("align: room unclear (%.1f m2, conf %.2f)\n",
-				    room_area, room_conf);
+			Con_Printf ("align: room unclear (%d wall%s, %.1f m2, "
+				    "conf %.2f)\n", room_count,
+				    room_count == 1 ? "" : "s", room_area,
+				    room_conf);
 		return;
 	}
 	if (!IN_LevelWallYaw (&lvl_yaw, &lvl_conf, &hits))
@@ -1409,11 +1482,15 @@ static void IN_AlignRoom (int loud)
 	   wrong by twice the angle everywhere else, so it cannot be found by
 	   trying it in a square room. */
 	turn = Align_Reduce90 (lvl_yaw - room_yaw);
+	if (!isfinite (turn))
+	{
+		if (loud)
+			Con_Printf ("align: refused, the numbers are not finite\n");
+		return;
+	}
 	if (vr_align_debug.value)
-		Con_Printf ("align: room %.1f (%.1f m2 conf %.2f) level %.1f "
-			    "(%d hits conf %.2f) body %.1f turn %+.1f\n",
-			    room_yaw, room_area, room_conf, lvl_yaw, hits,
-			    lvl_conf, qr_body_yaw, turn);
+		Con_Printf ("align: level %.1f (%d hits conf %.2f) turn %+.1f\n",
+			    lvl_yaw, hits, lvl_conf, turn);
 	if (fabsf (turn) < 0.5f)
 		return;			/* already aligned */
 	IN_SnapTurn (turn);
@@ -1424,15 +1501,25 @@ static void IN_AlignRoom_f (void)
 	IN_AlignRoom (1);
 }
 
-/* The melt's rising edge is the only moment a turn this large is tolerable:
-   it is already a two second transition with a dissolve over it. Outside it
-   the player would turn in the game and drift back out of alignment within
-   seconds, and correcting that continuously spins the room underfoot, which
-   is worse than no alignment at all. Rephasing does not turn you back -- the
-   alignment is a turn like any other and the world is where you left it.
+/* The melt's rising edge is the only moment to spend a turn this large.
+   Outside it the player turns in the game and drifts back out of alignment
+   within seconds, and correcting that continuously spins the room
+   underfoot, which is worse than no alignment at all. Rephasing does not
+   turn you back -- the alignment is a turn like any other.
 
-   Seeded from the live value on the first call so a config.cfg that saved
-   `phase 1` does not read as an edge at boot. */
+   The edge is SWALLOWED, not deferred, when the input is somewhere a
+   deliberate turn would not be allowed: a menu, the console, the weapon
+   wheel, or a pause without vr_turn_while_paused. Those are the same
+   conditions that gate the stick's own turning, and the edge has to be
+   read every frame rather than from behind their early returns -- a melt
+   begun with the menu open and acted on when it closes is a hard body
+   snap with the dissolve long finished, which is precisely the motion
+   sickness this feature is not allowed to cause.
+
+   Seeded from the live value on the first call so a melt already running
+   is not read as an edge. `phase` is not archived, so that is the window
+   having set it (ContentView sends `phase <level>` itself), never a config
+   restoring it. */
 static void IN_AlignEdge (void)
 {
 	static float	prev;
@@ -1446,7 +1533,14 @@ static void IN_AlignEdge (void)
 		return;
 	}
 	if (now > 0.01f && prev <= 0.01f && vr_align_room.value)
-		IN_AlignRoom (0);
+	{
+		if (key_dest == key_game && !qr_wheel_open
+		    && (!qr_paused || vr_turn_while_paused.value))
+			IN_AlignRoom (0);
+		else if (vr_align_debug.value)
+			Con_Printf ("align: the melt began with the input "
+				    "elsewhere -- skipped, not deferred\n");
+	}
 	prev = now;
 }
 
@@ -1514,6 +1608,12 @@ void IN_Move (usercmd_t *cmd)
 	   and the stick movement so it works whatever else is happening; the
 	   consumer only arms it when the off hand makes the teleport gesture. */
 	IN_Teleport ();
+
+	/* Room alignment rides the melt's edge. Here, not in the tail, because
+	   everything below can return early -- the wheel gate, the menu gate --
+	   and the edge must be observed every frame whether or not it may be
+	   acted on. IN_AlignEdge does its own gating. */
+	IN_AlignEdge ();
 
 	/* One source of truth for "the gun is in the hand this tick": the aim
 	   feeds a ray AND vr_handaim allows it. The shot, the move compensation,
@@ -1677,10 +1777,6 @@ void IN_Move (usercmd_t *cmd)
 		}
 	}
 	}
-
-	/* Room alignment rides the melt's edge. Placed before the compose so a
-	   turn it makes is folded into this frame's aim like any other. */
-	IN_AlignEdge ();
 
 	/* Compose the aim yaw from the (possibly just-turned) body plus the hand
 	   ray, and remember it so next frame's adopt-guard can tell a server

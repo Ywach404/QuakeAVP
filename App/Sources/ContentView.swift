@@ -37,9 +37,10 @@ struct ContentView: View {
     @State private var showScope = false
     @State private var showComfort = false
     @State private var floorTrim: Float = VRSettings.shared.floorTrim
-    // Room alignment is an experiment with a known exit, so it is off
-    // until asked for and nothing remembers it here -- vr_align_room is
-    // archived engine-side, which is the one copy worth having.
+    // Mirrors vr_align_room's own default, which is why that cvar is
+    // deliberately NOT archived: there is no live cvar read-back here, so
+    // an archived value that came back on would leave this toggle showing
+    // off while every melt turned the player.
     @State private var alignRoom = false
     @State private var alignDebug = false
     @State private var rightHanded = true

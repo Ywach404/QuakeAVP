@@ -87,6 +87,13 @@ final class FloorSource: @unchecked Sendable {
     /// change rather than twice a second forever.
     private var publishedWalls = 0
     private var wallsPublishedAt = 0.0
+    /// The correction the published table was expressed through. A recenter
+    /// changes it, and every published direction is wrong by the recenter's
+    /// yaw until the table is rebuilt -- so a change republishes at once
+    /// rather than waiting out the interval. The window puts Recenter and
+    /// "Align now" next to each other, which is all it takes to land inside
+    /// a quarter of a second.
+    private var wallsCorrection = matrix_identity_float4x4
     /// How often the table is rebuilt and re-published. The correction
     /// changes only on a recenter and the walls change only as the room is
     /// scanned, so this is a staleness bound, not a sample rate -- and
@@ -180,6 +187,11 @@ final class FloorSource: @unchecked Sendable {
 
         task?.cancel()
         dying?.stop()
+        // The engine keeps whatever it was last told, and a table published
+        // under a correction from a session that has ended points somewhere
+        // the room no longer is -- a melt from the flat window would turn to
+        // it. Nothing to align to is the honest state here.
+        QC_SetRoomWalls(nil, 0)
         print("[floor] plane detection stood down")
     }
 
@@ -203,11 +215,13 @@ final class FloorSource: @unchecked Sendable {
     func publishWalls(correction: simd_float4x4) {
         let now = CACurrentMediaTime()
         lock.lock()
-        guard now - wallsPublishedAt >= Self.wallPublishInterval else {
+        let moved = wallsCorrection != correction
+        guard moved || now - wallsPublishedAt >= Self.wallPublishInterval else {
             lock.unlock()
             return
         }
         wallsPublishedAt = now
+        wallsCorrection = correction
         let detected = Array(walls.values)
         let was = publishedWalls
         lock.unlock()
@@ -230,12 +244,12 @@ final class FloorSource: @unchecked Sendable {
         lock.lock()
         publishedWalls = dirs.count
         lock.unlock()
-        if dirs.isEmpty {
-            print("[walls] none usable of \(detected.count) vertical plane(s)")
-        } else {
-            print(String(format: "[walls] %d of %d, heaviest %.1f m² facing %.0f deg",
-                         dirs.count, detected.count, dirs[0].weight, dirs[0].degrees))
-        }
+        // Counts only. The direction a wall faces and how big it is are a
+        // scan of somebody's home, and this log is persisted to a file in
+        // the app container that tools/pull-console.sh copies to a Mac. The
+        // engine prints the shape on demand behind vr_align_debug, which is
+        // where a number that specific belongs.
+        print("[walls] \(dirs.count) usable of \(detected.count) vertical plane(s)")
     }
 
     /// Throw away the chosen floor and pick again from the planes that are

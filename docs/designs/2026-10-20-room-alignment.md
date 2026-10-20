@@ -113,8 +113,11 @@ motion sickness and a lost firefight.
 These are part of the first commit, not added later.
 
 - `vr_align_room`, default 0. Nothing changes for anyone until it is on.
-- The whole effect is one rotation, which `vr_recenter` and one turn of
-  the stick undo. It persists nothing.
+- The whole effect is one rotation and it persists nothing. Undoing it is
+  a turn of the stick, to within `vr_snapturn` degrees. **Not**
+  `vr_recenter`: that zeroes the head pose and the absorption ledger and
+  does not touch the body heading, so it leaves the alignment exactly
+  where it was. An earlier draft of this document claimed otherwise.
 - No save state, no level data, no engine files touched. The vendored
   hunk count does not move.
 - It lives on its own branch. If the result is flat, the branch is deleted
@@ -134,6 +137,19 @@ sees poorly, can produce a 45 degree turn that makes things worse. The
 confidence threshold is there for that, and doing nothing must always be
 the fallback.
 
+## The one assumption nothing verifies
+
+A vertical plane anchor's normal is taken to be the Y axis of its own
+frame, which is consistent with how the floor path already treats those
+anchors (its extent maths spans the plane in x and z) but is not
+established anywhere in this repository. If it is the wrong column the
+published directions are garbage that still passes every gate, because
+the mean at 4x is invariant to the normal's sign and cannot tell a real
+direction from a plausible one.
+
+The device check below is what proves it, which is why that check reads
+the published number directly rather than watching for a swing.
+
 ## Verification
 
 Host: the binning and the angle reduction are pure maths over a set of
@@ -150,10 +166,33 @@ watch nothing happen, with the log saying why.
 **That angle must be near 20 or 30 degrees, not 0 and not 45.** The turn
 is taken modulo 90, so an inverted sign is indistinguishable from a
 correct one at both of those, and a test run in a corridor that happens to
-sit square or diagonal to the room passes either way. With
-`vr_align_debug 1` the room direction, the level direction, the body
-heading and the turn are all printed, so the first device run should read
-those rather than trust the swing.
+sit square or diagonal to the room passes either way.
+
+**Do the room-only check first.** It needs no level, no melt and no
+corridor, and it is the only thing that proves the consumer chain and the
+plane-normal assumption above. Turn on `vr_align_debug 1`, then press
+**Align now** in the window; the first line printed is the room's side and
+it prints before anything can refuse.
+
+1. Stand square to a real wall, facing it. Recenter. Press Align now. The
+   `anchor` figure should read near 0 (the normal faces back at you at
+   180 degrees, and 180 modulo 90 is 0).
+2. Turn 20 degrees to your LEFT. Recenter. Align now. It should read
+   near 70.
+3. Turn 20 degrees to your RIGHT instead. Recenter. Align now. It should
+   read near 20.
+
+Steps 2 and 3 are the whole point: left and right must give DIFFERENT
+numbers. If they come out swapped, the angle's sign is inverted somewhere
+in the consumer chain. If the figure is unstable or unrelated to where you
+are standing, the wrong column of the plane anchor is being read as its
+normal. Either way the level side is irrelevant until this passes.
+
+Only then the corridor test, and expect the level side to refuse in open
+space: six of twenty-four rays must find geometry, and the Quake rooms
+that dwarf a living room are exactly the ones with nothing within range.
+`QR_ALIGN_RANGE` is the first number to tune, and the refusal says which
+gate stopped it.
 
 ## Settled by the builder
 
@@ -175,7 +214,17 @@ those rather than trust the swing.
   a 45-degree tie, both of which cancel to zero.
 - Applied at the start of the melt, in one `IN_SnapTurn`. Easing it across
   the sweep would mean a per-frame heading correction competing with the
-  player's own turning, for a motion the dissolve is already covering.
+  player's own turning.
+
+  Honest caveat on "masked by the sweep", which this document says
+  elsewhere: at the cvar's edge the eased phase is still near zero and the
+  world is fully opaque, so what the player sees is a plain snap turn, the
+  same motion the stick makes. The dissolve is not covering it. That may
+  well be the better behaviour -- a snap turn is a motion this game already
+  asks for and the player is used to reading -- but the third option exists
+  and is untried: fire on the eased value crossing part-way through the
+  sweep, where the noise really is hiding the walls. Decide it after the
+  first device run, not before.
 - Refusals print under `vr_align_debug`, and always for the manual
   `align_room` console command. `vr_align_debug 1` also prints all five
   numbers on every attempt, which is how the sign gets checked.
@@ -200,10 +249,35 @@ an inverted sign agree at exactly 0 and 45 degrees and be wrong by twice
 the angle everywhere else, so a square room cannot tell the two apart.
 This also raises the bar on the device criterion below.
 
-**A level change does not re-align.** Nothing writes the phase cvar on a
-map load -- `QR_NewMap` snaps the published scalar instead -- so no edge
-fires on arrival. The alignment is a turn like any other and it survives,
-which is the behaviour this document already asked for.
+**A level change loses the alignment, and does not redo it.** This
+document originally claimed the turn survives a map change. It does not.
+The server sends a `setangle` on spawn, and `IN_Move`'s adopt guard takes
+any unexplained change in the view yaw as exactly that and writes it into
+the body heading -- which overwrites the alignment turn. Nothing writes
+the phase cvar on a map load either, so no edge fires on arrival: you
+come through the slipgate already melted, facing the spawn angle, with
+the level lying across the room at whatever angle it happens to lie at.
+`phase 0` then `phase 1` re-aligns.
+
+Fixing that means re-aligning on the spawn edge rather than only the melt
+edge, which is a turn the player did not ask for at a moment when the
+dissolve is not covering anything. That is this document's own anti-goal,
+so it is left alone and raised as a question for A. instead.
+
+## Known rough edges, deliberately left
+
+- The engine keeps its wall table while the immersive space is open and is
+  handed an empty one when it closes, so `align_room` typed from the flat
+  window with the space shut always refuses. That is the honest answer
+  (there is no live room measurement then), but it means the window's
+  button only works with the space open.
+- Vertical-plane updates now run the floor re-selection, which takes a
+  lock the render thread takes twice a frame. Cheap per update, and plane
+  churn settles once a room is scanned, but it is worth watching in a
+  fully scanned room.
+- A ray from the fan is a point, not the player's hull, so it slips
+  through a railing or a doorway the player cannot and can vote for the
+  next room's wall.
 
 ## For A.
 
@@ -212,3 +286,8 @@ which is the behaviour this document already asked for.
   why it refused.
 - Whether "Align now" should stay in the shipped panel or be a debug-only
   control once the automatic path is trusted.
+- Whether coming through a slipgate already melted should re-align on the
+  spawn, given that the spawn `setangle` wipes the previous alignment.
+  Doing it means an unrequested turn with nothing covering it, which this
+  document calls an anti-goal; not doing it means every level change
+  leaves the world lying across the room until you rephase.

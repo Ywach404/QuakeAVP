@@ -29,7 +29,15 @@ int Align_Dominant (const align_dir_t *dirs, int count,
 		double w = dirs[i].weight;
 		double a;
 
-		if (!(w > 0.0))		/* also rejects a NaN weight */
+		/* Nothing that is not a finite positive number gets a vote.
+		   This is a public C API (QC_SetRoomWalls) and every gate
+		   downstream is a `less than a threshold` compare, which a NaN
+		   passes -- and the end of that road is a NaN written into the
+		   body heading, where it is unrecoverable because the guard
+		   that adopts a server setangle compares against it too. An
+		   infinity is just as bad: it makes the resultant and the total
+		   both infinite and their ratio a NaN. */
+		if (!(w > 0.0) || !isfinite (w) || !isfinite (dirs[i].degrees))
 			continue;
 		/* FOUR times the angle: the period of "which way does this
 		   room run" is 90 degrees, not 360, and quadrupling turns that
