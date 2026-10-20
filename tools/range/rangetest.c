@@ -4,13 +4,36 @@
  *
  * rangetest.c -- boot the engine against the make-check objects, load the
  * range, and assert it exercises what it was built to. Deviceless proof
- * the arena is wired: link against ${TMPDIR}/quakecore-hostbuild/*.o minus
+ * the arena is wired: link against ${TMPDIR}/quakecore-hostbuild/[star].o minus
  * hostmain.o (see tools/range/README.md).
  */
 
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include <stdio.h>
+
+/* The audio sink is Swift and is not in the host objects; hostmain.c carries
+ * the same four stand-ins for `make check`. Returning 0 from open leaves the
+ * engine with no sound device, which is the right headless answer. */
+int QC_AudioOpen (int speed, int channels, int bits, unsigned char **buffer, int *mono_samples)
+{
+	(void)speed; (void)channels; (void)bits;
+	if (buffer) *buffer = NULL;
+	if (mono_samples) *mono_samples = 0;
+	return 0;
+}
+int  QC_AudioSamplePos (void) { return 0; }
+void QC_AudioClose (void) { }
+void QC_AudioSetRunning (int running) { (void)running; }
+
+/* Mirrors the track constants in tools/range/genrange.py: lane 1's inner
+ * edge, a lane's width, and how far the lane lines stand proud of the floor.
+ * Change both or neither. */
+#define R_IN	720.0f
+#define LANE_W	48.0f
+#define LINE_H	2.0f
+#define LANE1_Y	(-(R_IN + LANE_W / 2))
+
 static int failures;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL: " __VA_ARGS__); printf("\n"); } else { printf("ok:   " __VA_ARGS__); printf("\n"); } } while (0)
 static void on_log (void *c, const char *t) { (void)c; fputs (t, stdout); }
@@ -28,7 +51,8 @@ static int alias_batches (void)
 }
 int main (int argc, char **argv)
 {
-	int base, wheel;
+	int base, wheel, i, reached;
+	vec3_t pos;
 	if (argc < 2) return 2;
 	QC_SetCallbacks (on_log, on_error, NULL);
 	QC_SetPaths (argv[1], argv[1]);
@@ -55,6 +79,44 @@ int main (int argc, char **argv)
 	CHECK (wheel == base + 8, "wheel rings all 8 over the range (%d -> %d)", base, wheel);
 	QC_ExecuteCommand ("-wheel\n");
 	frames (40);
+
+	/* The track around the arena, read through the collision hulls rather
+	 * than the renderer: the inner kerb is a line brush standing LINE_H
+	 * proud at exactly R_IN, and the middle of lane 1 just outside it is
+	 * open above its floor. A bend written with slivers, or a lane surface
+	 * laid over the arena's own floor, shows up here as the wrong contents. */
+	pos[0] = 0; pos[1] = -R_IN; pos[2] = LINE_H / 2;
+	CHECK (SV_PointContents (pos) == CONTENTS_SOLID,
+	       "a lane line stands proud at lane 1's inner edge (y=%.0f)", pos[1]);
+	pos[1] = LANE1_Y; pos[2] = 1;
+	CHECK (SV_PointContents (pos) == CONTENTS_EMPTY,
+	       "lane 1 itself is open (y=%.0f)", pos[1]);
+	pos[2] = -1;
+	CHECK (SV_PointContents (pos) == CONTENTS_SOLID, "and floored");
+
+	/* Walkable all the way out: the spawn faces +Y, so holding +back walks
+	 * the player south off the arena floor, across the infield strip, over
+	 * the inner kerb and into lane 1 -- 296 units, now the track hugs the
+	 * arena rather than ringing a field. Polled rather than timed, because
+	 * host_timescale is still easing back up from the wheel; the budget is
+	 * roughly four times the walk at the server's 320 ups cap. Nothing may
+	 * block the way, so the infield tiling has to meet the arena floor
+	 * flush and the kerb has to be a step, not a wall. */
+	QC_ExecuteCommand ("cl_backspeed 400\n");
+	QC_ExecuteCommand ("+back\n");
+	reached = 0;
+	for (i = 0; i < 280 && !reached; i++)
+	{
+		QC_Frame (1.0/72.0);
+		VectorCopy (svs.clients[0].edict->v.origin, pos);
+		if (pos[1] <= LANE1_Y)
+			reached = 1;
+	}
+	QC_ExecuteCommand ("-back\n");
+	CHECK (reached, "walked out of the arena into lane 1 (y=%.0f after %d frames)",
+	       pos[1], i);
+	CHECK (pos[2] > 0 && pos[2] < 64, "and is still on the floor out there (z=%.0f)",
+	       pos[2]);
 	printf (failures ? "\n%d FAILURES\n" : "\nall passed\n", failures);
 	return failures ? 1 : 0;
 }

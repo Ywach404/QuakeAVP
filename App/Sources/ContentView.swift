@@ -180,6 +180,20 @@ struct ContentView: View {
         ("Episode 4 · The Elder World", (1...8).map { "e4m\($0)" }),
         ("Deathmatch", (1...6).map { "dm\($0)" }),
     ]
+
+    /// The strips the picker actually offers: the episodes above, plus the
+    /// generated test range when this build carried `pak2.pak`. Gated on the
+    /// same data as the engine's dev auto-`map range` (QuakePaths
+    /// `hasBundledRangePak`) rather than on a flag, because `App/DevGameData`
+    /// is gitignored and a public checkout has no range to launch. Appended
+    /// last so `selectedEpisode` never points past the end.
+    private var episodeStrips: [(name: String, ids: [String])] {
+        var strips = Self.episodes
+        if engine.paths?.hasBundledRangePak == true {
+            strips.append(("Test range", ["range"]))
+        }
+        return strips
+    }
     @State private var confirmResetGun = false
     @State private var confirmResetProfile = false
     @State private var weaponBack: Float = 0
@@ -1000,7 +1014,7 @@ struct ContentView: View {
                 .buttonStyle(.bordered).font(.caption)
                 Spacer()
                 Picker("Episode", selection: $selectedEpisode) {
-                    ForEach(Array(Self.episodes.enumerated()), id: \.offset) { i, ep in
+                    ForEach(Array(episodeStrips.enumerated()), id: \.offset) { i, ep in
                         Text(ep.name).tag(i)
                     }
                 }
@@ -1008,7 +1022,7 @@ struct ContentView: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(Self.episodes[selectedEpisode].ids, id: \.self) { mapCard($0) }
+                    ForEach(episodeStrips[selectedEpisode].ids, id: \.self) { mapCard($0) }
                 }
                 .padding(.bottom, 4)
             }
