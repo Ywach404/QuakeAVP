@@ -819,18 +819,38 @@ static void IN_YawVectors (float yaw, vec3_t fwd, vec3_t right)
 	right[2] = 0.f;
 }
 
-/* The head's offset from the camera anchor, world frame, from the latest
-   feed rotated by the CURRENT body yaw (the feed is body-frame exactly so
-   snap turn rotates it for free). */
-static void IN_HeadOffsetWorld (float out[2])
+/* The world-space head offset a body-frame feed has at a given body yaw.
+   Split out of IN_HeadOffsetWorld so the turn-pivot invariant below is
+   provable on the host, with no world, no cvars and no sv to stand up. */
+void IN_HeadOffsetAtYaw (const float head[3], float yaw, float out[2])
 {
 	vec3_t fwd, right;
 
-	/* The body basis, not the aim: the head offset is a body-frame feed, so
-	   snap turn rotates it with the body (qr_body_yaw), never with the hand. */
-	IN_YawVectors (qr_body_yaw, fwd, right);
-	out[0] = qr_head[0] * fwd[0] + qr_head[1] * right[0];
-	out[1] = qr_head[0] * fwd[1] + qr_head[1] * right[1];
+	IN_YawVectors (yaw, fwd, right);
+	out[0] = head[0] * fwd[0] + head[1] * right[0];
+	out[1] = head[0] * fwd[1] + head[1] * right[1];
+}
+
+/* Rotate a world-space horizontal vector by a body-yaw delta, in place. The
+   absorption ledger lives in world space, so a deliberate turn has to carry
+   it round with the body; leave it behind and the head's world position moves
+   by the arc chord instead of solving out. */
+void IN_RotateBodyVec (float v[2], float degrees)
+{
+	float rad = degrees * (float) M_PI / 180.f;
+	float c = cosf (rad), s = sinf (rad);
+	float x = v[0], y = v[1];
+
+	v[0] = c * x - s * y;
+	v[1] = s * x + c * y;
+}
+
+/* The head's offset from the camera anchor, world frame, from the latest feed
+   rotated by the CURRENT body yaw. The body basis, not the aim: the feed is
+   body-frame exactly so a turn rotates it for free, never with the hand. */
+static void IN_HeadOffsetWorld (float out[2])
+{
+	IN_HeadOffsetAtYaw (qr_head, qr_body_yaw, out);
 }
 
 /*
@@ -1195,27 +1215,25 @@ static void IN_Teleport (void)
 
 /*
 ================
-IN_SnapTurn -- instant body rotation about the HEAD, not the anchor.
+IN_SnapTurn -- body rotation about the HEAD, not the anchor.
 
 Settle the body under the head first (a full absorb), rotate the absorbed
 offset with the body, then yaw. The head's world position solves out
-invariant, which is what "the world stays put under you" means; the whole
-point of snap over smooth is that there is nothing to interpolate.
+invariant, which is what "the world stays put under you" means.
+
+The one sanctioned writer of a deliberate body heading. Named for the stick
+snap it was written for, but every turn path goes through it now -- smooth
+and the edge turn call it once per frame with that frame's delta, which is
+the same arithmetic a snap does, just smaller. Write qr_body_yaw directly
+and the turn pivots about the recenter anchor instead; see the note at the
+call in IN_Move for what that looked like. Not for the server-angle adopt,
+which is a teleport moving the origin anyway, nor the demo-export pin.
 ================
 */
 static void IN_SnapTurn (float degrees)
 {
-	float rad, c, s, ax, ay;
-
 	IN_AbsorbHeadOffset ();
-
-	rad = degrees * M_PI / 180.f;
-	c = cosf (rad);
-	s = sinf (rad);
-	ax = qr_head_absorbed[0];
-	ay = qr_head_absorbed[1];
-	qr_head_absorbed[0] = c * ax - s * ay;
-	qr_head_absorbed[1] = s * ax + c * ay;
+	IN_RotateBodyVec (qr_head_absorbed, degrees);
 
 	/* Turn the BODY. cl.viewangles[YAW] (the aim) is recomposed from
 	   qr_body_yaw + the hand ray at the end of IN_Move, so it turns too. */
@@ -1415,18 +1433,20 @@ void IN_Move (usercmd_t *cmd)
 	   vr_turn_while_paused opts out. */
 	if (!qr_paused || vr_turn_while_paused.value)
 	{
+	float turn = 0.f;	/* this frame's deliberate body heading, degrees */
+
 	/* Right stick X turns the BODY (snap, or smooth for those who opt in). */
 	if (vr_smoothturn.value)
 	{
-		qr_body_yaw -= rx * cl_yawspeed.value * host_frametime;
+		turn -= rx * cl_yawspeed.value * host_frametime;
 	}
 	else
 	{
 		if (qr_snap_armed && fabsf (rx) > QR_SNAP_PRESS)
 		{
 			qr_snap_armed = false;
-			IN_SnapTurn ((rx > 0.f ? -1.f : 1.f)
-				     * q_max (vr_snapturn.value, 1.f));
+			turn += (rx > 0.f ? -1.f : 1.f)
+				* q_max (vr_snapturn.value, 1.f);
 		}
 		else if (!qr_snap_armed && fabsf (rx) < QR_SNAP_RELEASE)
 			qr_snap_armed = true;
@@ -1444,10 +1464,23 @@ void IN_Move (usercmd_t *cmd)
 		{
 			float frac = (fabsf (a) - dz) / 40.f;	/* ramp to full over 40 deg */
 			if (frac > 1.f) frac = 1.f;
-			qr_body_yaw += (a > 0.f ? 1.f : -1.f)
-				     * vr_edgeturn_speed.value * frac * (float) host_frametime;
+			turn += (a > 0.f ? 1.f : -1.f)
+			      * vr_edgeturn_speed.value * frac * (float) host_frametime;
 		}
 	}
+
+	/* One writer, one pivot. Every deliberate heading change this frame --
+	   stick snap, opt-in smooth, aim-hand edge turn, or a smooth and an edge
+	   turn together -- goes through IN_SnapTurn, which settles the body under
+	   the head and carries the absorption ledger round with it. The two
+	   continuous paths used to write qr_body_yaw bare, which pivoted the turn
+	   about the RECENTER ANCHOR instead: the head swept an arc, and the absorb
+	   at the end of IN_Move paid for the arc as real locomotion. You slid
+	   sideways when you turned, by the chord, perpendicular to the way you had
+	   walked and growing with how far from the recenter point you stood -- so
+	   it was invisible until room-scale walking made that radius non-zero. */
+	if (turn != 0.f)
+		IN_SnapTurn (turn);
 	}
 
 	/* Compose the aim yaw from the (possibly just-turned) body plus the hand
