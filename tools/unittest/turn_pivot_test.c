@@ -11,12 +11,18 @@
  * Pure maths over the two helpers; no world, no cvars, no sv.
  */
 #include "quakedef.h"
+#include "QuakeCore.h"
 #include <stdio.h>
 #include <math.h>
 
 /* in_null.c, file-local extern the way qr_bridge.c takes its globals. */
-void	IN_HeadOffsetAtYaw (const float head[3], float yaw, float out[2]);
-void	IN_RotateBodyVec (float v[2], float degrees);
+void		IN_HeadOffsetAtYaw (const float head[3], float yaw, float out[2]);
+void		IN_RotateBodyVec (float v[2], float degrees);
+extern float	qr_head_absorbed[2];
+extern float	qr_body_yaw;
+extern uint32_t	qr_recenter_count;
+/* The vr_* cvars are static in in_null.c; reach them through the cvar system
+   the way the console does, which is also what IN_Init has just registered. */
 
 static int failures;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL: " __VA_ARGS__); printf("\n"); } else { printf("ok:   " __VA_ARGS__); printf("\n"); } } while (0)
@@ -63,8 +69,15 @@ int main (void)
 	CHECK (fabsf (len2 (residual) - chord) < 1e-2f,
 	       "uncompensated 90 deg turn leaves the arc chord: %.2f units, expected %.2f",
 	       len2 (residual), chord);
-	CHECK (len2 (residual) > 0.25f,
-	       "and the chord clears the absorb deadzone, so it is walked as movement");
+	/* Match IN_AbsorbHeadOffset's gate exactly: it is PER-AXIS, not radial,
+	   so the deadzone is a square. Radial magnitude clearing 0.25 does not
+	   by itself mean the gate opens. (That the square is not
+	   rotation-invariant is also why this fix bounds the yaw-only slide at
+	   ~0.35 units rather than exactly zero -- about 9 mm, imperceptible and
+	   non-accumulating, since rotation preserves magnitude and the next
+	   absorb settles the ledger exactly.) */
+	CHECK (fabsf (residual[0]) >= 0.25f || fabsf (residual[1]) >= 0.25f,
+	       "and the chord opens the absorb's per-axis gate, so it is walked");
 
 	/* --- the residual rotates, it does not grow ------------------------- */
 	{
@@ -151,6 +164,124 @@ int main (void)
 			IN_RotateBodyVec (poisoned, 90.f);
 		CHECK (!isfinite (poisoned[0]) || !isfinite (poisoned[1]),
 		       "and no later turn recovers it -- hence the guard upstream");
+	}
+
+	/* ====================================================================
+	   The regression test proper: drive the REAL IN_Move and prove the
+	   smooth turn's call site routes through the ledger. Everything above
+	   is algebra over the helpers and would still pass if IN_Move went
+	   back to writing qr_body_yaw bare -- which is the failure mode
+	   working-notes.md warns about twice. This section fails on that
+	   revert, because it watches the ledger IN_Move actually leaves.
+
+	   The trick that makes it drivable with no map, no sv and no client:
+	   feed a recenter ack that does NOT match qr_recenter_count. Every
+	   IN_AbsorbHeadOffset then takes its "a recenter is in flight" early
+	   return, so nothing walks the player or overwrites the ledger -- but
+	   IN_SnapTurn's rotation happens regardless, which is exactly the
+	   thing under test.
+	   ================================================================= */
+	{
+		usercmd_t	cmd;
+		qc_gamepad_state_t pad;
+		float		seed[2] = { 30.f, -12.f };
+		float		expect[2];
+		float		yaw_before, delta;
+
+		/* Same bootstrap wristcomm_cvar_test.c and hud_tile_test.c use:
+		   Cvar_RegisterVariable copies its default through Z_Strdup, which
+		   needs the zone the hunk backs, and this binary does not run
+		   VID_Init. QR_TestEmitTileInto's first call Memory_Init's a static
+		   test hunk -- borrow it rather than inventing a second one. */
+		{
+			extern void QR_TestEmitTileInto (int tile_id, int stat_health,
+							 int stat_armor, int stat_ammo,
+							 int items, float *bbox_w,
+							 float *bbox_h, int *nverts);
+			float	bw, bh;
+			int	nv;
+			QR_TestEmitTileInto (QC_HUD_TILE_HEALTHARMOR, 100, 50, 0, 0,
+					     &bw, &bh, &nv);
+		}
+
+		IN_Init ();			/* register the vr_* cvars */
+
+		/* cl_yawspeed belongs to the client, which a unit test does not
+		   stand up; set the value rather than registering it. */
+		cl_yawspeed.value = 140.f;
+		Cvar_Set ("vr_smoothturn", "1");	/* the path under test */
+		Cvar_Set ("vr_edgeturn", "0");		/* isolate from the edge turn */
+		Cvar_Set ("vr_handaim", "0");		/* qr_aim_active stays false */
+		host_frametime = 0.011;			/* ~90 Hz */
+
+		/* Freeze the absorb: ack 7 against a recenter count of 0. */
+		qr_recenter_count = 0;
+		QC_InputSetHeadOffset (44.f, 15.f, 0.f, 7);
+
+		memset (&pad, 0, sizeof (pad));
+		pad.connected = 1;
+		pad.rx = 0.5f;			/* clear of QR_STICK_DEADZONE */
+		QC_InputSetGamepad (&pad);
+
+		qr_head_absorbed[0] = seed[0];
+		qr_head_absorbed[1] = seed[1];
+		yaw_before = qr_body_yaw;
+
+		memset (&cmd, 0, sizeof (cmd));
+		IN_Move (&cmd);
+
+		delta = qr_body_yaw - yaw_before;
+		CHECK (fabsf (delta) > 0.01f,
+		       "IN_Move's smooth turn moved the body (%.4f deg)", delta);
+
+		/* The invariant, stated without predicting the deadzone curve:
+		   whatever the body turned by, the ledger turned by the same. */
+		expect[0] = seed[0];
+		expect[1] = seed[1];
+		IN_RotateBodyVec (expect, delta);
+		CHECK (fabsf (qr_head_absorbed[0] - expect[0]) < 1e-3f
+		    && fabsf (qr_head_absorbed[1] - expect[1]) < 1e-3f,
+		       "the ledger turned with the body: (%.3f, %.3f), expected (%.3f, %.3f)",
+		       qr_head_absorbed[0], qr_head_absorbed[1], expect[0], expect[1]);
+
+		/* And it genuinely MOVED -- a revert leaves it on the seed, which
+		   the check above would catch, but say so outright so the failure
+		   names the bug rather than the arithmetic. */
+		CHECK (fabsf (qr_head_absorbed[0] - seed[0]) > 1e-4f
+		    || fabsf (qr_head_absorbed[1] - seed[1]) > 1e-4f,
+		       "a bare qr_body_yaw write would have left the ledger untouched");
+
+		/* --- and the EDGE turn, which is the path actually reported:
+		       arm held out past the deadzone, no stick touched at all. */
+		Cvar_Set ("vr_smoothturn", "0");	/* stick quiet either way */
+		Cvar_Set ("vr_edgeturn", "1");
+		Cvar_Set ("vr_handaim", "1");
+		Cvar_Set ("vr_aimyaw", "0");		/* no resting-trim offset */
+
+		pad.rx = 0.f;				/* nothing on the stick */
+		QC_InputSetGamepad (&pad);
+		/* A live hand ray 40 deg to the right: past vr_edgeturn_dz (18). */
+		QC_InputSetAim (1, 10.f, 6.f, -4.f, 40.f, 0.f);
+
+		qr_head_absorbed[0] = seed[0];
+		qr_head_absorbed[1] = seed[1];
+		yaw_before = qr_body_yaw;
+
+		memset (&cmd, 0, sizeof (cmd));
+		IN_Move (&cmd);
+
+		delta = qr_body_yaw - yaw_before;
+		CHECK (fabsf (delta) > 0.01f,
+		       "the arm-out edge turn moved the body with no stick input (%.4f deg)",
+		       delta);
+
+		expect[0] = seed[0];
+		expect[1] = seed[1];
+		IN_RotateBodyVec (expect, delta);
+		CHECK (fabsf (qr_head_absorbed[0] - expect[0]) < 1e-3f
+		    && fabsf (qr_head_absorbed[1] - expect[1]) < 1e-3f,
+		       "the edge turn carried the ledger too: (%.3f, %.3f), expected (%.3f, %.3f)",
+		       qr_head_absorbed[0], qr_head_absorbed[1], expect[0], expect[1]);
 	}
 
 	printf ("%s\n", failures ? "UNIT FAIL" : "UNIT PASS");

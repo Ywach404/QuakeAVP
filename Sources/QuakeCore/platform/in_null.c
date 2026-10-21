@@ -95,6 +95,16 @@ static float			qr_bodyyaw_pinned;
 
 void QC_ExportSetBodyYaw (int override, float yaw_deg)
 {
+	/* The pin assigns qr_body_yaw directly, so it is the one deliberate
+	   heading that does NOT pass IN_SnapTurn's finite guard -- and its value
+	   comes off disk, from a .vrtrack the user can replace, decoded with
+	   Float(bitPattern:) that validates nothing. A non-finite yaw here is
+	   the unrecoverable case: IN_Move's adopt guard compares against what it
+	   last wrote, a NaN fails that compare forever, and no spawn, teleport or
+	   recenter gets the view back. Refuse it at the door instead. */
+	if (override && !isfinite (yaw_deg))
+		return;
+
 	pthread_mutex_lock (&qc_input_lock);
 	qc_bodyyaw_override_shared = override;
 	qc_bodyyaw_shared = yaw_deg;
