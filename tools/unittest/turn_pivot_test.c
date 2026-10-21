@@ -136,6 +136,23 @@ int main (void)
 		       small_chord, big_chord);
 	}
 
+	/* --- why the isfinite guard sits in IN_SnapTurn and not in here ----
+	       The helpers are deliberately unguarded: the chokepoint owns the
+	       check. Prove the hazard it exists for -- one non-finite delta
+	       destroys the ledger, and no later rotation brings it back. */
+	{
+		float	poisoned[2] = { 10.f, 4.f };
+
+		IN_RotateBodyVec (poisoned, (float) (0.0 / 0.0));
+		CHECK (!isfinite (poisoned[0]) || !isfinite (poisoned[1]),
+		       "an unguarded non-finite turn poisons the ledger");
+
+		for (i = 0; i < 4; i++)
+			IN_RotateBodyVec (poisoned, 90.f);
+		CHECK (!isfinite (poisoned[0]) || !isfinite (poisoned[1]),
+		       "and no later turn recovers it -- hence the guard upstream");
+	}
+
 	printf ("%s\n", failures ? "UNIT FAIL" : "UNIT PASS");
 	return failures ? 1 : 0;
 }

@@ -1232,6 +1232,18 @@ which is a teleport moving the origin anyway, nor the demo-export pin.
 */
 static void IN_SnapTurn (float degrees)
 {
+	/* The chokepoint for every deliberate turn, so the one guard that cannot
+	   be skipped lives here. A non-finite angle written into qr_body_yaw is
+	   not a glitch to ride out: the adopt guard in IN_Move compares the yaw
+	   against what it last wrote, and a NaN fails that compare forever, so
+	   neither a spawn, a teleport nor a recenter gets the view back --
+	   relaunching is the only way out. It matters more now that the
+	   continuous paths route through here, because the rotation below would
+	   also take the absorption ledger with it, and a poisoned ledger is what
+	   every later absorb walks against. */
+	if (!isfinite (degrees))
+		return;
+
 	IN_AbsorbHeadOffset ();
 	IN_RotateBodyVec (qr_head_absorbed, degrees);
 
