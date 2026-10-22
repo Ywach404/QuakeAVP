@@ -55,7 +55,10 @@ final class WeaponTrim: @unchecked Sendable {
     /// Barrel-end clip keep-fraction (1 = none; the axe loads no round).
     private static let defaultFront32: [Float] = [
         1, 1, 1, 1, 1, 1, 1, 1,                 // hands / no arms
-        1, 0.985, 1, 1, 1, 1, 1, 1,             // hands / arms shown
+        // The shotgun sat at 0.985 here, clipping a sliver off the barrel
+        // end. With the real hands showing it looks better untrimmed, so
+        // every front default is now 1 and the barrel end is never cut.
+        1, 1, 1, 1, 1, 1, 1, 1,                 // hands / arms shown
         1, 1, 1, 1, 1, 1, 1, 1,                 // psvr2 / no arms
         1, 1, 1, 1, 1, 1, 1, 1                  // psvr2 / arms shown
     ]
