@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var showScope = false
     @State private var floorTrim: Float = VRSettings.shared.floorTrim
     @State private var rightHanded = true
+    @State private var difficulty: Difficulty = .normal
     /// vr_hud: 0 off, 1 wrist, 2 float, 3 modular (default). Mirrors the
     /// cvar's own default since there is no live cvar read-back, so it MUST
     /// keep matching r_null.c's `vr_hud` -- a mirror that drifted would show
@@ -1066,6 +1067,37 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu).font(.caption)
             }
+            // Difficulty, beside the hub whose whole job is choosing it. The
+            // hub's doors still work and write the same cvar; this is the same
+            // flag reached without walking to it.
+            //
+            // A @State mirror because there is no live cvar read-back in the
+            // view layer, the same reason vr_hud keeps one. VRSettings is the
+            // truth, and DifficultyWatcher updates it when a door moves it.
+            VStack(alignment: .leading, spacing: 3) {
+                Picker("Difficulty", selection: $difficulty) {
+                    ForEach(Difficulty.allCases, id: \.self) { d in
+                        Text(d.label).tag(d)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: difficulty) { _, new in
+                    VRSettings.shared.skill = new.rawValue
+                    engine.send("skill \(new.rawValue)")
+                }
+                // The engine samples `skill` ONCE when a level spawns
+                // (sv_main.c:1489), so a press mid-level cannot change the
+                // level you are in. Said out loud only while that is the
+                // case: a control that looks like it did something it did
+                // not is worse than no control.
+                if session.saveBlock != .noLocalGame {
+                    Text("Applies from the next level. This one keeps the "
+                         + "difficulty it started on.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .onAppear { difficulty = Difficulty(rawValue: VRSettings.shared.skill) ?? .normal }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(episodeStrips[selectedEpisode].ids, id: \.self) { mapCard($0) }
