@@ -40,21 +40,10 @@ struct SaveCoverFlow: View {
 
     let slots: [SaveGameSlot]
     let gameDirectory: URL?
-    let running: Bool
-    /// The engine's own refusal to save right now, already worded.
-    let saveBlockCaption: String?
-    let onLoad: (SaveGameSlot) -> Void
-    let onOverwrite: (SaveGameSlot) -> Void
-    let onDelete: (SaveGameSlot) -> Void
-    /// Whether saving is possible at all right now (the engine's own refusal).
-    let canSave: Bool
+    /// Which cover is in front. The deck chooses; the caller acts.
+    @Binding var selectedIndex: Int
 
-    @State private var selectedIndex = 0
     @State private var scrollID: Int?
-
-    private var selected: SaveGameSlot? {
-        slots.indices.contains(selectedIndex) ? slots[selectedIndex] : nil
-    }
 
     /// Identity of the LIST, not of a card. The deck is sorted newest-first,
     /// so saving prepends and every index shifts; `ForEach` diffs on the slot's
@@ -73,7 +62,6 @@ struct SaveCoverFlow: View {
                            alignment: .center)
             } else {
                 carousel
-                detail
             }
         }
         .onChange(of: revision) { old, new in
@@ -218,34 +206,4 @@ struct SaveCoverFlow: View {
         case .nightmare: return Color(red: 0.49, green: 0.12, blue: 0.12)
         }
     }
-
-    // MARK: - what the selected save can do
-
-    private var detail: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let slot = selected {
-                Text(slot.name).font(.caption.monospaced().weight(.semibold))
-                ForEach(CoverFlowMetrics.badges(for: slot), id: \.self) { badge in
-                    Text(badge.caption).font(.caption2).foregroundStyle(.orange)
-                }
-                HStack(spacing: 8) {
-                    Button("Load") { onLoad(slot) }
-                        // Deliberately NOT gated on the save block: resuming
-                        // from a cold engine is how a session starts.
-                        .disabled(!running || !slot.isLoadable || !slot.isAddressable)
-                    // Save over THIS one. The name is in the label, because
-                    // that label is the whole guard -- there is no dialog, and
-                    // overwriting the wrong save is the mistake worth making
-                    // hard rather than overwriting at all.
-                    Button("Overwrite \(slot.name)") { onOverwrite(slot) }
-                        .disabled(!running || !canSave || !slot.isAddressable)
-                    // No .disabled at all, deliberately. Tidying up saves is
-                    // worth doing with the engine stopped.
-                    Button("Delete", role: .destructive) { onDelete(slot) }
-                }
-                .font(.caption)
-            }
-        }
-    }
 }
-

@@ -152,6 +152,8 @@ struct ContentView: View {
     @State private var session = SessionState()
     @State private var joinAddress = ""
     @State private var slotPendingDelete: SaveGameSlot?
+    /// Which cover the deck has in front; the action row works on it.
+    @State private var selectedSave = 0
     @State private var killAI = false
     @State private var infightAttacker: Int32 = 0
     @State private var infightTarget: Int32 = 0
@@ -1188,51 +1190,63 @@ struct ContentView: View {
 
     private var saveLoadSection: some View {
         let running = engine.status == .running
+        let selected = session.slots.indices.contains(selectedSave)
+            ? session.slots[selectedSave] : nil
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Save / Load").font(.headline)
-            Text("The same files the console's save and load use, in the game "
-                 + "directory the engine is running out of.")
-                .font(.caption).foregroundStyle(.secondary)
-            // The engine's own refusal, said in advance. No second opinion:
-            // the reason is computed engine-side next to the guards it
-            // mirrors (session_avp.c).
+            // The headline and the paragraph under it are gone. The deck says
+            // what this is better than a label did, and every control now sits
+            // with the thing it acts on.
+            //
+            // The engine's own refusal still gets said in advance, because it
+            // is the one thing the pictures cannot show. No second opinion:
+            // the reason is computed engine-side next to the guards it mirrors
+            // (session_avp.c).
             if let why = session.saveBlock.caption {
                 Label(why, systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            // One button, and it only ever makes a NEW save. Overwriting is
-            // on the card you are overwriting, where the thing being replaced
-            // is in front of you.
-            //
-            // The name field this replaces was a leftover: typing into a text
-            // box in a headset is miserable, and the names it took were
-            // s-numbers anyway. Nothing was gained by asking.
-            Button("New save") {
-                session.save(SaveNaming.nextFreeSlotName(existing: session.slots.map(\.name)))
-            }
-                .buttonStyle(.borderedProminent)
-                .disabled(!running || !session.canSave)
-            Divider()
-            // The slots as a Cover Flow deck. Replaces a list of text rows:
-            // the save you want is a place you were standing, and a face you
-            // can recognise beats a name you have to read. Load and Delete
-            // live under the deck, acting on whichever cover is in front.
+            // The slots as a Cover Flow deck. It is a PICKER and owns no
+            // actions: the save you want is a place you were standing, and a
+            // face you can recognise beats a name you have to read.
             SaveCoverFlow(slots: session.slots,
                           gameDirectory: session.gameDirectory,
-                          running: running,
-                          saveBlockCaption: session.saveBlock.caption,
-                          onLoad: { session.load($0.name) },
-                          onOverwrite: { session.save($0.name) },
-                          onDelete: { slotPendingDelete = $0 },
-                          canSave: session.canSave)
-            HStack(spacing: 8) {
-                Button("Rescan") { session.refreshSlots() }
-                    .font(.caption)
-                if session.isSaving {
-                    ProgressView().controlSize(.small)
-                    Text("Saving…").font(.caption).foregroundStyle(.secondary)
+                          selectedIndex: $selectedSave)
+            if let slot = selected {
+                Text(slot.name).font(.caption.monospaced().weight(.semibold))
+                ForEach(CoverFlowMetrics.badges(for: slot), id: \.self) { badge in
+                    Text(badge.caption).font(.caption2).foregroundStyle(.orange)
                 }
             }
+            // Every action in one row, under the cover it acts on. New save is
+            // the only one that is not about the selection.
+            HStack(spacing: 8) {
+                Button("New save") {
+                    session.save(SaveNaming.nextFreeSlotName(existing: session.slots.map(\.name)))
+                }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!running || !session.canSave)
+                if let slot = selected {
+                    Button("Load") { session.load(slot.name) }
+                        // Deliberately NOT gated on the save block: resuming
+                        // from a cold engine is how a session starts.
+                        .disabled(!running || !slot.isLoadable || !slot.isAddressable)
+                    // No name in the label: the cover it replaces is the thing
+                    // in front of you, so repeating "s2" said nothing the
+                    // picture was not already saying.
+                    Button("Overwrite") { session.save(slot.name) }
+                        .disabled(!running || !session.canSave || !slot.isAddressable)
+                    // No .disabled at all, deliberately. Tidying up saves is
+                    // worth doing with the engine stopped.
+                    Button("Delete", role: .destructive) { slotPendingDelete = slot }
+                }
+                Spacer()
+                Button("Rescan") { session.refreshSlots() }
+                if session.isSaving {
+                    ProgressView().controlSize(.small)
+                    Text("Saving…").foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
         }
         .buttonStyle(.bordered)
         .confirmationDialog("Delete this saved game?",
