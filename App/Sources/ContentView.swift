@@ -546,7 +546,11 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .frame(width: 430)
+        // 430 fitted the controls but not the tab bar: six segments sharing it
+        // left about 66pt each, so "Comfort" and "Capture" truncated. A floor
+        // rather than a fixed width, so enlarging the window widens the tabs
+        // instead of only stretching the render surface beside them.
+        .frame(minWidth: 560, maxWidth: 680)
         .background(dashMaterial(14))
     }
 

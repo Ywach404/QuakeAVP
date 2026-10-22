@@ -52,15 +52,19 @@ struct QuakeAVPApp: App {
         // either reopens it or brings it forward, and no counting is needed.
         Window("QuakeAVP", id: Self.consoleWindowID) {
             ContentView()
-                // One fixed size that fits every control and the log; the
-                // console is a debug surface, not a resizable document, and
-                // a drifting window makes its buttons hard to hit in space.
-                // Sized for the full-width level bar -- an undersized frame
-                // makes content overlap and steal taps.
-                .frame(width: 960, height: 900)
+                // A FLOOR, not a fixed size. This was pinned to 960x900, and
+                // .contentSize resizability means the window is exactly its
+                // content -- so the two together took resizing away
+                // altogether, which nothing ever reported because the only
+                // symptom was the tab labels quietly truncating. There is no
+                // second screen in a headset and this window is the only place
+                // to read a number off the running engine, so it has to be
+                // allowed to grow. The minimum is what the full-width level
+                // bar needs; below it, content overlaps and steals taps.
+                .frame(minWidth: 1100, minHeight: 900)
         }
-        .defaultSize(width: 960, height: 900)
-        .windowResizability(.contentSize)
+        .defaultSize(width: 1100, height: 900)
+        .windowResizability(.contentMinSize)
         .onChange(of: scenePhase, initial: true) { _, phase in
             // First time the app is foregrounded, the audio session is finally
             // reachable: bring the device up. Latches inside the sink.
