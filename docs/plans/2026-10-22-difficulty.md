@@ -10,6 +10,21 @@
 
 **Spec:** `docs/designs/2026-10-22-save-browser.md` (difficulty half only; the Cover Flow browser and its render pass are explicitly out of scope here)
 
+## Status: all four tasks DONE 2026-10-22
+
+Commits `646e6b5` (parse), `d1521ba` (persist + launch push), `7d1fa9b`
+(adopt a door, mask a load), and the picker. On `main`, pushed to GitLab.
+Every gate green: Xcode visionOS device build, `make check` 62 TUs, host
+unit suite 272 checks, all five Swift host checks.
+
+Two things changed while building, both recorded in place rather than
+quietly diverged from: the `autoexec.cfg` constraint below was wrong and
+could not be met, and Task 3's rule had to compare against the LAST
+OBSERVED value rather than the stored one or the load mask would have been
+decoration.
+
+**The device checks at the foot of this file have not been run.**
+
 ## Global Constraints
 
 - **Never edit `Sources/QuakeCore/engine/`.** `skill` stays `cvar_t skill = {"skill","1",CVAR_NONE}` at `engine/host.c:74`. Persistence is platform-side. A seventh vendored hunk for this is refused by the spec's anti-goals.
@@ -41,7 +56,7 @@ Input classes the spec implies that no task's own happy-path test exercises. Eac
 **Interfaces:**
 - Produces: `enum Difficulty: Int, CaseIterable { case easy = 0, normal, hard, nightmare }` with `var label: String` ("Easy"/"Normal"/"Hard"/"Nightmare") and `static func from(skillLine: String) -> Difficulty?`. `SaveGameSlot.difficulty: Difficulty?`. `SaveGameHeader.parse` returns `(version: Int, comment: String, difficulty: Difficulty?)`.
 
-- [ ] **Step 1: Write the failing tests** in `tools/swifttest/session_test.swift`
+- [x] **Step 1: Write the failing tests** in `tools/swifttest/session_test.swift`
 
 Cover, with the layout above (a helper that builds a header from version, comment, 16 parm lines and a skill line):
 `parse` on a well-formed 21-line header returns `.hard` for a skill line of `"2"`; returns `.nightmare` for `"3"`; returns `.easy` for `"0"`.
@@ -51,23 +66,23 @@ Cover, with the layout above (a helper that builds a header from version, commen
 `parse` on a header truncated after line 3 returns a non-nil version and comment with `difficulty == nil` — a short file still lists, it just has no pip.
 `Difficulty.allCases.count == 4` and labels are exactly the four strings above.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `./tools/check-swift-session.sh`
 Expected: compile failure, no `Difficulty` in scope.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `Difficulty` to `SaveGames.swift`. `from(skillLine:)` trims whitespace, parses as `Double` (so `"2.000000"` works), rejects a non-integral or out-of-range value, then `Difficulty(rawValue:)`.
 Change `parse`'s split from `maxSplits: 2` to no limit and index element 18, guarding `lines.count > 18`. Keep the existing leniency: a bad or missing skill line must not fail the whole parse.
 Raise `headerBytes` from 256 to 512 — 19 lines of `%f` spawn parms plus a 39-char comment is ~190 bytes, which 256 covers with no margin for a longer comment.
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `./tools/check-swift-session.sh`
 Expected: all pass, including the pre-existing cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add App/Sources/SaveGames.swift tools/swifttest/session_test.swift
@@ -87,25 +102,25 @@ git commit -m "feat(saves): read a save's difficulty off line 19"
 - Consumes: `Difficulty` from Task 1.
 - Produces: `VRSettings.shared.skill: Int`, clamped 0...3 on both get and set, defaulting to 1 (Normal, matching the engine's own default).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 A pure test over the clamp alone, since `VRSettings` is not in the session harness: add `static func clampSkill(_ v: Int) -> Int` to `SaveGames.swift` beside `Difficulty` and test it — `clampSkill(-3) == 0`, `clampSkill(9) == 3`, `clampSkill(2) == 2`. `VRSettings.skill` uses it so the clamp has one definition and a host test.
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `./tools/check-swift-session.sh`
 Expected: no `clampSkill` in scope.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `clampSkill` in `SaveGames.swift`. `VRSettings.skill` in the established `store(...)`/lock shape, keyed `"vr.skill"`, routed through `clampSkill` on read as well as write (Review Focus 3).
 In `QuakeEngineHost`'s bootstrap, after the `volume`/`bgmvolume` forces and **before** the `map range` block, push `skill \(VRSettings.shared.skill)`. It must sit in that engine-thread block because no main-actor `send` can get ahead of it on a dev build.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `./tools/check-swift-session.sh` → pass. Then `make device` → BUILD SUCCEEDED.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add App/Sources/VRSettings.swift App/Sources/QuakeEngineHost.swift App/Sources/SaveGames.swift tools/swifttest/session_test.swift
@@ -125,7 +140,7 @@ git commit -m "feat(difficulty): persist the chosen skill and push it at launch"
 - Consumes: `clampSkill`, `VRSettings.shared.skill`.
 - Produces: `DifficultyWatch`, with `func sample(engineSkill: Int, loadInFlight: Bool) -> Int?` — the pure decision, returning the value to store or `nil` for "leave it alone" — and a `@MainActor` wrapper that polls `QC_CvarValue("skill")` on a 1 s timer and calls `markLoad()` from `SessionState`'s load path, holding the mask for 2 s.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `sample` is where the rule lives, so it is tested alone:
 engine 2, stored 2, no load → `nil` (nothing to do).
@@ -134,23 +149,23 @@ engine 0, stored 3, **load in flight** → `nil` (Review Focus 5: loading an Eas
 engine 9, stored 1, no load → `nil` (never store an out-of-range engine value).
 engine 1, stored 1, load in flight → `nil`.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `./tools/check-swift-session.sh`
 Expected: no `DifficultyWatch` in scope. Add the new file to that script's compile list.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `sample` is pure and total: ignore anything outside 0...3, return `nil` while `loadInFlight`, otherwise return the engine value when it differs from stored.
 The wrapper polls with a `Task` and `Task.sleep`, reads `QC_CvarValue("skill")` (any-thread, safe), and writes `VRSettings.shared.skill` on a non-nil result. `SessionState`'s load path calls `markLoad()` immediately before issuing the command.
 
 Document the known gap in the file header: a `load` typed directly into the console is not seen by `markLoad`, so that one case is adopted as if it were a preference. Masking it properly needs an engine-side signal, which is not worth a hunk.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `./tools/check-swift-session.sh` → pass. `make device` → BUILD SUCCEEDED.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add App/Sources/DifficultyWatch.swift App/Sources/SessionState.swift tools/swifttest/session_test.swift tools/check-swift-session.sh
@@ -167,17 +182,17 @@ git commit -m "feat(difficulty): adopt a hub door's skill change, ignore a load'
 **Interfaces:**
 - Consumes: `Difficulty`, `VRSettings.shared.skill`, `engine.send`.
 
-- [ ] **Step 1: Implement the control**
+- [x] **Step 1: Implement the control**
 
 A four-segment picker over `Difficulty.allCases`, labelled by `label`, bound to a `@State` mirror seeded from `VRSettings.shared.skill` (there is no live cvar read-back in the view layer, matching the existing `vr_hud` comment's reasoning). On change: write `VRSettings.shared.skill`, then `engine.send("skill \(raw)")`.
 
 Beneath it, a caption that is **conditional on a level running**: when one is, it reads that the change takes effect on the next level, because the engine samples `skill` once per spawn (`sv_main.c:1489`). Review Focus 4 — a control that looks like it did something it did not is worse than no control. Use the same enabled/disabled idiom the Save button already uses for "Start a level to save".
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `make device` → BUILD SUCCEEDED. Then `make check` and `./tools/check-unit.sh` → unchanged and green (no C touched, so this is a regression check only).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add App/Sources/ContentView.swift
