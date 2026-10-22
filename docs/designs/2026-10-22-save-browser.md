@@ -103,20 +103,50 @@ a comment about the `start` map being "Quake's in-game hub for difficulty"
 
 ### Capture
 
-The immersive renderer keeps the **most recent completed frame** as a small
-JPEG, one eye, downscaled to cover size (my call: 480x320, quality 0.7,
-re-encoded at most twice a second so it is never on the hot path). It is held
-in memory, not written, until something asks for it.
+A first draft of this said the renderer would keep "the most recent completed
+frame" and write it at save time. **That is not possible and the reasoning
+under it was wrong**; it is recorded here because the wrong version is the
+obvious one and will be proposed again.
 
-Pressing Save in the window writes the engine's save, then writes that held
-frame beside it. Because the window being open pauses the world and the
-immersive layer stops producing new frames, the held frame is already the last
-thing seen *before the panel appeared*, which is exactly what is wanted and
-needs no special casing.
+Three things break it:
 
-A save made from the console (`save s3`) while the immersive space is running
-gets the same held frame. A save made with no immersive space ever opened gets
-none, and falls back below.
+1. **No frame is ever retained.** A drawable's colour texture is valid only
+   inside the frame that queried it; after `encodePresent`/`endSubmission`
+   (`ImmersiveRenderer.swift:513-517`) the app holds no reference and the
+   compositor recycles it. A capture has to be *scheduled in advance*, never
+   taken after the fact.
+2. **The drawable cannot be cheaply copied even in-frame.** Foveation is on
+   with the rate map attached, so raw pixels are warped; the layered path is
+   one 2D-array texture with two amplified slices; and the textures are
+   compositor-owned, which already refused a `pixelFormatView` usage
+   (`QuakeAVPApp.swift:112-117`). THE RULE at `ImmersiveRenderer.swift:280-335`
+   — four device SIGABRTs — forbids fallible work inside the submission window
+   anyway.
+3. **"The last frame before the panel" is the wrong picture.** The panel is
+   summoned by the wrist gauntlet MENU cell or the prayer sign, so the true
+   last pre-panel frame is the player looking at their own wrist, or at two
+   palms held in front of their face. And pause freezes the *sim only*
+   (`in_null.c:519-522`): the render thread and head tracking keep running at
+   90 Hz, so the newest frame while the panel is up is wherever the player
+   happens to be looking now.
+
+**So: a re-render, not a capture.** At save time, inside
+`withConsumer(.immersive)`, one mono un-foveated offscreen pass in the shape
+of `ExportRenderer` (`ExportRenderer.swift:85-99`), drawn from a **remembered
+pre-summon head pose** — the pose from the last frame before the panel was
+summoned, kept for exactly this. The world is frozen, so re-rendering from
+that pose reproduces the pre-panel view precisely, which is what was asked for
+and what neither a cadence nor a live frame gives.
+
+One pass per save is negligible and does not touch the release claim of
+single-pass foveated stereo, which is about the *presented* path. No continuous
+cadence, for that reason.
+
+`Image_WriteJPG` is already compiled in and has no callers
+(`engine/image.c:576-605`), so the C half of writing the file exists.
+
+A save made with no immersive space ever opened has no pose and no pass, gets
+no cover, and falls back below.
 
 ### Where covers live
 
@@ -140,7 +170,14 @@ face, bottom-aligned over a dark gradient:
 
 - the level's full name
 - a difficulty pip, coloured, four states
-- kill count, secrets, and the date
+- kill count and the date
+
+**Not secrets.** `Host_SavegameComment` writes only the level name and
+`kills:%3i/%3i` (`host_cmd.c:1037-1066`); secrets are live client stats, and
+reaching them would mean parsing the `ED_WriteGlobals` block around line 86 —
+a few-KB read instead of the current 256 bytes — and only working if the
+loaded progs.dat marks those globals `DEF_SAVEGLOBAL`. One number is not worth
+a progs dependency. Dropped; my call.
 
 Covers are self-describing so three can be read at once rather than swiping to
 find out. Beneath the carousel: the slot-name field, Save, Load.
@@ -153,10 +190,20 @@ bookmarks, and `AssetDragProvider` — all of which exist for files on disk. The
 `nothingElseIsFirstResponder()` guard is AppKit and has no visionOS meaning;
 it goes.
 
-Refusals keep their current behaviour and become cover states: a foreign
-version shows the cover greyed with the orange version warning and Load
-disabled, and "Start a level to save" / "Can't save during the intermission"
-still gate Save.
+**Delete comes with them.** An earlier draft of this document said the rows
+have no delete affordance and recorded A.'s agreement to adding none. That was
+wrong: the rows carry a per-row destructive Delete with a confirmation dialog
+(`ContentView.swift:1238`, `:1193-1204`, `SessionState.delete` at
+`SessionState.swift:263`). Shipping covers without it is a regression, so the
+cover keeps a Delete and its confirmation, with a hands path and a Sense path.
+
+Refusals keep their current behaviour and become cover states. There are
+**two**, not one: a foreign version shows the cover greyed with the orange
+version warning and Load disabled, and a file whose name the console tokenizer
+cannot take (`isAddressable`, `SaveGames.swift:58`, used at
+`ContentView.swift:1225-1233`) is refused the same way. The first draft carried
+only the version case. "Start a level to save" and "Can't save during the
+intermission" still gate Save.
 
 ### Difficulty: one value, two ways in, persisted outside the engine
 
@@ -164,11 +211,27 @@ Four buttons in the window (Easy, Normal, Hard, Nightmare) send `skill N`.
 That is all the window does; it does not own the value.
 
 Swift owns **persistence**. The stored difficulty is pushed as `skill N` once
-at launch, before any map starts. The engine's live value is read back through
-a read-only snapshot; when it differs from what is stored — which is what a
-hub door or a console `skill` does — the new value is stored. So the hub door
-keeps working untouched and still "sets a true flag", and neither route is
-privileged.
+at launch, from the engine-thread bootstrap block above the dev `map range`
+(`QuakeEngineHost.swift:288-316`) — no main-actor `send` can get ahead of that
+on a dev build. Reading the live value needs no new API: `QC_CvarValue` already
+exists and is any-thread (`QuakeCore.h:535`). When the live value differs from
+what is stored, the new value is stored. So the hub door keeps working
+untouched and still "sets a true flag", and neither route is privileged.
+
+**With one exception, which the naive rule gets wrong.** `Host_Loadgame_f`
+writes the cvar from the save file (`host_cmd.c:1245-1246`), so "adopt any
+engine change" would mean loading an Easy save silently rewrites a persisted
+Nightmare — and the verification below ("set Hard, relaunch, still Hard")
+would pass or fail depending on whether a save was loaded in between. A load
+is not the player expressing a preference; it is resuming a game that already
+had one. A hub door *is* the player expressing a preference. So load-driven
+changes are masked and door-driven ones adopted, which means the adopt has to
+know a load is in flight rather than merely watching the value. **My call,
+flagged for A.**
+
+The launch push also has to not trample `autoexec.cfg`, which this port treats
+as a sanctioned escape hatch (`in_null.c:1341`): if an autoexec sets `skill`,
+that wins for the session.
 
 No engine edit. `skill` stays `CVAR_NONE` in `host.c` and the platform carries
 the archiving, which is the shim-instead-of-a-hunk rule in `working-notes.md`.
@@ -241,9 +304,44 @@ Three of these were put to A. as the builder's calls and confirmed by him on
   swipe-to-index mapping for hands versus Sense.
 - Pip colours, within the four-state scheme.
 
+## Notes a builder should not have to re-derive
+
+- **The component is a re-derivation, not a lift.** The Cover Flow look is
+  about 40 lines of inline modifier chain plus five constants and a
+  `scrollID`/`selectedIndex` sync. Its "wheel accumulator" is
+  `ScrollStepAccumulator`, 12 lines, whose only producer is an `NSEvent`
+  scroll monitor — **zero callers on visionOS**, so carrying its six tests
+  over would be a green suite with nothing on screen, which is the exact trap
+  `working-notes.md` warns about twice. Cards need `.hoverEffect()` to answer
+  gaze, and the tilt depends on `.contentMargins(..., for: .scrollContent)`
+  surviving the port. A 560pt column shows roughly five cards.
+- `com_gamedir` is `Application Support/QuakeAVP/id1`, not the Files-visible
+  `Documents`, so covers beside the saves are invisible to the player. That is
+  fine, but it is a different directory from the existing user-facing
+  `Documents/thumbnails/` map-preview convention (`ContentView.swift:1103`).
+
 ## For A.
 
-Nothing outstanding. The three open calls (Nightmare's visibility, re-capture
-on overwrite, and a delete affordance) were put to him on 2026-10-22 and are
-recorded above under decisions. The sparse phased-out cover was raised as a
-consequence and accepted.
+Settled on 2026-10-22: Nightmare visible, silent re-capture on overwrite, and
+the sparse phased-out cover accepted. The delete question was withdrawn — it
+rested on a false claim of mine and is now a carry-over, above.
+
+Open, and each one changes what gets built:
+
+1. **Does this block release 1?** §6 of `window-menu-report.md` has never been
+   run (the report is DONE_WITH_CONCERNS, "nothing in this round has been on
+   device") and it gates the "2D layer" box, which is *first* in the
+   release-1 order. Either run §6 against the rows now and restate for covers
+   afterwards, or restate once and only ever run the cover version. Related:
+   the difficulty half is small, self-contained and needs no capture work, so
+   it could land alone and leave the browser until after the alpha. The two
+   are coupled only because the cover shows the pip.
+2. **What is in the picture besides the world?** The immersive frame carries
+   the virtual hands, the wrist HUD tiles, the wrist communicator, the
+   world-placed console plane, the reticle and the arc gauges. The anti-goal
+   names only the SwiftUI panel, so "the panel is not in the picture" is not a
+   sufficient criterion. A dedicated re-render can include or omit any of
+   them, and the choice is what the cover *looks like*.
+3. **Should loading a save change your persisted difficulty?** This design
+   says no, masked, for the reasoning above. Overruling it is one line of
+   behaviour and makes the relaunch criterion depend on load history.
