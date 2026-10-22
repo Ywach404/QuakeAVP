@@ -105,6 +105,24 @@ struct SaveCoverFlow: View {
             .id(revision)
         }
         .frame(height: CoverFlowMetrics.cardHeight)
+        // Fade the deck out at its own edges rather than letting the panel cut
+        // it. scrollClipDisabled stops the SCROLL VIEW clipping, but the panel
+        // it sits in is itself a scroll view and clips at its edge, so a card
+        // far enough out was sliced in half mid-cover.
+        //
+        // A steeper opacity curve in the transform cannot fix it: ScrollTransitionPhase
+        // clamps at +-1, so every card past the second flanker sits at the same
+        // phase and would fade to the same value while still being cut. The fade
+        // has to be a property of the DECK's edges, not of a card's distance --
+        // which is what real Cover Flow does, and why its flankers recede into
+        // nothing instead of stopping at a border.
+        .mask {
+            LinearGradient(stops: [.init(color: .clear, location: 0),
+                                   .init(color: .black, location: 0.14),
+                                   .init(color: .black, location: 0.86),
+                                   .init(color: .clear, location: 1)],
+                           startPoint: .leading, endPoint: .trailing)
+        }
         // Two-way, with a guard on each side so the pair cannot oscillate.
         // Animated only model -> scroll; a scroll that sets the model back
         // would fight the gesture.
