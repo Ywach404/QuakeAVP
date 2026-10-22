@@ -2,10 +2,18 @@
 
 Status: SPLIT, 2026-10-22. The **difficulty half is built and merged** to
 main (plan: `docs/plans/2026-10-22-difficulty.md`), though its device checks
-have not been run. The **Cover Flow browser is not built** and waits on a
-headset, since the carousel's feel and the re-render pass both need judging
-there. Two features in one document because the cover shows the difficulty,
-and that dependency runs one way: difficulty works alone.
+have not been run. The **Cover Flow browser is not built**.
+
+**IN SCOPE FOR RELEASE 1**, settled with A. 2026-10-22. The row-based
+save/load it replaces *works* -- A. has used it on device -- so this is not
+a functional gap. It is a LOOK: "it works, it just looks incredibly ugly."
+Since `release-1.md` makes save/load in the window the completion of the
+2D-layer item, and since the first public build is the whole point of the
+release, a save UI A. will not show strangers is a release blocker even
+though the code behind it is finished.
+
+Two features in one document because the cover shows the difficulty, and
+that dependency runs one way: difficulty works alone.
 
 ## Intent
 
@@ -277,8 +285,24 @@ Device, the criteria that cannot pass on a black screen:
 `.superpowers/sdd/window-menu-report.md` §6 items 1-4 and 11 are written
 against rows ("the row must appear", "the orange version warning and a
 disabled Load"). Those checks all still apply but have to be restated against
-covers. **That is a rewrite of part of the release-1 gate, not just new UI**,
-and release-1's "2D layer" box should not be ticked against the old wording.
+covers. **That is a rewrite of part of the release-1 gate, not just new UI.**
+
+**So do not run items 1-4 or 11 against the rows.** They would formally
+verify a UI that is about to be deleted, and then be rewritten and run
+again. Restate once, run once.
+
+The other six items are untouched by the browser and can be run at any time:
+5 (the gauntlet MENU key summons the window), 6 (Sense Options, once per
+press), 7 (the engine menu is gone from both but `togglemenu` still draws
+it), 8 (pause parity across all three summon routes), 9 (the LAN browser
+finds and joins a real desktop server) and 10 (the loopback row lists the
+local host).
+
+**Item 9 is the one worth doing first.** It is the only genuinely unknown
+check in the set, it needs a desktop QuakeSpasm with `listen 1` on the same
+network, and it doubles as the evidence for release-1's separate "Online"
+item. Item 5 needs `vr_wristcomm_off_cmd5 qavp_window` typed once beforehand,
+because that cvar is CVAR_ARCHIVE and A.'s headset holds the old value.
 
 ## Decisions made here
 
