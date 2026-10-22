@@ -44,7 +44,10 @@ struct SaveCoverFlow: View {
     /// The engine's own refusal to save right now, already worded.
     let saveBlockCaption: String?
     let onLoad: (SaveGameSlot) -> Void
+    let onOverwrite: (SaveGameSlot) -> Void
     let onDelete: (SaveGameSlot) -> Void
+    /// Whether saving is possible at all right now (the engine's own refusal).
+    let canSave: Bool
 
     @State private var selectedIndex = 0
     @State private var scrollID: Int?
@@ -52,6 +55,14 @@ struct SaveCoverFlow: View {
     private var selected: SaveGameSlot? {
         slots.indices.contains(selectedIndex) ? slots[selectedIndex] : nil
     }
+
+    /// Identity of the LIST, not of a card. The deck is sorted newest-first,
+    /// so saving prepends and every index shifts; `ForEach` diffs on the slot's
+    /// name while `scrollPosition` is keyed on Int, and that mismatch leaves the
+    /// scroll view holding a stale offset -- a new save's card would not show
+    /// up until something else forced a rebuild. Keying the scroll view on this
+    /// rebuilds it when the list changes shape.
+    private var revision: [String] { slots.map(\.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -65,10 +76,14 @@ struct SaveCoverFlow: View {
                 detail
             }
         }
-        .onChange(of: slots.count) { _, count in
-            // A delete can leave the index past the end, and a new save
-            // arrives at the front because the list is newest-first.
-            if selectedIndex >= count { selectedIndex = max(0, count - 1) }
+        .onChange(of: revision) { old, new in
+            // A delete can leave the index past the end.
+            if selectedIndex >= slots.count { selectedIndex = max(0, slots.count - 1) }
+            // A new save PREPENDS, because the list is newest-first, so every
+            // index shifts under the scroll view. Go to it: you just made it,
+            // it is what you want to be looking at, and it also stops the
+            // selection silently pointing at a different save than before.
+            if slots.count > old.count { selectedIndex = 0 }
         }
     }
 
@@ -99,6 +114,7 @@ struct SaveCoverFlow: View {
             // them at the edge. The hero is unaffected, which is why this
             // reads as "some of them are cut off" rather than as broken.
             .scrollClipDisabled()
+            .id(revision)
         }
         .frame(height: CoverFlowMetrics.cardHeight)
         // Two-way, with a guard on each side so the pair cannot oscillate.
@@ -217,6 +233,12 @@ struct SaveCoverFlow: View {
                         // Deliberately NOT gated on the save block: resuming
                         // from a cold engine is how a session starts.
                         .disabled(!running || !slot.isLoadable || !slot.isAddressable)
+                    // Save over THIS one. The name is in the label, because
+                    // that label is the whole guard -- there is no dialog, and
+                    // overwriting the wrong save is the mistake worth making
+                    // hard rather than overwriting at all.
+                    Button("Overwrite \(slot.name)") { onOverwrite(slot) }
+                        .disabled(!running || !canSave || !slot.isAddressable)
                     // No .disabled at all, deliberately. Tidying up saves is
                     // worth doing with the engine stopped.
                     Button("Delete", role: .destructive) { onDelete(slot) }

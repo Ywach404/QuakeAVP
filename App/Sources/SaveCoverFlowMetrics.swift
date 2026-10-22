@@ -127,11 +127,4 @@ enum SaveNaming {
         // something that cannot collide rather than overwrite s99.
         return "save\(Int(Date().timeIntervalSince1970))"
     }
-
-    /// What the save button should SAY, which is the whole guard against an
-    /// accidental overwrite: no dialog, no second button, the label just tells
-    /// the truth about what is about to happen.
-    static func saveButtonTitle(name: String, existing: [String]) -> String {
-        existing.contains(name) ? "Overwrite \(name)" : "New save"
-    }
 }

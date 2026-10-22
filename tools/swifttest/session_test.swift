@@ -220,11 +220,6 @@ struct SessionTest {
         check(N.nextFreeSlotName(existing: (0..<100).map { "s\($0)" }).hasPrefix("save"),
               "a hundred s-numbers falls back to a name that cannot collide")
 
-        // The label IS the overwrite guard. No dialog, no second button.
-        check(N.saveButtonTitle(name: "s3", existing: ["s0"]) == "New save",
-              "an unused name reads as a new save")
-        check(N.saveButtonTitle(name: "s0", existing: ["s0"]) == "Overwrite s0",
-              "an existing name says so, and says which")
     }
 
     // MARK: - header parsing
