@@ -97,25 +97,30 @@ struct SaveCoverFlow: View {
             .contentMargins(.horizontal,
                             CoverFlowMetrics.contentMargin(forWidth: geometry.size.width),
                             for: .scrollContent)
-            // The inset above deliberately shrinks the measured region to one
-            // card, so every flanker lies OUTSIDE it and the scroll view clips
-            // them at the edge. The hero is unaffected, which is why this
-            // reads as "some of them are cut off" rather than as broken.
-            .scrollClipDisabled()
+            // NO scrollClipDisabled here, deliberately, and it is the second
+            // thing in this view that looked like the fix and was not.
+            //
+            // Allowing the deck to draw outside its bounds let it spill across
+            // the whole window: a large translucent quad hanging off the panel,
+            // in the flat view and the immersive one alike, with the flankers'
+            // corners cut where that spill met the mask's edge. The content it
+            // was drawing is the scroll view's own inset region, which the
+            // margin below deliberately makes enormous.
+            //
+            // Clipping is correct. The mask is what stops it being VISIBLE:
+            // cards fade to nothing before the boundary, so the boundary has
+            // nothing left to cut.
             .id(revision)
         }
         .frame(height: CoverFlowMetrics.cardHeight)
-        // Fade the deck out at its own edges rather than letting the panel cut
-        // it. scrollClipDisabled stops the SCROLL VIEW clipping, but the panel
-        // it sits in is itself a scroll view and clips at its edge, so a card
-        // far enough out was sliced in half mid-cover.
+        // Fade the deck out at its own edges rather than ending it at a border.
         //
-        // A steeper opacity curve in the transform cannot fix it: ScrollTransitionPhase
-        // clamps at +-1, so every card past the second flanker sits at the same
-        // phase and would fade to the same value while still being cut. The fade
-        // has to be a property of the DECK's edges, not of a card's distance --
-        // which is what real Cover Flow does, and why its flankers recede into
-        // nothing instead of stopping at a border.
+        // A steeper opacity curve in the card transform cannot do this:
+        // ScrollTransitionPhase clamps at +-1, so every card past the second
+        // flanker sits at the same phase and would fade to the same value while
+        // still ending in a hard cut. The fade has to be a property of the
+        // DECK's edges, not of a card's distance from centre -- which is what
+        // real Cover Flow does, and why its flankers recede into nothing.
         .mask {
             LinearGradient(stops: [.init(color: .clear, location: 0),
                                    .init(color: .black, location: 0.14),
@@ -141,10 +146,18 @@ struct SaveCoverFlow: View {
         return cardFace(slot, isCentre: isCentre)
             .frame(width: CoverFlowMetrics.cardWidth,
                    height: CoverFlowMetrics.cardHeight)
-            // Before the transform, so the gaze highlight follows the rotated
-            // geometry rather than an untilted rectangle.
-            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10))
-            .hoverEffect()
+            // NO hoverEffect. It was here, applied before the transform so the
+            // gaze highlight would follow the rotated geometry, and it is the
+            // best remaining candidate for the flankers' corners being cut: a
+            // hover effect clips to its content shape, and that shape is the
+            // card's UNROTATED rectangle, so a rotated card loses whatever
+            // falls outside it -- which is precisely its corners.
+            //
+            // Nothing else in this window uses hoverEffect, so it was a new
+            // pattern rather than a house one, and a correctly drawn card is
+            // worth more than a gaze highlight. If the deck feels dead to look
+            // at without it, the fix is to apply it AFTER the transform and
+            // accept an untilted highlight.
             .zIndex(Double(slots.count - abs(index - selectedIndex)))
             .scrollTransition(.interactive, axis: .horizontal) { content, phase in
                 content
