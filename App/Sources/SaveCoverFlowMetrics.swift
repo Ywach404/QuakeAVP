@@ -106,3 +106,32 @@ enum CoverFlowMetrics {
         gameDirectory == nil ? "Waiting for the engine." : "No saved games yet."
     }
 }
+
+/// Naming a new save.
+///
+/// The name field used to default to a hardcoded "s0", left over from when
+/// twelve numbered quick-slot buttons were how you chose a slot. With the deck
+/// doing that job, a fixed default means the first save of every session
+/// silently overwrites the same file -- which is what it did.
+enum SaveNaming {
+
+    /// The lowest `s<n>` not already taken.
+    ///
+    /// Counting the saves would be wrong: delete s1 of three and the count
+    /// says 2, which is taken. The question is which name is FREE, not how
+    /// many there are.
+    static func nextFreeSlotName(existing: [String]) -> String {
+        let taken = Set(existing)
+        for n in 0..<100 where !taken.contains("s\(n)") { return "s\(n)" }
+        // A hundred saves and every one of them an s-number. Fall back to
+        // something that cannot collide rather than overwrite s99.
+        return "save\(Int(Date().timeIntervalSince1970))"
+    }
+
+    /// What the save button should SAY, which is the whole guard against an
+    /// accidental overwrite: no dialog, no second button, the label just tells
+    /// the truth about what is about to happen.
+    static func saveButtonTitle(name: String, existing: [String]) -> String {
+        existing.contains(name) ? "Overwrite \(name)" : "New save"
+    }
+}

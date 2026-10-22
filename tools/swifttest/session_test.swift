@@ -43,6 +43,7 @@ struct SessionTest {
         runDifficultyTests()
         runDifficultyWatchTests()
         runCoverFlowTests()
+        runSaveNamingTests()
         runSlotListTests()
         runConsoleArgumentTests()
         print("PASSED")
@@ -202,6 +203,32 @@ struct SessionTest {
         check(CoverFlowMetrics.emptyMessage(gameDirectory: URL(fileURLWithPath: "/tmp"))
                 == "No saved games yet.",
               "a directory with nothing in it reads as no saved games")
+    }
+
+    // MARK: - naming a new save
+
+    static func runSaveNamingTests() {
+        typealias N = SaveNaming
+
+        check(N.nextFreeSlotName(existing: []) == "s0", "the first save is s0")
+        check(N.nextFreeSlotName(existing: ["s0"]) == "s1", "the next one does not overwrite it")
+        check(N.nextFreeSlotName(existing: ["s0", "s1", "s2"]) == "s3", "and keeps counting up")
+
+        // Counting the saves would be wrong here, which is the point of the
+        // function: with s1 deleted there are two saves, and "s2" is taken.
+        check(N.nextFreeSlotName(existing: ["s0", "s2"]) == "s1",
+              "a gap left by a delete is filled, not skipped")
+        check(N.nextFreeSlotName(existing: ["quicksave", "my run"]) == "s0",
+              "names that are not s-numbers do not consume a slot")
+
+        check(N.nextFreeSlotName(existing: (0..<100).map { "s\($0)" }).hasPrefix("save"),
+              "a hundred s-numbers falls back to a name that cannot collide")
+
+        // The label IS the overwrite guard. No dialog, no second button.
+        check(N.saveButtonTitle(name: "s3", existing: ["s0"]) == "New save",
+              "an unused name reads as a new save")
+        check(N.saveButtonTitle(name: "s0", existing: ["s0"]) == "Overwrite s0",
+              "an existing name says so, and says which")
     }
 
     // MARK: - header parsing

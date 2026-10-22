@@ -151,6 +151,9 @@ struct ContentView: View {
     // reach Cbuf.
     @State private var session = SessionState()
     @State private var saveName = "s0"
+    /// Set once the player edits the name, so the auto-suggestion stops
+    /// replacing what they chose.
+    @State private var typedName = false
     @State private var joinAddress = ""
     @State private var slotPendingDelete: SaveGameSlot?
     @State private var killAI = false
@@ -1204,10 +1207,18 @@ struct ContentView: View {
             HStack {
                 TextField("Save name", text: Binding(
                     get: { saveName },
-                    set: { saveName = ConsoleArgument.sanitizedSavegameName($0) }))
+                    set: { saveName = ConsoleArgument.sanitizedSavegameName($0); typedName = true }))
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
-                Button("Save") { session.save(saveName) }
+                // The label is the overwrite guard: it says "New save" for a
+                // free name and "Overwrite s2" for a taken one, so the thing
+                // about to happen is written on the button being pressed. No
+                // dialog -- saving is a thing you do constantly in Quake, and
+                // a confirmation on every one would be worse than the risk.
+                Button(SaveNaming.saveButtonTitle(name: saveName,
+                                                  existing: session.slots.map(\.name))) {
+                    session.save(saveName)
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(!running || !session.canSave
                               || !ConsoleArgument.isValidSavegameName(saveName))
@@ -1236,6 +1247,15 @@ struct ContentView: View {
             }
         }
         .buttonStyle(.bordered)
+        // Seed the name with the first FREE slot, and keep it current as saves
+        // arrive and go -- but never over a name the player typed themselves.
+        // It used to be a hardcoded "s0", left from when twelve numbered
+        // buttons were how you picked a slot, so the first save of every
+        // session quietly overwrote the same file.
+        .onChange(of: session.slots.map(\.name), initial: true) { _, names in
+            guard !typedName else { return }
+            saveName = SaveNaming.nextFreeSlotName(existing: names)
+        }
         .confirmationDialog("Delete this saved game?",
                             isPresented: Binding(get: { slotPendingDelete != nil },
                                                  set: { if !$0 { slotPendingDelete = nil } }),
