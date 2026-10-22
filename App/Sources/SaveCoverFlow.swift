@@ -94,6 +94,11 @@ struct SaveCoverFlow: View {
             .contentMargins(.horizontal,
                             CoverFlowMetrics.contentMargin(forWidth: geometry.size.width),
                             for: .scrollContent)
+            // The inset above deliberately shrinks the measured region to one
+            // card, so every flanker lies OUTSIDE it and the scroll view clips
+            // them at the edge. The hero is unaffected, which is why this
+            // reads as "some of them are cut off" rather than as broken.
+            .scrollClipDisabled()
         }
         .frame(height: CoverFlowMetrics.cardHeight)
         // Two-way, with a guard on each side so the pair cannot oscillate.
@@ -129,10 +134,17 @@ struct SaveCoverFlow: View {
                     .opacity(1 - 0.25 * abs(phase.value))
             }
             .onTapGesture {
-                // A flanker selects; the hero loads. Tapping the thing you
-                // are already looking at is the only unambiguous activate
-                // gesture when there is no pointer.
-                if isCentre { onLoad(slot) } else { selectedIndex = index }
+                // SELECTS. Never loads.
+                //
+                // A first version loaded when you tapped the centre card, and
+                // it fired by accident: the gesture that summons the window
+                // releases over the window the instant it appears, lands as a
+                // tap on whatever card is in front, and silently threw away
+                // the running game. The console caught it -- a summon line
+                // followed immediately by a load. Loading is destructive and
+                // gets an explicit button, the way the rows this replaces had
+                // one.
+                selectedIndex = index
             }
             .accessibilityLabel("\(slot.name), \(slot.displayText)")
     }

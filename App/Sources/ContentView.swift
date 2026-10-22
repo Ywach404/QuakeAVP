@@ -1098,6 +1098,17 @@ struct ContentView: View {
                 .onChange(of: difficulty) { _, new in
                     VRSettings.shared.skill = new.rawValue
                     engine.send("skill \(new.rawValue)")
+                    // Deliberately loud. The picker reported as doing nothing
+                    // on device and the console carried no trace either way,
+                    // so this says what was sent and what the engine read back
+                    // a moment later. `send` is a no-op unless the engine is
+                    // running, which is the first thing worth ruling out.
+                    engine.note("[skill] picked \(new.label) (\(new.rawValue)); "
+                                + "engine status \(engine.status == .running ? "running" : "NOT running")")
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(250))
+                        engine.note("[skill] cvar now \(Int(QC_CvarValue("skill")))")
+                    }
                 }
                 // The engine samples `skill` ONCE when a level spawns
                 // (sv_main.c:1489), so a press mid-level cannot change the
@@ -1204,19 +1215,6 @@ struct ContentView: View {
             Text("Letters, digits, - and _ only; a space or a semicolon would "
                  + "split the command before the engine saw the name.")
                 .font(.caption2).foregroundStyle(.secondary)
-            // The engine menu's own twelve slots (menu.c, s0...s11), so a
-            // slot saved here is the slot `load s3` loads.
-            Text("Quick slots").font(.caption).foregroundStyle(.secondary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(SaveGameHeader.quickSlotNames, id: \.self) { slot in
-                        Button(slot) { saveName = slot; session.save(slot) }
-                            .font(.caption.monospacedDigit())
-                    }
-                }
-                .padding(.bottom, 2)
-            }
-            .disabled(!running || !session.canSave)
             Divider()
             // The slots as a Cover Flow deck. Replaces a list of text rows:
             // the save you want is a place you were standing, and a face you
