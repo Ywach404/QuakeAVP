@@ -40,9 +40,73 @@ struct SessionTest {
 
     static func main() {
         runHeaderParseTests()
+        runDifficultyTests()
         runSlotListTests()
         runConsoleArgumentTests()
         print("PASSED")
+    }
+
+    // MARK: - difficulty
+
+    /// A whole savegame header the way Host_Savegame_f writes it: version,
+    /// comment, NUM_SPAWN_PARMS (16) floats, current_skill, map name, time.
+    /// Built from that description rather than committed, for the same reason
+    /// the two-line fixtures above are.
+    static func saveHeader(skill: String, version: Int = 5,
+                           parms: Int = 16) -> String {
+        let comment = engineComment(level: "the Slipgate Complex", kills: 7, total: 31)
+        var s = "\(version)\n\(comment)\n"
+        for _ in 0..<parms { s += "0.000000\n" }
+        s += "\(skill)\ne1m1\n12.345000\n"
+        return s
+    }
+
+    static func runDifficultyTests() {
+        // The four the engine clamps to (sv_main.c:1489-1492).
+        check(Difficulty.allCases.count == 4, "there are exactly four difficulties")
+        check(Difficulty.allCases.map(\.label) == ["Easy", "Normal", "Hard", "Nightmare"],
+              "the labels are the four Quake names, in skill order")
+        check(Difficulty.easy.rawValue == 0 && Difficulty.nightmare.rawValue == 3,
+              "the raw values are the engine's skill numbers")
+
+        check(Difficulty.from(skillLine: "0") == .easy, "skill 0 is Easy")
+        check(Difficulty.from(skillLine: "2") == .hard, "skill 2 is Hard")
+        check(Difficulty.from(skillLine: "3") == .nightmare, "skill 3 is Nightmare")
+        // Written by fprintf("%d") today, but a float-formatted line is the
+        // obvious thing a mod or a hand edit produces, and it means the same.
+        check(Difficulty.from(skillLine: "2.000000") == .hard,
+              "a float-formatted skill line still reads as Hard")
+        check(Difficulty.from(skillLine: " 1 ") == .normal,
+              "surrounding whitespace is ignored")
+
+        // Out of range is REFUSED, never clamped: clamping would label a save
+        // with a difficulty it was not played on.
+        check(Difficulty.from(skillLine: "7") == nil, "a skill above 3 is refused")
+        check(Difficulty.from(skillLine: "-1") == nil, "a negative skill is refused")
+        check(Difficulty.from(skillLine: "1.5") == nil, "a non-integral skill is refused")
+        check(Difficulty.from(skillLine: "") == nil, "an empty skill line is refused")
+        check(Difficulty.from(skillLine: "x") == nil, "a non-numeric skill line is refused")
+
+        // Through the real parse, at the real line.
+        check(SaveGameHeader.parse(saveHeader(skill: "2"))?.difficulty == .hard,
+              "the parse finds the difficulty on line 19")
+        check(SaveGameHeader.parse(saveHeader(skill: "0"))?.difficulty == .easy,
+              "and on line 19 for Easy too")
+
+        // A truncated file still LISTS, it just has no pip. A save you cannot
+        // describe is better than a row that vanished.
+        let short = SaveGameHeader.parse(saveHeader(skill: "2", parms: 3))
+        check(short != nil, "a header with too few spawn parms still parses")
+        check(short?.difficulty == nil, "and reports no difficulty rather than guessing")
+        check(SaveGameHeader.parse("5\n\(engineComment(level: "x", kills: 0, total: 0))\n")?
+                .difficulty == nil,
+              "the old two-line fixture has no difficulty and does not crash")
+
+        // The clamp VRSettings.skill is built on, kept here so it has one
+        // definition and a host test.
+        check(clampSkill(-3) == 0, "a stored skill below range clamps to Easy")
+        check(clampSkill(9) == 3, "a stored skill above range clamps to Nightmare")
+        check(clampSkill(2) == 2, "a stored skill in range is untouched")
     }
 
     // MARK: - header parsing

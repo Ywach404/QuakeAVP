@@ -25,6 +25,48 @@
 
 import Foundation
 
+/// Quake's four skill levels, which the engine clamps to 0...3 when a level
+/// spawns (`engine/sv_main.c:1489-1492`). The raw values ARE the `skill` cvar's
+/// numbers, so a `Difficulty` can be sent to the console as-is.
+enum Difficulty: Int, CaseIterable, Hashable, Sendable {
+    case easy = 0
+    case normal = 1
+    case hard = 2
+    case nightmare = 3
+
+    var label: String {
+        switch self {
+        case .easy: return "Easy"
+        case .normal: return "Normal"
+        case .hard: return "Hard"
+        case .nightmare: return "Nightmare"
+        }
+    }
+
+    /// Read a savegame's `current_skill` line. `Host_Savegame_f` writes it with
+    /// `fprintf("%d")`, but a float-formatted line is what a mod or a hand edit
+    /// produces and it means the same thing, so both are accepted.
+    ///
+    /// Out of range is REFUSED rather than clamped. Clamping here would label a
+    /// save with a difficulty it was not played on, which is worse than showing
+    /// no pip at all -- the display can say nothing, but it must not lie.
+    static func from(skillLine: String) -> Difficulty? {
+        let trimmed = skillLine.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let d = Double(trimmed),
+              d == d.rounded(), let i = Int(exactly: d.rounded())
+        else { return nil }
+        return Difficulty(rawValue: i)
+    }
+}
+
+/// Clamp a stored skill into the engine's range. The defaults domain is not
+/// trustworthy input -- it survives downgrades and can be written by hand -- so
+/// this is applied on read as well as on write, and lives here so it has one
+/// definition and a host test.
+func clampSkill(_ value: Int) -> Int {
+    min(max(value, 0), 3)
+}
+
 /// One `.sav` in the current game directory, as the slot list shows it.
 struct SaveGameSlot: Identifiable, Hashable {
     /// The savegame name without the extension -- exactly the argument
@@ -35,6 +77,10 @@ struct SaveGameSlot: Identifiable, Hashable {
     let version: Int
     /// The raw comment line, underscores and all, as written.
     let comment: String
+    /// The skill the save was written on, from its own `current_skill` line.
+    /// nil when the file is too short or the line is unreadable: the slot
+    /// still lists, it just cannot say which difficulty it was.
+    let difficulty: Difficulty?
     let modified: Date
 
     var id: String { name }
@@ -72,7 +118,10 @@ enum SaveGameHeader {
 
     /// Enough bytes for the version line and the full comment line with room
     /// to spare; a savegame's third line is already spawn parms.
-    private static let headerBytes = 256
+    // 19 lines: a version, a 39-char comment, sixteen "%f" spawn parms at
+    // nine bytes each, then the skill line -- about 190 bytes, which 256
+    // covered with no margin for a longer comment.
+    private static let headerBytes = 512
 
     /// Underscores back to spaces, trailing padding trimmed -- M_ScanSaves'
     /// display rule.
@@ -87,21 +136,37 @@ enum SaveGameHeader {
     /// Deliberately lenient about the comment and strict about the version:
     /// the version is what decides whether `load` will work, while the
     /// comment is cosmetic and a mod could write anything into it.
-    static func parse(_ header: String) -> (version: Int, comment: String)? {
+    static func parse(_ header: String) -> (version: Int, comment: String,
+                                            difficulty: Difficulty?)? {
         // `\n` only: Host_Savegame_f writes with fprintf to a text-mode FILE,
         // and nothing in the format uses a bare CR.
-        let lines = header.split(separator: "\n", maxSplits: 2,
+        //
+        // Split far enough to reach current_skill. The layout is version,
+        // comment, NUM_SPAWN_PARMS (16, engine/server.h:86) floats, skill, map
+        // name, time -- so skill is line 19, element 18. The old limit of 2
+        // stopped at the comment.
+        let lines = header.split(separator: "\n", maxSplits: skillLineIndex + 1,
                                  omittingEmptySubsequences: false)
         guard lines.count >= 2,
               let version = Int(lines[0].trimmingCharacters(in: .whitespaces))
         else { return nil }
-        return (version, String(lines[1]))
+        // A short or malformed file still parses: it lists with no pip rather
+        // than vanishing from the browser.
+        let difficulty = lines.count > skillLineIndex
+            ? Difficulty.from(skillLine: String(lines[skillLineIndex]))
+            : nil
+        return (version, String(lines[1]), difficulty)
     }
+
+    /// Zero-based index of `current_skill`: one version line, one comment line,
+    /// then NUM_SPAWN_PARMS of them.
+    static let skillLineIndex = 2 + 16
 
     /// Read just the header off disk. Opens, reads one small chunk, closes --
     /// a `.sav` is every edict in the level and must never be slurped whole
     /// to show a row in a list.
-    static func readHeader(of url: URL) -> (version: Int, comment: String)? {
+    static func readHeader(of url: URL) -> (version: Int, comment: String,
+                                            difficulty: Difficulty?)? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: headerBytes), !data.isEmpty
@@ -145,6 +210,7 @@ enum SaveGameHeader {
                                       url: url,
                                       version: header.version,
                                       comment: header.comment,
+                                      difficulty: header.difficulty,
                                       modified: modified))
         }
         slots.sort { $0.modified > $1.modified }
