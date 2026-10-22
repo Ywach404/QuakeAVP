@@ -171,6 +171,14 @@ struct SessionTest {
         check(M.visibleCardCount(forWidth: 0) == 1,
               "there is always at least the hero")
 
+        // The deck is TALLER than a card. A card tilted in perspective is
+        // taller than its flat self, and a container of exactly cardHeight is
+        // where the corners were being cut.
+        check(M.deckHeight > M.cardHeight,
+              "the deck leaves headroom for a tilted card (\(M.deckHeight) vs \(M.cardHeight))")
+        check(M.deckHeight >= M.cardHeight * 1.2,
+              "and enough of it to cover a 55 degree turn")
+
         // The two orange refusals are independent and a save can be both.
         let both = SaveGameSlot(name: "my save", url: URL(fileURLWithPath: "/tmp/my save.sav"),
                                 version: 4, comment: "", difficulty: nil,

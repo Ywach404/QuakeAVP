@@ -58,7 +58,7 @@ struct SaveCoverFlow: View {
             if slots.isEmpty {
                 Text(CoverFlowMetrics.emptyMessage(gameDirectory: gameDirectory))
                     .font(.caption).foregroundStyle(.secondary)
-                    .frame(height: CoverFlowMetrics.cardHeight,
+                    .frame(height: CoverFlowMetrics.deckHeight,
                            alignment: .center)
             } else {
                 carousel
@@ -112,7 +112,7 @@ struct SaveCoverFlow: View {
             // nothing left to cut.
             .id(revision)
         }
-        .frame(height: CoverFlowMetrics.cardHeight)
+        .frame(height: CoverFlowMetrics.deckHeight)
         // Fade the deck out at its own edges rather than ending it at a border.
         //
         // A steeper opacity curve in the card transform cannot do this:
@@ -146,18 +146,13 @@ struct SaveCoverFlow: View {
         return cardFace(slot, isCentre: isCentre)
             .frame(width: CoverFlowMetrics.cardWidth,
                    height: CoverFlowMetrics.cardHeight)
-            // NO hoverEffect. It was here, applied before the transform so the
-            // gaze highlight would follow the rotated geometry, and it is the
-            // best remaining candidate for the flankers' corners being cut: a
-            // hover effect clips to its content shape, and that shape is the
-            // card's UNROTATED rectangle, so a rotated card loses whatever
-            // falls outside it -- which is precisely its corners.
-            //
-            // Nothing else in this window uses hoverEffect, so it was a new
-            // pattern rather than a house one, and a correctly drawn card is
-            // worth more than a gaze highlight. If the deck feels dead to look
-            // at without it, the fix is to apply it AFTER the transform and
-            // accept an untilted highlight.
+            // Before the transform, so the gaze highlight follows the rotated
+            // geometry rather than an untilted rectangle. This was briefly
+            // removed on a theory that it clipped the corners; it did not, and
+            // the giveaway was that it had been in place while the deck looked
+            // right. The corners were the container's height, below.
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10))
+            .hoverEffect()
             .zIndex(Double(slots.count - abs(index - selectedIndex)))
             .scrollTransition(.interactive, axis: .horizontal) { content, phase in
                 content

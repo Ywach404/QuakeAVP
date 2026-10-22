@@ -57,6 +57,22 @@ enum CoverFlowMetrics {
     /// Centre-to-centre spacing of the stacked flankers.
     static var pitch: CGFloat { cardWidth * (1 - flankerOverlapFraction) }
 
+    /// The deck's own height, which is NOT a card's height.
+    ///
+    /// A card tilted in perspective is taller than its flat self: the near
+    /// edge is magnified toward the viewer, so a 55-degree turn pushes the top
+    /// and bottom corners outside the rectangle the card occupies when facing
+    /// you. Give the container exactly `cardHeight` and that is where those
+    /// corners get cut -- which is what was happening, and why disabling the
+    /// scroll view's clip appeared to cure it: the card was then free to draw
+    /// outside a frame that was simply too small, at the cost of spilling
+    /// across the whole window.
+    ///
+    /// Headroom is the actual fix. The multiplier is empirical rather than
+    /// derived -- the exact magnification depends on `perspective`, which is
+    /// a device-check dial -- so it is deliberately generous.
+    static var deckHeight: CGFloat { cardHeight * 1.35 }
+
     /// The horizontal scroll-content inset.
     ///
     /// NOT centring, despite looking like it. `scrollTransition` and
