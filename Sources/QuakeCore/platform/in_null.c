@@ -1306,15 +1306,6 @@ static void IN_SnapTurn (float degrees)
 	if (!isfinite (degrees))
 		return;
 
-	/* The chokepoint for every deliberate turn, so the one guard that
-	   cannot be skipped lives here. A non-finite angle written into
-	   qr_body_yaw is not a glitch to ride out: the adopt guard in IN_Move
-	   compares the yaw against what it last wrote, and a NaN fails that
-	   compare forever, so neither a spawn, a teleport nor a recenter gets
-	   the view back. Relaunching is the only way out. */
-	if (!isfinite (degrees))
-		return;
-
 	IN_AbsorbHeadOffset ();
 	IN_RotateBodyVec (qr_head_absorbed, degrees);
 
