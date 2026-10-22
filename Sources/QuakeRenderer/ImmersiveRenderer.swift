@@ -824,18 +824,6 @@ final class ImmersiveRenderer {
             }
             lastAnchorZ = anchorZ
 
-            // Calibration readout. The game floor is the player's hull
-            // bottom; where it lands in the room is the one number this
-            // whole feature exists to control, so publish it rather than
-            // trusting that the arithmetic above did what it claims.
-            let gameFloorZ = packet.vieworg.2 - packet.viewheight - FloorMath.hullBottom
-            let gameFloorRoomY = (gameFloorZ - anchorZ) * s
-            let realFloorRoomY = floorRaw.map {
-                FloorMath.floorYRoom(raw: $0, correction: recenterCorrection)
-            }
-            FloorReadout.publish(
-                gameFloorAboveReal: realFloorRoomY.map { gameFloorRoomY - $0 },
-                headAboveGameFloor: originFromDevice.columns.3.y - gameFloorRoomY)
             // The engine is told how far the rendered eye sits above
             // vieworg: the anchor's offset plus the head's height above the
             // tracking origin. Every engine-side reconstruction of the eye

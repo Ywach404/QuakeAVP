@@ -1595,14 +1595,20 @@ struct ContentView: View {
                 get: { debug.strobeDebug }, set: { debug.strobeDebug = $0 }))
             Toggle("Turn trigger meter (stick/clutch/flick)", isOn: Binding(
                 get: { debug.turnDebug }, set: { debug.turnDebug = $0 }))
-            Toggle("Fire threshold meter (pinch/curl)", isOn: Binding(
+            Toggle("Fire threshold meter (pinch)", isOn: Binding(
                 get: { debug.fireDebug }, set: { debug.fireDebug = $0 }))
-            // HUD dock placement. Sliders, not typed fields -- typing into a
-            // text box in the headset is miserable; dragging is what you want in
-            // space. Position in cm, rotation on the gyro below.
+            // Where the DEBUG METERS above are docked -- not the game HUD,
+            // which is placed by vr_hud_* and the tile editor. These feed
+            // VRSettings.hud* , read only by HandInput's hudDock, whose
+            // callers are all guarded on a meter being on: so nothing here
+            // moves anything until one of the toggles above is set.
+            //
+            // Sliders, not typed fields -- typing into a text box in the
+            // headset is miserable; dragging is what you want in space.
+            // Position in cm, rotation on the gyro below.
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("HUD Position").font(.caption.weight(.semibold))
+                    Text("Debug meter placement").font(.caption.weight(.semibold))
                     Spacer()
                     Button("Reset") { resetHUDPlacement() }.font(.caption)
                 }
@@ -1612,7 +1618,7 @@ struct ContentView: View {
                     VRSettings.shared.hudUp = $0; ProfileStore.shared.current.hudUp = $0 }
                 transformSlider("Side", $hudSideUI, -0.3...0.3, unit: "cm", display: 100) {
                     VRSettings.shared.hudSide = $0; ProfileStore.shared.current.hudSide = $0 }
-                Text("HUD Transform").font(.caption.weight(.semibold)).padding(.top, 2)
+                Text("Meter rotation").font(.caption.weight(.semibold)).padding(.top, 2)
                 HStack(alignment: .center, spacing: 14) {
                     gyroDial(pitch: $hudPitchUI, yaw: $hudYawUI, roll: $hudRollUI) { p, y, r in
                         VRSettings.shared.hudPitch = p; VRSettings.shared.hudYaw = y
