@@ -12,7 +12,34 @@
 
 ## Status
 
-- [ ] Task 1 · [ ] Task 2 · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
+- [x] **Task 1 — DONE and device-verified 2026-10-22** · [ ] Task 2 · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
+
+## Task 1 outcome
+
+Built, and confirmed working on device by A. Four defects found only by
+putting it on the headset, all fixed:
+
+1. **Tapping the hero card loaded it, and fired by accident.** The summon
+   gesture releases over the window the instant it appears and landed as a
+   tap, silently discarding the running game. Tapping now only selects; Load
+   is the explicit button the rows always had.
+2. **The flankers were clipped.** The content inset deliberately shrinks the
+   measured region to one card, so every flanker lies outside it and the
+   scroll view cut them. `scrollClipDisabled()`.
+3. **A new save's card did not appear** until something forced a rebuild. The
+   deck sorts newest-first, so a save prepends and every index shifts;
+   `ForEach` diffs on name while `scrollPosition` is keyed on Int. The source
+   component's `id()` on the scroll view existed for exactly this and was
+   noted as needed when sorting by mtime -- and dropped anyway. Restored, and
+   a new save now takes the selection.
+4. **Overwrite was unreachable** except by typing an existing name. It is a
+   button on the selected card now, naming what it replaces. The name field
+   is gone: typing in a headset is miserable and the deck chooses the slot.
+
+Lesson for the remaining tasks: both 2 and 3 were hazards handed over in the
+reconnaissance and lost between reading them and writing the code. Re-read
+the hazard list in each task immediately before implementing it, not before
+planning it.
 
 ## Global Constraints
 
