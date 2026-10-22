@@ -121,10 +121,20 @@ struct SaveCoverFlow: View {
         // still ending in a hard cut. The fade has to be a property of the
         // DECK's edges, not of a card's distance from centre -- which is what
         // real Cover Flow does, and why its flankers recede into nothing.
+        // NARROW. A 14% fade was eating the near flankers' outer corners: a
+        // tilted card's silhouette is sloped, so its top and bottom outer
+        // extremities reach further out than its middle and dissolve first,
+        // which reads exactly like a clipped corner -- the thing this mask was
+        // added to prevent.
+        //
+        // The near flankers never approach the deck's edge, so the fade only
+        // has to soften the far ones. 6% is about a card's half-width at the
+        // 560pt column floor, which is enough to turn a hard cut into a
+        // recession and narrow enough to leave every legible card alone.
         .mask {
             LinearGradient(stops: [.init(color: .clear, location: 0),
-                                   .init(color: .black, location: 0.14),
-                                   .init(color: .black, location: 0.86),
+                                   .init(color: .black, location: 0.06),
+                                   .init(color: .black, location: 0.94),
                                    .init(color: .clear, location: 1)],
                            startPoint: .leading, endPoint: .trailing)
         }

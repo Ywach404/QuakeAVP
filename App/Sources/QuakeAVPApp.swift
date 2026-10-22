@@ -61,9 +61,16 @@ struct QuakeAVPApp: App {
                 // to read a number off the running engine, so it has to be
                 // allowed to grow. The minimum is what the full-width level
                 // bar needs; below it, content overlaps and steals taps.
-                .frame(minWidth: 1100, minHeight: 900)
+                //
+                // Raised again 2026-10-22: 1100x900 still truncated the header
+                // line, squeezed the multiplayer block and cut the console
+                // text, and A. was resizing the window by hand on every launch
+                // to get a layout that fits. The default is now about what he
+                // was dragging it to. A size that has to be corrected before
+                // the window is usable is not a default.
+                .frame(minWidth: 1240, minHeight: 980)
         }
-        .defaultSize(width: 1100, height: 900)
+        .defaultSize(width: 1440, height: 1040)
         .windowResizability(.contentMinSize)
         .onChange(of: scenePhase, initial: true) { _, phase in
             // First time the app is foregrounded, the audio session is finally
