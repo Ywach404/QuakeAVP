@@ -1,6 +1,13 @@
 # Aligning the level to the room — design
 
-Status: built on `feat/room-align`, 2026-10-20. Not proven on device. An
+Status: PARKED, 2026-10-22. Built and merged to main, but off by default
+(`vr_align_room` is CVAR_NONE, so it does not survive a relaunch) and its
+panel controls were removed in a0705c6 -- the console is the only way in now.
+Keeping the walls aligned *while playing* cannot work from a one-shot turn,
+which this document already listed as a non-goal; see the floor half, which
+does hold. The plane detection underneath it is kept because
+`2026-10-17-room-obstacles.md` needs exactly that data. Not proven on device:
+the room-only check below was never run. An
 experiment with a known exit; see "Failsafes" and "The risk, stated plainly".
 
 ## Intent

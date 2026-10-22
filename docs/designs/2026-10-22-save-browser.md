@@ -1,8 +1,11 @@
 # A Cover Flow save browser, and a difficulty that sticks — design
 
-Status: proposed, 2026-10-22. Not built. Two features in one document because
-the cover shows the difficulty, so the browser wants the difficulty work to
-exist first.
+Status: SPLIT, 2026-10-22. The **difficulty half is built and merged** to
+main (plan: `docs/plans/2026-10-22-difficulty.md`), though its device checks
+have not been run. The **Cover Flow browser is not built** and waits on a
+headset, since the carousel's feel and the re-render pass both need judging
+there. Two features in one document because the cover shows the difficulty,
+and that dependency runs one way: difficulty works alone.
 
 ## Intent
 

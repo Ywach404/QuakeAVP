@@ -36,3 +36,7 @@ pop.lmp
 # itself. Every real file in here is still ignored; do not relax this further.
 App/DevGameData/music/*
 !App/DevGameData/music/.gitkeep
+
+# Session scratch: brainstorming mockups and round reports. Already in
+# .git/info/exclude on this clone, which a fresh clone does not get.
+.superpowers/

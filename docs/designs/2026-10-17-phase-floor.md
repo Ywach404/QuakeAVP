@@ -1,7 +1,9 @@
 # Feet on the real floor — design
 
-Status: proposed, 2026-10-17. Not built. The second design,
-`2026-10-17-room-obstacles.md`, depends on this one.
+Status: BUILT and merged to main, 2026-10-21 (MR 20, folded into the
+room-align fast-forward). Confirmed on device: the game floor stays under the
+player's feet, including over stairs. The second design,
+`2026-10-17-room-obstacles.md`, depends on this one and is still proposed.
 
 ## Intent
 

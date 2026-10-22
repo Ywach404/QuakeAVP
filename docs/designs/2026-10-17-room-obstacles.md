@@ -1,8 +1,10 @@
 # Real furniture, solid to monsters — design
 
-Status: proposed, 2026-10-17. Not built. Depends on
-`2026-10-17-phase-floor.md`: the boxes stand on the Quake floor,
-and that floor must be the real floor first.
+Status: proposed, 2026-10-17. Not built. Its dependency IS now built:
+`2026-10-17-phase-floor.md` shipped 2026-10-21, so the Quake floor is the
+real floor and the boxes have something to stand on. Two decisions at the
+foot of this document still await A. The plane data this needs is already
+flowing -- a device session on 2026-10-21 logged 13 usable walls of 19.
 
 ## Intent
 

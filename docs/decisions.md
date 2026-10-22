@@ -852,3 +852,91 @@ every head-locked overlay.
 Its own session, not the world-tracking one, because that supervisor
 retries a failed run forever and plane detection is the first provider in
 this app that needs a permission the player can refuse.
+
+---
+
+## 2026-10-22 — A deliberate turn pivots about the head, through one writer
+
+**Choice.** Every deliberate body heading change goes through `IN_SnapTurn`,
+which absorbs the head offset, rotates the absorption ledger by the same
+delta, and only then adds the yaw. `IN_Move` accumulates the frame's snap,
+smooth and edge-turn contributions into one value and applies it with a
+single call.
+
+**Why.** The two continuous paths used to write `qr_body_yaw` bare. That
+pivots the turn about the last recenter point rather than the head: the head
+sweeps an arc, and the absorb at the end of `IN_Move` pays for that arc with
+a real `SV_Move`, so a yaw-only input translated the player by the arc's
+chord — perpendicular to the direction walked and growing with distance from
+the recenter point. A metre off-centre and a 90 degree turn was about 1.7 m,
+faster than walking. It was invisible for as long as nobody walked, because
+the radius is zero at the recenter point; the room-scale floor work is what
+finally made it non-zero. Confirmed on device: no slide standing on the
+recenter spot, a curved path after walking a metre away.
+
+The finite guard lives in the same chokepoint. A NaN in `qr_body_yaw` fails
+`IN_Move`'s adopt comparison forever, so no spawn, teleport or recenter
+retrieves the view, and routing the continuous paths through here would take
+the ledger with it. The absorb deadzone is a square and a square is not
+rotation-invariant, so the residual slide is bounded at about 0.35 units
+rather than exactly zero — about 9 mm, non-accumulating.
+
+---
+
+## 2026-10-22 — Difficulty is persisted by the platform, not by archiving the cvar
+
+**Choice.** `skill` stays `CVAR_NONE` in `engine/host.c`. `VRSettings.skill`
+holds the value, the engine-thread bootstrap pushes it before any level can
+spawn, and `DifficultyWatcher` polls `QC_CvarValue("skill")` to adopt changes
+made engine-side. The window's picker sends `skill N` and does not own the
+value; a hub door on `start` is equally authoritative.
+
+**Why.** Archiving the cvar is a one-word change to a vendored engine file,
+which is a seventh patched hunk for something a shim absorbs completely. The
+hub doors are QuakeC `trigger_setskill` reaching `PF_cvar_set`, so they
+already write the same cvar the console does — there was never anything to
+reconcile between the two routes, only persistence and a control missing.
+
+Loads are masked. `Host_Loadgame_f` writes the cvar from the file, so
+adopting every engine-side change would let loading an Easy save overwrite a
+persisted Nightmare. A load is resuming a game that already had a preference;
+a door is the player expressing one. The comparison is against the last
+observed value rather than the stored one, because a change declined during a
+load otherwise keeps differing from the stored value and gets adopted a tick
+after the mask lapses, which would make the mask decoration.
+
+The launch push does override a `skill` set in `autoexec.cfg`, unlike most
+forces in that block. `exec autoexec.cfg` is queued inside `Host_Init`, so
+anything added after `QC_Init` returns necessarily runs later; yielding would
+mean pushing before that exec, which the platform cannot reach, or pushing
+after the buffer drains, by which time a level has spawned on the wrong
+skill. Overriding is the only one of the three that is never silently wrong,
+and a choice made in the window outranking a config file is the right
+precedence now that difficulty has a control.
+
+---
+
+## 2026-10-22 — Room-to-level wall alignment is parked; the floor half stays
+
+**Choice.** The alignment machinery stays in the tree, off by default and
+reachable only from the console; its panel controls are gone. The floor half
+— the game floor tracking the real floor continuously — stays and is on by
+default. Plane detection is kept regardless.
+
+**Why.** Matching a level's walls to a room's needs a mapping between a fixed
+living room and arbitrary level geometry, and that only ever exists where the
+player is standing. Walking somewhere else, or simply turning, changes the
+right answer; the document had already listed "keeping alignment while the
+player turns" as a non-goal before it was built. Correcting continuously is
+worse than the drift, because it spins the room under a player who is trying
+to aim.
+
+The floor half is different and holds: a height has one correct answer at
+every instant, which is why it can be re-derived every frame while a
+direction cannot. Plane detection survives because
+`2026-10-17-room-obstacles.md` needs exactly that data, and enemies reacting
+to real furniture only needs the geometry correct where the monster is, now —
+local and momentary, which is what the sensor can actually supply.
+
+A panel control implies a feature worth reaching for, and the window is the
+only debug surface on device, so what sits in it should earn the space.
