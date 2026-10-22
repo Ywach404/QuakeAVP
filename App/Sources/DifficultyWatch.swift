@@ -35,24 +35,37 @@ import Foundation
 /// The decision, alone and total.
 enum DifficultyWatch {
 
-    /// The value to store, or nil for "leave it alone".
-    ///
-    /// Compared against what was LAST OBSERVED, not against what is stored.
-    /// That distinction is the whole mask: a load-driven change is seen,
-    /// declined, and recorded as seen, so it never differs from the last
-    /// observation again and is never adopted on a later tick. Comparing
-    /// against the stored value instead would let a declined change sit there
-    /// differing from it forever, and the next tick after the mask expired
-    /// would adopt it -- which would make the mask do nothing at all.
-    ///
-    /// Total by construction: every engine value outside 0...3 returns nil
-    /// rather than being clamped into something storable, because a skill the
-    /// engine could not have meant is a sign of a bad read, not a preference.
-    static func sample(engineSkill: Int, lastSeen: Int, loadInFlight: Bool) -> Int? {
-        guard (0...3).contains(engineSkill) else { return nil }
-        guard !loadInFlight else { return nil }
-        return engineSkill == lastSeen ? nil : engineSkill
+    /// What to do about a difference between the engine and the stored choice.
+    enum Action: Equatable {
+        /// The player changed it engine-side (a hub door, a console `skill`).
+        /// Take it as their new preference.
+        case adopt(Int)
+        /// A LOAD changed it. Put the engine back to what the player chose.
+        case restore(Int)
     }
+
+    /// Masking a load stops it rewriting the preference. It does NOT put the
+    /// engine back, and that was the missing half: `Host_Loadgame_f` sets the
+    /// skill cvar from the file, so after loading an old save the engine held
+    /// that save's skill while the preference held the player's. Every level
+    /// started afterwards spawned at the engine's value -- found on device as
+    /// a cvar reading 3 and the next save recording 0.
+    ///
+    /// Restoring does not disturb the loaded game: `current_skill` was already
+    /// sampled when that level spawned, so the cvar only decides the NEXT one.
+    ///
+    /// A fresh change always wins over a restore. Otherwise walking a hub door
+    /// to a difficulty that differs from the stored one would be undone a
+    /// second later by the very mechanism meant to respect it.
+    static func decide(engineSkill: Int, stored: Int, lastSeen: Int,
+                       loadInFlight: Bool) -> Action? {
+        guard (0...3).contains(engineSkill), (0...3).contains(stored) else { return nil }
+        guard !loadInFlight else { return nil }
+        if engineSkill != lastSeen { return .adopt(engineSkill) }
+        if engineSkill != stored { return .restore(stored) }
+        return nil
+    }
+
 }
 
 /// The live half: polls the engine's `skill` and stores what `sample` accepts.
@@ -72,6 +85,8 @@ final class DifficultyWatcher {
     private let readEngineSkill: () -> Int
     private let readStored: () -> Int
     private let writeStored: (Int) -> Void
+    /// Sends `skill N` to the engine. The other half of the load mask.
+    private let pushEngineSkill: (Int) -> Void
     private var maskedUntil: ContinuousClock.Instant?
     private var task: Task<Void, Never>?
     /// The engine value as of the last tick. Seeded lazily on the first tick
@@ -81,10 +96,12 @@ final class DifficultyWatcher {
 
     init(readEngineSkill: @escaping () -> Int,
          readStored: @escaping () -> Int,
-         writeStored: @escaping (Int) -> Void) {
+         writeStored: @escaping (Int) -> Void,
+         pushEngineSkill: @escaping (Int) -> Void) {
         self.readEngineSkill = readEngineSkill
         self.readStored = readStored
         self.writeStored = writeStored
+        self.pushEngineSkill = pushEngineSkill
     }
 
     /// Called immediately BEFORE a load command is issued.
@@ -117,12 +134,19 @@ final class DifficultyWatcher {
         guard (0...3).contains(engine) else { return }   // a bad read teaches nothing
         let seen = lastSeen ?? readStored()
 
-        if let adopt = DifficultyWatch.sample(engineSkill: engine, lastSeen: seen,
-                                              loadInFlight: inFlight) {
-            writeStored(adopt)
+        switch DifficultyWatch.decide(engineSkill: engine, stored: readStored(),
+                                      lastSeen: seen, loadInFlight: inFlight) {
+        case .adopt(let v):
+            writeStored(v)
+        case .restore(let v):
+            // Put the engine back where the player left it. Harmless to the
+            // running game: its own skill was sampled when it spawned.
+            pushEngineSkill(v)
+        case nil:
+            break
         }
-        // Recorded whether or not it was adopted. This is what stops a
-        // declined load-driven change coming back on the next tick.
+        // Recorded whether or not anything was done. This is what stops a
+        // declined load-driven change reading as a fresh one next tick.
         lastSeen = engine
     }
 }

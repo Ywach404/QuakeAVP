@@ -273,7 +273,8 @@ final class SessionState {
     static let difficultyWatcher = DifficultyWatcher(
         readEngineSkill: { Int(QC_CvarValue("skill")) },
         readStored: { VRSettings.shared.skill },
-        writeStored: { VRSettings.shared.skill = $0 })
+        writeStored: { VRSettings.shared.skill = $0 },
+        pushEngineSkill: { QuakeEngineViewModel.shared.send("skill \($0)") })
 
     /// Delete a slot. There is no engine command for this; the file is the
     /// engine's, so the only honest thing to do is remove it and rescan.

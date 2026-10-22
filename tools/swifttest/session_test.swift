@@ -117,37 +117,33 @@ struct SessionTest {
     static func runDifficultyWatchTests() {
         typealias W = DifficultyWatch
 
-        check(W.sample(engineSkill: 2, lastSeen: 2, loadInFlight: false) == nil,
-              "a value that has not changed is left alone")
+        // --- the decision, as an action rather than a bare value ----------
+        // A load writes the skill cvar from the file it is loading. Masking
+        // that stops it rewriting the player's PREFERENCE, which was right,
+        // but it left the ENGINE holding the loaded save's skill -- so every
+        // level started afterwards spawned at that, not at what was chosen.
+        // Found on device: the cvar read 3, the next save recorded 0.
+        check(W.decide(engineSkill: 3, stored: 3, lastSeen: 3, loadInFlight: false) == nil,
+              "agreement all round does nothing")
+        check(W.decide(engineSkill: 2, stored: 1, lastSeen: 1, loadInFlight: false)
+                == .adopt(2),
+              "a fresh engine-side change is the player choosing: adopt it")
+        check(W.decide(engineSkill: 0, stored: 3, lastSeen: 3, loadInFlight: true) == nil,
+              "during a load, only observe")
+        check(W.decide(engineSkill: 0, stored: 3, lastSeen: 0, loadInFlight: false)
+                == .restore(3),
+              "after the load, the engine is put BACK to the chosen difficulty")
+        check(W.decide(engineSkill: 0, stored: 0, lastSeen: 0, loadInFlight: false) == nil,
+              "a load of a save that matches the preference needs no restore")
+        check(W.decide(engineSkill: 9, stored: 1, lastSeen: 1, loadInFlight: false) == nil,
+              "an out-of-range read is ignored entirely")
 
-        // A hub door on `start`, or a console `skill`: the player chose.
-        check(W.sample(engineSkill: 3, lastSeen: 1, loadInFlight: false) == 3,
-              "an engine-side change with no load in flight is adopted")
-        check(W.sample(engineSkill: 0, lastSeen: 2, loadInFlight: false) == 0,
-              "adoption works downwards too")
+        // Restoring must not fight an adopt: a hub door is a fresh change and
+        // wins, even when the engine also differs from what is stored.
+        check(W.decide(engineSkill: 2, stored: 3, lastSeen: 1, loadInFlight: false)
+                == .adopt(2),
+              "a fresh change is adopted, never mistaken for a load to undo")
 
-        // The case the naive rule gets wrong. Host_Loadgame_f writes the cvar
-        // from the file, so without this a loaded Easy save would quietly
-        // overwrite a persisted Nightmare -- and the "relaunch and it is still
-        // Hard" criterion would depend on load history.
-        check(W.sample(engineSkill: 0, lastSeen: 3, loadInFlight: true) == nil,
-              "a load's skill change is NOT adopted as a preference")
-        check(W.sample(engineSkill: 1, lastSeen: 1, loadInFlight: true) == nil,
-              "and a load that agrees changes nothing either")
-
-        // The reason the comparison is against lastSeen and not against the
-        // stored value. Once a load's change has been seen and declined, the
-        // very next tick has lastSeen == the loaded value, so it is NOT
-        // adopted when the mask lapses. Comparing against stored would have
-        // adopted it one second later and the mask would be decoration.
-        check(W.sample(engineSkill: 0, lastSeen: 0, loadInFlight: false) == nil,
-              "a declined load value is not adopted once the mask lapses")
-
-        // Never store what the engine could not have meant.
-        check(W.sample(engineSkill: 9, lastSeen: 1, loadInFlight: false) == nil,
-              "an out-of-range engine value is ignored, not clamped and stored")
-        check(W.sample(engineSkill: -2, lastSeen: 1, loadInFlight: false) == nil,
-              "a negative engine value is ignored")
     }
 
     // MARK: - the carousel's arithmetic
