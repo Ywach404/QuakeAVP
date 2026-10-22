@@ -50,6 +50,7 @@ final class VRSettings: @unchecked Sendable {
 
     private let lock = NSLock()
     private var _rightHanded = true
+    private var _skill = 1
 
     var rightHanded: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _rightHanded }
@@ -319,6 +320,7 @@ final class VRSettings: @unchecked Sendable {
     /// input profile under a different name and meaning, and its 0.40 m
     /// default must never be read as a trim.
     private static let floorTrimKey = "floorTrim.v1"
+    private static let skillKey = "skill.v1"
     static let floorTrimLimit: Float = 0.3     // metres, either way
     private static let commFwdKey = "wristCommFwd"
     private static let commSideKey = "wristCommSide"
@@ -384,6 +386,24 @@ final class VRSettings: @unchecked Sendable {
     var floorTrim: Float {
         get { lock.lock(); defer { lock.unlock() }; return _floorTrim }
         set { store(Self.clamp(newValue, Self.floorTrimLimit), Self.floorTrimKey) { $0._floorTrim = $1 } }
+    }
+    /// The difficulty the player has chosen, as the engine's own skill number.
+    ///
+    /// The engine cannot hold this for us: `skill` is CVAR_NONE
+    /// (`engine/host.c:74`), so it reverts to 1 on every launch, and archiving
+    /// it would be a vendored-engine hunk for one word. So the value lives
+    /// here, is pushed into the engine at launch, and is updated when
+    /// something engine-side changes it (a hub door on `start`).
+    ///
+    /// Clamped on READ as well as write: the defaults domain survives
+    /// downgrades and can be written by hand, so it is not trusted input.
+    var skill: Int {
+        get { lock.lock(); defer { lock.unlock() }; return clampSkill(_skill) }
+        set {
+            let v = clampSkill(newValue)
+            lock.lock(); _skill = v; lock.unlock()
+            UserDefaults.standard.set(v, forKey: Self.skillKey)
+        }
     }
     var wristCommFwd: Float {
         get { lock.lock(); defer { lock.unlock() }; return _wristCommFwd }
@@ -564,6 +584,11 @@ final class VRSettings: @unchecked Sendable {
         let d = UserDefaults.standard
         _wristCommTilt = Self.clamp(Float(d.double(forKey: Self.commTiltKey)), Self.commTiltLimit)
         _floorTrim = Self.clamp(Float(d.double(forKey: Self.floorTrimKey)), Self.floorTrimLimit)
+        // Absent means NORMAL, not Easy. integer(forKey:) returns 0 for a
+        // missing key, and 0 is a real skill, so the key's presence has to be
+        // tested or a fresh install silently plays on Easy.
+        _skill = d.object(forKey: Self.skillKey) == nil
+            ? 1 : clampSkill(d.integer(forKey: Self.skillKey))
         _wristCommFwd = Self.clamp(Float(d.double(forKey: Self.commFwdKey)), Self.commOffsetLimit)
         _wristCommSide = Self.clamp(Float(d.double(forKey: Self.commSideKey)), Self.commOffsetLimit)
         _wristCommUp = Self.clamp(Float(d.double(forKey: Self.commUpKey)), Self.commOffsetLimit)

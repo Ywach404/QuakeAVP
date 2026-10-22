@@ -16,7 +16,7 @@
 - **Thread rule.** `QC_CvarValue` is any-thread (`QuakeCore.h:531-535`). `QC_ExecuteCommand` goes through `QuakeEngineHost.execute(_:)`, the only sanctioned way in from the UI. Nothing here touches the render thread.
 - **Input is hands and Sense controllers only.** Every control needs both; no gamepad-only affordance.
 - **Skill range is 0...3** — clamped by the engine at `engine/sv_main.c:1489-1492`. Labels, in order: Easy, Normal, Hard, Nightmare. Nightmare is visible, not hidden.
-- **`autoexec.cfg` wins.** It is a sanctioned escape hatch (`in_null.c:1341`); the launch push must not override a `skill` set there.
+- **~~`autoexec.cfg` wins.~~ CORRECTED during Task 2.** This constraint was written on a wrong assumption and cannot be met. `host.c:899` queues `exec autoexec.cfg` *inside* `Host_Init`, so anything the platform adds to the command buffer after `QC_Init` returns necessarily runs after it. Yielding would mean pushing before that exec, which the platform cannot reach, or pushing after the buffer drains, by which time `map range` has spawned a level on the wrong skill. The launch push therefore **does** override an autoexec `skill`, which is also the right precedence for a setting that now has a control and a stored value. The console still sets `skill` at any time.
 - **Save file layout** (`engine/host_cmd.c:1140-1148`, `NUM_SPAWN_PARMS` = 16 at `engine/server.h:86`): line 1 version, line 2 comment, lines 3–18 spawn parms, **line 19 `current_skill`**, line 20 map name, line 21 `sv.time`. Zero-indexed, skill is element 18.
 - `make check` and `tools/check-unit.sh` must stay green; `make device` is the only proof of the real target and must be run before each commit that touches Swift.
 

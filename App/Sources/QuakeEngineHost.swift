@@ -301,6 +301,30 @@ final class QuakeEngineHost: @unchecked Sendable {
         "volume 0.03\n".withCString { QC_ExecuteCommand($0) }
         "bgmvolume 0.7\n".withCString { QC_ExecuteCommand($0) }
 
+        // Difficulty. `skill` is CVAR_NONE (engine/host.c:74) so it reverts to
+        // 1 every launch; the stored choice is pushed back here rather than by
+        // archiving the cvar, which would cost a vendored-engine hunk for one
+        // word. It has to run in THIS block, on the engine thread, because no
+        // main-actor send can get ahead of the `map range` below on a dev
+        // build -- and a level that spawned before the push would sample the
+        // wrong skill.
+        //
+        // This DOES override `skill` in an autoexec.cfg, unlike most settings
+        // here, and the asymmetry is deliberate rather than overlooked.
+        // host.c:899 queues `exec autoexec.cfg` inside Host_Init, so anything
+        // added to the buffer after QC_Init returns necessarily runs after it;
+        // yielding would mean pushing before the exec, which cannot be done
+        // from out here, or pushing after the buffer drains, by which time
+        // `map range` below has already spawned a level and sampled the wrong
+        // skill. Of the three, overriding is the one that is never silently
+        // wrong.
+        //
+        // It is also the right precedence now that difficulty is a real
+        // setting with a control and a stored value: a choice made in the
+        // window should outrank a config file, and the console still sets
+        // `skill` at any time for anyone who wants the old behaviour.
+        "skill \(VRSettings.shared.skill)\n".withCString { QC_ExecuteCommand($0) }
+
         // DEV ONLY. Auto-spawn straight into the input test range (the
         // flatgrass arena: lava/slime/water pools, powerup tints, weapon rack,
         // firing line) instead of the demo attract loop. The range lives in
