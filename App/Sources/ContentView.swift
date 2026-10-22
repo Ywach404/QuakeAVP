@@ -1218,14 +1218,16 @@ struct ContentView: View {
             }
             .disabled(!running || !session.canSave)
             Divider()
-            if session.slots.isEmpty {
-                Text(session.gameDirectory == nil
-                     ? "Waiting for the engine."
-                     : "No saved games yet.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(session.slots) { slot in saveSlotRow(slot, running: running) }
-            }
+            // The slots as a Cover Flow deck. Replaces a list of text rows:
+            // the save you want is a place you were standing, and a face you
+            // can recognise beats a name you have to read. Load and Delete
+            // live under the deck, acting on whichever cover is in front.
+            SaveCoverFlow(slots: session.slots,
+                          gameDirectory: session.gameDirectory,
+                          running: running,
+                          saveBlockCaption: session.saveBlock.caption,
+                          onLoad: { session.load($0.name) },
+                          onDelete: { slotPendingDelete = $0 })
             HStack(spacing: 8) {
                 Button("Rescan") { session.refreshSlots() }
                     .font(.caption)
@@ -1249,41 +1251,6 @@ struct ContentView: View {
             Text(slotPendingDelete.map { "\($0.name) — \($0.displayText)" }
                  ?? "")
         }
-    }
-
-    private func saveSlotRow(_ slot: SaveGameSlot, running: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(slot.name)
-                    .font(.caption.monospaced().weight(.semibold))
-                // The comment line the engine wrote: level name and kills.
-                Text(slot.displayText.isEmpty ? "—" : slot.displayText)
-                    .font(.caption2).foregroundStyle(.secondary)
-                Text(slot.modified.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption2).foregroundStyle(.tertiary)
-                if !slot.isLoadable {
-                    // `load` calls Host_Error on a version mismatch, which
-                    // drops you to the console. Say so instead of offering it.
-                    Text("Savegame version \(slot.version) — this engine reads "
-                         + "version \(SaveGameHeader.version).")
-                        .font(.caption2).foregroundStyle(.orange)
-                }
-                if !slot.isAddressable {
-                    // Anything dropped in over Files can be called anything,
-                    // and `load` takes one whitespace-free argument. Say why
-                    // rather than leaving an enabled button that no-ops.
-                    Text("Rename this file (letters, digits, - and _) to load "
-                         + "it — the console cannot take a name with a space "
-                         + "or a dot in it.")
-                        .font(.caption2).foregroundStyle(.orange)
-                }
-            }
-            Spacer()
-            Button("Load") { session.load(slot.name) }
-                .disabled(!running || !slot.isLoadable || !slot.isAddressable)
-            Button("Delete", role: .destructive) { slotPendingDelete = slot }
-        }
-        .font(.caption)
     }
 
     private var multiplayerSection: some View {

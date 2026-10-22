@@ -42,6 +42,7 @@ struct SessionTest {
         runHeaderParseTests()
         runDifficultyTests()
         runDifficultyWatchTests()
+        runCoverFlowTests()
         runSlotListTests()
         runConsoleArgumentTests()
         print("PASSED")
@@ -146,6 +147,61 @@ struct SessionTest {
               "an out-of-range engine value is ignored, not clamped and stored")
         check(W.sample(engineSkill: -2, lastSeen: 1, loadInFlight: false) == nil,
               "a negative engine value is ignored")
+    }
+
+    // MARK: - the carousel's arithmetic
+
+    static func runCoverFlowTests() {
+        typealias M = CoverFlowMetrics
+
+        // Pitch is what decides how many cards fit. The flankers overlap each
+        // other by a fraction of a card, which is the negative HStack spacing.
+        check(abs(M.pitch - M.cardWidth * (1 - M.flankerOverlapFraction)) < 0.01,
+              "pitch is a card less its overlap (\(M.pitch))")
+
+        // contentMargins is NOT centring -- it shrinks the measured region to
+        // one card so only the centre card can reach .identity. Get this wrong
+        // and the cards sit flat with no Cover Flow at all.
+        check(abs(M.contentMargin(forWidth: 560) - (560 - M.cardWidth) / 2) < 0.01,
+              "the margin insets the region to a single card's width")
+        check(M.contentMargin(forWidth: 100) == 0,
+              "a column narrower than a card gives no margin, never a negative one")
+
+        check(M.visibleCardCount(forWidth: 560) == 5,
+              "the 560pt column floor shows a five-card deck")
+        check(M.visibleCardCount(forWidth: 300) == 3,
+              "a narrow column still shows a hero and one flanker each side")
+        check(M.visibleCardCount(forWidth: 0) == 1,
+              "there is always at least the hero")
+
+        // The two orange refusals are independent and a save can be both.
+        let both = SaveGameSlot(name: "my save", url: URL(fileURLWithPath: "/tmp/my save.sav"),
+                                version: 4, comment: "", difficulty: nil,
+                                modified: .distantPast)
+        let badges = CoverFlowMetrics.badges(for: both)
+        check(badges.count == 2, "a foreign version with an unusable name shows BOTH warnings")
+        check(badges.contains(.versionMismatch(4)), "the version badge carries the file's version")
+        check(badges.contains(.unaddressable), "and the name badge is there too")
+
+        let fine = SaveGameSlot(name: "s3", url: URL(fileURLWithPath: "/tmp/s3.sav"),
+                                version: SaveGameHeader.version, comment: "",
+                                difficulty: .hard, modified: .distantPast)
+        check(CoverFlowMetrics.badges(for: fine).isEmpty,
+              "a loadable, addressable save shows no warning")
+
+        check(CoverBadge.versionMismatch(4).caption
+                == "Savegame version 4 — this engine reads version \(SaveGameHeader.version).",
+              "the version caption is the engine's own wording")
+        check(CoverBadge.unaddressable.caption
+                == "Rename this file (letters, digits, - and _) to load it — the console cannot take a name with a space or a dot in it.",
+              "the name caption is the engine's own wording")
+
+        // Two different empty states, and they say different things.
+        check(CoverFlowMetrics.emptyMessage(gameDirectory: nil) == "Waiting for the engine.",
+              "no game directory yet reads as waiting for the engine")
+        check(CoverFlowMetrics.emptyMessage(gameDirectory: URL(fileURLWithPath: "/tmp"))
+                == "No saved games yet.",
+              "a directory with nothing in it reads as no saved games")
     }
 
     // MARK: - header parsing
