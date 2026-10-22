@@ -2569,6 +2569,15 @@ struct ContentView: View {
             TextField("console command, e.g. map e1m1", text: $commandText)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
+                // Console commands are lowercase and the keyboard capitalises
+                // the first letter of a sentence, so every command had to have
+                // its first character fixed by hand. Autocorrect is worse: it
+                // "corrects" cvar names into English words. Not a lowercasing
+                // of the text -- values after the command are case-sensitive
+                // (`name Bob`, a map path), so only the keyboard's guessing is
+                // turned off, never what was actually typed.
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
                 .onSubmit(submit)
             Button("Send", action: submit)
                 .disabled(commandText.isEmpty || engine.status != .running)
