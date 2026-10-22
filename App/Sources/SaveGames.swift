@@ -77,6 +77,12 @@ struct SaveGameSlot: Identifiable, Hashable {
     let version: Int
     /// The raw comment line, underscores and all, as written.
     let comment: String
+    /// The save's cover picture, when it has one.
+    ///
+    /// nil means "show the plain card": either no cover was ever written, or
+    /// the one on disk is not yet readable. Resolved during `list`, from the
+    /// directory listing already in hand, so it costs no extra stat per slot.
+    let coverURL: URL?
     /// The skill the save was written on, from its own `current_skill` line.
     /// nil when the file is too short or the line is unreadable: the slot
     /// still lists, it just cannot say which difficulty it was.
@@ -162,6 +168,16 @@ enum SaveGameHeader {
     /// then NUM_SPAWN_PARMS of them.
     static let skillLineIndex = 2 + 16
 
+    /// Where a save's cover lives: beside it, same name, `.jpg`.
+    ///
+    /// Beside the save rather than in an index, so deleting a save takes its
+    /// cover with it and nothing can disagree with the directory. Exactly one
+    /// extension is replaced -- a `.sav` dropped in over Files can be called
+    /// anything, and `my.save.sav` must not resolve to `my.jpg`.
+    static func coverURL(forSave save: URL) -> URL {
+        save.deletingPathExtension().appendingPathExtension("jpg")
+    }
+
     /// Read just the header off disk. Opens, reads one small chunk, closes --
     /// a `.sav` is every edict in the level and must never be slurped whole
     /// to show a row in a list.
@@ -201,15 +217,30 @@ enum SaveGameHeader {
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
         ) else { return [] }
 
+        // Covers are matched from the listing already in hand rather than by
+        // stat-ing a second path per save. A cover counts only when it has
+        // BYTES in it: a save is written by truncating first, so a scan landing
+        // mid-write sees zero, and a cover is a second such file. An empty one
+        // must read as absent, so the card falls back to the plain one instead
+        // of showing a broken image.
+        var covers: Set<String> = []
+        for url in entries where url.pathExtension.lowercased() == "jpg" {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            if size > 0 { covers.insert(url.deletingPathExtension().lastPathComponent) }
+        }
+
         var slots: [SaveGameSlot] = []
         for url in entries where url.pathExtension.lowercased() == "sav" {
             guard let header = readHeader(of: url) else { continue }
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate ?? .distantPast
-            slots.append(SaveGameSlot(name: url.deletingPathExtension().lastPathComponent,
+            let name = url.deletingPathExtension().lastPathComponent
+            slots.append(SaveGameSlot(name: name,
                                       url: url,
                                       version: header.version,
                                       comment: header.comment,
+                                      coverURL: covers.contains(name)
+                                          ? coverURL(forSave: url) : nil,
                                       difficulty: header.difficulty,
                                       modified: modified))
         }

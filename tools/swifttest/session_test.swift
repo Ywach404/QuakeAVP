@@ -45,6 +45,7 @@ struct SessionTest {
         runCoverFlowTests()
         runSaveNamingTests()
         runSlotListTests()
+        runCoverTests()
         runConsoleArgumentTests()
         print("PASSED")
     }
@@ -181,7 +182,7 @@ struct SessionTest {
 
         // The two orange refusals are independent and a save can be both.
         let both = SaveGameSlot(name: "my save", url: URL(fileURLWithPath: "/tmp/my save.sav"),
-                                version: 4, comment: "", difficulty: nil,
+                                version: 4, comment: "", coverURL: nil, difficulty: nil,
                                 modified: .distantPast)
         let badges = CoverFlowMetrics.badges(for: both)
         check(badges.count == 2, "a foreign version with an unusable name shows BOTH warnings")
@@ -189,7 +190,7 @@ struct SessionTest {
         check(badges.contains(.unaddressable), "and the name badge is there too")
 
         let fine = SaveGameSlot(name: "s3", url: URL(fileURLWithPath: "/tmp/s3.sav"),
-                                version: SaveGameHeader.version, comment: "",
+                                version: SaveGameHeader.version, comment: "", coverURL: nil,
                                 difficulty: .hard, modified: .distantPast)
         check(CoverFlowMetrics.badges(for: fine).isEmpty,
               "a loadable, addressable save shows no warning")
@@ -228,6 +229,69 @@ struct SessionTest {
         check(N.nextFreeSlotName(existing: (0..<100).map { "s\($0)" }).hasPrefix("save"),
               "a hundred s-numbers falls back to a name that cannot collide")
 
+    }
+
+    // MARK: - covers beside the save
+
+    static func runCoverTests() {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory
+            .appendingPathComponent("qavp-cover-test-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        // --- the pure path derivation -----------------------------------
+        let s3 = dir.appendingPathComponent("s3.sav")
+        let cover = SaveGameHeader.coverURL(forSave: s3)
+        check(cover.lastPathComponent == "s3.jpg", "a cover is the save's name with .jpg")
+        check(cover.deletingLastPathComponent().path == s3.deletingLastPathComponent().path,
+              "and it sits in the same directory as the save")
+
+        // ONE extension, not greedily: a dropped-in file can be called
+        // anything, and "my.save.sav" must not become "my.jpg".
+        let dotted = SaveGameHeader.coverURL(
+            forSave: dir.appendingPathComponent("my.save.sav"))
+        check(dotted.lastPathComponent == "my.save.jpg",
+              "only the final extension is replaced")
+
+        // --- what list() does with them ---------------------------------
+        func writeSave(_ name: String) {
+            let comment = engineComment(level: "the Installation", kills: 3, total: 9)
+            var text = "5\n\(comment)\n"
+            for _ in 0..<16 { text += "0.000000\n" }
+            text += "2\ne1m1\n1.0\n"
+            try! text.write(to: dir.appendingPathComponent(name), atomically: true,
+                            encoding: .utf8)
+        }
+        func writeJPG(_ name: String, bytes: Int) {
+            let data = Data(repeating: 0xFF, count: bytes)
+            try! data.write(to: dir.appendingPathComponent(name))
+        }
+
+        writeSave("withcover.sav");  writeJPG("withcover.jpg", bytes: 2048)
+        writeSave("nocover.sav")
+        writeSave("midwrite.sav");   writeJPG("midwrite.jpg", bytes: 0)
+        // A cover whose save is gone. Must not conjure a card.
+        writeJPG("orphan.jpg", bytes: 2048)
+
+        let slots = SaveGameHeader.list(in: dir)
+        func slot(_ n: String) -> SaveGameSlot? { slots.first { $0.name == n } }
+
+        check(slots.count == 3, "a .jpg with no .sav is not a save (\(slots.count) listed)")
+        check(slot("orphan") == nil, "and specifically does not appear by name")
+
+        check(slot("withcover")?.coverURL != nil, "a save with a cover reports it")
+        check(slot("withcover")?.coverURL?.lastPathComponent == "withcover.jpg",
+              "and reports the right file")
+        check(slot("nocover")?.coverURL == nil, "a save with no cover reports none")
+
+        // The one that matters. A save is written by truncating first, so a
+        // scan landing mid-write reads zero bytes -- and a cover is a SECOND
+        // such file. An empty .jpg must read as ABSENT, so the card falls back
+        // to the plain one rather than showing a broken image.
+        check(slot("midwrite") != nil, "a save with a half-written cover still lists")
+        check(slot("midwrite")?.coverURL == nil,
+              "and an empty cover file reads as no cover at all")
     }
 
     // MARK: - header parsing

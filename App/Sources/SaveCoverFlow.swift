@@ -193,11 +193,21 @@ struct SaveCoverFlow: View {
         ZStack(alignment: .bottomLeading) {
             // A dark solid, not .ultraThinMaterial: material is near-invisible
             // against visionOS glass and a screenshot needs something to sit
-            // on. The gradient is the same shape the cover's own overlay will
-            // take, so the plain card and a covered one read as one family.
+            // on. Drawn UNDER the cover as well as instead of it, so a cover
+            // that fails to decode shows the plain card rather than a hole.
             RoundedRectangle(cornerRadius: 10)
                 .fill(LinearGradient(colors: [Color(white: 0.14), Color(white: 0.07)],
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
+            // The picture, when there is one. `coverURL` is already non-nil
+            // only for a file with bytes in it, so a half-written cover never
+            // reaches here -- but decoding can still fail on a file that was
+            // complete when listed and torn since, and UIImage returning nil
+            // simply leaves the plain card showing.
+            if let cover = slot.coverURL, let image = UIImage(contentsOfFile: cover.path) {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
             caption(slot)
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
