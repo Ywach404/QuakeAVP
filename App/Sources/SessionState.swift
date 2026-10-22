@@ -255,8 +255,25 @@ final class SessionState {
     /// the row for such a save is not offered in the first place.
     func load(_ name: String) {
         guard ConsoleArgument.isValidSavegameName(name) else { return }
+        // Before the command, not after: Host_Loadgame_f writes the `skill`
+        // cvar from the file, and without the mask the watcher would read that
+        // back and store it as if the player had chosen it -- so loading an
+        // Easy save would overwrite a persisted Nightmare.
+        Self.difficultyWatcher.markLoad()
         QuakeEngineViewModel.shared.send("load \(name)")
     }
+
+    /// Watches for an engine-side difficulty change -- a hub door on `start`
+    /// is QuakeC writing the cvar, so nothing notifies us and it has to be
+    /// polled. Wired here because `load` is what has to mask it.
+    /// APP-scoped, not per-view: SessionState is @State on ContentView and its
+    /// poll starts with the Game tab, but a hub door can be walked with the
+    /// window shut, and a load's mask has to be in place wherever the load came
+    /// from. One watcher, started when the engine comes up, stopped never.
+    static let difficultyWatcher = DifficultyWatcher(
+        readEngineSkill: { Int(QC_CvarValue("skill")) },
+        readStored: { VRSettings.shared.skill },
+        writeStored: { VRSettings.shared.skill = $0 })
 
     /// Delete a slot. There is no engine command for this; the file is the
     /// engine's, so the only honest thing to do is remove it and rescan.

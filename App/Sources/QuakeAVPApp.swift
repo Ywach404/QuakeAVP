@@ -68,7 +68,13 @@ struct QuakeAVPApp: App {
         .onChange(of: scenePhase, initial: true) { _, phase in
             // First time the app is foregrounded, the audio session is finally
             // reachable: bring the device up. Latches inside the sink.
-            if phase == .active { AudioSink.shared.sceneDidActivate() }
+            if phase == .active {
+                AudioSink.shared.sceneDidActivate()
+                // Watch for an engine-side difficulty change. App-scoped and
+                // idempotent: a hub door on `start` can be walked with the
+                // window shut, so this cannot be tied to the Game tab's poll.
+                SessionState.difficultyWatcher.start()
+            }
         }
         // A closed window has no in-app way back without this: a menu command
         // + Cmd-0 reopen it. Losing the console used to mean relaunching.

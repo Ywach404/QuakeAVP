@@ -41,6 +41,7 @@ struct SessionTest {
     static func main() {
         runHeaderParseTests()
         runDifficultyTests()
+        runDifficultyWatchTests()
         runSlotListTests()
         runConsoleArgumentTests()
         print("PASSED")
@@ -107,6 +108,44 @@ struct SessionTest {
         check(clampSkill(-3) == 0, "a stored skill below range clamps to Easy")
         check(clampSkill(9) == 3, "a stored skill above range clamps to Nightmare")
         check(clampSkill(2) == 2, "a stored skill in range is untouched")
+    }
+
+    // MARK: - adopting an engine-side difficulty change
+
+    static func runDifficultyWatchTests() {
+        typealias W = DifficultyWatch
+
+        check(W.sample(engineSkill: 2, lastSeen: 2, loadInFlight: false) == nil,
+              "a value that has not changed is left alone")
+
+        // A hub door on `start`, or a console `skill`: the player chose.
+        check(W.sample(engineSkill: 3, lastSeen: 1, loadInFlight: false) == 3,
+              "an engine-side change with no load in flight is adopted")
+        check(W.sample(engineSkill: 0, lastSeen: 2, loadInFlight: false) == 0,
+              "adoption works downwards too")
+
+        // The case the naive rule gets wrong. Host_Loadgame_f writes the cvar
+        // from the file, so without this a loaded Easy save would quietly
+        // overwrite a persisted Nightmare -- and the "relaunch and it is still
+        // Hard" criterion would depend on load history.
+        check(W.sample(engineSkill: 0, lastSeen: 3, loadInFlight: true) == nil,
+              "a load's skill change is NOT adopted as a preference")
+        check(W.sample(engineSkill: 1, lastSeen: 1, loadInFlight: true) == nil,
+              "and a load that agrees changes nothing either")
+
+        // The reason the comparison is against lastSeen and not against the
+        // stored value. Once a load's change has been seen and declined, the
+        // very next tick has lastSeen == the loaded value, so it is NOT
+        // adopted when the mask lapses. Comparing against stored would have
+        // adopted it one second later and the mask would be decoration.
+        check(W.sample(engineSkill: 0, lastSeen: 0, loadInFlight: false) == nil,
+              "a declined load value is not adopted once the mask lapses")
+
+        // Never store what the engine could not have meant.
+        check(W.sample(engineSkill: 9, lastSeen: 1, loadInFlight: false) == nil,
+              "an out-of-range engine value is ignored, not clamped and stored")
+        check(W.sample(engineSkill: -2, lastSeen: 1, loadInFlight: false) == nil,
+              "a negative engine value is ignored")
     }
 
     // MARK: - header parsing
