@@ -71,8 +71,13 @@ a comment about the `start` map being "Quake's in-game hub for difficulty"
 
 ## Anti-goals
 
-- A cover that is a picture of the window. If the screenshot shows the panel
-  you were looking at when you pressed Save, the feature is pointless.
+- A cover that is a picture of the window, or of the HUD. **The cover is the
+  WORLD only** (A., 2026-10-22: "Just the world"). The re-render omits the
+  SwiftUI panel, the virtual hands, the view weapon, the reticle, the arc
+  gauges, the wrist HUD tiles, the wrist communicator and the world-placed
+  console plane. A cover reads like a postcard of where you were standing, so
+  the room is recognisable at carousel size instead of half-covered by gun.
+  This is a criterion, not a preference: a cover with the gun in it is wrong.
 - A shelf of identical empty cards. The fallback has to look deliberate.
 - Losing the version refusal. A foreign `.sav` must still be visibly refused
   with Load disabled; a prettier browser that silently drops it is worse than
@@ -336,12 +341,6 @@ Open, and each one changes what gets built:
    the difficulty half is small, self-contained and needs no capture work, so
    it could land alone and leave the browser until after the alpha. The two
    are coupled only because the cover shows the pip.
-2. **What is in the picture besides the world?** The immersive frame carries
-   the virtual hands, the wrist HUD tiles, the wrist communicator, the
-   world-placed console plane, the reticle and the arc gauges. The anti-goal
-   names only the SwiftUI panel, so "the panel is not in the picture" is not a
-   sufficient criterion. A dedicated re-render can include or omit any of
-   them, and the choice is what the cover *looks like*.
-3. **Should loading a save change your persisted difficulty?** This design
+2. **Should loading a save change your persisted difficulty?** This design
    says no, masked, for the reasoning above. Overruling it is one line of
    behaviour and makes the relaunch criterion depend on load history.
