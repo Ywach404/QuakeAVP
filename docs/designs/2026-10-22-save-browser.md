@@ -298,10 +298,21 @@ it), 8 (pause parity across all three summon routes), 9 (the LAN browser
 finds and joins a real desktop server) and 10 (the loopback row lists the
 local host).
 
-**Item 9 is the one worth doing first.** It is the only genuinely unknown
-check in the set, it needs a desktop QuakeSpasm with `listen 1` on the same
-network, and it doubles as the evidence for release-1's separate "Online"
-item. Item 5 needs `vr_wristcomm_off_cmd5 qavp_window` typed once beforehand,
+**Run 5, 6, 7, 8 and 10 first; DEFER item 9.** Those five need no setup at
+all -- press a thing and see whether the window appears, whether pause holds,
+whether the loopback row is listed with a local game up. Minutes, no
+preparation.
+
+Item 9 needs a desktop QuakeSpasm with `listen 1` stood up on the same
+network, and the thing it proves is the LAN browser, which belongs to
+release-1's **Online** item -- third of four on that checklist and the lowest
+priority of the engineering work. It sits in §6 only because the browser's UI
+happens to live in the window. So it moves: run it alongside the Online work,
+not as part of ticking the 2D-layer box. An earlier version of this note had
+it first, on the grounds that it was the most interesting unknown, which is
+not the same as the most valuable.
+
+Item 5 needs `vr_wristcomm_off_cmd5 qavp_window` typed once beforehand,
 because that cvar is CVAR_ARCHIVE and A.'s headset holds the old value.
 
 ## Decisions made here
