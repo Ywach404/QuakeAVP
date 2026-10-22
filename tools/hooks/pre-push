@@ -1,0 +1,83 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 A. Cervantez
+#
+# pre-push -- keep the private working documents off the public remote.
+#
+# docs/designs/ and docs/plans/ are working documents. They hold unbuilt
+# ideas, open questions addressed to me by name, and the reasoning behind
+# decisions that the public history should carry only as outcomes. GitLab is
+# the continuous private remote; GitHub gets deliberate releases. Nothing
+# mechanical enforced that split, so this does.
+#
+# It refuses a push to the GitHub remote when the commits being pushed ADD or
+# MODIFY anything under those two directories. It deliberately does NOT refuse
+# merely because the tree still contains them: two design files were already
+# published before this hook existed (docs/designs/2026-10-17-phase-floor.md
+# and docs/designs/2026-10-17-room-obstacles.md), and blocking on their
+# presence would block every push until public history is rewritten. The point
+# is to stop the leak growing, not to make the repo unpushable.
+#
+# Install: tools/hooks/install.sh, or copy to .git/hooks/pre-push.
+# Override once, deliberately:  QAVP_ALLOW_PUBLIC_DOCS=1 git push github main
+#
+# $1 = remote name, $2 = remote URL. Ref lines arrive on stdin as
+# "<local ref> <local sha> <remote ref> <remote sha>".
+
+set -u
+
+REMOTE_NAME="${1:-}"
+REMOTE_URL="${2:-}"
+ZERO='0000000000000000000000000000000000000000'
+GUARDED='docs/designs docs/plans'
+
+# Only the public remote. A GitLab push is the normal case and must stay quiet.
+case "$REMOTE_NAME$REMOTE_URL" in
+	*github*) ;;
+	*) exit 0 ;;
+esac
+
+if [ "${QAVP_ALLOW_PUBLIC_DOCS:-0}" = "1" ]; then
+	echo "pre-push: QAVP_ALLOW_PUBLIC_DOCS=1 -- publishing working documents on purpose." >&2
+	exit 0
+fi
+
+hits=''
+while read -r local_ref local_sha remote_ref remote_sha; do
+	# A branch deletion pushes a zero local sha and carries no tree.
+	[ "$local_sha" = "$ZERO" ] && continue
+
+	if [ "$remote_sha" = "$ZERO" ]; then
+		# New branch there: everything not already on that remote is new.
+		range="$local_sha --not --remotes=$REMOTE_NAME"
+	else
+		range="$remote_sha..$local_sha"
+	fi
+
+	# shellcheck disable=SC2086
+	found=$(git log --name-only --pretty=format: --no-renames $range \
+			-- $GUARDED 2>/dev/null | sed '/^$/d' | sort -u)
+	[ -n "$found" ] && hits="$hits$found
+"
+done
+
+hits=$(printf '%s' "$hits" | sed '/^$/d' | sort -u)
+[ -z "$hits" ] && exit 0
+
+echo "" >&2
+echo "BLOCKED: this push would publish private working documents." >&2
+echo "" >&2
+echo "$hits" | sed 's/^/    /' >&2
+echo "" >&2
+echo "docs/designs/ and docs/plans/ are GitLab-only. They carry unbuilt" >&2
+echo "ideas, open questions and reasoning that the public history should" >&2
+echo "show only as outcomes." >&2
+echo "" >&2
+echo "To push the code without them, take them out of the range -- e.g." >&2
+echo "build the public branch from a tree that has no docs/designs or" >&2
+echo "docs/plans, rather than reverting them on main." >&2
+echo "" >&2
+echo "If publishing them IS the intent:" >&2
+echo "    QAVP_ALLOW_PUBLIC_DOCS=1 git push $REMOTE_NAME ..." >&2
+echo "" >&2
+exit 1

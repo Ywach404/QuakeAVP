@@ -35,7 +35,6 @@ struct ContentView: View {
     @State private var commandText = ""
     @State private var autoOpened = false
     @State private var showScope = false
-    @State private var showComfort = false
     @State private var floorTrim: Float = VRSettings.shared.floorTrim
     @State private var rightHanded = true
     /// vr_hud: 0 off, 1 wrist, 2 float, 3 modular (default). Mirrors the
@@ -139,14 +138,10 @@ struct ContentView: View {
     @State private var gyroRollMode = false
     @State private var hudFaceUI: Float = 0.8
     @State private var hudScaleUI: Float = 1
-    @State private var fireMode: FireMode = .pinch
     @State private var summonGesture: SummonGesture = .prayer
     @State private var wheelSelectHand: WheelSelectHand = .offHand
     @State private var aimSmoothUI: Float = 0.4
     @State private var pinchCloseUI: Float = 1.5   // cm
-    @State private var curlSensUI: Float = 0.72
-    @State private var hammerDropUI: Float = 45
-    @State private var showWeapon = false
     @State private var activeTab: PanelTab = .game
     @State private var roster = EnemyRoster()
     // The Game tab's engine read-back (save guards, connection, LAN browser)
@@ -2201,7 +2196,6 @@ struct ContentView: View {
     /// shows what was persisted (called on launch and on a profile switch).
     private func syncFromProfile() {
         let p = ProfileStore.shared.current
-        fireMode = FireMode(rawValue: p.fireMode) ?? .pinch
         summonGesture = SummonGesture(rawValue: p.summonGesture ?? 0) ?? .prayer
         wheelSelectHand = WheelSelectHand(rawValue: p.wheelSelectHand ?? 0) ?? .offHand
         aimSmoothUI = p.aimSmooth; pinchCloseUI = p.pinchClose * 100
@@ -2210,7 +2204,6 @@ struct ContentView: View {
         wheelFwdUI = p.wheelFwd; wheelUpUI = p.wheelUp; wheelSideUI = p.wheelSide
         wheelClipUI = p.wheelClip
         offHandPitchUI = p.offHandPitch; offHandYawUI = p.offHandYaw; offHandRollUI = p.offHandRoll
-        curlSensUI = p.curlSensitivity; hammerDropUI = p.hammerDropDeg
         hudFwdUI = p.hudForward; hudUpUI = p.hudUp; hudSideUI = p.hudSide
         hudPitchUI = p.hudPitch; hudRollUI = p.hudRoll; hudYawUI = p.hudYaw ?? 0
         hudFaceUI = p.hudFaceMe; hudScaleUI = p.hudScale
