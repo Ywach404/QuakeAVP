@@ -276,6 +276,19 @@ struct ContentView: View {
         .frame(minWidth: 640, minHeight: 560)
         .background(dashMaterial(28))
         .tint(Self.noctuaBurgundy)
+        // Window-lifetime, not Game-tab-lifetime. `refresh` only reaches the
+        // filesystem when the game directory changes or a save is in flight,
+        // so running it for as long as the window is up costs one
+        // equality-guarded snapshot copy at 2 Hz -- which is what its own
+        // comment already assumed.
+        //
+        // It was started from the Game tab, which left `saveBlock` frozen at
+        // whatever it last read whenever that tab was not on screen. The
+        // levelBar below is full-width and always visible, and its difficulty
+        // caption asks `saveBlock` whether a level is running, so quitting to
+        // the console with the tab closed left it insisting one still was.
+        .onAppear { session.startPolling() }
+        .onDisappear { session.stopPolling() }
         .task {
             // World sensing, asked for from the WINDOW. The floor the
             // immersive space stands on is measured by plane detection,
@@ -1158,8 +1171,9 @@ struct ContentView: View {
             Divider()
             multiplayerSection
         }
-        .onAppear { session.startPolling(); session.refreshSlots() }
-        .onDisappear { session.stopPolling() }
+        // The slot list is rescanned when you come to look at it. The POLL
+        // itself is started at window level, not here -- see the body.
+        .onAppear { session.refreshSlots() }
     }
 
     private var saveLoadSection: some View {
