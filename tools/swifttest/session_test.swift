@@ -51,6 +51,7 @@ struct SessionTest {
         runCoverBackfillTests()
         runConsoleArgumentTests()
         runTuningLogTests()
+        runTuningStepTests()
         print("PASSED")
     }
 
@@ -612,6 +613,46 @@ struct SessionTest {
               "a change too small to show at three decimals is not a line")
         check(Tuning.Logger.line("x", from: 1.0, to: 1.001) != nil,
               "a change that does show at three decimals is")
+    }
+
+
+    // MARK: - slider detents
+
+    /// Every parameter row is dotted, and one dot is one unit of what its
+    /// readout shows. The step is therefore derived from the format string
+    /// rather than hand-set per row, which is what stops the panel drifting
+    /// back into having two kinds of slider in it.
+    static func runTuningStepTests() {
+        check(Tuning.step(forFormat: "%.0f") == 1,
+              "a row printing whole numbers steps by one")
+        check(Tuning.step(forFormat: "%.1f") == 0.1,
+              "a row printing one decimal steps by a tenth")
+        check(Tuning.step(forFormat: "%.2f") == 0.01,
+              "a row printing two decimals steps by a hundredth")
+        check(Tuning.step(forFormat: "%.0f%@") == 1,
+              "a trailing unit suffix does not change the precision")
+
+        // The HUD offsets are stored in metres and shown in centimetres, so
+        // a one-centimetre detent is 0.01 in storage. Without dividing back
+        // down, the same row would quantise to whole metres and the slider
+        // would have three usable positions.
+        let cm = Tuning.step(forFormat: "%.0f%@", display: 100)
+        check(cm != nil && abs(cm! - 0.01) < 1e-12,
+              "a value shown in centimetres but stored in metres steps by 0.01")
+        let mm = Tuning.step(forFormat: "%.1f", display: 100)
+        check(mm != nil && abs(mm! - 0.001) < 1e-12,
+              "and one more displayed decimal is one tenth of that")
+
+        // A format with no decimal specifier gets no detent, rather than a
+        // guessed one: "%d" is not a zero-decimal float.
+        check(Tuning.step(forFormat: "%d") == nil,
+              "an integer format yields no step rather than a wrong one")
+        check(Tuning.step(forFormat: "%@") == nil, "nor does a bare string format")
+        check(Tuning.step(forFormat: "") == nil, "nor an empty one")
+        check(Tuning.step(forFormat: "%.0f", display: 0) == nil,
+              "a zero display factor cannot produce a step")
+        check(Tuning.step(forFormat: "%.0f", display: .nan) == nil,
+              "nor can a non-finite one")
     }
 
 }

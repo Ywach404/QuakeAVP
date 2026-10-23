@@ -788,7 +788,8 @@ struct ContentView: View {
                         get: { Double(floorTrim) },
                         set: { noteTuning("Floor trim", from: floorTrim, to: Float($0))
                                floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
-                        in: -Double(VRSettings.floorTrimLimit)...Double(VRSettings.floorTrimLimit))
+                        in: -Double(VRSettings.floorTrimLimit)...Double(VRSettings.floorTrimLimit),
+                        step: Tuning.step(forFormat: "%.1f", display: 100) ?? 0.001)
                     .tuningLocked()
                     HStack {
                         Button("Reset") {
@@ -1157,7 +1158,7 @@ struct ContentView: View {
                             get: { Double(turnHoldSpeedUI) },
                             set: { noteTuning("Turn speed", from: turnHoldSpeedUI, to: Float($0))
                                    turnHoldSpeedUI = Float($0); engine.send("vr_edgeturn_speed \(Int($0))") }),
-                               in: 30...180)
+                               in: 30...180, step: Tuning.step(forFormat: "%.0f") ?? 1)
                         Text("\(Int(turnHoldSpeedUI))°/s")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -1168,7 +1169,7 @@ struct ContentView: View {
                             get: { Double(turnHoldDzUI) },
                             set: { noteTuning("Dead zone", from: turnHoldDzUI, to: Float($0))
                                    turnHoldDzUI = Float($0); engine.send("vr_edgeturn_dz \(Int($0))") }),
-                               in: 8...40)
+                               in: 8...40, step: Tuning.step(forFormat: "%.0f") ?? 1)
                         Text("\(Int(turnHoldDzUI))°")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -1753,7 +1754,8 @@ struct ContentView: View {
                         get: { Double(sfxVolume) },
                         set: { noteTuning("Effects", from: sfxVolume, to: Float($0))
                                sfxVolume = Float($0)
-                               if !audioMuted { engine.send("volume \(sfxVolume)") } }), in: 0...1)
+                               if !audioMuted { engine.send("volume \(sfxVolume)") } }),
+                        in: 0...1, step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
                     Text(String(format: "%.0f%%", sfxVolume * 100))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
@@ -1765,7 +1767,8 @@ struct ContentView: View {
                         get: { Double(musicVolume) },
                         set: { noteTuning("Music", from: musicVolume, to: Float($0))
                                musicVolume = Float($0)
-                               if !audioMuted { engine.send("bgmvolume \(musicVolume)") } }), in: 0...1)
+                               if !audioMuted { engine.send("bgmvolume \(musicVolume)") } }),
+                        in: 0...1, step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
                     Text(String(format: "%.0f%%", musicVolume * 100))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
@@ -2093,7 +2096,7 @@ struct ContentView: View {
                     WeaponTrim.shared.setPlacement(.init(back: weaponBack, up: weaponUp,
                                                          side: weaponSide))
                     weaponPlacementCustom = true
-                }), in: range)
+                }), in: range, step: Tuning.step(forFormat: fmt) ?? 1)
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
@@ -2111,7 +2114,7 @@ struct ContentView: View {
                 get: { Double(value.wrappedValue) },
                 set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
                        value.wrappedValue = Float($0); set(Float($0)) }),
-                in: 0.5...1)
+                in: 0.5...1, step: Tuning.step(forFormat: "%.2f") ?? 0.01)
             Text(String(format: "%.2f", value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
@@ -2309,7 +2312,8 @@ struct ContentView: View {
                 set: { let v = Float($0)
                        noteTuning(label, from: value.wrappedValue, to: v)
                        value.wrappedValue = v; apply(v) }),
-                in: Double(range.lowerBound)...Double(range.upperBound))
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Tuning.step(forFormat: "%.0f%@", display: display) ?? 1)
             Text(String(format: "%.0f%@", value.wrappedValue * display, unit))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .trailing)
@@ -2343,7 +2347,8 @@ struct ContentView: View {
                 get: { Double(value.wrappedValue) },
                 set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
                        value.wrappedValue = Float($0); apply(Float($0)) }),
-                in: Double(range.lowerBound)...Double(range.upperBound))
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Tuning.step(forFormat: fmt) ?? 0.01)
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
@@ -2450,7 +2455,7 @@ struct ContentView: View {
                        value.wrappedValue = Float($0)
                        engine.send("\(cvar) \(Float($0))")
                        if let kp { ProfileStore.shared.current[keyPath: kp] = Float($0) } }),
-                in: range)
+                in: range, step: Tuning.step(forFormat: fmt) ?? 1)
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
@@ -2472,7 +2477,7 @@ struct ContentView: View {
                        value.wrappedValue = Float($0)
                        set(Float($0))
                        ProfileStore.shared.current[keyPath: kp] = Float($0) }),
-                in: -180...180)
+                in: -180...180, step: Tuning.step(forFormat: "%.0f") ?? 1)
             Text(String(format: "%.0f", value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
@@ -2593,7 +2598,8 @@ struct ContentView: View {
             // A rotated Slider is the sanctioned vertical-slider trick: lay
             // it out at its length, rotate, then reserve the rotated
             // footprint. -90 puts minimum at the bottom.
-            Slider(value: $phaseLevel, in: 0...1) {
+            Slider(value: $phaseLevel, in: 0...1,
+                   step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01) {
                 Text("Phase")
             }
             .frame(width: 200)
@@ -2609,7 +2615,8 @@ struct ContentView: View {
             VStack(spacing: 2) {
                 Text("Ground \(Int((phaseFloor * 100).rounded()))%")
                     .font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $phaseFloor, in: 0...1)
+                Slider(value: $phaseFloor, in: 0...1,
+                       step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
                     .frame(width: 110)
                     .onChange(of: phaseFloor) { old, value in
                         noteTuning("Ground", from: Float(old), to: Float(value),
@@ -2627,7 +2634,8 @@ struct ContentView: View {
             VStack(spacing: 2) {
                 Text("Edge grid \(Int((phaseGrid * 100).rounded()))%")
                     .font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $phaseGrid, in: 0...1)
+                Slider(value: $phaseGrid, in: 0...1,
+                       step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
                     .frame(width: 110)
                     .onChange(of: phaseGrid) { old, value in
                         noteTuning("Edge grid", from: Float(old), to: Float(value),

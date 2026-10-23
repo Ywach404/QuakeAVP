@@ -1016,3 +1016,40 @@ Coverage is guarded by `tools/check-tuning-lock.sh` rather than by trust. The
 failure mode is not the lock misbehaving — it is a slider added later that
 nobody marked, which no test of the lock can catch and which in the headset
 is indistinguishable from a locked one right up until a stray pinch moves it.
+
+---
+
+## 2026-10-23 - Every parameter slider is dotted, at its own readout's precision
+
+**Choice.** Every slider in the panel carries a step, and that step is one
+unit of whatever its own readout prints: a row showing `%.0f` moves by 1, a
+row showing `%.2f` by 0.01, and a row stored in metres but printed in
+centimetres by 0.01 rather than by 1. The step is derived from the format
+string through `Tuning.step(forFormat:display:)` rather than hand-set per
+row, and `tools/check-tuning-lock.sh` fails any slider written without one.
+
+**Why.** The panel had two kinds of slider in it. The wrist unit's five rows
+were stepped, deliberately and for a documented reason (the unit is dialled to
+a degree and half a centimetre, not to float precision, and the dotted track
+is what `step:` draws for free). Every other row in the window was continuous.
+Nobody chose that split; it is just the order the rows were written in, and it
+read as two different controls doing the same job.
+
+Making them match meant picking a direction, and the directions are not
+equivalent, because a step changes BEHAVIOUR and not only appearance. Removing
+the wrist unit's detents would have undone a real decision. Applying one
+shared step per unit kind would have been the most uniform but would leave
+some rows coarser than the number printed beside them. Tying each row's step
+to its own displayed precision keeps every control exactly as fine as it is
+legible: nothing can be nudged by a fraction that will never appear on screen,
+and nothing that does appear becomes unreachable.
+
+That also removes a whole class of nonsense from the tuning log. A continuous
+slider could register a change far below the three decimals the line prints,
+which is why the report threshold had to be pinned to the printed resolution
+in the first place. With detents at display precision, every change is at
+least one visible unit by construction.
+
+Deriving the step from the format rather than passing it per call site is the
+part that will still be true in a year. The two numbers cannot drift apart,
+because there is only one of them.

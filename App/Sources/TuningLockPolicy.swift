@@ -50,6 +50,35 @@ enum Tuning {
     /// in the digits shown.
     static let changeEpsilon: Float = 5e-4
 
+    /// The step a slider should move in, derived from the format its own
+    /// readout is printed with.
+    ///
+    /// Every parameter control in the panel is dotted, and the dots are one
+    /// unit of whatever the number beside the slider shows. That ties the
+    /// feel to the readout: a row printing `%.0f` cannot be nudged by a
+    /// third of a unit it will never display, and a row printing `%.2f` can
+    /// still be resolved to the last digit it shows. Before this, one group
+    /// of rows was stepped and every other was continuous, so the panel had
+    /// two different kinds of slider in it for no reason anybody chose.
+    ///
+    /// `display` is the factor between what is STORED and what is SHOWN --
+    /// the HUD offsets are held in metres and printed in centimetres -- so
+    /// the step has to be divided back down into storage units, or a 1 cm
+    /// detent would quantise the value to whole metres.
+    ///
+    /// Nil when the format carries no decimal specifier, which leaves that
+    /// slider continuous rather than guessing a detent for it.
+    static func step(forFormat format: String, display: Float = 1) -> Double? {
+        guard display > 0, display.isFinite else { return nil }
+        // "%.2f" -> 2. Anchored on the "%." so a bare "%@" or "%d" is not
+        // mistaken for a zero-decimal float.
+        guard let dot = format.range(of: "%."),
+              let decimals = Int(format[dot.upperBound...].prefix(while: \.isNumber)),
+              decimals >= 0, decimals <= 6
+        else { return nil }
+        return pow(10.0, Double(-decimals)) / Double(display)
+    }
+
     /// Coalesces setter calls into one report per gesture.
     ///
     /// A value type with no clock of its own: every entry point takes the

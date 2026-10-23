@@ -70,6 +70,26 @@ check_body placeSlider 'noteTuning("gun ' 'prefixed with gun'
 check_body placementSlider 'noteTuning(cvar,' 'of its cvar'
 check_body commPlaceRow 'commAlongArm ?' 'with the across/along mode'
 
+# Every parameter control is dotted, which means every slider carries a step.
+#
+# The track style is not decoration: one dot is one unit of what the row's
+# readout shows, so a stepped slider cannot be nudged by a fraction it will
+# never display. The panel used to have exactly one stepped group and twelve
+# continuous ones, which is two kinds of slider in one window for no reason
+# anybody chose -- and the way back to that is a new row written without a
+# step, which looks fine in isolation.
+for line in $SLIDER_LINES; do
+	next=$(echo "$SLIDER_LINES" | awk -v l="$line" '$1 > l { print $1; exit }')
+	end=$((line + 20))
+	if [ -n "$next" ] && [ "$next" -le "$end" ]; then end=$((next - 1)); fi
+	if sed -n "${line},${end}p" "$SRC" | grep -q 'step:'; then
+		echo "ok:   ContentView.swift:$line has a detent"
+	else
+		echo "FAIL: ContentView.swift:$line is a slider with no step: -- it would draw a plain track"
+		fails=$((fails + 1))
+	fi
+done
+
 # `tabIsTunable` decides where the lock pill appears, and is a second place
 # the truth is written down. See tools/tuning-tab-inventory.py.
 python3 "$ROOT_DIR/tools/tuning-tab-inventory.py" "$SRC" | while read -r tab count; do
