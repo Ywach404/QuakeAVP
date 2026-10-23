@@ -554,6 +554,7 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            lockBar
             ScrollView {
                 Group {
                     switch activeTab {
@@ -565,8 +566,21 @@ struct ContentView: View {
                     case .debug: debugContent
                     }
                 }
-                .padding(.trailing, 6)
+                .padding(.trailing, Self.gutterWidth + 6)
+                // An OVERLAY rather than a column in an HStack. A scroll
+                // view proposes unbounded height to its content, so a
+                // `maxHeight: .infinity` sibling in there has nothing to
+                // resolve against; an overlay is proposed exactly the size
+                // of the view it sits on, which is the rows' own height --
+                // what "full height" has to mean for this to be grabbable
+                // all the way down.
+                .overlay(alignment: .trailing) { scrollGutter }
             }
+            // The grip, drawn OVER the gutter and pinned to the panel rather
+            // than to the content, so it stays where your eye last found it
+            // instead of scrolling away with the rows. Decorative only: a
+            // gesture here would claim the drag the scroll view needs.
+            .overlay(alignment: .trailing) { gutterGrip }
         }
         .padding(16)
         // 430 fitted the controls but not the tab bar: six segments sharing it
@@ -575,6 +589,86 @@ struct ContentView: View {
         // instead of only stretching the render surface beside them.
         .frame(minWidth: 560, maxWidth: 680)
         .background(dashMaterial(14))
+    }
+
+    /// Width of the scroll gutter. Wide enough to be a comfortable gaze
+    /// target -- the eye does not land to the pixel, which is the whole
+    /// problem this solves -- and narrow enough not to take a column of
+    /// space away from the rows.
+    private static let gutterWidth: CGFloat = 40
+
+    /// A strip of deliberate nothing down the side of the panel.
+    ///
+    /// Scrolling by gaze and pinch means pinching SOMETHING and dragging it,
+    /// and until now everything there was to pinch was a slider or a dial.
+    /// This is somewhere to grab that holds no value: the drag falls through
+    /// to the enclosing ScrollView precisely BECAUSE nothing here claims it.
+    ///
+    /// `Color.clear` with an explicit `contentShape` rather than padding:
+    /// empty layout space is not a gaze target, and a gutter you cannot look
+    /// at is not a gutter. It lives INSIDE the scroll content so that it is
+    /// full-height whatever the tab holds.
+    private var scrollGutter: some View {
+        Color.clear
+            .frame(width: Self.gutterWidth, alignment: .trailing)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Scroll area")
+    }
+
+    /// The gutter's grip texture. Not interactive -- see the overlay comment
+    /// at the call site; this only tells the eye where to aim.
+    private var gutterGrip: some View {
+        VStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { _ in
+                Capsule().fill(Self.noctuaBrown.opacity(0.45))
+                    .frame(width: 14, height: 2)
+            }
+        }
+        .frame(width: Self.gutterWidth)
+        .allowsHitTesting(false)
+    }
+
+    /// The lock, above the tab content so it reads from every tab.
+    ///
+    /// A value that got moved by accident costs more than the setting: a gun
+    /// trim nudged unnoticed was blamed on three successive builds before the
+    /// value itself was looked at. So the panel starts locked, and unlocking
+    /// is a deliberate press.
+    private var lockBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                TuningLock.shared.isLocked.toggle()
+            } label: {
+                Label(TuningLock.shared.isLocked ? "Locked" : "Unlocked",
+                      systemImage: TuningLock.shared.isLocked ? "lock.fill" : "lock.open")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .tint(TuningLock.shared.isLocked ? .secondary : .orange)
+            Text(TuningLock.shared.isLocked
+                 ? "Sliders and dials are held. Buttons still work."
+                 : "Sliders and dials will move. Changes are logged to the console.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// One setter call on a tuned control, tagged with the tab it is on --
+    /// row labels repeat between tabs, and "Back" alone would not say which
+    /// Back moved.
+    private func noteTuning(_ label: String, from: Float, to: Float) {
+        TuningLock.shared.note("\(Self.tabName(activeTab))/\(label)", from: from, to: to)
+    }
+
+    private static func tabName(_ tab: PanelTab) -> String {
+        switch tab {
+        case .game: return "game"
+        case .comfort: return "comfort"
+        case .weapon: return "weapon"
+        case .admin: return "admin"
+        case .capture: return "capture"
+        case .debug: return "debug"
+        }
     }
 
     private var comfortContent: some View {
@@ -649,8 +743,10 @@ struct ContentView: View {
                     }
                     Slider(value: Binding(
                         get: { Double(floorTrim) },
-                        set: { floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
+                        set: { noteTuning("Floor trim", from: floorTrim, to: Float($0))
+                               floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
                         in: -Double(VRSettings.floorTrimLimit)...Double(VRSettings.floorTrimLimit))
+                    .tuningLocked()
                     HStack {
                         Button("Reset") {
                             floorTrim = 0; VRSettings.shared.floorTrim = 0
@@ -1016,20 +1112,24 @@ struct ContentView: View {
                         Text("Turn speed").font(.caption)
                         Slider(value: Binding(
                             get: { Double(turnHoldSpeedUI) },
-                            set: { turnHoldSpeedUI = Float($0); engine.send("vr_edgeturn_speed \(Int($0))") }),
+                            set: { noteTuning("Turn speed", from: turnHoldSpeedUI, to: Float($0))
+                                   turnHoldSpeedUI = Float($0); engine.send("vr_edgeturn_speed \(Int($0))") }),
                                in: 30...180)
                         Text("\(Int(turnHoldSpeedUI))°/s")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
+                    .tuningLocked()
                     HStack {
                         Text("Dead zone").font(.caption)
                         Slider(value: Binding(
                             get: { Double(turnHoldDzUI) },
-                            set: { turnHoldDzUI = Float($0); engine.send("vr_edgeturn_dz \(Int($0))") }),
+                            set: { noteTuning("Dead zone", from: turnHoldDzUI, to: Float($0))
+                                   turnHoldDzUI = Float($0); engine.send("vr_edgeturn_dz \(Int($0))") }),
                                in: 8...40)
                         Text("\(Int(turnHoldDzUI))°")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
+                    .tuningLocked()
                 }
                 // Fire is pinch in quake-avp. The curl gesture stays in code
                 // (HandState.indexCurled, the .curl fire path) for a future
@@ -1608,22 +1708,26 @@ struct ContentView: View {
                     Text("Effects").font(.caption).frame(width: 60, alignment: .leading)
                     Slider(value: Binding(
                         get: { Double(sfxVolume) },
-                        set: { sfxVolume = Float($0)
+                        set: { noteTuning("Effects", from: sfxVolume, to: Float($0))
+                               sfxVolume = Float($0)
                                if !audioMuted { engine.send("volume \(sfxVolume)") } }), in: 0...1)
                     Text(String(format: "%.0f%%", sfxVolume * 100))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
                 }
+                .tuningLocked()
                 HStack {
                     Text("Music").font(.caption).frame(width: 60, alignment: .leading)
                     Slider(value: Binding(
                         get: { Double(musicVolume) },
-                        set: { musicVolume = Float($0)
+                        set: { noteTuning("Music", from: musicVolume, to: Float($0))
+                               musicVolume = Float($0)
                                if !audioMuted { engine.send("bgmvolume \(musicVolume)") } }), in: 0...1)
                     Text(String(format: "%.0f%%", musicVolume * 100))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
                 }
+                .tuningLocked()
             }
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
@@ -1941,6 +2045,7 @@ struct ContentView: View {
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
                 set: { nv in
+                    noteTuning(label, from: value.wrappedValue, to: Float(nv))
                     value.wrappedValue = Float(nv)
                     WeaponTrim.shared.setPlacement(.init(back: weaponBack, up: weaponUp,
                                                          side: weaponSide))
@@ -1950,6 +2055,7 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// A Trim slider (0.5...1) routed through WeaponTrim, which persists the
@@ -1960,12 +2066,14 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 60, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0); set(Float($0)) }),
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0); set(Float($0)) }),
                 in: 0.5...1)
             Text(String(format: "%.2f", value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// The shared core of every gyro-style disc in this screen: a wireframe
@@ -2041,6 +2149,10 @@ struct ContentView: View {
                 }
             }
             .onEnded { _ in last.wrappedValue = nil })
+        // Every dial in the panel comes through here -- gyroDial and
+        // commDisc are both thin wrappers over this -- so one lock covers
+        // all of them.
+        .tuningLocked(dims: true)
     }
 
     /// The gyro dial (inspector-style): drag INSIDE the rings to tumble the
@@ -2139,12 +2251,15 @@ struct ContentView: View {
                 .frame(width: 44, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { let v = Float($0); value.wrappedValue = v; apply(v) }),
+                set: { let v = Float($0)
+                       noteTuning(label, from: value.wrappedValue, to: v)
+                       value.wrappedValue = v; apply(v) }),
                 in: Double(range.lowerBound)...Double(range.upperBound))
             Text(String(format: "%.0f%@", value.wrappedValue * display, unit))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// Reset the HUD dock to defaults -- position, the gyro rotation, and scale
@@ -2171,12 +2286,14 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 100, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0); apply(Float($0)) }),
                 in: Double(range.lowerBound)...Double(range.upperBound))
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// One wrist-communicator placement row: a STEPPED `Slider` -- the unit
@@ -2199,7 +2316,8 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 64, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0); apply(Float($0)) }),
                 in: Double(range.lowerBound)...Double(range.upperBound),
                 step: Double(step))
             // Normalise -0 to 0 first: `%f` prints the sign bit even though
@@ -2211,6 +2329,7 @@ struct ContentView: View {
                 .frame(width: 48, alignment: .trailing)
         }
         .font(.caption)
+        .tuningLocked()
     }
 
     private static func normalizedZero(_ v: Float) -> Float { v == 0 ? 0 : v }
@@ -2271,7 +2390,8 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 40, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0)
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0)
                        engine.send("\(cvar) \(Float($0))")
                        if let kp { ProfileStore.shared.current[keyPath: kp] = Float($0) } }),
                 in: range)
@@ -2279,6 +2399,7 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// Off-hand model angle slider: feeds VRSettings (read on the render
@@ -2291,7 +2412,8 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 46, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0)
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0)
                        set(Float($0))
                        ProfileStore.shared.current[keyPath: kp] = Float($0) }),
                 in: -180...180)
@@ -2299,6 +2421,7 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// One row of the modular HUD panel (vr_hud 3): a four-way anchor
@@ -2432,9 +2555,11 @@ struct ContentView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                 Slider(value: $phaseFloor, in: 0...1)
                     .frame(width: 110)
-                    .onChange(of: phaseFloor) { _, value in
+                    .onChange(of: phaseFloor) { old, value in
+                        noteTuning("Ground", from: Float(old), to: Float(value))
                         engine.send(String(format: "phase_floor %.2f", value))
                     }
+                    .tuningLocked()
             }
             .fixedSize()
             // The grid at the real floor's EDGE, on its own dial. It rode
@@ -2448,9 +2573,11 @@ struct ContentView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                 Slider(value: $phaseGrid, in: 0...1)
                     .frame(width: 110)
-                    .onChange(of: phaseGrid) { _, value in
+                    .onChange(of: phaseGrid) { old, value in
+                        noteTuning("Edge grid", from: Float(old), to: Float(value))
                         engine.send(String(format: "phase_grid %.2f", value))
                     }
+                    .tuningLocked()
             }
             .fixedSize()
             Menu {
