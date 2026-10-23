@@ -12,7 +12,7 @@
 
 ## Status
 
-- [x] **Task 1 — DONE and device-verified 2026-10-22** · [ ] Task 2 · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
+- [x] **Task 1 — DONE, device-verified** · [x] **Task 2 — DONE, device-verified** · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
 
 ## Task 1 outcome
 
@@ -40,6 +40,28 @@ Lesson for the remaining tasks: both 2 and 3 were hazards handed over in the
 reconnaissance and lost between reading them and writing the code. Re-read
 the hazard list in each task immediately before implementing it, not before
 planning it.
+
+## Task 2 outcome
+
+Built and confirmed on device 2026-10-22, by pushing real JPEGs onto the
+headset by hand -- which is the whole reason this task was split out. The
+cover path is proven end to end before anything exists that can produce one,
+so any problem in Task 5 is in the capture, not the display.
+
+Verified on device: a save with a cover shows it; a save with a ZERO-BYTE
+cover shows the plain card (the mid-write guard); saves with no cover are
+unaffected; a `.jpg` with no `.sav` produces no card.
+
+One defect found, and only because the test images were deliberately the
+wrong shape: `aspectRatio(contentMode: .fill)` may report a size LARGER than
+the one it is offered, and a ZStack takes its largest child, so the card's
+own frame could not clamp it -- a frame positions an oversized child, it does
+not shrink one. A wide cover made a wide card. The image is pinned and
+clipped now.
+
+Worth keeping: real covers will be close to the card's aspect, where this
+would have read as a design choice rather than a bug. Testing with
+deliberately wrong-shaped inputs is what made it visible.
 
 ## Global Constraints
 
