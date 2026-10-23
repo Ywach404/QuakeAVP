@@ -364,7 +364,8 @@ struct ContentView: View {
                 // a cover drawn from "now" is a picture of the player's own
                 // hands. Freezing here lets the cover come from a moment
                 // before the gesture instead.
-                HeadPoseRing.shared.freeze(at: CACurrentMediaTime())
+                HeadPoseRing.shared.freeze(at: CACurrentMediaTime(),
+                                           lookBack: CoverRenderer.lookBack)
                 openWindow(id: QuakeAVPApp.consoleWindowID)
                 // You summoned the console mid-game: stop the world so a
                 // shambler isn't eating you while you read a slider. Resume is

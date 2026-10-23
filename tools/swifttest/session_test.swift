@@ -311,53 +311,45 @@ struct SessionTest {
         // Nothing recorded: a save taken before the immersive space was ever
         // opened has no pose, and must say so rather than invent one.
         let empty = HeadPoseRing()
-        check(empty.pose(secondsBefore: 0.5) == nil,
-              "an empty ring has no pose to give")
-        empty.freeze(at: 1.0)
-        check(empty.pose(secondsBefore: 0.5) == nil,
-              "and freezing an empty ring does not conjure one")
+        check(empty.coverPose() == nil, "an empty ring has no pose to give")
+        empty.freeze(at: 1.0, lookBack: 0.8)
+        check(empty.coverPose() == nil, "and freezing an empty ring conjures nothing")
 
         let ring = HeadPoseRing()
         ring.note(pose(10), at: 0.0)
         ring.note(pose(20), at: 0.5)
         ring.note(pose(30), at: 1.0)
-        ring.freeze(at: 1.0)
 
-        check(tag(ring.pose(secondsBefore: 0)) == 30, "zero back is the newest pose")
-        check(tag(ring.pose(secondsBefore: 0.5)) == 20,
-              "half a second back is the pose from half a second back")
-        check(tag(ring.pose(secondsBefore: 1.0)) == 10, "a second back is the oldest")
+        // Not summoned yet: the newest pose, which is still a view of the
+        // room. This is the case where the panel was already open, so a save
+        // never re-summons and nothing is latched.
+        check(tag(ring.coverPose()) == 30, "with nothing latched, the newest pose is used")
 
-        // Asking further back than the ring holds returns the OLDEST it has
-        // rather than nil: a pose from slightly too long ago is still a
-        // picture of the room, and nil would mean no cover at all.
-        check(tag(ring.pose(secondsBefore: 99)) == 10,
-              "asking beyond the ring returns the oldest held, not nothing")
+        // The summon RESOLVES the look-back there and then.
+        ring.freeze(at: 1.0, lookBack: 0.5)
+        check(tag(ring.coverPose()) == 20, "the summon latches the pose from its look-back")
 
-        // The whole reason for a ring rather than one slot: the prayer sign
-        // dwells for 0.6 s while the player looks at their own palms, so the
-        // pose wanted is from BEFORE the gesture, not at the summon.
-        check(tag(ring.pose(secondsBefore: 0.8)) == 10,
-              "a pose from before a 0.6s gesture is still reachable")
+        // THE BUG THIS DESIGN EXISTS FOR. A first version pinned the summon's
+        // timestamp and searched for it when the save happened. By then the
+        // player has looked at the panel and pressed a button -- measured at
+        // 3.5 s on device -- and one second of ring has rolled entirely past
+        // that instant, so every pose held is NEWER than the one being looked
+        // for and the search finds nothing. Latching survives it.
+        for i in 0..<300 { ring.note(pose(Float(100 + i)), at: 1.0 + Double(i) / 90.0) }
+        check(tag(ring.coverPose()) == 20,
+              "and it survives the ring rolling completely past that moment")
 
-        // Freezing is what makes "secondsBefore" mean anything: it pins the
-        // reference instant, so later frames cannot drag the answer forward.
-        ring.note(pose(40), at: 1.5)
-        check(tag(ring.pose(secondsBefore: 0)) == 30,
-              "a frame noted after the freeze does not move the answer")
-        ring.freeze(at: 1.5)
-        check(tag(ring.pose(secondsBefore: 0)) == 40,
-              "and a fresh freeze picks it up")
+        // A fresh summon re-latches.
+        ring.freeze(at: 1.0 + 299.0 / 90.0, lookBack: 0.5)
+        check(tag(ring.coverPose()) != 20, "a new summon takes a new pose")
 
-        // Fixed storage: it must overwrite rather than grow, because it is
-        // written every frame on the render thread forever.
+        // Fixed storage: it overwrites rather than grows, since it is written
+        // every frame on the render thread forever.
         let long = HeadPoseRing()
         for i in 0..<500 { long.note(pose(Float(i)), at: Double(i) / 90.0) }
-        long.freeze(at: 499.0 / 90.0)
-        check(tag(long.pose(secondsBefore: 0)) == 499, "the newest survives a wrap")
-        check(long.pose(secondsBefore: 0.5) != nil, "and a recent one is still there")
-        check(tag(long.pose(secondsBefore: 99)) != 0,
-              "while the very first is long gone, not resurrected")
+        check(tag(long.coverPose()) == 499, "the newest survives a wrap")
+        check(long.debugState.held == HeadPoseRing.capacity,
+              "and the ring never grows past its capacity")
     }
 
     // MARK: - header parsing
