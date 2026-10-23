@@ -76,7 +76,10 @@ final class CoverRenderer: @unchecked Sendable {
         // No pose means the immersive space was never opened this session,
         // so there is nothing to draw and nothing is wrong.
         guard let pose = HeadPoseRing.shared.pose(secondsBefore: Self.lookBack) else {
-            stop("no head pose (immersive space never opened, or never frozen)")
+            let d = HeadPoseRing.shared.debugState
+            stop("no head pose -- held \(d.held), frozen "
+                 + (d.frozen.map { String(format: "%.3f", $0) } ?? "never")
+                 + String(format: ", newest %.3f, now %.3f", d.newest, CACurrentMediaTime()))
             return
         }
 

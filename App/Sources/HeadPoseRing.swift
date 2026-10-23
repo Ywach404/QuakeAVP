@@ -64,6 +64,15 @@ final class HeadPoseRing: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// How many poses are held, whether an instant has been pinned, and the
+    /// newest time seen. For working out WHY a cover found no pose, which is
+    /// otherwise two different failures wearing one nil.
+    var debugState: (held: Int, frozen: TimeInterval?, newest: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        let newest = filled == 0 ? 0 : times[(next + Self.capacity - 1) % Self.capacity]
+        return (filled, frozenAt, newest)
+    }
+
     /// Called when the window is summoned: pins the instant to measure from.
     func freeze(at time: TimeInterval) {
         lock.lock(); frozenAt = time; lock.unlock()
