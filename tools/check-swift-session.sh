@@ -21,6 +21,7 @@ swiftc -O \
 	"$ROOT_DIR/App/Sources/DifficultyWatch.swift" \
 	"$ROOT_DIR/App/Sources/SaveCoverFlowMetrics.swift" \
 	"$ROOT_DIR/App/Sources/HeadPoseRing.swift" \
+	"$ROOT_DIR/App/Sources/TuningLockPolicy.swift" \
 	"$ROOT_DIR/App/Sources/ConsoleArgument.swift" \
 	-o "$OUT"
 
