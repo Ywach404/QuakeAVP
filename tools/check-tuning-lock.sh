@@ -78,7 +78,16 @@ check_body commPlaceRow 'commAlongArm ?' 'with the across/along mode'
 # continuous ones, which is two kinds of slider in one window for no reason
 # anybody chose -- and the way back to that is a new row written without a
 # step, which looks fine in isolation.
+# The phase LEVEL is the one deliberate exemption, and it is the same
+# argument that exempts it from the lock: you SCRUB the dissolve by hand
+# rather than set it to a number, and a hundred notches in a rotated 200pt
+# track fought the gesture. Named here so the exemption is a decision rather
+# than an omission.
 for line in $SLIDER_LINES; do
+	if sed -n "${line}p" "$SRC" | grep -q 'phaseLevel'; then
+		echo "skip: ContentView.swift:$line is the phase scrub, continuous on purpose"
+		continue
+	fi
 	next=$(echo "$SLIDER_LINES" | awk -v l="$line" '$1 > l { print $1; exit }')
 	end=$((line + 20))
 	if [ -n "$next" ] && [ "$next" -le "$end" ]; then end=$((next - 1)); fi

@@ -52,6 +52,7 @@ struct SessionTest {
         runConsoleArgumentTests()
         runTuningLogTests()
         runTuningStepTests()
+        runScrollGutterTests()
         print("PASSED")
     }
 
@@ -653,6 +654,59 @@ struct SessionTest {
               "a zero display factor cannot produce a step")
         check(Tuning.step(forFormat: "%.0f", display: .nan) == nil,
               "nor can a non-finite one")
+    }
+
+
+    // MARK: - the gutter's position indicator
+
+    /// Drawn rather than borrowed from the system, because the system's sits
+    /// in the same strip and can be DRAGGED, which is what made the gutter
+    /// throw the panel to the bottom instead of following the hand.
+    static func runScrollGutterTests() {
+        // A tab that fits needs no indicator movement, and says so by
+        // filling the track rather than by vanishing.
+        check(ScrollGutter.progress(offset: 0, content: 400, container: 900) == 0,
+              "content shorter than the view is never scrolled")
+        check(ScrollGutter.thumbLength(content: 400, container: 900, track: 600) == 600,
+              "and its indicator fills the track, which reads as nowhere to go")
+
+        // The first frame of every tab, before layout has measured anything.
+        // This is the case that would divide by zero.
+        check(ScrollGutter.progress(offset: 0, content: 0, container: 0) == 0,
+              "an unmeasured tab is at the top, not at NaN")
+        check(ScrollGutter.thumbLength(content: 0, container: 0, track: 600) == 600,
+              "and shows a full track rather than nothing")
+        check(ScrollGutter.thumbOffset(offset: 0, content: 0, container: 0, track: 600) == 0,
+              "with the indicator at the top")
+
+        // 1800 of content in a 900 view: half fits, so half a track.
+        check(ScrollGutter.thumbLength(content: 1800, container: 900, track: 600) == 300,
+              "an indicator is as long a fraction of the track as fits on screen")
+        check(ScrollGutter.progress(offset: 450, content: 1800, container: 900) == 0.5,
+              "halfway down the scrollable range is halfway")
+        check(ScrollGutter.thumbOffset(offset: 450, content: 1800, container: 900,
+                                       track: 600) == 150,
+              "and the indicator sits at half of the room it has, not half the track")
+
+        // At full scroll the indicator's BOTTOM meets the track's bottom.
+        let end = ScrollGutter.thumbOffset(offset: 900, content: 1800,
+                                           container: 900, track: 600)
+        check(end + 300 == 600, "at the end, the indicator's bottom is the track's bottom")
+
+        // Overscroll happens on every rubber-band and must not push the
+        // indicator outside the track.
+        check(ScrollGutter.progress(offset: -120, content: 1800, container: 900) == 0,
+              "rubber-banding past the top still reads as the top")
+        check(ScrollGutter.progress(offset: 4000, content: 1800, container: 900) == 1,
+              "and past the bottom as the bottom")
+
+        // A very long tab would otherwise draw a few pixels, which reads as
+        // a rendering fault rather than as a position.
+        check(ScrollGutter.thumbLength(content: 90000, container: 900, track: 600)
+                == ScrollGutter.minimumThumbLength,
+              "a very long tab's indicator stops shrinking at the floor")
+        check(ScrollGutter.thumbLength(content: 1800, container: 900, track: 0) == 0,
+              "an unmeasured track draws nothing at all")
     }
 
 }

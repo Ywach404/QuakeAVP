@@ -588,7 +588,18 @@ struct ContentView: View {
             // than to the content, so it stays where your eye last found it
             // instead of scrolling away with the rows. Decorative only: a
             // gesture here would claim the drag the scroll view needs.
-            .overlay(alignment: .trailing) { gutterGrip }
+            .overlay(alignment: .trailing) { gutterTrack }
+            // What the indicator rides on. `contentOffset` and the two sizes
+            // in one value so a single change drives one update.
+            .onScrollGeometryChange(for: ScrollFrame.self) { geo in
+                ScrollFrame(offset: geo.contentOffset.y,
+                            content: geo.contentSize.height,
+                            viewport: geo.containerSize.height)
+            } action: { _, frame in
+                scrollOffset = frame.offset
+                scrollContentHeight = frame.content
+                scrollViewportHeight = frame.viewport
+            }
         }
         .padding(16)
         // 430 fitted the controls but not the tab bar: six segments sharing it
@@ -605,6 +616,20 @@ struct ContentView: View {
     /// space away from the rows.
     private static let gutterWidth: CGFloat = 40
 
+    /// What the gutter's indicator is drawn from. Fed by
+    /// `onScrollGeometryChange` on the panel's ScrollView.
+    @State private var scrollOffset: Double = 0
+    @State private var scrollContentHeight: Double = 0
+    @State private var scrollViewportHeight: Double = 0
+
+    /// One value so a scroll produces one update rather than three.
+    /// `onScrollGeometryChange` needs it Equatable to tell changes apart.
+    private struct ScrollFrame: Equatable {
+        let offset: Double
+        let content: Double
+        let viewport: Double
+    }
+
     /// A strip of deliberate nothing down the side of the panel.
     ///
     /// Scrolling by gaze and pinch means pinching SOMETHING and dragging it,
@@ -620,23 +645,58 @@ struct ContentView: View {
         Color.clear
             .frame(width: Self.gutterWidth, alignment: .trailing)
             .contentShape(Rectangle())
-            // Gaze feedback, and not decoration: an invisible strip you
-            // cannot tell you have found is the same problem as having no
-            // strip. The grip texture does not move with the eye, so this is
-            // the only thing that confirms the gutter has the gaze before
-            // you commit the pinch.
-            .hoverEffect()
+            // NO .hoverEffect() here, and it is not an oversight. This strip
+            // is as tall as the whole tab's CONTENT, so visionOS drew its
+            // highlight over that entire region -- a white bar down every
+            // tab, which looked like a rendering fault. The visible track
+            // and the moving indicator are the affordance instead, and they
+            // are a better one: they say where you are as well as where to
+            // grab.
             .accessibilityLabel("Scroll area")
     }
 
-    /// The gutter's grip texture. Not interactive -- see the overlay comment
-    /// at the call site; this only tells the eye where to aim.
-    private var gutterGrip: some View {
-        VStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { _ in
-                Capsule().fill(Self.noctuaBrown.opacity(0.45))
-                    .frame(width: 14, height: 2)
+    /// The gutter's visible track, running its whole length, with the
+    /// scroll position riding on it.
+    ///
+    /// NOT INTERACTIVE, and that is the point rather than a limitation. The
+    /// system's own indicator sits in this exact strip and can be dragged,
+    /// and dragging one does not follow your hand -- it maps the grab's
+    /// position onto the scroll offset, so a pinch landing on it threw the
+    /// panel straight to the bottom. Hiding it fixed the scrolling and cost
+    /// the only cue for how far down a tab you were; drawing our own gets
+    /// the cue back without putting a scrubber in the one strip that exists
+    /// to be grabbed.
+    ///
+    /// The dotted track is the same language as the sliders beside it, where
+    /// a dot is one unit of the value. Here the dots are just the rail.
+    private var gutterTrack: some View {
+        GeometryReader { geo in
+            let track = geo.size.height
+            let thumb = ScrollGutter.thumbLength(content: scrollContentHeight,
+                                                 container: scrollViewportHeight,
+                                                 track: track)
+            let drop = ScrollGutter.thumbOffset(offset: scrollOffset,
+                                                content: scrollContentHeight,
+                                                container: scrollViewportHeight,
+                                                track: track)
+            ZStack(alignment: .top) {
+                // The rail: dots the length of the gutter, so the strip
+                // reads as a thing you can grab anywhere along it rather
+                // than as three marks floating in a gap.
+                VStack(spacing: 4) {
+                    ForEach(0..<max(1, Int(track / 6)), id: \.self) { _ in
+                        Circle().fill(Self.noctuaBrown.opacity(0.30))
+                            .frame(width: 2, height: 2)
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .top)
+                .clipped()
+                Capsule()
+                    .fill(Self.noctuaBrown.opacity(0.75))
+                    .frame(width: 5, height: thumb)
+                    .offset(y: drop)
             }
+            .frame(width: Self.gutterWidth, alignment: .center)
         }
         .frame(width: Self.gutterWidth)
         .allowsHitTesting(false)
@@ -655,10 +715,21 @@ struct ContentView: View {
             } label: {
                 Label(TuningLock.shared.isLocked ? "Locked" : "Unlocked",
                       systemImage: TuningLock.shared.isLocked ? "lock.fill" : "lock.open")
-                    .font(.caption)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TuningLock.shared.isLocked
+                                     ? Color(white: 0.92) : Color(white: 0.12))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(TuningLock.shared.isLocked
+                                ? Self.noctuaBrown.opacity(0.55)
+                                : Color(red: 0.93, green: 0.58, blue: 0.16),
+                                in: Capsule())
             }
-            .buttonStyle(.bordered)
-            .tint(TuningLock.shared.isLocked ? .secondary : .orange)
+            // Drawn, not tinted. `.tint(.secondary)` on a `.bordered`
+            // button washed out to pure white against visionOS glass, which
+            // read as a glitch rather than as a state. Explicit colours on
+            // an explicit capsule cannot be reinterpreted by a button style.
+            .buttonStyle(.plain)
             Text(TuningLock.shared.isLocked
                  ? "Sliders and dials are held. Buttons still work."
                  : "Sliders and dials will move. Changes are logged to the console.")
@@ -2598,8 +2669,13 @@ struct ContentView: View {
             // A rotated Slider is the sanctioned vertical-slider trick: lay
             // it out at its length, rotate, then reserve the rotated
             // footprint. -90 puts minimum at the bottom.
-            Slider(value: $phaseLevel, in: 0...1,
-                   step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01) {
+            // CONTINUOUS, and the only slider in the app that is. Detents
+            // are for a parameter you are setting to a number; this one is
+            // the dissolve being scrubbed by hand, and a hundred notches in
+            // a rotated 200pt track fought the gesture instead of helping
+            // it. It is exempt from the lock for the same reason -- it is an
+            // action, not a value.
+            Slider(value: $phaseLevel, in: 0...1) {
                 Text("Phase")
             }
             .frame(width: 200)
