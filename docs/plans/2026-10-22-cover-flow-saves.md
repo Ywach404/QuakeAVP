@@ -12,7 +12,7 @@
 
 ## Status
 
-- [x] **Task 1 — device-verified** · [x] **Task 2 — device-verified** · [x] **Task 3 — built** · [x] **Task 4 — built** · [x] **Task 5 — built, DEVICE CHECK PENDING** · [ ] Task 6 · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
+- [x] **Task 1 — device-verified** · [x] **Task 2 — device-verified** · [x] **Task 3 — built** · [x] **Task 4 — built** · [x] **Task 5 — DEVICE-VERIFIED** · [ ] Task 6 · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
 
 ## Task 1 outcome
 
@@ -62,6 +62,31 @@ clipped now.
 Worth keeping: real covers will be close to the card's aspect, where this
 would have read as a design choice rather than a bug. Testing with
 deliberately wrong-shaped inputs is what made it visible.
+
+## Task 5 verified 2026-10-22
+
+Covers render and appear. A. : "it works!"
+
+It took two instrumented saves, and the fault was mine twice over in the
+same place. The design document's capture scheme was already corrected once
+by the builder check, which killed a frame-grab that cannot work. What
+replaced it had the SAME class of error one level down: I pinned the
+summon's TIMESTAMP and searched the ring for it at save time, without
+checking how much wall clock passes between the two. It is 3.5 s, measured
+on device -- the player looks at the panel and presses a button -- and one
+second of ring has rolled entirely past that instant by then, so every pose
+held is newer than the one being searched for and the filter discards all of
+them.
+
+The summon now RESOLVES the look-back and keeps the matrix. With nothing
+latched (the panel was already open, so no summon fired) it falls back to
+the newest pose, which is still a view of the room.
+
+Both faults came out of ONE instrumented save, after three readings of the
+code found nothing. Every exit in the cover path had been made silent to the
+save -- correct, a picture must never fail a save -- and I had made them
+silent to the LOG as well, which left eight indistinguishable ways to produce
+nothing.
 
 ## Tasks 3-5 outcome
 
