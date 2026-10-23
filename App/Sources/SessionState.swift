@@ -179,6 +179,27 @@ final class SessionState {
         // The one thing the poll does with the filesystem, and only while a
         // save is actually in flight.
         if pendingSave != nil { refreshSlots() }
+
+        // A save loaded without a cover takes one once the level it loaded is
+        // actually being played. See CoverBackfill for why neither "at load"
+        // nor "at resume" is early enough.
+        if pendingCoverBackfill != nil {
+            let paused = GamePause.shared.isPaused
+            if paused { resumedAt = nil }
+            else if resumedAt == nil { resumedAt = Date() }
+            let since = resumedAt.map { Date().timeIntervalSince($0) } ?? 0
+            if let owed = CoverBackfill.due(pending: pendingCoverBackfill,
+                                            levelLoaded: levelLoaded, paused: paused,
+                                            secondsSinceResume: since),
+               let directory = gameDirectory {
+                pendingCoverBackfill = nil
+                resumedAt = nil
+                Task.detached(priority: .utility) { [weak self] in
+                    CoverRenderer.shared.write(coverFor: owed, into: directory)
+                    await MainActor.run { self?.refreshSlots() }
+                }
+            }
+        }
     }
 
     /// Rescan the engine's game directory for savegames.
@@ -281,6 +302,16 @@ final class SessionState {
         // back and store it as if the player had chosen it -- so loading an
         // Easy save would overwrite a persisted Nightmare.
         Self.difficultyWatcher.markLoad()
+        // The latched pose is a view of the level being LEFT. Keeping it
+        // would put the wrong map on any cover drawn after this.
+        HeadPoseRing.shared.clearLatch()
+        // Owe this save a cover if it has none. Drawn later, not here: the
+        // load leaves the world paused until Resume, and the ring is still
+        // full of the previous level for a second afterwards.
+        if slots.first(where: { $0.name == name })?.coverURL == nil {
+            pendingCoverBackfill = name
+            resumedAt = nil
+        }
         QuakeEngineViewModel.shared.send("load \(name)")
     }
 
@@ -291,6 +322,12 @@ final class SessionState {
     /// poll starts with the Game tab, but a hub door can be walked with the
     /// window shut, and a load's mask has to be in place wherever the load came
     /// from. One watcher, started when the engine comes up, stopped never.
+    /// A save loaded without a cover, owed one once the new level is up.
+    private var pendingCoverBackfill: String?
+    /// When the world was last un-paused, so the ring has time to fill with
+    /// the level actually being played.
+    private var resumedAt: Date?
+
     static let difficultyWatcher = DifficultyWatcher(
         readEngineSkill: { Int(QC_CvarValue("skill")) },
         readStored: { VRSettings.shared.skill },

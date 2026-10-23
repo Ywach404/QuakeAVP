@@ -88,6 +88,13 @@ final class HeadPoseRing: @unchecked Sendable {
         latchedAt = times[best]
     }
 
+    /// Forget the latched pose. Called on a LOAD: the latch is a view of the
+    /// level being left, and handing it to the level being entered would put
+    /// the wrong map on the cover.
+    func clearLatch() {
+        lock.lock(); latched = nil; latchedAt = nil; lock.unlock()
+    }
+
     /// The pose a cover should be drawn from.
     ///
     /// The latched one when the window was summoned this session; otherwise

@@ -144,3 +144,32 @@ enum SaveNaming {
         return "save\(Int(Date().timeIntervalSince1970))"
     }
 }
+
+/// When to draw a cover for a save that was loaded without one.
+///
+/// Old saves -- every save written before covers existed -- show a plain
+/// card. Rather than leave them plain forever or invent a picture for them,
+/// they take one the first time they are actually played: the gap closes as
+/// the player works through their saves, and a save never loaded keeps a
+/// plain card, which is honest.
+///
+/// The timing is the whole of it, and both halves are wrong in the obvious
+/// implementation. `Host_Loadgame_f` leaves the world PAUSED until the player
+/// presses Resume, so drawing at load time captures a frozen frame of a level
+/// they have not seen yet. And the pose ring holds one second, so immediately
+/// after Resume it is still full of the level they just left -- a cover drawn
+/// then is a picture of the wrong map.
+enum CoverBackfill {
+
+    /// How long after Resume to wait. At least a ring's worth, so nothing of
+    /// the previous level survives in it.
+    static let settle: TimeInterval = 1.25
+
+    /// The save owed a cover, when one is due.
+    static func due(pending: String?, levelLoaded: Bool, paused: Bool,
+                    secondsSinceResume: TimeInterval) -> String? {
+        guard let pending, levelLoaded, !paused, secondsSinceResume >= settle
+        else { return nil }
+        return pending
+    }
+}

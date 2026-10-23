@@ -48,6 +48,7 @@ struct SessionTest {
         runSlotListTests()
         runCoverTests()
         runHeadPoseRingTests()
+        runCoverBackfillTests()
         runConsoleArgumentTests()
         print("PASSED")
     }
@@ -350,6 +351,39 @@ struct SessionTest {
         check(tag(long.coverPose()) == 499, "the newest survives a wrap")
         check(long.debugState.held == HeadPoseRing.capacity,
               "and the ring never grows past its capacity")
+    }
+
+    // MARK: - backfilling a cover on load
+
+    static func runCoverBackfillTests() {
+        typealias B = CoverBackfill
+
+        check(B.due(pending: nil, levelLoaded: true, paused: false,
+                    secondsSinceResume: 99) == nil,
+              "nothing owed, nothing drawn")
+        check(B.due(pending: "s3", levelLoaded: false, paused: false,
+                    secondsSinceResume: 99) == nil,
+              "no level means nothing to take a picture OF")
+
+        // A load pauses the world and leaves it paused until the player
+        // presses Resume. Drawing then would capture a frozen frame of a
+        // level the player has not seen yet.
+        check(B.due(pending: "s3", levelLoaded: true, paused: true,
+                    secondsSinceResume: 99) == nil,
+              "while still paused, wait")
+
+        // And after Resume the ring is still full of the OLD level: it holds
+        // one second, so the new world needs a moment to fill it.
+        check(B.due(pending: "s3", levelLoaded: true, paused: false,
+                    secondsSinceResume: 0.2) == nil,
+              "just-resumed is too early -- the ring still holds the old level")
+        check(B.due(pending: "s3", levelLoaded: true, paused: false,
+                    secondsSinceResume: 1.5) == "s3",
+              "once the new level has filled the ring, draw it")
+
+        // The settle is at least a ring's worth, or the cover is a picture
+        // of where the player was before they loaded.
+        check(B.settle >= 1.0, "the settle covers a full ring")
     }
 
     // MARK: - header parsing
