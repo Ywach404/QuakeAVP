@@ -21,6 +21,11 @@ import simd
 
 enum ExportCamera {
     case head(VRTrack)
+    /// A head pose given directly, rather than sampled from a track by
+    /// server time. A save's cover is drawn from a remembered pose with no
+    /// recording behind it, and the world is frozen at the moment it is
+    /// taken, so there is nothing to interpolate.
+    case pose(simd_float4x4)
     case smoothedHead(VRTrack)
     case gun
     /// Third person: the player model is drawn (chase_active 1). Chase is
@@ -135,6 +140,11 @@ final class ExportRenderer {
                 SIMD4(f.viewproj.8, f.viewproj.9, f.viewproj.10, f.viewproj.11),
                 SIMD4(f.viewproj.12, f.viewproj.13, f.viewproj.14, f.viewproj.15)))
             return (vp, SIMD3(f.vieworg.0, f.vieworg.1, f.vieworg.2))
+        case .pose(let m):
+            // eye->world in tracking axes, exactly what .head produces once
+            // it has sampled. Its inverse is the view matrix.
+            return (projection * m.inverse,
+                    SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z))
         case .head(let track), .smoothedHead(let track):
             let s = track.sample(at: f.time)
             var pose = simd_float4x4(s.orientation)
@@ -171,7 +181,7 @@ final class ExportRenderer {
 
     /// Render `f` with `camera` and add it to the accumulator with `weight`.
     func accumulate(frame f: qc_frame_t, camera: ExportCamera, weight: Float,
-                    commandBuffer: MTLCommandBuffer) {
+                    commandBuffer: MTLCommandBuffer, worldOnly: Bool = false) {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = color
         pass.colorAttachments[0].loadAction = .clear
@@ -204,7 +214,7 @@ final class ExportRenderer {
         }
         core.encode(frame: f, with: encoder, pipelines: pipelines, uniforms: uniforms,
                     phase: phase, amplificationCount: 1, viewmodelViewport: viewports,
-                    drawsViewmodel: false)
+                    drawsViewmodel: false, worldOnly: worldOnly)
         encoder.endEncoding()
 
         guard let compute = commandBuffer.makeComputeCommandEncoder() else { return }

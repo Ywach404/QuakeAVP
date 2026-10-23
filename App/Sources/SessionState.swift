@@ -248,6 +248,27 @@ final class SessionState {
                        previous: slots.first { $0.name == name }?.modified,
                        requestedAt: Date())
         QuakeEngineViewModel.shared.send("save \(name)")
+
+        // The cover, after the save is on its way and never able to stop it.
+        // Off the main actor because the pass takes the renderer's consumer
+        // lock and waits on a command buffer -- neither belongs on the thread
+        // drawing this window, and the lock must never be taken on the
+        // CompositorServices thread at all.
+        //
+        // No completion handler and no error: a save with no cover is a
+        // complete save showing a plain card, which is what every save
+        // written before this existed does. The poll will pick the file up
+        // whenever it lands, because `pendingSave` already makes it rescan.
+        if let directory = gameDirectory {
+            Task.detached(priority: .utility) { [weak self] in
+                CoverRenderer.shared.write(coverFor: name, into: directory)
+                // Rescan once it lands. The SAVE clears `pendingSave` the
+                // moment the .sav appears, so by the time the cover is
+                // written nothing is watching the directory any more and the
+                // card would sit there plain until something else refreshed.
+                await MainActor.run { self?.refreshSlots() }
+            }
+        }
     }
 
     /// `load <name>`. Allowed with no level loaded -- that is how a session
