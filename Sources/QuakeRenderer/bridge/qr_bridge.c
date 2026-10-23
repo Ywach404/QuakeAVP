@@ -4173,6 +4173,10 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 	rec.clip[1] = rec.clip[2] = rec.clip[3] = 0.f;
 	if (qr_handweapon)
 	{
+		/* Marked so a world-only consumer can drop it. The viewmodel
+		   flag above is deliberately NOT set for the hand weapon, so
+		   this is the only thing that identifies it. */
+		rec.flags |= QC_ENTFLAG_HANDWEAPON;
 		QR_WeaponClip (paliashdr, rec.clip);
 		if (vr_weapontint.value)
 			rec.dbg[0] = 1.f;   /* debug: paint the hand weapon green */
@@ -7838,7 +7842,18 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 				langles[1] = cl.viewangles[1] + vr_laseryaw.value;
 				langles[2] = cl.viewangles[2];
 				if (vr_laser.value)
+				{
+					/* Published as its own range so a world-only
+					   consumer can drop the beam. NOT folded into
+					   the reticle's range below: that one is drawn
+					   with the depth test off, and widening it to
+					   cover the laser would change how the live
+					   laser draws. */
+					slot->frame.laser_first_vert = slot->frame.num_particle_verts;
 					QR_EmitLaser (slot, lstart, langles);
+					slot->frame.laser_vert_count = slot->frame.num_particle_verts
+						- slot->frame.laser_first_vert;
+				}
 				/* Reticle marks where the SHOT lands (cl.viewangles, not the
 				   laser's barrel-aligned tilt), from the same muzzle. Entered
 				   for the shape OR the gauges; QR_EmitReticle draws whichever
@@ -7939,6 +7954,8 @@ void QR_BeginFrame (void)
 	slot->frame.num_particle_verts = 0;
 	slot->frame.reticle_first_vert = 0;
 	slot->frame.reticle_vert_count = 0;
+	slot->frame.laser_first_vert = 0;
+	slot->frame.laser_vert_count = 0;
 	slot->frame.ground_first_vert = 0;
 	slot->frame.ground_vert_count = 0;
 	slot->frame.num_sprite_verts = 0;

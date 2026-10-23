@@ -170,7 +170,19 @@ enum {
 	   whose submodel belongs to a func_door_secret: a secret door that
 	   hangs in the air after the wall around it melts is a spoiler, so
 	   secrets go out with the architecture they hide in. */
-	QC_ENTFLAG_PHASED = 1 << 1
+	QC_ENTFLAG_PHASED = 1 << 1,
+
+	/* The gun in the player's hand, for a consumer that wants the world
+	   WITHOUT the player's own kit in it -- a save's cover picture.
+	   
+	   It needs a flag of its own because it cannot be recognised any
+	   other way: it is emitted through the ordinary alias path, and the
+	   bridge deliberately SUPPRESSES QC_ENTFLAG_VIEWMODEL on it, because
+	   the immersive path draws the gun on the hand rather than locked to
+	   the view. So a consumer skipping viewmodels does not skip this, and
+	   the only other trace of it is a clip value that is not a reliable
+	   signal. */
+	QC_ENTFLAG_HANDWEAPON = 1 << 2
 };
 
 /*
@@ -461,6 +473,16 @@ typedef struct qc_frame_s {
 	   over the gun. Zero count when the world is solid. */
 	uint32_t	ground_first_vert;
 	uint32_t	ground_vert_count;
+	/* The aiming laser, a third sub-range of the same run. Published so a
+	   world-only pass can leave it out; it had no range at all before,
+	   which meant no way to skip it short of skipping every particle.
+	   
+	   Deliberately NOT folded into the reticle's range even though both
+	   belong to the aim: that one is drawn with the depth test OFF, and
+	   widening it to cover the laser would change how the LIVE laser
+	   draws. Zero count when the gun is not aiming. */
+	uint32_t	laser_first_vert;
+	uint32_t	laser_vert_count;
 
 	/* Sprite models as 3D billboarded TEXTURED quads (explosions, bubbles).
 	   Five floats per vertex: xyz position (Quake units) and st; six vertices

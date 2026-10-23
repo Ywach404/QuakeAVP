@@ -388,7 +388,8 @@ final class RendererCore {
                 amplificationCount: Int,
                 viewmodelViewport: (full: MTLViewport, squished: MTLViewport)? = nil,
                 drawsViewmodel: Bool = false,
-                windowHud: Bool = false) {
+                windowHud: Bool = false,
+                worldOnly: Bool = false) {
         guard frame.num_batches > 0, frame.num_indices > 0,
               let batches = frame.batches
         else { return }
@@ -484,6 +485,11 @@ final class RendererCore {
             if batch.kind == UInt32(QC_BATCH_ALIAS) {
                 guard let entities = frame.entities else { continue }
                 let entity = entities[Int(batch.entity)]
+                // The gun in the hand. Marked by the bridge precisely
+                // because the viewmodel flag below is deliberately NOT set
+                // on it, so nothing else here can tell it from any other
+                // alias entity in the world.
+                if worldOnly, entity.flags & UInt32(QC_ENTFLAG_HANDWEAPON) != 0 { continue }
                 if entity.flags & UInt32(QC_ENTFLAG_VIEWMODEL) != 0 {
                     // The weapon. Its transform is vieworg + viewangles —
                     // the BODY pose — and the immersive camera composes the
@@ -666,19 +672,33 @@ final class RendererCore {
                 // so anything meant to be seen THROUGH a melted wall cannot
                 // be depth tested. Walk the run in order and flip the state
                 // at each boundary, rather than hard-coding three spans.
+                //
+                // A world-only pass does not reposition these ranges, it
+                // DROPS them: the aim mark, the ground grid and the aiming
+                // laser are the player's own kit, not the world. What is
+                // left is the gaps, all ordinary depth-no-write particles.
                 var always: [(Int, Int)] = []
-                for (first, count) in [(frame.ground_first_vert, frame.ground_vert_count),
-                                       (frame.reticle_first_vert, frame.reticle_vert_count)] {
+                let subRanges = worldOnly
+                    ? [(frame.ground_first_vert, frame.ground_vert_count),
+                       (frame.reticle_first_vert, frame.reticle_vert_count),
+                       (frame.laser_first_vert, frame.laser_vert_count)]
+                    : [(frame.ground_first_vert, frame.ground_vert_count),
+                       (frame.reticle_first_vert, frame.reticle_vert_count)]
+                for (first, count) in subRanges {
                     let f = min(Int(first), total)
                     let c = min(Int(count), total - f)
-                    if c >= 3 { always.append((f, c)) }
+                    // A dropped range counts at any size; a depth-always one
+                    // needs a whole triangle to be worth a state change.
+                    if worldOnly ? c > 0 : c >= 3 { always.append((f, c)) }
                 }
                 always.sort { $0.0 < $1.0 }
                 var runs: [(Int, Int, MTLDepthStencilState)] = []
                 var cursor = 0
                 for (f, c) in always where f >= cursor {
                     runs.append((cursor, f - cursor, pipelines.depthNoWrite))
-                    runs.append((f, c, pipelines.depthAlways))
+                    // Skipped entirely when world-only: the gap before it is
+                    // kept, the range itself is simply never drawn.
+                    if !worldOnly { runs.append((f, c, pipelines.depthAlways)) }
                     cursor = f + c
                 }
                 runs.append((cursor, total - cursor, pipelines.depthNoWrite))
@@ -742,7 +762,10 @@ final class RendererCore {
         // Weapon-wheel guide ring, over the world, before the vignette (so
         // locomotion vignette — never on while the wheel is open — could
         // still darken it, harmlessly).
-        if frame.wheel_frac > 0.01, frame.wheel_count > 0, frame.wheel_radius > 0.5 {
+        // The weapon wheel's guide ring. Zero while a save is being written,
+        // because the wheel blocks saving -- gated anyway rather than trusted,
+        // since "it cannot happen" is how it gets into the picture later.
+        if !worldOnly, frame.wheel_frac > 0.01, frame.wheel_count > 0, frame.wheel_radius > 0.5 {
             let guide = Self.wheelGuideGeometry(frame: frame)
             // A per-frame buffer, not setVertexBytes: the triangle geometry
             // exceeds the 4 KB setVertexBytes limit.
@@ -766,7 +789,9 @@ final class RendererCore {
         // — over the world and under the vignette. One conchars atlas, one
         // flat vertex run (9 floats/vert: xyz, uv, rgba), per-frame buffer.
         if let textPipeline = pipelines.text,
-           frame.num_text_verts >= 3, frame.conchars_texnum != 0,
+           // Wheel labels and centerprints: words the player is being
+           // shown, not part of the room.
+           !worldOnly, frame.num_text_verts >= 3, frame.conchars_texnum != 0,
            let atlas = textures[frame.conchars_texnum],
            let src = frame.text_verts {
             let floatCount = Int(frame.num_text_verts) * 9
@@ -802,7 +827,9 @@ final class RendererCore {
         }
 
         // Comfort vignette, last over everything, engine-eased strength.
-        if frame.vignette > 0.001 {
+        // Comfort vignette. Like the wheel, zero at save time by
+        // construction, and gated rather than assumed.
+        if !worldOnly, frame.vignette > 0.001 {
             setPipeline(pipelines.vignette, depth: pipelines.depthAlways)
             var vignetteUniforms = VignetteUniforms(strength: frame.vignette)
             withUnsafeBytes(of: &vignetteUniforms) { raw in
