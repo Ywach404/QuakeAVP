@@ -23,6 +23,7 @@ set -e
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT_DIR/App/Sources/ContentView.swift"
 fails=0
+TABFAIL=$(mktemp); trap 'rm -f "$TABFAIL"' EXIT
 
 # The phase column is a SIBLING of the tab panel, not content inside its
 # scroll view, so there is no scroll gesture for a pinch to misfire into and
@@ -68,6 +69,22 @@ check_body() {
 check_body placeSlider 'noteTuning("gun ' 'prefixed with gun'
 check_body placementSlider 'noteTuning(cvar,' 'of its cvar'
 check_body commPlaceRow 'commAlongArm ?' 'with the across/along mode'
+
+# `tabIsTunable` decides where the lock pill appears, and is a second place
+# the truth is written down. See tools/tuning-tab-inventory.py.
+python3 "$ROOT_DIR/tools/tuning-tab-inventory.py" "$SRC" | while read -r tab count; do
+	# What the Swift switch claims for this tab.
+	claim=$(awk '/private static func tabIsTunable/,/^    \}/' "$SRC" \
+		| grep -E "case .*\.$tab\b" | grep -o 'return [a-z]*' | head -1 | awk '{print $2}')
+	if [ "$count" -gt 0 ]; then want=true; else want=false; fi
+	if [ "$claim" = "$want" ]; then
+		echo "ok:   tab $tab: $count drag controls, tabIsTunable says $claim"
+	else
+		echo "FAIL: tab $tab has $count drag controls but tabIsTunable says $claim"
+		echo "$tab" >> "$TABFAIL"
+	fi
+done
+if [ -s "$TABFAIL" ]; then fails=$((fails + 1)); fi
 
 # No two controls on one tab may log under the same name. See
 # tools/tuning-log-names.py for why a collision drops a change outright.

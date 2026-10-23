@@ -554,7 +554,7 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            lockBar
+            if Self.tabIsTunable(activeTab) { lockBar }
             ScrollView {
                 Group {
                     switch activeTab {
@@ -576,6 +576,14 @@ struct ContentView: View {
                 // all the way down.
                 .overlay(alignment: .trailing) { scrollGutter }
             }
+            // The gutter and the system scroll indicator were occupying the
+            // same strip, and dragging an indicator does not follow your
+            // hand -- it maps the grab's POSITION onto the scroll offset, so
+            // a pinch anywhere near the trailing edge jumped the panel to
+            // wherever that point corresponded to and made a gradual scroll
+            // impossible. The grip is the affordance now, so the indicator
+            // is only a rival for the same pixels.
+            .scrollIndicators(.hidden)
             // The grip, drawn OVER the gutter and pinned to the panel rather
             // than to the content, so it stays where your eye last found it
             // instead of scrolling away with the rows. Decorative only: a
@@ -678,6 +686,21 @@ struct ContentView: View {
                             group: String? = nil) {
         TuningLock.shared.note("\(group ?? Self.tabName(activeTab))/\(label)",
                                from: from, to: to)
+    }
+
+    /// Whether a tab holds any drag-driven control, and so whether the lock
+    /// pill has anything to say there. Game, Admin and Capture are buttons,
+    /// pickers and text throughout.
+    ///
+    /// Kept honest by tools/check-tuning-lock.sh, which counts the controls
+    /// in each tab's body and fails if this list disagrees -- a tab that
+    /// grows its first slider would otherwise silently lose the lock's
+    /// explanation while the lock still applied to it.
+    private static func tabIsTunable(_ tab: PanelTab) -> Bool {
+        switch tab {
+        case .comfort, .weapon, .debug: return true
+        case .game, .admin, .capture: return false
+        }
     }
 
     private static func tabName(_ tab: PanelTab) -> String {
