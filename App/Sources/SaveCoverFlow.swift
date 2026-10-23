@@ -207,6 +207,18 @@ struct SaveCoverFlow: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    // Pinned and cropped, so the PICTURE cannot decide how big
+                    // the CARD is. `.fill` is allowed to report a size larger
+                    // than the one it was offered, and a ZStack takes its
+                    // largest child, so without this an outer frame cannot
+                    // clamp it: a wide cover made a wide card and the whole
+                    // deck changed shape with whatever image happened to land
+                    // in it. Fill then crop is what a cover wants anyway --
+                    // the frame is the card's, and the picture is trimmed to
+                    // it rather than negotiating.
+                    .frame(width: CoverFlowMetrics.cardWidth,
+                           height: CoverFlowMetrics.cardHeight)
+                    .clipped()
             }
             caption(slot)
         }
