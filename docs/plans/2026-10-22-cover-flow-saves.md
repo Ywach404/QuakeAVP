@@ -12,7 +12,7 @@
 
 ## Status
 
-- [x] **Task 1 — DONE, device-verified** · [x] **Task 2 — DONE, device-verified** · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
+- [x] **Task 1 — device-verified** · [x] **Task 2 — device-verified** · [x] **Task 3 — built** · [x] **Task 4 — built** · [x] **Task 5 — built, DEVICE CHECK PENDING** · [ ] Task 6 · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
 
 ## Task 1 outcome
 
@@ -62,6 +62,34 @@ clipped now.
 Worth keeping: real covers will be close to the card's aspect, where this
 would have read as a design choice rather than a bug. Testing with
 deliberately wrong-shaped inputs is what made it visible.
+
+## Tasks 3-5 outcome
+
+Built 2026-10-22, all gates green, **device check pending**. Task 5 is the
+first thing in this plan that cannot be host-tested: a render pass's proof is
+a cover with no gun in it.
+
+- **Task 3** added `worldOnly` as a default-false parameter, so no existing
+  caller moved. `QC_ENTFLAG_HANDWEAPON` was needed because the bridge
+  deliberately suppresses the viewmodel flag on the hand weapon, and the
+  aiming laser had no published vertex range at all. Its range is deliberately
+  separate from the reticle's: that one draws depth-always, and widening it
+  would have changed how the LIVE laser draws.
+- **Task 4**'s ring earned itself twice over. The known reason was the prayer
+  sign's 0.6 s dwell. The one I had underweighted: pause stops the SIM only,
+  so the render thread keeps running at 90 Hz while the panel is up and "the
+  latest pose" read a moment later is wherever the player is looking NOW.
+  Freezing the instant at the summon is what makes "seconds before" mean
+  anything.
+- **Task 5** needed `ExportCamera.pose`, taking a matrix rather than sampling
+  a VRTrack by server time -- a cover has no recording behind it and nothing
+  to interpolate.
+
+One gap closed that the plan had not listed: the save clears `pendingSave`
+the moment the `.sav` appears, so by the time the picture is written nothing
+is watching the directory and the card would sit plain until something else
+refreshed. The same shape as the Task 1 bug where a new save's card did not
+show up. Rescan after the cover lands.
 
 ## Global Constraints
 
