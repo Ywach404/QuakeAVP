@@ -67,12 +67,6 @@ final class TuningLock {
         scheduleFlush()
     }
 
-    /// Report anything still pending. For the window going away: a change
-    /// that has not yet gone quiet would otherwise never be reported.
-    func drainNow() {
-        emit(logger.drain())
-    }
-
     /// One task at a time, living only as long as something is pending.
     ///
     /// The clock is `CACurrentMediaTime`, which is monotonic. Wall time is

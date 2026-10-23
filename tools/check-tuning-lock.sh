@@ -53,6 +53,19 @@ else
 	fails=$((fails + 1))
 fi
 
+# The dials must be LOGGED as well as locked, and that is a separate miss:
+# gyroDisc owns the gesture, so the lock belongs there, but only gyroDial and
+# commDisc know what their axes are CALLED -- so the lock passing says nothing
+# about whether a dial drag is reported. It was in fact missed the first time.
+for fn in gyroDial commDisc; do
+	if awk "/private func $fn/,/^    \}/" "$SRC" | grep -q 'noteTuning('; then
+		echo "ok:   $fn reports its changes"
+	else
+		echo "FAIL: $fn moves a tuned value without a [tune] line"
+		fails=$((fails + 1))
+	fi
+done
+
 # The lock must default to engaged. A lock that starts off is decoration.
 if grep -q 'var isLocked = true' "$ROOT_DIR/App/Sources/TuningLock.swift"; then
 	echo "ok:   the lock defaults to locked"

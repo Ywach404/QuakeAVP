@@ -940,3 +940,62 @@ local and momentary, which is what the sensor can actually supply.
 
 A panel control implies a feature worth reaching for, and the window is the
 only debug surface on device, so what sits in it should earn the space.
+
+---
+
+## 2026-10-23 — The panel locks what responds to a drag, not what holds a value
+
+**Choice.** The control panel starts locked at every launch, and the lock
+disables only drag-driven controls: the sliders and the three gyro discs.
+Buttons, toggles, segmented pickers, the map cards, the tab bar and the
+console stay live, so the panel is fully usable with the lock engaged.
+Alongside it, a 40pt gutter of empty space runs down the trailing edge of the
+scrolling tab content, and every change to a tuned value prints one
+`[tune] tab/Label from -> to` line per gesture.
+
+**Why.** The first rule drafted was "lock anything that HOLDS a value you
+tuned," which is the intuitive split and the wrong one. The accident has a
+mechanism: scrolling the panel by gaze and pinch means pinching something and
+dragging it, so the gesture that moves the view and the gesture that moves a
+value are *the same gesture*, and the only thing separating them is where the
+gaze happened to land. That makes continuous drag response the hazard, not
+value-holding. A segmented picker holds a tuned value too and is near
+impossible to hit by accident, because it needs a discrete press on a
+specific target; locking it would only make the panel annoying and push
+toward leaving the lock off. Naming the drag is what lets the lock stay on
+permanently, which is the only version of it that protects anything.
+
+Locked at every launch and deliberately not persisted. A remembered lock is
+remembered as *unlocked* on the day you forgot you left it that way, which is
+strictly worse than no lock; and tuning here is one focused session followed
+by set-and-forget, so re-engaging costs a single press. It lives in an
+observable singleton rather than view state because the window is summoned
+often and re-locking the panel under a hand mid-session would be its own
+annoyance.
+
+The gutter exists because the lock cannot fix scrolling. Even fully locked,
+the panel still has to be scrolled, and there still has to be somewhere to
+pinch. Empty layout padding is not a gaze target, so the gutter is a real
+hit-testable surface that claims no gesture of its own — the drag reaches the
+scroll view precisely *because* nothing in the gutter handles it. Attaching a
+gesture there to "make it work" would break it.
+
+The log is the part that answers what the accident actually cost. A trim
+moved by a stray pinch was unnoticed for days and blamed on three successive
+builds before the value itself was looked at; the setting was cheap and the
+misdirected debugging was not. A lock can be left off, so the log is the
+backstop that cannot be left in the wrong state. It coalesces to one line per
+gesture because a slider's binding fires dozens of times per drag and a line
+each is a log nobody reads, which is the same as no log; and a drag that
+returns to where it started says nothing, so every line in it is a value that
+genuinely differs now.
+
+The phase LEVEL slider is exempt: it is the dissolve being scrubbed during
+play, an action rather than a setting, and locking it would remove a control
+that is meant to be used with the lock on. The ground-opacity and edge-grid
+dials beside it are settings, and are locked.
+
+Coverage is guarded by `tools/check-tuning-lock.sh` rather than by trust. The
+failure mode is not the lock misbehaving — it is a slider added later that
+nobody marked, which no test of the lock can catch and which in the headset
+is indistinguishable from a locked one right up until a stray pinch moves it.

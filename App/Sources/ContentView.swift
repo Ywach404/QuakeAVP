@@ -2169,14 +2169,20 @@ struct ContentView: View {
         return gyroDisc(a: yaw.wrappedValue, b: pitch.wrappedValue, spin: roll.wrappedValue,
                         last: $gyroLast, rimMode: $gyroRollMode,
                         onInside: { dx, dy, _, _ in
-                            yaw.wrappedValue = max(-180, min(180,
+                            let newYaw = max(-180, min(180,
                                 yaw.wrappedValue + Float(dx) * degPerPt))
-                            pitch.wrappedValue = max(-90, min(90,
+                            let newPitch = max(-90, min(90,
                                 pitch.wrappedValue + Float(dy) * degPerPt))
+                            noteTuning("Pan Y", from: yaw.wrappedValue, to: newYaw)
+                            noteTuning("Tilt X", from: pitch.wrappedValue, to: newPitch)
+                            yaw.wrappedValue = newYaw
+                            pitch.wrappedValue = newPitch
                             apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
                         },
                         onRim: { d in
-                            roll.wrappedValue = max(-180, min(180, roll.wrappedValue + d))
+                            let newRoll = max(-180, min(180, roll.wrappedValue + d))
+                            noteTuning("Roll Z", from: roll.wrappedValue, to: newRoll)
+                            roll.wrappedValue = newRoll
                             apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
                         })
     }
@@ -2204,14 +2210,20 @@ struct ContentView: View {
                         spin: angle.wrappedValue,
                         last: $commDiscLast, rimMode: $commDiscRimMode,
                         onInside: { _, _, nx, ny in
-                            side.wrappedValue = max(-posRange, min(posRange, Float(nx) * posRange))
-                            forward.wrappedValue = max(-posRange, min(posRange, Float(-ny) * posRange))
+                            let newSide = max(-posRange, min(posRange, Float(nx) * posRange))
+                            let newFwd = max(-posRange, min(posRange, Float(-ny) * posRange))
+                            noteTuning("Side", from: side.wrappedValue, to: newSide)
+                            noteTuning("Forward", from: forward.wrappedValue, to: newFwd)
+                            side.wrappedValue = newSide
+                            forward.wrappedValue = newFwd
                             apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
                         },
                         onRim: { d in
                             let scaled = d * (angleSpan / 360)
-                            angle.wrappedValue = max(-VRSettings.commTiltLimit,
+                            let newAngle = max(-VRSettings.commTiltLimit,
                                 min(VRSettings.commTiltLimit, angle.wrappedValue + scaled))
+                            noteTuning("Angle", from: angle.wrappedValue, to: newAngle)
+                            angle.wrappedValue = newAngle
                             apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
                         })
     }
