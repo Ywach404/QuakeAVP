@@ -358,6 +358,13 @@ struct ContentView: View {
                 // sink wired above is the one that hops to the main actor,
                 // so `log` itself only prints and forwards.
                 HandDebug.shared.log("[summon] respawn closure reached -> openWindow(console)")
+                // Pin the instant BEFORE the window appears. Both ways in are
+                // hand gestures -- the prayer sign dwells 0.6 s with the palms
+                // up, the gauntlet is pressed while looking at the wrist -- so
+                // a cover drawn from "now" is a picture of the player's own
+                // hands. Freezing here lets the cover come from a moment
+                // before the gesture instead.
+                HeadPoseRing.shared.freeze(at: CACurrentMediaTime())
                 openWindow(id: QuakeAVPApp.consoleWindowID)
                 // You summoned the console mid-game: stop the world so a
                 // shambler isn't eating you while you read a slider. Resume is

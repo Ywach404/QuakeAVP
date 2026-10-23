@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import simd
 
 func check(_ condition: Bool, _ label: String) {
     if condition {
@@ -46,6 +47,7 @@ struct SessionTest {
         runSaveNamingTests()
         runSlotListTests()
         runCoverTests()
+        runHeadPoseRingTests()
         runConsoleArgumentTests()
         print("PASSED")
     }
@@ -292,6 +294,70 @@ struct SessionTest {
         check(slot("midwrite") != nil, "a save with a half-written cover still lists")
         check(slot("midwrite")?.coverURL == nil,
               "and an empty cover file reads as no cover at all")
+    }
+
+    // MARK: - the head-pose ring
+
+    /// A pose identifiable by one number, so a test can say which one came
+    /// back without comparing sixteen floats.
+    static func pose(_ tag: Float) -> simd_float4x4 {
+        var m = matrix_identity_float4x4
+        m.columns.3 = SIMD4<Float>(tag, 0, 0, 1)
+        return m
+    }
+    static func tag(_ m: simd_float4x4?) -> Float? { m.map { $0.columns.3.x } }
+
+    static func runHeadPoseRingTests() {
+        // Nothing recorded: a save taken before the immersive space was ever
+        // opened has no pose, and must say so rather than invent one.
+        let empty = HeadPoseRing()
+        check(empty.pose(secondsBefore: 0.5) == nil,
+              "an empty ring has no pose to give")
+        empty.freeze(at: 1.0)
+        check(empty.pose(secondsBefore: 0.5) == nil,
+              "and freezing an empty ring does not conjure one")
+
+        let ring = HeadPoseRing()
+        ring.note(pose(10), at: 0.0)
+        ring.note(pose(20), at: 0.5)
+        ring.note(pose(30), at: 1.0)
+        ring.freeze(at: 1.0)
+
+        check(tag(ring.pose(secondsBefore: 0)) == 30, "zero back is the newest pose")
+        check(tag(ring.pose(secondsBefore: 0.5)) == 20,
+              "half a second back is the pose from half a second back")
+        check(tag(ring.pose(secondsBefore: 1.0)) == 10, "a second back is the oldest")
+
+        // Asking further back than the ring holds returns the OLDEST it has
+        // rather than nil: a pose from slightly too long ago is still a
+        // picture of the room, and nil would mean no cover at all.
+        check(tag(ring.pose(secondsBefore: 99)) == 10,
+              "asking beyond the ring returns the oldest held, not nothing")
+
+        // The whole reason for a ring rather than one slot: the prayer sign
+        // dwells for 0.6 s while the player looks at their own palms, so the
+        // pose wanted is from BEFORE the gesture, not at the summon.
+        check(tag(ring.pose(secondsBefore: 0.8)) == 10,
+              "a pose from before a 0.6s gesture is still reachable")
+
+        // Freezing is what makes "secondsBefore" mean anything: it pins the
+        // reference instant, so later frames cannot drag the answer forward.
+        ring.note(pose(40), at: 1.5)
+        check(tag(ring.pose(secondsBefore: 0)) == 30,
+              "a frame noted after the freeze does not move the answer")
+        ring.freeze(at: 1.5)
+        check(tag(ring.pose(secondsBefore: 0)) == 40,
+              "and a fresh freeze picks it up")
+
+        // Fixed storage: it must overwrite rather than grow, because it is
+        // written every frame on the render thread forever.
+        let long = HeadPoseRing()
+        for i in 0..<500 { long.note(pose(Float(i)), at: Double(i) / 90.0) }
+        long.freeze(at: 499.0 / 90.0)
+        check(tag(long.pose(secondsBefore: 0)) == 499, "the newest survives a wrap")
+        check(long.pose(secondsBefore: 0.5) != nil, "and a recent one is still there")
+        check(tag(long.pose(secondsBefore: 99)) != 0,
+              "while the very first is long gone, not resurrected")
     }
 
     // MARK: - header parsing

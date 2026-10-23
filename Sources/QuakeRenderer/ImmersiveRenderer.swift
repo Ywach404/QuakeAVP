@@ -882,11 +882,20 @@ final class ImmersiveRenderer {
             // cl.time is the duplicate-clock corruption VRTrack has a fixup
             // pass for.
             if publishes {
+                let quakeFromHead = quakeFromOrigin * originFromDevice
                 TrackRecorder.shared.noteFrame(
                     clTime: packet.time,
-                    quakeFromHead: quakeFromOrigin * originFromDevice,
+                    quakeFromHead: quakeFromHead,
                     worldScale: s, bodyYaw: packet.body_yaw,
                     headOffset: SIMD3(fwd, right, up), heightTrim: heightTrim)
+                // The same matrix the exporter's head camera consumes, kept
+                // for a second so a save's cover can be drawn from where the
+                // player was looking BEFORE they reached for the window.
+                // Keyed on wall time rather than the server clock, because
+                // the gesture that summons the window happens in the room,
+                // not in the simulation -- and the sim is about to stop.
+                HeadPoseRing.shared.note(quakeFromHead,
+                                         at: CACurrentMediaTime())
             }
         }
 
