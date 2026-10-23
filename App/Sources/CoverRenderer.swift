@@ -68,17 +68,34 @@ final class CoverRenderer: @unchecked Sendable {
     /// what every save written before this existed does. A save that failed
     /// because its picture failed would be a far worse trade.
     func write(coverFor name: String, into directory: URL) {
+        // Every exit here is deliberately silent to the SAVE -- a cover can
+        // never fail a save -- but silent to the log as well made "no cover
+        // appeared" impossible to diagnose. Each guard says which one it was.
+        func stop(_ why: String) { HandDebug.shared.log("[cover] \(name): \(why)") }
+
         // No pose means the immersive space was never opened this session,
         // so there is nothing to draw and nothing is wrong.
-        guard let pose = HeadPoseRing.shared.pose(secondsBefore: Self.lookBack) else { return }
+        guard let pose = HeadPoseRing.shared.pose(secondsBefore: Self.lookBack) else {
+            stop("no head pose (immersive space never opened, or never frozen)")
+            return
+        }
 
         // No core means no renderer has ever come up, which is the same
         // "nothing to draw" case as no pose.
-        guard let core = RendererCoordinator.shared.core else { return }
-        guard let renderer = makeRenderer(core: core),
-              let queue = core.device.makeCommandQueue(),
+        guard let core = RendererCoordinator.shared.core else {
+            stop("no renderer core")
+            return
+        }
+        guard let renderer = makeRenderer(core: core) else {
+            stop("ExportRenderer init failed")
+            return
+        }
+        guard let queue = core.device.makeCommandQueue(),
               let cb = queue.makeCommandBuffer()
-        else { return }
+        else {
+            stop("no Metal command queue")
+            return
+        }
 
         // Somewhere to blit the private render target into, so the CPU can
         // read it. ExportRenderer's own colour texture is .private.
@@ -87,11 +104,15 @@ final class CoverRenderer: @unchecked Sendable {
             mipmapped: false)
         desc.usage = [.shaderRead, .shaderWrite]
         desc.storageMode = .shared
-        guard let readback = core.device.makeTexture(descriptor: desc) else { return }
+        guard let readback = core.device.makeTexture(descriptor: desc) else {
+            stop("readback texture allocation failed")
+            return
+        }
 
         var drew = false
-        core.withConsumer(.immersive) {
-            guard let frame = QC_RendererAcquireFrame() else { return }
+        var acquired = true
+        let got: Void? = core.withConsumer(.immersive) {
+            guard let frame = QC_RendererAcquireFrame() else { acquired = false; return }
             defer { QC_RendererReleaseFrame() }
             renderer.accumulate(frame: frame.pointee, camera: .pose(pose), weight: 1,
                                 commandBuffer: cb, worldOnly: true)
@@ -100,12 +121,17 @@ final class CoverRenderer: @unchecked Sendable {
             renderer.resolve(into: readback, hud: [], atlasTexnum: 0, commandBuffer: cb)
             drew = true
         }
-        guard drew else { return }
+        if got == nil { stop("the immersive consumer is not current (is the space open?)"); return }
+        if !acquired { stop("no frame packet to draw"); return }
+        guard drew else { stop("nothing drawn"); return }
 
         cb.commit()
         cb.waitUntilCompleted()          // outside the consumer lock
 
-        guard let jpeg = Self.encodeJPEG(from: readback) else { return }
+        guard let jpeg = Self.encodeJPEG(from: readback) else {
+            stop("JPEG encode failed")
+            return
+        }
         // Written to a temporary name and moved into place, so a scan can
         // never see a half-written cover. A zero-byte .jpg reads as absent
         // by design, but a torn one would decode to nothing visible.
@@ -117,7 +143,9 @@ final class CoverRenderer: @unchecked Sendable {
             try jpeg.write(to: temp, options: .atomic)
             _ = try? FileManager.default.removeItem(at: final)
             try FileManager.default.moveItem(at: temp, to: final)
+            HandDebug.shared.log("[cover] \(name): wrote \(jpeg.count) bytes -> \(final.lastPathComponent)")
         } catch {
+            stop("write failed: \(error.localizedDescription)")
             try? FileManager.default.removeItem(at: temp)
         }
     }
