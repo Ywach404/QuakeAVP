@@ -990,10 +990,27 @@ each is a log nobody reads, which is the same as no log; and a drag that
 returns to where it started says nothing, so every line in it is a value that
 genuinely differs now.
 
-The phase LEVEL slider is exempt: it is the dissolve being scrubbed during
-play, an action rather than a setting, and locking it would remove a control
-that is meant to be used with the lock on. The ground-opacity and edge-grid
-dials beside it are settings, and are locked.
+The phase column is left alone entirely, all three sliders. It is a sibling
+of the panel rather than content inside its scroll view, so there is no scroll
+gesture there for a pinch to misfire into -- the hazard the lock answers does
+not exist in that column, and a greyed row whose explanation sits in a
+different column is just a control that looks broken. The first pass locked
+the ground-opacity and edge-grid dials on the reasoning that they are settings
+while the phase level is an action; that reasoning was about the wrong thing.
+What decides it is whether a control competes with scrolling, not whether its
+value is held. All three are still logged, tagged `phase` rather than
+whichever tab happens to be selected, because attributing them to a tab they
+are not on would be misdirection in the one artefact meant to prevent it.
+
+Log names have to be UNIQUE, not merely descriptive, and that is a
+consequence of coalescing rather than a style question. Two controls sharing a
+name merge into a single line carrying the first one's starting value and the
+second one's final value, so one collision produces a wrong line and silently
+drops a change. The weapon tab had three "Up" sliders and three "Side".
+`placementSlider` logs its cvar, which is unique by construction and is also
+the handle to grep for or to set from the console; `placeSlider` is prefixed;
+the wrist rows carry the across/along mode, since one label there names two
+different stored values depending on a picker.
 
 Coverage is guarded by `tools/check-tuning-lock.sh` rather than by trust. The
 failure mode is not the lock misbehaving — it is a slider added later that

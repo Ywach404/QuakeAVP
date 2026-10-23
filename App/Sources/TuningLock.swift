@@ -76,7 +76,13 @@ final class TuningLock {
         guard flushTask == nil else { return }
         flushTask = Task { @MainActor [weak self] in
             while let self, !self.logger.isEmpty {
-                try? await Task.sleep(for: .seconds(Tuning.quietPeriod))
+                // Cancellation has to BREAK rather than be swallowed. With
+                // `try?` alone a cancelled sleep returns instantly and the
+                // loop condition is still true, which spins the main thread
+                // for as long as anything is pending. Nothing cancels this
+                // today; a future owner would find it the hard way.
+                do { try await Task.sleep(for: .seconds(Tuning.quietPeriod)) }
+                catch { break }
                 self.emit(self.logger.flush(at: CACurrentMediaTime()))
             }
             self?.flushTask = nil
@@ -107,6 +113,19 @@ extension View {
     @MainActor
     func tuningLocked(dims: Bool = false) -> some View {
         let locked = TuningLock.shared.isLocked
-        return self.disabled(locked).opacity(dims && locked ? 0.4 : 1)
+        return self
+            .disabled(locked)
+            // .disabled() is the documented way to stop a CONTROL, and it is
+            // not the guaranteed way to stop a raw `.gesture(DragGesture())`
+            // attached to a ZStack of Shapes -- which is exactly what the
+            // gyro discs are. Refusing hits is unambiguous.
+            //
+            // It also makes the lock do something better than nothing: a row
+            // that takes no hits passes the drag straight to the enclosing
+            // ScrollView, so with the lock on the whole panel becomes
+            // somewhere to grab, and the gutter is what you need only while
+            // actually tuning.
+            .allowsHitTesting(!locked)
+            .opacity(dims && locked ? 0.4 : 1)
     }
 }

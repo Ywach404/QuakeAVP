@@ -41,7 +41,14 @@ enum Tuning {
     /// Below this, a value did not really move. Sliders are continuous and
     /// a gaze that drifts a pixel should not be an event; what matters is
     /// whether the value is DIFFERENT now.
-    static let changeEpsilon: Float = 1e-4
+    ///
+    /// Exactly half the resolution the line is PRINTED at, which ties the
+    /// two together deliberately. At 1e-4 against a `%.3f` readout a real
+    /// change could round to the same three decimals on both sides and emit
+    /// `0.000 -> 0.000` -- a line that reports a change while showing none,
+    /// which teaches you to distrust the log. Anything reported now differs
+    /// in the digits shown.
+    static let changeEpsilon: Float = 5e-4
 
     /// Coalesces setter calls into one report per gesture.
     ///
@@ -69,10 +76,15 @@ enum Tuning {
         /// At the top of a binding's `set:` the old value is still in hand,
         /// so the caller can simply pass it.
         mutating func note(_ name: String, from: Float, to: Float, at now: TimeInterval) {
-            // Nothing non-finite is recorded. The sliders are bounded, but
-            // the gyro discs accumulate drag deltas into a stored value, and
-            // one NaN there would persist and print forever.
-            guard from.isFinite, to.isFinite else { return }
+            // `to` must be finite: that is the value being stored, and a
+            // NaN reaching a gyro disc's accumulator would persist and print
+            // forever. `from` is only the value being LEFT, and refusing on
+            // it would lose the one gesture that matters most -- dragging a
+            // control whose value has already gone bad back to a real number
+            // would be the silent edit, with the first note of the drag
+            // thrown away and the rest opening a pending entry from
+            // mid-gesture.
+            guard to.isFinite else { return }
             if var entry = pending[name] {
                 entry.to = to
                 entry.last = now
@@ -96,10 +108,12 @@ enum Tuning {
 
         /// Report everything outstanding, quiet period or not.
         ///
-        /// For the window closing or the lock being re-engaged: a change
-        /// that is still pending at that moment would otherwise be dropped,
-        /// and a dropped line is a silent edit -- the exact thing this
-        /// exists to prevent.
+        /// For the lock being re-engaged mid-gesture: the change is already
+        /// made, so waiting out a quiet period that can no longer end in
+        /// another move would just delay the line, and dropping it would be
+        /// a silent edit -- the thing this exists to prevent. The window
+        /// closing needs nothing, because the flush task belongs to the
+        /// app-lived shell rather than to any view.
         mutating func drain() -> [String] {
             let all = pending.sorted { ($0.value.last, $0.key) < ($1.value.last, $1.key) }
             pending.removeAll()
@@ -116,7 +130,10 @@ enum Tuning {
         /// line in it is a value that is actually different from what it was
         /// before you touched it.
         static func line(_ name: String, from: Float, to: Float) -> String? {
-            guard from.isFinite, to.isFinite else { return nil }
+            guard to.isFinite else { return nil }
+            // Coming back from a bad value is always worth reporting, and
+            // there is no meaningful distance from NaN to compare.
+            guard from.isFinite else { return "[tune] \(name) invalid -> \(number(to))" }
             guard abs(to - from) >= Tuning.changeEpsilon else { return nil }
             return "[tune] \(name) \(number(from)) -> \(number(to))"
         }

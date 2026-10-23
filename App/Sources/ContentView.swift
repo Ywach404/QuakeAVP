@@ -612,6 +612,12 @@ struct ContentView: View {
         Color.clear
             .frame(width: Self.gutterWidth, alignment: .trailing)
             .contentShape(Rectangle())
+            // Gaze feedback, and not decoration: an invisible strip you
+            // cannot tell you have found is the same problem as having no
+            // strip. The grip texture does not move with the eye, so this is
+            // the only thing that confirms the gutter has the gaze before
+            // you commit the pinch.
+            .hoverEffect()
             .accessibilityLabel("Scroll area")
     }
 
@@ -653,11 +659,25 @@ struct ContentView: View {
         }
     }
 
-    /// One setter call on a tuned control, tagged with the tab it is on --
+    /// One setter call on a tuned control, tagged with where it lives --
     /// row labels repeat between tabs, and "Back" alone would not say which
     /// Back moved.
-    private func noteTuning(_ label: String, from: Float, to: Float) {
-        TuningLock.shared.note("\(Self.tabName(activeTab))/\(label)", from: from, to: to)
+    ///
+    /// The name has to be UNIQUE, not merely descriptive: changes coalesce
+    /// per name, so two controls sharing one would merge into a single line
+    /// carrying the first one's starting value and the second one's final
+    /// value, and the second change would never be reported. A wrong line
+    /// and a dropped line from one collision. `placementSlider` therefore
+    /// logs under its cvar and `placeSlider` under a prefix, because the
+    /// weapon tab has three "Up" sliders and three "Side".
+    ///
+    /// `group` is for a control that is not inside the tab panel at all; the
+    /// active tab would be a lie there, and a misattributed line in the one
+    /// artefact that exists to stop misattribution is worse than no line.
+    private func noteTuning(_ label: String, from: Float, to: Float,
+                            group: String? = nil) {
+        TuningLock.shared.note("\(group ?? Self.tabName(activeTab))/\(label)",
+                               from: from, to: to)
     }
 
     private static func tabName(_ tab: PanelTab) -> String {
@@ -2045,7 +2065,7 @@ struct ContentView: View {
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
                 set: { nv in
-                    noteTuning(label, from: value.wrappedValue, to: Float(nv))
+                    noteTuning("gun \(label)", from: value.wrappedValue, to: Float(nv))
                     value.wrappedValue = Float(nv)
                     WeaponTrim.shared.setPlacement(.init(back: weaponBack, up: weaponUp,
                                                          side: weaponSide))
@@ -2212,8 +2232,8 @@ struct ContentView: View {
                         onInside: { _, _, nx, ny in
                             let newSide = max(-posRange, min(posRange, Float(nx) * posRange))
                             let newFwd = max(-posRange, min(posRange, Float(-ny) * posRange))
-                            noteTuning("Side", from: side.wrappedValue, to: newSide)
-                            noteTuning("Forward", from: forward.wrappedValue, to: newFwd)
+                            noteTuning("Side\(commAlongArm ? " along" : " across")", from: side.wrappedValue, to: newSide)
+                            noteTuning("Forward\(commAlongArm ? " along" : " across")", from: forward.wrappedValue, to: newFwd)
                             side.wrappedValue = newSide
                             forward.wrappedValue = newFwd
                             apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
@@ -2222,7 +2242,7 @@ struct ContentView: View {
                             let scaled = d * (angleSpan / 360)
                             let newAngle = max(-VRSettings.commTiltLimit,
                                 min(VRSettings.commTiltLimit, angle.wrappedValue + scaled))
-                            noteTuning("Angle", from: angle.wrappedValue, to: newAngle)
+                            noteTuning("Angle\(commAlongArm ? " along" : " across")", from: angle.wrappedValue, to: newAngle)
                             angle.wrappedValue = newAngle
                             apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
                         })
@@ -2328,7 +2348,8 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 64, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                set: { noteTuning("\(label)\(commAlongArm ? " along" : " across")",
+                                  from: value.wrappedValue, to: Float($0))
                        value.wrappedValue = Float($0); apply(Float($0)) }),
                 in: Double(range.lowerBound)...Double(range.upperBound),
                 step: Double(step))
@@ -2402,7 +2423,7 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 40, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                set: { noteTuning(cvar, from: value.wrappedValue, to: Float($0))
                        value.wrappedValue = Float($0)
                        engine.send("\(cvar) \(Float($0))")
                        if let kp { ProfileStore.shared.current[keyPath: kp] = Float($0) } }),
@@ -2568,10 +2589,10 @@ struct ContentView: View {
                 Slider(value: $phaseFloor, in: 0...1)
                     .frame(width: 110)
                     .onChange(of: phaseFloor) { old, value in
-                        noteTuning("Ground", from: Float(old), to: Float(value))
+                        noteTuning("Ground", from: Float(old), to: Float(value),
+                                   group: "phase")
                         engine.send(String(format: "phase_floor %.2f", value))
                     }
-                    .tuningLocked()
             }
             .fixedSize()
             // The grid at the real floor's EDGE, on its own dial. It rode
@@ -2586,10 +2607,10 @@ struct ContentView: View {
                 Slider(value: $phaseGrid, in: 0...1)
                     .frame(width: 110)
                     .onChange(of: phaseGrid) { old, value in
-                        noteTuning("Edge grid", from: Float(old), to: Float(value))
+                        noteTuning("Edge grid", from: Float(old), to: Float(value),
+                                   group: "phase")
                         engine.send(String(format: "phase_grid %.2f", value))
                     }
-                    .tuningLocked()
             }
             .fixedSize()
             Menu {

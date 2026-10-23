@@ -591,13 +591,27 @@ struct SessionTest {
         check(Tuning.Logger.line("x", from: -0.0, to: 2) == "[tune] x 0.000 -> 2.000",
               "negative zero prints without its sign")
 
-        // Nothing non-finite reaches the log. Sliders are bounded, but the
-        // dials accumulate deltas from a drag and a single NaN would stick
-        // forever once it landed in a stored value.
+        // A non-finite value must never be STORED: the dials accumulate
+        // deltas from a drag and one NaN would stick forever.
         var bad = Tuning.Logger()
-        bad.note("x", from: .nan, to: 1, at: 0)
         bad.note("y", from: 0, to: .infinity, at: 0)
-        check(bad.drain().isEmpty, "a non-finite value is refused rather than logged")
+        check(bad.drain().isEmpty, "a non-finite new value is refused rather than logged")
+
+        // But coming BACK from a bad value is the single most important
+        // gesture to report, so a non-finite `from` is reported rather than
+        // refused. Refusing it would throw away the first note of the repair
+        // drag and start the pending entry from mid-gesture.
+        var repair = Tuning.Logger()
+        repair.note("x", from: .nan, to: 1, at: 0)
+        check(repair.drain() == ["[tune] x invalid -> 1.000"],
+              "dragging a value back from NaN is reported, not swallowed")
+
+        // The threshold is tied to the printed resolution, so a line can
+        // never claim a change while showing the same number twice.
+        check(Tuning.Logger.line("x", from: 1.0, to: 1.0002) == nil,
+              "a change too small to show at three decimals is not a line")
+        check(Tuning.Logger.line("x", from: 1.0, to: 1.001) != nil,
+              "a change that does show at three decimals is")
     }
 
 }
