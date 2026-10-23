@@ -12,7 +12,9 @@
 
 ## Status
 
-- [x] **Task 1 — device-verified** · [x] **Task 2 — device-verified** · [x] **Task 3 — built** · [x] **Task 4 — built** · [x] **Task 5 — DEVICE-VERIFIED** · [ ] Task 6 · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
+- [x] **Task 1 — device-verified** · [x] **Task 2 — device-verified** · [x] **Task 3 — built** · [x] **Task 4 — built** · [x] **Task 5 — DEVICE-VERIFIED** · [x] **Task 6 — DEVICE-VERIFIED**
+
+**PLAN COMPLETE, 2026-10-22.** All six tasks built and confirmed on device. · [ ] Task 3 · [ ] Task 4 · [ ] Task 5 · [ ] Task 6
 
 ## Task 1 outcome
 
@@ -62,6 +64,18 @@ clipped now.
 Worth keeping: real covers will be close to the card's aspect, where this
 would have read as a design choice rather than a bug. Testing with
 deliberately wrong-shaped inputs is what made it visible.
+
+## Task 6 verified 2026-10-22
+
+An old save loaded without a cover takes one once the level is being played.
+Confirmed on device.
+
+Three ways to get the wrong picture, two of them in the plan and one found
+while wiring it: drawing at load time catches a paused frame of a level not
+yet seen; drawing at Resume catches a ring still full of the level just
+left; and the ring's LATCHED pose survives a load, so the previous map would
+go on the new cover with none of the timing being wrong. The latch is cleared
+on load.
 
 ## Task 5 verified 2026-10-22
 
