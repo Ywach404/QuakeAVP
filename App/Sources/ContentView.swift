@@ -556,6 +556,7 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             if Self.tabIsTunable(activeTab) { lockBar }
+            GeometryReader { panel in
             ScrollView {
                 Group {
                     switch activeTab {
@@ -569,6 +570,11 @@ struct ContentView: View {
                     }
                 }
                 .padding(.trailing, Self.gutterWidth + 6)
+                // See the GeometryReader above: a MINIMUM, so a short tab
+                // fills the panel and can space itself out, while a long one
+                // scrolls exactly as before. Applied before the overlay so
+                // the gutter spans the filled height too.
+                .frame(minHeight: panel.size.height, alignment: .top)
                 // An OVERLAY rather than a column in an HStack. A scroll
                 // view proposes unbounded height to its content, so a
                 // `maxHeight: .infinity` sibling in there has nothing to
@@ -586,6 +592,7 @@ struct ContentView: View {
             // impossible. The grip is the affordance now, so the indicator
             // is only a rival for the same pixels.
             .scrollIndicators(.hidden)
+            }
             // The grip, drawn OVER the gutter and pinned to the panel rather
             // than to the content, so it stays where your eye last found it
             // instead of scrolling away with the rows. Decorative only: a
@@ -1371,6 +1378,11 @@ struct ContentView: View {
     private var gameContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             saveLoadSection
+            // Takes whatever the panel has spare, so the deck sits in the
+            // middle of the tab rather than at the top of a void. The canvas
+            // it pushes against is the minHeight set in `controlPanel`; in a
+            // bare ScrollView this Spacer would have nothing to do.
+            Spacer(minLength: 0)
         }
         // The slot list is rescanned when you come to look at it. The POLL
         // itself is started at window level, not here -- see the body.
@@ -1389,6 +1401,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 14) {
             multiplayerSection
         }
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var saveLoadSection: some View {
@@ -1533,12 +1546,23 @@ struct ContentView: View {
                  + "network only. Each search starts the list empty and fills it "
                  + "as replies arrive, over about a second and a half.")
                 .font(.caption2).foregroundStyle(.secondary)
-            if session.servers.isEmpty {
-                Text(session.isSearching ? "Listening…" : "No servers found yet.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(session.servers) { server in serverRow(server, running: running) }
+            // The list holds the tab's remaining height whether or not it
+            // has anything in it. Two reasons, and neither is decoration:
+            // the tab used to end wherever the last control happened to
+            // fall, leaving the void this fills; and it changed SHAPE when a
+            // server appeared, so the buttons you had just aimed at moved
+            // under your gaze. A found game now lands in a space already set
+            // aside for it.
+            VStack(alignment: .leading, spacing: 6) {
+                if session.servers.isEmpty {
+                    Text(session.isSearching ? "Listening…" : "No servers found yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(session.servers) { server in serverRow(server, running: running) }
+                }
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .buttonStyle(.bordered)
     }

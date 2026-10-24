@@ -44,8 +44,20 @@ enum CoverFlowMetrics {
     // reasoning. Every horizontal number is a fraction of cardWidth, so the
     // look is width-adaptive; only the height was arithmetic off that app's
     // 260pt drawer and is re-derived here for a tall panel column.
-    static let cardWidth: CGFloat = 150
-    static let cardHeight: CGFloat = 132
+    /// 3:2, matching CoverRenderer's 480x320 exactly.
+    ///
+    /// The first pair was 150x132, which is 1.14:1 against a 3:2 picture, so
+    /// every cover lost about a quarter of its width to the crop -- the deck
+    /// was throwing away the thing it exists to show. Matching the aspect
+    /// means `.fill` has almost nothing to trim.
+    ///
+    /// And bigger, because the Game tab had a tall void under it and the
+    /// covers are screenshots: at 150pt a corridor was a smudge. Not so big
+    /// that the flankers vanish -- at 230 the 620pt panel floor still shows
+    /// the centre card with a flanker either side, which is the whole point
+    /// of a deck rather than a list.
+    static let cardWidth: CGFloat = 230
+    static let cardHeight: CGFloat = 154
     static let tiltDegrees: CGFloat = 55
     /// How much the flankers overlap EACH OTHER -- the negative stack spacing.
     static let flankerOverlapFraction: CGFloat = 0.32
