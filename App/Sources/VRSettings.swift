@@ -61,6 +61,26 @@ final class VRSettings: @unchecked Sendable {
     /// alone, leaving the gun hand as just the weapon -- mirrors how the PSVR
     /// controllers only model the off hand. Default on: a bare gun with no
     /// hand on it reads better in-headset than two hands clipping the model.
+    /// Whether the SENSE CONTROLLERS are the chosen input, as opposed to
+    /// merely being switched on.
+    ///
+    /// Not the same question as "are the controllers tracking", and the
+    /// difference is the bug this exists to fix. Picking Hands in the window
+    /// switches input to bare hands with the pair still connected -- that is
+    /// deliberate, and the picker says so -- but a connected pair lying on a
+    /// desk goes on tracking, so a renderer gated on tracking kept drawing
+    /// the rigid controller hand and overwrote the real one every frame.
+    ///
+    /// Mirrored here because the renderer reads it on the CompositorServices
+    /// thread, where ProfileStore (main-actor, @Observable) must not be
+    /// touched. VRSettings is the render thread's view of settings and takes
+    /// a lock, which is the existing route for exactly this.
+    private var _controllersActive = false
+    var controllersActive: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _controllersActive }
+        set { lock.lock(); _controllersActive = newValue; lock.unlock() }
+    }
+
     private var _offHandModelOnly = true
     var offHandModelOnly: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _offHandModelOnly }

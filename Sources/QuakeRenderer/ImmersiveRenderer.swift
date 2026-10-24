@@ -108,6 +108,10 @@ final class ImmersiveRenderer {
     /// is echoed back through QC_InputSetHeadOffset so the engine knows
     /// which generation the feed belongs to.
     private var recenterCorrection = matrix_identity_float4x4
+    /// Whether this renderer published the controller's off-hand model on
+    /// the last frame, so the falling edge can be cleared exactly once.
+    /// Render-thread only, like everything else in this type.
+    private var publishedControllerHand = false
     /// The pose the correction was built from, kept so the height half can
     /// be rebuilt without re-zeroing yaw and position. Re-zeroing those
     /// mid-session would snap the world sideways to wherever you happen to
@@ -723,10 +727,21 @@ final class ImmersiveRenderer {
 
             // Off-hand presence model, CONTROLLER mode only. The ARKit hand
             // session is off then (no joints), but the controller pose is
-            // tracked, so pose a rigid hand on the OFF controller. Only publish
-            // while controllers track -- in hands-only mode HandInput owns
-            // VirtualHand and we must not fight it. The gun hand gets no model.
-            if SpatialControllerTracker.shared.isTracking,
+            // tracked, so pose a rigid hand on the OFF controller. In
+            // hands-only mode HandInput owns VirtualHand and we must not
+            // fight it. The gun hand gets no model.
+            //
+            // GATED ON THE CHOSEN MODE, not on tracking, and the two are not
+            // the same question. Picking Hands in the window switches input to
+            // bare hands with the pair still connected, which the picker says
+            // it does on purpose -- but a connected pair lying on a desk goes
+            // on tracking happily, so a tracking-gated publish kept drawing
+            // the rigid controller hand and overwrote the real one every
+            // frame. Input was correct and the hand was wrong, which is a
+            // hard thing to attribute from inside the headset.
+            let wantsControllerHand = VRSettings.shared.controllersActive
+                && SpatialControllerTracker.shared.isTracking
+            if wantsControllerHand,
                let offPose = SpatialControllerTracker.shared.pose(left: rightHanded) {
                 // Fold the handshake-angle offset (tuned on device) into the
                 // pose, in the controller-local frame -- so it rotates the hand
@@ -739,6 +754,16 @@ final class ImmersiveRenderer {
                 VirtualHand.shared.publish(
                     ControllerHandModel.posed(by: recenterCorrection * offPose * rot,
                                               leftHand: rightHanded))
+                publishedControllerHand = true
+            } else if publishedControllerHand {
+                // The FALLING edge, cleared exactly once. VirtualHand holds
+                // whatever was last published, so a publish with no matching
+                // clear leaves the controller's hand frozen in the world the
+                // moment the controllers stop being the input. Once, because
+                // in hands mode HandInput publishes every frame and clearing
+                // repeatedly would be the fight the comment above forbids.
+                VirtualHand.shared.publish([])
+                publishedControllerHand = false
             }
 
             let yaw = packet.body_yaw * .pi / 180

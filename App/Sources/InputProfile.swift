@@ -231,6 +231,10 @@ final class ProfileStore {
             // been opened, and a mode that lags the profile means placement
             // edits land in the other input's slots.
             WeaponTrim.shared.setMode(active.rawValue)
+            // The render thread's copy, for the same reason: it decides
+            // whether to draw the controller's off-hand model, and a mode
+            // that lags leaves the wrong hand on screen.
+            VRSettings.shared.controllersActive = (active == .psvr2)
         }
     }
 
@@ -303,6 +307,10 @@ final class ProfileStore {
     func apply() {
         let p = current
         let s = VRSettings.shared
+        // Seeded here as well as in `active`'s didSet, which does not fire on
+        // initialisation -- so a launch straight into controller mode would
+        // otherwise start with the mirror reading false.
+        s.controllersActive = (active == .psvr2)
         s.aimSmooth = p.aimSmooth
         s.curlSensitivity = p.curlSensitivity
         s.pinchClose = p.pinchClose
