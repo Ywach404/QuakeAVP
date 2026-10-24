@@ -554,6 +554,7 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            if Self.tabIsTunable(activeTab) { lockBar }
             ScrollView {
                 Group {
                     switch activeTab {
@@ -565,7 +566,42 @@ struct ContentView: View {
                     case .debug: debugContent
                     }
                 }
-                .padding(.trailing, 6)
+                .padding(.trailing, Self.gutterWidth + 6)
+                // An OVERLAY rather than a column in an HStack. A scroll
+                // view proposes unbounded height to its content, so a
+                // `maxHeight: .infinity` sibling in there has nothing to
+                // resolve against; an overlay is proposed exactly the size
+                // of the view it sits on, which is the rows' own height --
+                // what "full height" has to mean for this to be grabbable
+                // all the way down.
+                .overlay(alignment: .trailing) { scrollGutter }
+            }
+            // The gutter and the system scroll indicator were occupying the
+            // same strip, and dragging an indicator does not follow your
+            // hand -- it maps the grab's POSITION onto the scroll offset, so
+            // a pinch anywhere near the trailing edge jumped the panel to
+            // wherever that point corresponded to and made a gradual scroll
+            // impossible. The grip is the affordance now, so the indicator
+            // is only a rival for the same pixels.
+            .scrollIndicators(.hidden)
+            // The grip, drawn OVER the gutter and pinned to the panel rather
+            // than to the content, so it stays where your eye last found it
+            // instead of scrolling away with the rows. Decorative only: a
+            // gesture here would claim the drag the scroll view needs.
+            .overlay(alignment: .trailing) { gutterTrack }
+            // What the indicator rides on. `contentOffset` and the two sizes
+            // in one value so a single change drives one update.
+            .onScrollGeometryChange(for: ScrollFrame.self) { geo in
+                ScrollFrame(offset: geo.contentOffset.y,
+                            content: geo.contentSize.height,
+                            viewport: geo.containerSize.height)
+            } action: { _, frame in
+                // Written, never read here -- that is what keeps the panel
+                // out of the invalidation.
+                let state = ScrollGutterState.shared
+                state.offset = frame.offset
+                state.content = frame.content
+                state.viewport = frame.viewport
             }
         }
         .padding(16)
@@ -575,6 +611,138 @@ struct ContentView: View {
         // instead of only stretching the render surface beside them.
         .frame(minWidth: 560, maxWidth: 680)
         .background(dashMaterial(14))
+    }
+
+    /// Width of the scroll gutter. Wide enough to be a comfortable gaze
+    /// target -- the eye does not land to the pixel, which is the whole
+    /// problem this solves -- and narrow enough not to take a column of
+    /// space away from the rows.
+    private static let gutterWidth: CGFloat = 40
+
+    /// One value so a scroll produces one update rather than three.
+    /// `onScrollGeometryChange` needs it Equatable to tell changes apart.
+    private struct ScrollFrame: Equatable {
+        let offset: Double
+        let content: Double
+        let viewport: Double
+    }
+
+    /// A strip of deliberate nothing down the side of the panel.
+    ///
+    /// Scrolling by gaze and pinch means pinching SOMETHING and dragging it,
+    /// and until now everything there was to pinch was a slider or a dial.
+    /// This is somewhere to grab that holds no value: the drag falls through
+    /// to the enclosing ScrollView precisely BECAUSE nothing here claims it.
+    ///
+    /// `Color.clear` with an explicit `contentShape` rather than padding:
+    /// empty layout space is not a gaze target, and a gutter you cannot look
+    /// at is not a gutter. It lives INSIDE the scroll content so that it is
+    /// full-height whatever the tab holds.
+    private var scrollGutter: some View {
+        Color.clear
+            .frame(width: Self.gutterWidth, alignment: .trailing)
+            .contentShape(Rectangle())
+            // NO .hoverEffect() here, and it is not an oversight. This strip
+            // is as tall as the whole tab's CONTENT, so visionOS drew its
+            // highlight over that entire region -- a white bar down every
+            // tab, which looked like a rendering fault. The visible track
+            // and the moving indicator are the affordance instead, and they
+            // are a better one: they say where you are as well as where to
+            // grab.
+            .accessibilityLabel("Scroll area")
+    }
+
+    /// The gutter's rail and position indicator. Lives in
+    /// ScrollGutterState.swift, which explains why it is a separate view
+    /// with its own observable state rather than three @State properties
+    /// here: a @State write invalidates ContentView, and ContentView is the
+    /// whole panel, so scrolling re-evaluated forty rows of sliders to move
+    /// one capsule.
+    private var gutterTrack: some View {
+        GutterTrack(width: Self.gutterWidth, tint: Self.noctuaBrown)
+    }
+
+    /// The lock, above the tab content so it reads from every tab.
+    ///
+    /// A value that got moved by accident costs more than the setting: a gun
+    /// trim nudged unnoticed was blamed on three successive builds before the
+    /// value itself was looked at. So the panel starts locked, and unlocking
+    /// is a deliberate press.
+    private var lockBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                TuningLock.shared.isLocked.toggle()
+            } label: {
+                Label(TuningLock.shared.isLocked ? "Locked" : "Unlocked",
+                      systemImage: TuningLock.shared.isLocked ? "lock.fill" : "lock.open")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TuningLock.shared.isLocked
+                                     ? Color(white: 0.92) : Color(white: 0.12))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(TuningLock.shared.isLocked
+                                ? Self.noctuaBrown.opacity(0.55)
+                                : Color(red: 0.93, green: 0.58, blue: 0.16),
+                                in: Capsule())
+            }
+            // Drawn, not tinted. `.tint(.secondary)` on a `.bordered`
+            // button washed out to pure white against visionOS glass, which
+            // read as a glitch rather than as a state. Explicit colours on
+            // an explicit capsule cannot be reinterpreted by a button style.
+            .buttonStyle(.plain)
+            Text(TuningLock.shared.isLocked
+                 ? "Sliders and dials are held. Buttons still work."
+                 : "Sliders and dials will move. Changes are logged to the console.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// One setter call on a tuned control, tagged with where it lives --
+    /// row labels repeat between tabs, and "Back" alone would not say which
+    /// Back moved.
+    ///
+    /// The name has to be UNIQUE, not merely descriptive: changes coalesce
+    /// per name, so two controls sharing one would merge into a single line
+    /// carrying the first one's starting value and the second one's final
+    /// value, and the second change would never be reported. A wrong line
+    /// and a dropped line from one collision. `placementSlider` therefore
+    /// logs under its cvar and `placeSlider` under a prefix, because the
+    /// weapon tab has three "Up" sliders and three "Side".
+    ///
+    /// `group` is for a control that is not inside the tab panel at all; the
+    /// active tab would be a lie there, and a misattributed line in the one
+    /// artefact that exists to stop misattribution is worse than no line.
+    private func noteTuning(_ label: String, from: Float, to: Float,
+                            group: String? = nil) {
+        TuningLock.shared.note("\(group ?? Self.tabName(activeTab))/\(label)",
+                               from: from, to: to)
+    }
+
+    /// Whether a tab holds any drag-driven control, and so whether the lock
+    /// pill has anything to say there. Game, Admin and Capture are buttons,
+    /// pickers and text throughout.
+    ///
+    /// Kept honest by tools/check-tuning-lock.sh, which counts the controls
+    /// in each tab's body and fails if this list disagrees -- a tab that
+    /// grows its first slider would otherwise silently lose the lock's
+    /// explanation while the lock still applied to it.
+    private static func tabIsTunable(_ tab: PanelTab) -> Bool {
+        switch tab {
+        case .comfort, .weapon, .debug: return true
+        case .game, .admin, .capture: return false
+        }
+    }
+
+    private static func tabName(_ tab: PanelTab) -> String {
+        switch tab {
+        case .game: return "game"
+        case .comfort: return "comfort"
+        case .weapon: return "weapon"
+        case .admin: return "admin"
+        case .capture: return "capture"
+        case .debug: return "debug"
+        }
     }
 
     private var comfortContent: some View {
@@ -649,8 +817,11 @@ struct ContentView: View {
                     }
                     Slider(value: Binding(
                         get: { Double(floorTrim) },
-                        set: { floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
-                        in: -Double(VRSettings.floorTrimLimit)...Double(VRSettings.floorTrimLimit))
+                        set: { noteTuning("Floor trim", from: floorTrim, to: Float($0))
+                               floorTrim = Float($0); VRSettings.shared.floorTrim = Float($0) }),
+                        in: -Double(VRSettings.floorTrimLimit)...Double(VRSettings.floorTrimLimit),
+                        step: Tuning.step(forFormat: "%.1f", display: 100) ?? 0.001)
+                    .tuningLocked()
                     HStack {
                         Button("Reset") {
                             floorTrim = 0; VRSettings.shared.floorTrim = 0
@@ -1016,20 +1187,24 @@ struct ContentView: View {
                         Text("Turn speed").font(.caption)
                         Slider(value: Binding(
                             get: { Double(turnHoldSpeedUI) },
-                            set: { turnHoldSpeedUI = Float($0); engine.send("vr_edgeturn_speed \(Int($0))") }),
-                               in: 30...180)
+                            set: { noteTuning("Turn speed", from: turnHoldSpeedUI, to: Float($0))
+                                   turnHoldSpeedUI = Float($0); engine.send("vr_edgeturn_speed \(Int($0))") }),
+                               in: 30...180, step: Tuning.step(forFormat: "%.0f") ?? 1)
                         Text("\(Int(turnHoldSpeedUI))°/s")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
+                    .tuningLocked()
                     HStack {
                         Text("Dead zone").font(.caption)
                         Slider(value: Binding(
                             get: { Double(turnHoldDzUI) },
-                            set: { turnHoldDzUI = Float($0); engine.send("vr_edgeturn_dz \(Int($0))") }),
-                               in: 8...40)
+                            set: { noteTuning("Dead zone", from: turnHoldDzUI, to: Float($0))
+                                   turnHoldDzUI = Float($0); engine.send("vr_edgeturn_dz \(Int($0))") }),
+                               in: 8...40, step: Tuning.step(forFormat: "%.0f") ?? 1)
                         Text("\(Int(turnHoldDzUI))°")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
+                    .tuningLocked()
                 }
                 // Fire is pinch in quake-avp. The curl gesture stays in code
                 // (HandState.indexCurled, the .curl fire path) for a future
@@ -1608,22 +1783,28 @@ struct ContentView: View {
                     Text("Effects").font(.caption).frame(width: 60, alignment: .leading)
                     Slider(value: Binding(
                         get: { Double(sfxVolume) },
-                        set: { sfxVolume = Float($0)
-                               if !audioMuted { engine.send("volume \(sfxVolume)") } }), in: 0...1)
+                        set: { noteTuning("Effects", from: sfxVolume, to: Float($0))
+                               sfxVolume = Float($0)
+                               if !audioMuted { engine.send("volume \(sfxVolume)") } }),
+                        in: 0...1, step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
                     Text(String(format: "%.0f%%", sfxVolume * 100))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
                 }
+                .tuningLocked()
                 HStack {
                     Text("Music").font(.caption).frame(width: 60, alignment: .leading)
                     Slider(value: Binding(
                         get: { Double(musicVolume) },
-                        set: { musicVolume = Float($0)
-                               if !audioMuted { engine.send("bgmvolume \(musicVolume)") } }), in: 0...1)
+                        set: { noteTuning("Music", from: musicVolume, to: Float($0))
+                               musicVolume = Float($0)
+                               if !audioMuted { engine.send("bgmvolume \(musicVolume)") } }),
+                        in: 0...1, step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
                     Text(String(format: "%.0f%%", musicVolume * 100))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
                 }
+                .tuningLocked()
             }
             Toggle("Aim-ray decomposition (figure)", isOn: Binding(
                 get: { debug.aimRayDebug }, set: { debug.aimRayDebug = $0 }))
@@ -1941,15 +2122,17 @@ struct ContentView: View {
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
                 set: { nv in
+                    noteTuning("gun \(label)", from: value.wrappedValue, to: Float(nv))
                     value.wrappedValue = Float(nv)
                     WeaponTrim.shared.setPlacement(.init(back: weaponBack, up: weaponUp,
                                                          side: weaponSide))
                     weaponPlacementCustom = true
-                }), in: range)
+                }), in: range, step: Tuning.step(forFormat: fmt) ?? 1)
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// A Trim slider (0.5...1) routed through WeaponTrim, which persists the
@@ -1960,12 +2143,14 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 60, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0); set(Float($0)) }),
-                in: 0.5...1)
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0); set(Float($0)) }),
+                in: 0.5...1, step: Tuning.step(forFormat: "%.2f") ?? 0.01)
             Text(String(format: "%.2f", value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// The shared core of every gyro-style disc in this screen: a wireframe
@@ -2041,6 +2226,10 @@ struct ContentView: View {
                 }
             }
             .onEnded { _ in last.wrappedValue = nil })
+        // Every dial in the panel comes through here -- gyroDial and
+        // commDisc are both thin wrappers over this -- so one lock covers
+        // all of them.
+        .tuningLocked(dims: true)
     }
 
     /// The gyro dial (inspector-style): drag INSIDE the rings to tumble the
@@ -2057,14 +2246,20 @@ struct ContentView: View {
         return gyroDisc(a: yaw.wrappedValue, b: pitch.wrappedValue, spin: roll.wrappedValue,
                         last: $gyroLast, rimMode: $gyroRollMode,
                         onInside: { dx, dy, _, _ in
-                            yaw.wrappedValue = max(-180, min(180,
+                            let newYaw = max(-180, min(180,
                                 yaw.wrappedValue + Float(dx) * degPerPt))
-                            pitch.wrappedValue = max(-90, min(90,
+                            let newPitch = max(-90, min(90,
                                 pitch.wrappedValue + Float(dy) * degPerPt))
+                            noteTuning("Pan Y", from: yaw.wrappedValue, to: newYaw)
+                            noteTuning("Tilt X", from: pitch.wrappedValue, to: newPitch)
+                            yaw.wrappedValue = newYaw
+                            pitch.wrappedValue = newPitch
                             apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
                         },
                         onRim: { d in
-                            roll.wrappedValue = max(-180, min(180, roll.wrappedValue + d))
+                            let newRoll = max(-180, min(180, roll.wrappedValue + d))
+                            noteTuning("Roll Z", from: roll.wrappedValue, to: newRoll)
+                            roll.wrappedValue = newRoll
                             apply(pitch.wrappedValue, yaw.wrappedValue, roll.wrappedValue)
                         })
     }
@@ -2092,14 +2287,20 @@ struct ContentView: View {
                         spin: angle.wrappedValue,
                         last: $commDiscLast, rimMode: $commDiscRimMode,
                         onInside: { _, _, nx, ny in
-                            side.wrappedValue = max(-posRange, min(posRange, Float(nx) * posRange))
-                            forward.wrappedValue = max(-posRange, min(posRange, Float(-ny) * posRange))
+                            let newSide = max(-posRange, min(posRange, Float(nx) * posRange))
+                            let newFwd = max(-posRange, min(posRange, Float(-ny) * posRange))
+                            noteTuning("Side\(commAlongArm ? " along" : " across")", from: side.wrappedValue, to: newSide)
+                            noteTuning("Forward\(commAlongArm ? " along" : " across")", from: forward.wrappedValue, to: newFwd)
+                            side.wrappedValue = newSide
+                            forward.wrappedValue = newFwd
                             apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
                         },
                         onRim: { d in
                             let scaled = d * (angleSpan / 360)
-                            angle.wrappedValue = max(-VRSettings.commTiltLimit,
+                            let newAngle = max(-VRSettings.commTiltLimit,
                                 min(VRSettings.commTiltLimit, angle.wrappedValue + scaled))
+                            noteTuning("Angle\(commAlongArm ? " along" : " across")", from: angle.wrappedValue, to: newAngle)
+                            angle.wrappedValue = newAngle
                             apply(side.wrappedValue, forward.wrappedValue, angle.wrappedValue)
                         })
     }
@@ -2139,12 +2340,16 @@ struct ContentView: View {
                 .frame(width: 44, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { let v = Float($0); value.wrappedValue = v; apply(v) }),
-                in: Double(range.lowerBound)...Double(range.upperBound))
+                set: { let v = Float($0)
+                       noteTuning(label, from: value.wrappedValue, to: v)
+                       value.wrappedValue = v; apply(v) }),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Tuning.step(forFormat: "%.0f%@", display: display) ?? 1)
             Text(String(format: "%.0f%@", value.wrappedValue * display, unit))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// Reset the HUD dock to defaults -- position, the gyro rotation, and scale
@@ -2171,12 +2376,15 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 100, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
-                in: Double(range.lowerBound)...Double(range.upperBound))
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0); apply(Float($0)) }),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Tuning.step(forFormat: fmt) ?? 0.01)
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// One wrist-communicator placement row: a STEPPED `Slider` -- the unit
@@ -2199,7 +2407,9 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 64, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0); apply(Float($0)) }),
+                set: { noteTuning("\(label)\(commAlongArm ? " along" : " across")",
+                                  from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0); apply(Float($0)) }),
                 in: Double(range.lowerBound)...Double(range.upperBound),
                 step: Double(step))
             // Normalise -0 to 0 first: `%f` prints the sign bit even though
@@ -2211,6 +2421,7 @@ struct ContentView: View {
                 .frame(width: 48, alignment: .trailing)
         }
         .font(.caption)
+        .tuningLocked()
     }
 
     private static func normalizedZero(_ v: Float) -> Float { v == 0 ? 0 : v }
@@ -2271,14 +2482,16 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 40, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0)
+                set: { noteTuning(cvar, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0)
                        engine.send("\(cvar) \(Float($0))")
                        if let kp { ProfileStore.shared.current[keyPath: kp] = Float($0) } }),
-                in: range)
+                in: range, step: Tuning.step(forFormat: fmt) ?? 1)
             Text(String(format: fmt, value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// Off-hand model angle slider: feeds VRSettings (read on the render
@@ -2291,14 +2504,16 @@ struct ContentView: View {
             Text(label).font(.caption).frame(width: 46, alignment: .leading)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Float($0)
+                set: { noteTuning(label, from: value.wrappedValue, to: Float($0))
+                       value.wrappedValue = Float($0)
                        set(Float($0))
                        ProfileStore.shared.current[keyPath: kp] = Float($0) }),
-                in: -180...180)
+                in: -180...180, step: Tuning.step(forFormat: "%.0f") ?? 1)
             Text(String(format: "%.0f", value.wrappedValue))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+        .tuningLocked()
     }
 
     /// One row of the modular HUD panel (vr_hud 3): a four-way anchor
@@ -2406,6 +2621,15 @@ struct ContentView: View {
     /// slider scrubbing the `phase` target (the engine eases toward it, so
     /// a partial nudge holds a partial melt), the sweep-speed menu, and the
     /// ember colour well with its reset.
+    /// Twentieths for the two small phase dials.
+    ///
+    /// Same arithmetic as the scrub above them: a step matching the printed
+    /// percentage would be 100 detents on a 110pt track, which draws as a
+    /// line rather than as dots. Twenty of them read, and a fifth of an
+    /// opacity is still a finer adjustment than the eye needs for deciding
+    /// how much floor it wants to see.
+    private static let phaseDialStep = 0.05
+
     private var phaseControls: some View {
         VStack(spacing: 12) {
             Text("\(Int((phaseLevel * 100).rounded()))%")
@@ -2414,7 +2638,18 @@ struct ContentView: View {
             // A rotated Slider is the sanctioned vertical-slider trick: lay
             // it out at its length, rotate, then reserve the rotated
             // footprint. -90 puts minimum at the bottom.
-            Slider(value: $phaseLevel, in: 0...1) {
+            // QUARTERS, and not this row's printed precision like every
+            // other slider.
+            //
+            // A step fine enough to match the readout puts 100 detents
+            // across a 200pt track, a dot every 2pt, which merges into a
+            // solid white line: the dots are drawn and cannot be seen AS
+            // dots. Five positions can, and they are what this control is
+            // for -- the dissolve is thrown to none, a quarter, half,
+            // three-quarters or full, by hand, mid-game. It is a scrub with
+            // stops, not a value being dialled in, which is also why it is
+            // exempt from the lock.
+            Slider(value: $phaseLevel, in: 0...1, step: 0.25) {
                 Text("Phase")
             }
             .frame(width: 200)
@@ -2430,9 +2665,11 @@ struct ContentView: View {
             VStack(spacing: 2) {
                 Text("Ground \(Int((phaseFloor * 100).rounded()))%")
                     .font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $phaseFloor, in: 0...1)
+                Slider(value: $phaseFloor, in: 0...1, step: Self.phaseDialStep)
                     .frame(width: 110)
-                    .onChange(of: phaseFloor) { _, value in
+                    .onChange(of: phaseFloor) { old, value in
+                        noteTuning("Ground", from: Float(old), to: Float(value),
+                                   group: "phase")
                         engine.send(String(format: "phase_floor %.2f", value))
                     }
             }
@@ -2446,9 +2683,11 @@ struct ContentView: View {
             VStack(spacing: 2) {
                 Text("Edge grid \(Int((phaseGrid * 100).rounded()))%")
                     .font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $phaseGrid, in: 0...1)
+                Slider(value: $phaseGrid, in: 0...1, step: Self.phaseDialStep)
                     .frame(width: 110)
-                    .onChange(of: phaseGrid) { _, value in
+                    .onChange(of: phaseGrid) { old, value in
+                        noteTuning("Edge grid", from: Float(old), to: Float(value),
+                                   group: "phase")
                         engine.send(String(format: "phase_grid %.2f", value))
                     }
             }

@@ -940,3 +940,116 @@ local and momentary, which is what the sensor can actually supply.
 
 A panel control implies a feature worth reaching for, and the window is the
 only debug surface on device, so what sits in it should earn the space.
+
+---
+
+## 2026-10-23 — The panel locks what responds to a drag, not what holds a value
+
+**Choice.** The control panel starts locked at every launch, and the lock
+disables only drag-driven controls: the sliders and the three gyro discs.
+Buttons, toggles, segmented pickers, the map cards, the tab bar and the
+console stay live, so the panel is fully usable with the lock engaged.
+Alongside it, a 40pt gutter of empty space runs down the trailing edge of the
+scrolling tab content, and every change to a tuned value prints one
+`[tune] tab/Label from -> to` line per gesture.
+
+**Why.** The first rule drafted was "lock anything that HOLDS a value you
+tuned," which is the intuitive split and the wrong one. The accident has a
+mechanism: scrolling the panel by gaze and pinch means pinching something and
+dragging it, so the gesture that moves the view and the gesture that moves a
+value are *the same gesture*, and the only thing separating them is where the
+gaze happened to land. That makes continuous drag response the hazard, not
+value-holding. A segmented picker holds a tuned value too and is near
+impossible to hit by accident, because it needs a discrete press on a
+specific target; locking it would only make the panel annoying and push
+toward leaving the lock off. Naming the drag is what lets the lock stay on
+permanently, which is the only version of it that protects anything.
+
+Locked at every launch and deliberately not persisted. A remembered lock is
+remembered as *unlocked* on the day you forgot you left it that way, which is
+strictly worse than no lock; and tuning here is one focused session followed
+by set-and-forget, so re-engaging costs a single press. It lives in an
+observable singleton rather than view state because the window is summoned
+often and re-locking the panel under a hand mid-session would be its own
+annoyance.
+
+The gutter exists because the lock cannot fix scrolling. Even fully locked,
+the panel still has to be scrolled, and there still has to be somewhere to
+pinch. Empty layout padding is not a gaze target, so the gutter is a real
+hit-testable surface that claims no gesture of its own — the drag reaches the
+scroll view precisely *because* nothing in the gutter handles it. Attaching a
+gesture there to "make it work" would break it.
+
+The log is the part that answers what the accident actually cost. A trim
+moved by a stray pinch was unnoticed for days and blamed on three successive
+builds before the value itself was looked at; the setting was cheap and the
+misdirected debugging was not. A lock can be left off, so the log is the
+backstop that cannot be left in the wrong state. It coalesces to one line per
+gesture because a slider's binding fires dozens of times per drag and a line
+each is a log nobody reads, which is the same as no log; and a drag that
+returns to where it started says nothing, so every line in it is a value that
+genuinely differs now.
+
+The phase column is left alone entirely, all three sliders. It is a sibling
+of the panel rather than content inside its scroll view, so there is no scroll
+gesture there for a pinch to misfire into -- the hazard the lock answers does
+not exist in that column, and a greyed row whose explanation sits in a
+different column is just a control that looks broken. The first pass locked
+the ground-opacity and edge-grid dials on the reasoning that they are settings
+while the phase level is an action; that reasoning was about the wrong thing.
+What decides it is whether a control competes with scrolling, not whether its
+value is held. All three are still logged, tagged `phase` rather than
+whichever tab happens to be selected, because attributing them to a tab they
+are not on would be misdirection in the one artefact meant to prevent it.
+
+Log names have to be UNIQUE, not merely descriptive, and that is a
+consequence of coalescing rather than a style question. Two controls sharing a
+name merge into a single line carrying the first one's starting value and the
+second one's final value, so one collision produces a wrong line and silently
+drops a change. The weapon tab had three "Up" sliders and three "Side".
+`placementSlider` logs its cvar, which is unique by construction and is also
+the handle to grep for or to set from the console; `placeSlider` is prefixed;
+the wrist rows carry the across/along mode, since one label there names two
+different stored values depending on a picker.
+
+Coverage is guarded by `tools/check-tuning-lock.sh` rather than by trust. The
+failure mode is not the lock misbehaving — it is a slider added later that
+nobody marked, which no test of the lock can catch and which in the headset
+is indistinguishable from a locked one right up until a stray pinch moves it.
+
+---
+
+## 2026-10-23 - Every parameter slider is dotted, at its own readout's precision
+
+**Choice.** Every slider in the panel carries a step, and that step is one
+unit of whatever its own readout prints: a row showing `%.0f` moves by 1, a
+row showing `%.2f` by 0.01, and a row stored in metres but printed in
+centimetres by 0.01 rather than by 1. The step is derived from the format
+string through `Tuning.step(forFormat:display:)` rather than hand-set per
+row, and `tools/check-tuning-lock.sh` fails any slider written without one.
+
+**Why.** The panel had two kinds of slider in it. The wrist unit's five rows
+were stepped, deliberately and for a documented reason (the unit is dialled to
+a degree and half a centimetre, not to float precision, and the dotted track
+is what `step:` draws for free). Every other row in the window was continuous.
+Nobody chose that split; it is just the order the rows were written in, and it
+read as two different controls doing the same job.
+
+Making them match meant picking a direction, and the directions are not
+equivalent, because a step changes BEHAVIOUR and not only appearance. Removing
+the wrist unit's detents would have undone a real decision. Applying one
+shared step per unit kind would have been the most uniform but would leave
+some rows coarser than the number printed beside them. Tying each row's step
+to its own displayed precision keeps every control exactly as fine as it is
+legible: nothing can be nudged by a fraction that will never appear on screen,
+and nothing that does appear becomes unreachable.
+
+That also removes a whole class of nonsense from the tuning log. A continuous
+slider could register a change far below the three decimals the line prints,
+which is why the report threshold had to be pinned to the printed resolution
+in the first place. With detents at display precision, every change is at
+least one visible unit by construction.
+
+Deriving the step from the format rather than passing it per call site is the
+part that will still be true in a year. The two numbers cannot drift apart,
+because there is only one of them.

@@ -50,6 +50,9 @@ struct SessionTest {
         runHeadPoseRingTests()
         runCoverBackfillTests()
         runConsoleArgumentTests()
+        runTuningLogTests()
+        runTuningStepTests()
+        runScrollGutterTests()
         print("PASSED")
     }
 
@@ -524,4 +527,186 @@ struct SessionTest {
               "a semicolon in an address is refused")
         check(!ConsoleArgument.isValidAddress("host name"), "a space in an address is refused")
     }
+
+    // MARK: - the tuning log
+
+    /// One `[tune]` line per GESTURE, not per setter call.
+    ///
+    /// A slider drag calls its binding's setter dozens of times, and a line
+    /// per call is a log nobody reads -- which would defeat the whole point
+    /// of having one. The coalescer holds the earliest `from` and the latest
+    /// `to` for a name and emits once the drag has gone quiet.
+    static func runTuningLogTests() {
+        // A drag: many setter calls, one line, with the ENDS of the gesture
+        // in it rather than the last two samples.
+        var log = Tuning.Logger()
+        log.note("weapon/Back", from: 9.005, to: 9.4, at: 100.0)
+        log.note("weapon/Back", from: 9.4, to: 9.9, at: 100.1)
+        log.note("weapon/Back", from: 9.9, to: 10.24, at: 100.2)
+        check(log.flush(at: 100.3).isEmpty,
+              "nothing is emitted while the drag is still moving")
+        let lines = log.flush(at: 100.2 + Tuning.quietPeriod)
+        check(lines == ["[tune] weapon/Back 9.005 -> 10.240"],
+              "one line for the whole drag, from where it started to where it stopped")
+        check(log.flush(at: 200).isEmpty, "and it is emitted exactly once")
+
+        // A drag that comes back to where it began changed nothing, so it
+        // says nothing. This is the case that keeps the log trustworthy:
+        // every line in it is a value that is actually different now.
+        var round = Tuning.Logger()
+        round.note("comfort/Dead zone", from: 20, to: 26, at: 10)
+        round.note("comfort/Dead zone", from: 26, to: 20, at: 10.1)
+        check(round.flush(at: 10.1 + Tuning.quietPeriod).isEmpty,
+              "a drag that returns to its starting value emits nothing")
+
+        // Two controls moved in the same breath are two independent
+        // gestures; one going quiet must not drag the other out with it.
+        var two = Tuning.Logger()
+        two.note("weapon/Up", from: 0, to: 3, at: 50)
+        two.note("weapon/Side", from: 0, to: -2, at: 50.5)
+        let first = two.flush(at: 50 + Tuning.quietPeriod)
+        check(first == ["[tune] weapon/Up 0.000 -> 3.000"],
+              "the control that went quiet first is emitted first, alone")
+        let second = two.flush(at: 50.5 + Tuning.quietPeriod)
+        check(second == ["[tune] weapon/Side 0.000 -> -2.000"],
+              "and the other follows when its own quiet period elapses")
+
+        // A second gesture on the same control is a second line.
+        var again = Tuning.Logger()
+        again.note("debug/Effects", from: 1, to: 0.5, at: 0)
+        _ = again.flush(at: Tuning.quietPeriod)
+        again.note("debug/Effects", from: 0.5, to: 0.8, at: 10)
+        check(again.flush(at: 10 + Tuning.quietPeriod) == ["[tune] debug/Effects 0.500 -> 0.800"],
+              "moving the same control again logs again")
+
+        // Closing the window must not strand a change that has not yet gone
+        // quiet -- that would be a silent edit, the exact thing being fixed.
+        var closing = Tuning.Logger()
+        closing.note("weapon/Grip", from: 1, to: 1.25, at: 0)
+        check(closing.drain() == ["[tune] weapon/Grip 1.000 -> 1.250"],
+              "draining emits a pending change regardless of the quiet period")
+        check(closing.drain().isEmpty, "and leaves nothing behind")
+
+        // A dial resting exactly at zero must not flash a stray minus: `%f`
+        // prints the sign bit even though -0.0 == 0.0. Same reason
+        // commPlaceRow normalises its readout.
+        check(Tuning.Logger.line("x", from: -0.0, to: 2) == "[tune] x 0.000 -> 2.000",
+              "negative zero prints without its sign")
+
+        // A non-finite value must never be STORED: the dials accumulate
+        // deltas from a drag and one NaN would stick forever.
+        var bad = Tuning.Logger()
+        bad.note("y", from: 0, to: .infinity, at: 0)
+        check(bad.drain().isEmpty, "a non-finite new value is refused rather than logged")
+
+        // But coming BACK from a bad value is the single most important
+        // gesture to report, so a non-finite `from` is reported rather than
+        // refused. Refusing it would throw away the first note of the repair
+        // drag and start the pending entry from mid-gesture.
+        var repair = Tuning.Logger()
+        repair.note("x", from: .nan, to: 1, at: 0)
+        check(repair.drain() == ["[tune] x invalid -> 1.000"],
+              "dragging a value back from NaN is reported, not swallowed")
+
+        // The threshold is tied to the printed resolution, so a line can
+        // never claim a change while showing the same number twice.
+        check(Tuning.Logger.line("x", from: 1.0, to: 1.0002) == nil,
+              "a change too small to show at three decimals is not a line")
+        check(Tuning.Logger.line("x", from: 1.0, to: 1.001) != nil,
+              "a change that does show at three decimals is")
+    }
+
+
+    // MARK: - slider detents
+
+    /// Every parameter row is dotted, and one dot is one unit of what its
+    /// readout shows. The step is therefore derived from the format string
+    /// rather than hand-set per row, which is what stops the panel drifting
+    /// back into having two kinds of slider in it.
+    static func runTuningStepTests() {
+        check(Tuning.step(forFormat: "%.0f") == 1,
+              "a row printing whole numbers steps by one")
+        check(Tuning.step(forFormat: "%.1f") == 0.1,
+              "a row printing one decimal steps by a tenth")
+        check(Tuning.step(forFormat: "%.2f") == 0.01,
+              "a row printing two decimals steps by a hundredth")
+        check(Tuning.step(forFormat: "%.0f%@") == 1,
+              "a trailing unit suffix does not change the precision")
+
+        // The HUD offsets are stored in metres and shown in centimetres, so
+        // a one-centimetre detent is 0.01 in storage. Without dividing back
+        // down, the same row would quantise to whole metres and the slider
+        // would have three usable positions.
+        let cm = Tuning.step(forFormat: "%.0f%@", display: 100)
+        check(cm != nil && abs(cm! - 0.01) < 1e-12,
+              "a value shown in centimetres but stored in metres steps by 0.01")
+        let mm = Tuning.step(forFormat: "%.1f", display: 100)
+        check(mm != nil && abs(mm! - 0.001) < 1e-12,
+              "and one more displayed decimal is one tenth of that")
+
+        // A format with no decimal specifier gets no detent, rather than a
+        // guessed one: "%d" is not a zero-decimal float.
+        check(Tuning.step(forFormat: "%d") == nil,
+              "an integer format yields no step rather than a wrong one")
+        check(Tuning.step(forFormat: "%@") == nil, "nor does a bare string format")
+        check(Tuning.step(forFormat: "") == nil, "nor an empty one")
+        check(Tuning.step(forFormat: "%.0f", display: 0) == nil,
+              "a zero display factor cannot produce a step")
+        check(Tuning.step(forFormat: "%.0f", display: .nan) == nil,
+              "nor can a non-finite one")
+    }
+
+
+    // MARK: - the gutter's position indicator
+
+    /// Drawn rather than borrowed from the system, because the system's sits
+    /// in the same strip and can be DRAGGED, which is what made the gutter
+    /// throw the panel to the bottom instead of following the hand.
+    static func runScrollGutterTests() {
+        // A tab that fits needs no indicator movement, and says so by
+        // filling the track rather than by vanishing.
+        check(ScrollGutter.progress(offset: 0, content: 400, container: 900) == 0,
+              "content shorter than the view is never scrolled")
+        check(ScrollGutter.thumbLength(content: 400, container: 900, track: 600) == 600,
+              "and its indicator fills the track, which reads as nowhere to go")
+
+        // The first frame of every tab, before layout has measured anything.
+        // This is the case that would divide by zero.
+        check(ScrollGutter.progress(offset: 0, content: 0, container: 0) == 0,
+              "an unmeasured tab is at the top, not at NaN")
+        check(ScrollGutter.thumbLength(content: 0, container: 0, track: 600) == 600,
+              "and shows a full track rather than nothing")
+        check(ScrollGutter.thumbOffset(offset: 0, content: 0, container: 0, track: 600) == 0,
+              "with the indicator at the top")
+
+        // 1800 of content in a 900 view: half fits, so half a track.
+        check(ScrollGutter.thumbLength(content: 1800, container: 900, track: 600) == 300,
+              "an indicator is as long a fraction of the track as fits on screen")
+        check(ScrollGutter.progress(offset: 450, content: 1800, container: 900) == 0.5,
+              "halfway down the scrollable range is halfway")
+        check(ScrollGutter.thumbOffset(offset: 450, content: 1800, container: 900,
+                                       track: 600) == 150,
+              "and the indicator sits at half of the room it has, not half the track")
+
+        // At full scroll the indicator's BOTTOM meets the track's bottom.
+        let end = ScrollGutter.thumbOffset(offset: 900, content: 1800,
+                                           container: 900, track: 600)
+        check(end + 300 == 600, "at the end, the indicator's bottom is the track's bottom")
+
+        // Overscroll happens on every rubber-band and must not push the
+        // indicator outside the track.
+        check(ScrollGutter.progress(offset: -120, content: 1800, container: 900) == 0,
+              "rubber-banding past the top still reads as the top")
+        check(ScrollGutter.progress(offset: 4000, content: 1800, container: 900) == 1,
+              "and past the bottom as the bottom")
+
+        // A very long tab would otherwise draw a few pixels, which reads as
+        // a rendering fault rather than as a position.
+        check(ScrollGutter.thumbLength(content: 90000, container: 900, track: 600)
+                == ScrollGutter.minimumThumbLength,
+              "a very long tab's indicator stops shrinking at the floor")
+        check(ScrollGutter.thumbLength(content: 1800, container: 900, track: 0) == 0,
+              "an unmeasured track draws nothing at all")
+    }
+
 }

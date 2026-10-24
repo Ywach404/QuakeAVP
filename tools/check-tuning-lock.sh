@@ -1,0 +1,156 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 A. Cervantez
+#
+# check-tuning-lock.sh
+#
+# Every drag-driven control in the panel must be under the tuning lock.
+#
+# This is a SOURCE check rather than a unit test because what it guards is
+# not behaviour, it is coverage: the lock works by being applied at each
+# control, and the failure mode is a slider added later that nobody
+# remembered to mark. That cannot be caught by testing the lock -- the lock
+# would pass -- and it cannot be caught in the headset either, because an
+# unlocked slider looks exactly like a locked one until a stray pinch moves
+# it, which is the bug.
+#
+# A raw `Slider(value:` must be followed by `.tuningLocked()` within 20
+# lines, and `gyroDisc` -- the one place all three dials go through -- must
+# carry it too. The deliberate exemption is listed below with its reason.
+
+set -e
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$ROOT_DIR/App/Sources/ContentView.swift"
+fails=0
+TABFAIL=$(mktemp); trap 'rm -f "$TABFAIL"' EXIT
+
+# The phase column is a SIBLING of the tab panel, not content inside its
+# scroll view, so there is no scroll gesture for a pinch to misfire into and
+# none of its three sliders is locked -- the lock pill that would explain a
+# greyed row is in a different column entirely. They are still logged.
+PHASE_FROM=$(grep -n 'private var phaseControls' "$SRC" | cut -d: -f1)
+
+SLIDER_LINES=$(grep -nE '(^|[^A-Za-z])Slider\(value:' "$SRC" | cut -d: -f1)
+
+for line in $SLIDER_LINES; do
+	if [ -n "$PHASE_FROM" ] && [ "$line" -gt "$PHASE_FROM" ]; then
+		echo "skip: ContentView.swift:$line is in the phase column, outside the panel"
+		continue
+	fi
+	# Stop at the NEXT slider rather than at a fixed offset. With a flat
+	# 20-line window two rows sitting close together let a missing
+	# modifier borrow its neighbour's and pass, which would make the
+	# check weakest exactly where the rows are densest.
+	next=$(echo "$SLIDER_LINES" | awk -v l="$line" '$1 > l { print $1; exit }')
+	end=$((line + 20))
+	if [ -n "$next" ] && [ "$next" -le "$end" ]; then end=$((next - 1)); fi
+	if sed -n "${line},${end}p" "$SRC" | grep -q '\.tuningLocked('; then
+		echo "ok:   ContentView.swift:$line is under the tuning lock"
+	else
+		echo "FAIL: ContentView.swift:$line is a slider with no .tuningLocked()"
+		fails=$((fails + 1))
+	fi
+done
+
+# tuning-log-names.py cannot read a wrapper's body, so it ASSUMES how each
+# one derives its log name. Those assumptions are pinned here: without this,
+# dropping placeSlider's prefix would reintroduce the weapon tab's three-way
+# "Up" collision while the duplicate check went on passing, because the check
+# would still believe the prefix was there.
+check_body() {
+	if awk "/private func $1/,/^    \}/" "$SRC" | grep -q -- "$2"; then
+		echo "ok:   $1 logs the name $3"
+	else
+		echo "FAIL: $1 no longer logs the name $3 -- tuning-log-names.py assumes it does"
+		fails=$((fails + 1))
+	fi
+}
+check_body placeSlider 'noteTuning("gun ' 'prefixed with gun'
+check_body placementSlider 'noteTuning(cvar,' 'of its cvar'
+check_body commPlaceRow 'commAlongArm ?' 'with the across/along mode'
+
+# Every parameter control is dotted, which means every slider carries a step.
+#
+# The track style is not decoration: one dot is one unit of what the row's
+# readout shows, so a stepped slider cannot be nudged by a fraction it will
+# never display. The panel used to have exactly one stepped group and twelve
+# continuous ones, which is two kinds of slider in one window for no reason
+# anybody chose -- and the way back to that is a new row written without a
+# step, which looks fine in isolation.
+# EVERY slider is dotted, with no exemptions. The phase scrub briefly had
+# one, on a misreading: what was wrong with that column was the gutter's
+# hover highlight painting white over the dots, not the dots.
+for line in $SLIDER_LINES; do
+	next=$(echo "$SLIDER_LINES" | awk -v l="$line" '$1 > l { print $1; exit }')
+	end=$((line + 20))
+	if [ -n "$next" ] && [ "$next" -le "$end" ]; then end=$((next - 1)); fi
+	if sed -n "${line},${end}p" "$SRC" | grep -q 'step:'; then
+		echo "ok:   ContentView.swift:$line has a detent"
+	else
+		echo "FAIL: ContentView.swift:$line is a slider with no step: -- it would draw a plain track"
+		fails=$((fails + 1))
+	fi
+done
+
+# `tabIsTunable` decides where the lock pill appears, and is a second place
+# the truth is written down. See tools/tuning-tab-inventory.py.
+python3 "$ROOT_DIR/tools/tuning-tab-inventory.py" "$SRC" | while read -r tab count; do
+	# What the Swift switch claims for this tab.
+	claim=$(awk '/private static func tabIsTunable/,/^    \}/' "$SRC" \
+		| grep -E "case .*\.$tab\b" | grep -o 'return [a-z]*' | head -1 | awk '{print $2}')
+	if [ "$count" -gt 0 ]; then want=true; else want=false; fi
+	if [ "$claim" = "$want" ]; then
+		echo "ok:   tab $tab: $count drag controls, tabIsTunable says $claim"
+	else
+		echo "FAIL: tab $tab has $count drag controls but tabIsTunable says $claim"
+		echo "$tab" >> "$TABFAIL"
+	fi
+done
+if [ -s "$TABFAIL" ]; then fails=$((fails + 1)); fi
+
+# No two controls on one tab may log under the same name. See
+# tools/tuning-log-names.py for why a collision drops a change outright.
+dupes=$(python3 "$ROOT_DIR/tools/tuning-log-names.py" "$SRC")
+if [ -n "$dupes" ]; then
+	echo "$dupes" | sed 's/^/FAIL: two controls log under one name -- /'
+	fails=$((fails + 1))
+else
+	echo "ok:   no two controls on a tab share a log name"
+fi
+
+# The dials. gyroDial and commDisc are thin wrappers over gyroDisc, so the
+# lock belongs on the one of them that owns the DragGesture.
+if awk '/private func gyroDisc/,/^    \}/' "$SRC" | grep -q '\.tuningLocked('; then
+	echo "ok:   gyroDisc is under the tuning lock"
+else
+	echo "FAIL: gyroDisc has no .tuningLocked() -- every dial is unlocked"
+	fails=$((fails + 1))
+fi
+
+# The dials must be LOGGED as well as locked, and that is a separate miss:
+# gyroDisc owns the gesture, so the lock belongs there, but only gyroDial and
+# commDisc know what their axes are CALLED -- so the lock passing says nothing
+# about whether a dial drag is reported. It was in fact missed the first time.
+for fn in gyroDial commDisc; do
+	if awk "/private func $fn/,/^    \}/" "$SRC" | grep -q 'noteTuning('; then
+		echo "ok:   $fn reports its changes"
+	else
+		echo "FAIL: $fn moves a tuned value without a [tune] line"
+		fails=$((fails + 1))
+	fi
+done
+
+# The lock must default to engaged. A lock that starts off is decoration.
+if grep -q 'var isLocked = true' "$ROOT_DIR/App/Sources/TuningLock.swift"; then
+	echo "ok:   the lock defaults to locked"
+else
+	echo "FAIL: TuningLock.isLocked does not default to true"
+	fails=$((fails + 1))
+fi
+
+if [ "$fails" -ne 0 ]; then
+	echo "TUNING LOCK FAIL ($fails)"
+	exit 1
+fi
+echo "TUNING LOCK PASS"
