@@ -943,7 +943,7 @@ only debug surface on device, so what sits in it should earn the space.
 
 ---
 
-## 2026-10-23 — The panel locks what responds to a drag, not what holds a value
+## 2026-10-23 - The panel locks what responds to a drag, not what holds a value
 
 **Choice.** The control panel starts locked at every launch, and the lock
 disables only drag-driven controls: the sliders and the three gyro discs.
@@ -976,7 +976,7 @@ annoyance.
 The gutter exists because the lock cannot fix scrolling. Even fully locked,
 the panel still has to be scrolled, and there still has to be somewhere to
 pinch. Empty layout padding is not a gaze target, so the gutter is a real
-hit-testable surface that claims no gesture of its own — the drag reaches the
+hit-testable surface that claims no gesture of its own: the drag reaches the
 scroll view precisely *because* nothing in the gutter handles it. Attaching a
 gesture there to "make it work" would break it.
 
@@ -1013,7 +1013,7 @@ the wrist rows carry the across/along mode, since one label there names two
 different stored values depending on a picker.
 
 Coverage is guarded by `tools/check-tuning-lock.sh` rather than by trust. The
-failure mode is not the lock misbehaving — it is a slider added later that
+failure mode is not the lock misbehaving, it is a slider added later that
 nobody marked, which no test of the lock can catch and which in the headset
 is indistinguishable from a locked one right up until a stray pinch moves it.
 
