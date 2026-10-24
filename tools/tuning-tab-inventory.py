@@ -18,7 +18,7 @@ import sys
 src = open(sys.argv[1]).read().split('\n')
 
 TABS = ['gameContent', 'comfortContent', 'weaponContent',
-        'adminContent', 'captureContent', 'debugContent', 'onlineContent']
+        'adminContent', 'captureContent', 'debugContent']
 
 DRAG = re.compile(
     r'\b(placeSlider|trimSlider|transformSlider|tuneRow|commPlaceRow'

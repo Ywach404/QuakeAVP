@@ -17,7 +17,7 @@ import sys
 src = open(sys.argv[1]).read().split('\n')
 
 TABS = ['gameContent', 'comfortContent', 'weaponContent',
-        'adminContent', 'captureContent', 'debugContent', 'onlineContent']
+        'adminContent', 'captureContent', 'debugContent']
 
 starts = {}
 for i, line in enumerate(src):
