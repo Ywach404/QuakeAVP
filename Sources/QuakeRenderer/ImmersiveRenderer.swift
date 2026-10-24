@@ -108,6 +108,28 @@ final class ImmersiveRenderer {
     /// is echoed back through QC_InputSetHeadOffset so the engine knows
     /// which generation the feed belongs to.
     private var recenterCorrection = matrix_identity_float4x4
+    /// A Sense controller's pose, but only while the controllers are the
+    /// INPUT the player chose.
+    ///
+    /// Every caller here used to ask `SpatialControllerTracker.isTracking`
+    /// directly, and that is the wrong question in a way that reads as right.
+    /// Choosing Hands switches input to bare hands with the pair still
+    /// connected -- deliberately, as the picker says -- and a connected pair
+    /// lying on a desk keeps tracking perfectly well. So every one of those
+    /// gates stayed true after the handover and went on preferring a
+    /// controller nobody was holding: the off-hand model drew over the real
+    /// hand, the wrist grid and the gauntlet stayed pinned to the desk, and
+    /// the aim feed fought HandInput for the single route into
+    /// QC_InputSetAim at 90 Hz.
+    ///
+    /// Four callers, one question, asked once.
+    private func activeControllerPose(left: Bool) -> simd_float4x4? {
+        guard VRSettings.shared.controllersActive,
+              SpatialControllerTracker.shared.isTracking
+        else { return nil }
+        return SpatialControllerTracker.shared.pose(left: left)
+    }
+
     /// Whether this renderer published the controller's off-hand model on
     /// the last frame, so the falling edge can be cleared exactly once.
     /// Render-thread only, like everything else in this type.
@@ -714,7 +736,7 @@ final class ImmersiveRenderer {
             // HandInput; when neither is present the engine falls back to the
             // body-anchored aim. Controller forward is -Z.
             let rightHanded = VRSettings.shared.rightHanded
-            if let domPose = SpatialControllerTracker.shared.pose(left: !rightHanded) {
+            if let domPose = activeControllerPose(left: !rightHanded) {
                 let c = recenterCorrection * domPose
                 let o = c.columns.3
                 let fwd0 = -c.columns.2          // controller forward, corrected
@@ -739,10 +761,7 @@ final class ImmersiveRenderer {
             // the rigid controller hand and overwrote the real one every
             // frame. Input was correct and the hand was wrong, which is a
             // hard thing to attribute from inside the headset.
-            let wantsControllerHand = VRSettings.shared.controllersActive
-                && SpatialControllerTracker.shared.isTracking
-            if wantsControllerHand,
-               let offPose = SpatialControllerTracker.shared.pose(left: rightHanded) {
+            if let offPose = activeControllerPose(left: rightHanded) {
                 // Fold the handshake-angle offset (tuned on device) into the
                 // pose, in the controller-local frame -- so it rotates the hand
                 // relative to the controller, not the world.
@@ -1353,16 +1372,19 @@ final class ImmersiveRenderer {
     }
 
     /// The off-hand wrist position for the wrist-mode panel, corrected
-    /// tracking space: the Sense controller pose when controllers are
-    /// tracking (the same source the off-hand rigid-hand model reads,
-    /// above), else the ARKit wrist `HandInput` publishes continuously
+    /// tracking space: the Sense controller pose while the controllers are
+    /// the chosen INPUT (the same source the off-hand rigid-hand model
+    /// reads, above), else the ARKit wrist `HandInput` publishes continuously
     /// whenever hands are the active input (see `OffHandWrist`). nil when
     /// neither source currently has the off-hand -- the caller's cue to
     /// fall back to the float placement.
+    ///
+    /// Chosen rather than merely tracking: this is what pins the wrist
+    /// gauntlet, so a connected pair on a desk left the gauntlet out there
+    /// with them and out of reach of the hand actually being used.
     private func offHandWristPosition() -> SIMD3<Float>? {
         let rightHanded = VRSettings.shared.rightHanded
-        if SpatialControllerTracker.shared.isTracking,
-           let offPose = SpatialControllerTracker.shared.pose(left: rightHanded) {
+        if let offPose = activeControllerPose(left: rightHanded) {
             let p = recenterCorrection * offPose.columns.3
             return SIMD3(p.x, p.y, p.z)
         }
@@ -1610,8 +1632,7 @@ final class ImmersiveRenderer {
     /// nil when neither source currently has the dominant hand.
     private func gunPosition() -> SIMD3<Float>? {
         let rightHanded = VRSettings.shared.rightHanded
-        if SpatialControllerTracker.shared.isTracking,
-           let domPose = SpatialControllerTracker.shared.pose(left: !rightHanded) {
+        if let domPose = activeControllerPose(left: !rightHanded) {
             let p = recenterCorrection * domPose.columns.3
             return SIMD3(p.x, p.y, p.z)
         }

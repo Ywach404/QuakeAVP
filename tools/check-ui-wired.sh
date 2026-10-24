@@ -39,6 +39,29 @@ check_wired 'CoverFlowMetrics.badges(for:' SaveCoverFlow.swift
 check_wired 'CoverFlowMetrics.emptyMessage(' SaveCoverFlow.swift
 check_wired 'session.saveBlock.caption' ContentView.swift
 
+# The renderer must ask for a controller pose in ONE place.
+#
+# `SpatialControllerTracker.isTracking` is the wrong question everywhere it
+# was asked: a Sense pair stays connected and tracking on a desk after the
+# player has switched to bare hands, so every tracking-gated branch went on
+# preferring a controller nobody was holding. That put the rigid hand over the
+# real one, left the wrist gauntlet pinned out of reach, and had the aim feed
+# fighting HandInput for the single route into QC_InputSetAim. All four now go
+# through activeControllerPose, which also asks whether controllers are the
+# CHOSEN input. A fifth caller written the old way would be the same bug again
+# and would look perfectly reasonable in isolation.
+RENDERER="$ROOT_DIR/Sources/QuakeRenderer/ImmersiveRenderer.swift"
+total=$(grep -c 'SpatialControllerTracker\.shared' "$RENDERER" || true)
+inside=$(awk '/private func activeControllerPose/,/^    \}/' "$RENDERER" \
+	| grep -c 'SpatialControllerTracker\.shared' || true)
+if [ "$total" = "$inside" ]; then
+	echo "ok:   the renderer asks for a controller pose in one place ($inside)"
+else
+	echo "FAIL: $((total - inside)) controller-tracking check(s) outside activeControllerPose"
+	echo "      a pose gated on tracking alone survives the switch to bare hands"
+	fails=$((fails + 1))
+fi
+
 if [ "$fails" -ne 0 ]; then
 	echo "UI WIRING FAIL ($fails)"
 	exit 1
