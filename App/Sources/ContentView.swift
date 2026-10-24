@@ -596,9 +596,12 @@ struct ContentView: View {
                             content: geo.contentSize.height,
                             viewport: geo.containerSize.height)
             } action: { _, frame in
-                scrollOffset = frame.offset
-                scrollContentHeight = frame.content
-                scrollViewportHeight = frame.viewport
+                // Written, never read here -- that is what keeps the panel
+                // out of the invalidation.
+                let state = ScrollGutterState.shared
+                state.offset = frame.offset
+                state.content = frame.content
+                state.viewport = frame.viewport
             }
         }
         .padding(16)
@@ -615,12 +618,6 @@ struct ContentView: View {
     /// problem this solves -- and narrow enough not to take a column of
     /// space away from the rows.
     private static let gutterWidth: CGFloat = 40
-
-    /// What the gutter's indicator is drawn from. Fed by
-    /// `onScrollGeometryChange` on the panel's ScrollView.
-    @State private var scrollOffset: Double = 0
-    @State private var scrollContentHeight: Double = 0
-    @State private var scrollViewportHeight: Double = 0
 
     /// One value so a scroll produces one update rather than three.
     /// `onScrollGeometryChange` needs it Equatable to tell changes apart.
@@ -655,51 +652,14 @@ struct ContentView: View {
             .accessibilityLabel("Scroll area")
     }
 
-    /// The gutter's visible track, running its whole length, with the
-    /// scroll position riding on it.
-    ///
-    /// NOT INTERACTIVE, and that is the point rather than a limitation. The
-    /// system's own indicator sits in this exact strip and can be dragged,
-    /// and dragging one does not follow your hand -- it maps the grab's
-    /// position onto the scroll offset, so a pinch landing on it threw the
-    /// panel straight to the bottom. Hiding it fixed the scrolling and cost
-    /// the only cue for how far down a tab you were; drawing our own gets
-    /// the cue back without putting a scrubber in the one strip that exists
-    /// to be grabbed.
-    ///
-    /// The dotted track is the same language as the sliders beside it, where
-    /// a dot is one unit of the value. Here the dots are just the rail.
+    /// The gutter's rail and position indicator. Lives in
+    /// ScrollGutterState.swift, which explains why it is a separate view
+    /// with its own observable state rather than three @State properties
+    /// here: a @State write invalidates ContentView, and ContentView is the
+    /// whole panel, so scrolling re-evaluated forty rows of sliders to move
+    /// one capsule.
     private var gutterTrack: some View {
-        GeometryReader { geo in
-            let track = geo.size.height
-            let thumb = ScrollGutter.thumbLength(content: scrollContentHeight,
-                                                 container: scrollViewportHeight,
-                                                 track: track)
-            let drop = ScrollGutter.thumbOffset(offset: scrollOffset,
-                                                content: scrollContentHeight,
-                                                container: scrollViewportHeight,
-                                                track: track)
-            ZStack(alignment: .top) {
-                // The rail: dots the length of the gutter, so the strip
-                // reads as a thing you can grab anywhere along it rather
-                // than as three marks floating in a gap.
-                VStack(spacing: 4) {
-                    ForEach(0..<max(1, Int(track / 6)), id: \.self) { _ in
-                        Circle().fill(Self.noctuaBrown.opacity(0.30))
-                            .frame(width: 2, height: 2)
-                    }
-                }
-                .frame(maxHeight: .infinity, alignment: .top)
-                .clipped()
-                Capsule()
-                    .fill(Self.noctuaBrown.opacity(0.75))
-                    .frame(width: 5, height: thumb)
-                    .offset(y: drop)
-            }
-            .frame(width: Self.gutterWidth, alignment: .center)
-        }
-        .frame(width: Self.gutterWidth)
-        .allowsHitTesting(false)
+        GutterTrack(width: Self.gutterWidth, tint: Self.noctuaBrown)
     }
 
     /// The lock, above the tab content so it reads from every tab.
@@ -2669,13 +2629,15 @@ struct ContentView: View {
             // A rotated Slider is the sanctioned vertical-slider trick: lay
             // it out at its length, rotate, then reserve the rotated
             // footprint. -90 puts minimum at the bottom.
-            // CONTINUOUS, and the only slider in the app that is. Detents
-            // are for a parameter you are setting to a number; this one is
-            // the dissolve being scrubbed by hand, and a hundred notches in
-            // a rotated 200pt track fought the gesture instead of helping
-            // it. It is exempt from the lock for the same reason -- it is an
-            // action, not a value.
-            Slider(value: $phaseLevel, in: 0...1) {
+            // Dotted like every other parameter control, including through
+            // the rotation. It briefly lost its detents on a misreading of
+            // "the vertical one is weird": what was wrong was the gutter's
+            // hover highlight painting white over this column, not the dots
+            // themselves. It stays exempt from the LOCK, which is a
+            // separate argument -- this is the dissolve being scrubbed, an
+            // action rather than a value.
+            Slider(value: $phaseLevel, in: 0...1,
+                   step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01) {
                 Text("Phase")
             }
             .frame(width: 200)
