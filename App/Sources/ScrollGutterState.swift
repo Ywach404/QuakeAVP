@@ -58,14 +58,16 @@ struct GutterTrack: View {
     /// Spacing and size of the rail's dots. The rail is the same visual
     /// language as the stepped sliders beside it; here the dots are just the
     /// rail rather than units of anything.
-    private let dotSpacing: CGFloat = 7
-    private let dotDiameter: CGFloat = 3
+    private let dotSpacing: CGFloat = 9
+    private let dotDiameter: CGFloat = 4
 
-    /// The indicator's width. Wide enough to read as a grabbable-looking
-    /// rail at arm's length in a headset -- it was 5pt and looked like a
-    /// hairline -- and still narrower than the strip it sits in, so the
-    /// dots stay visible either side of it.
-    private let thumbWidth: CGFloat = 10
+    /// The indicator's width. CHONKY on purpose: at 5pt it was a hairline
+    /// and at 10pt it still read as a line rather than a bar. A headset is
+    /// a low-DPI display viewed at arm's length through lenses, so a control
+    /// that looks heavy-handed in a screenshot is about right in the device.
+    /// It stays inside the 40pt strip with room either side so the rail is
+    /// visible above and below it.
+    private let thumbWidth: CGFloat = 24
 
     var body: some View {
         GeometryReader { geo in

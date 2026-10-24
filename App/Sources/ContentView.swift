@@ -2621,6 +2621,15 @@ struct ContentView: View {
     /// slider scrubbing the `phase` target (the engine eases toward it, so
     /// a partial nudge holds a partial melt), the sweep-speed menu, and the
     /// ember colour well with its reset.
+    /// Twentieths for the two small phase dials.
+    ///
+    /// Same arithmetic as the scrub above them: a step matching the printed
+    /// percentage would be 100 detents on a 110pt track, which draws as a
+    /// line rather than as dots. Twenty of them read, and a fifth of an
+    /// opacity is still a finer adjustment than the eye needs for deciding
+    /// how much floor it wants to see.
+    private static let phaseDialStep = 0.05
+
     private var phaseControls: some View {
         VStack(spacing: 12) {
             Text("\(Int((phaseLevel * 100).rounded()))%")
@@ -2629,15 +2638,18 @@ struct ContentView: View {
             // A rotated Slider is the sanctioned vertical-slider trick: lay
             // it out at its length, rotate, then reserve the rotated
             // footprint. -90 puts minimum at the bottom.
-            // Dotted like every other parameter control, including through
-            // the rotation. It briefly lost its detents on a misreading of
-            // "the vertical one is weird": what was wrong was the gutter's
-            // hover highlight painting white over this column, not the dots
-            // themselves. It stays exempt from the LOCK, which is a
-            // separate argument -- this is the dissolve being scrubbed, an
-            // action rather than a value.
-            Slider(value: $phaseLevel, in: 0...1,
-                   step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01) {
+            // QUARTERS, and not this row's printed precision like every
+            // other slider.
+            //
+            // A step fine enough to match the readout puts 100 detents
+            // across a 200pt track, a dot every 2pt, which merges into a
+            // solid white line: the dots are drawn and cannot be seen AS
+            // dots. Five positions can, and they are what this control is
+            // for -- the dissolve is thrown to none, a quarter, half,
+            // three-quarters or full, by hand, mid-game. It is a scrub with
+            // stops, not a value being dialled in, which is also why it is
+            // exempt from the lock.
+            Slider(value: $phaseLevel, in: 0...1, step: 0.25) {
                 Text("Phase")
             }
             .frame(width: 200)
@@ -2653,8 +2665,7 @@ struct ContentView: View {
             VStack(spacing: 2) {
                 Text("Ground \(Int((phaseFloor * 100).rounded()))%")
                     .font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $phaseFloor, in: 0...1,
-                       step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
+                Slider(value: $phaseFloor, in: 0...1, step: Self.phaseDialStep)
                     .frame(width: 110)
                     .onChange(of: phaseFloor) { old, value in
                         noteTuning("Ground", from: Float(old), to: Float(value),
@@ -2672,8 +2683,7 @@ struct ContentView: View {
             VStack(spacing: 2) {
                 Text("Edge grid \(Int((phaseGrid * 100).rounded()))%")
                     .font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $phaseGrid, in: 0...1,
-                       step: Tuning.step(forFormat: "%.0f", display: 100) ?? 0.01)
+                Slider(value: $phaseGrid, in: 0...1, step: Self.phaseDialStep)
                     .frame(width: 110)
                     .onChange(of: phaseGrid) { old, value in
                         noteTuning("Edge grid", from: Float(old), to: Float(value),
