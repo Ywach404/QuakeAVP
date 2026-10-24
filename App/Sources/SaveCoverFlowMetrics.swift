@@ -31,9 +31,9 @@ enum CoverBadge: Hashable {
     var caption: String {
         switch self {
         case .versionMismatch(let v):
-            return "Savegame version \(v) — this engine reads version \(SaveGameHeader.version)."
+            return "Savegame version \(v). This engine reads version \(SaveGameHeader.version)."
         case .unaddressable:
-            return "Rename this file (letters, digits, - and _) to load it — the console cannot take a name with a space or a dot in it."
+            return "Rename this file (letters, digits, - and _) to load it: the console cannot take a name with a space or a dot in it."
         }
     }
 }

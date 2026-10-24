@@ -202,10 +202,10 @@ struct SessionTest {
               "a loadable, addressable save shows no warning")
 
         check(CoverBadge.versionMismatch(4).caption
-                == "Savegame version 4 — this engine reads version \(SaveGameHeader.version).",
+                == "Savegame version 4. This engine reads version \(SaveGameHeader.version).",
               "the version caption is the engine's own wording")
         check(CoverBadge.unaddressable.caption
-                == "Rename this file (letters, digits, - and _) to load it — the console cannot take a name with a space or a dot in it.",
+                == "Rename this file (letters, digits, - and _) to load it: the console cannot take a name with a space or a dot in it.",
               "the name caption is the engine's own wording")
 
         // Two different empty states, and they say different things.
