@@ -20,7 +20,7 @@ import os
 /// BEFORE there is a level, and since the engine menu is now console-only it
 /// is the only way to reach any of it. First in the strip for the same
 /// reason.
-private enum PanelTab: Hashable { case game, comfort, weapon, admin, capture, debug }
+private enum PanelTab: Hashable { case game, online, comfort, weapon, admin, capture, debug }
 
 struct ContentView: View {
     /// Not owned here either — see QuakeEngineViewModel. A window close must
@@ -546,6 +546,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("Panel", selection: $activeTab) {
                 Text("Game").tag(PanelTab.game)
+                Text("Online").tag(PanelTab.online)
                 Text("Comfort").tag(PanelTab.comfort)
                 Text("Weapon").tag(PanelTab.weapon)
                 Text("Admin").tag(PanelTab.admin)
@@ -559,6 +560,7 @@ struct ContentView: View {
                 Group {
                     switch activeTab {
                     case .game: gameContent
+                    case .online: onlineContent
                     case .comfort: comfortContent
                     case .weapon: weaponContent
                     case .admin: adminContent
@@ -609,7 +611,12 @@ struct ContentView: View {
         // left about 66pt each, so "Comfort" and "Capture" truncated. A floor
         // rather than a fixed width, so enlarging the window widens the tabs
         // instead of only stretching the render surface beside them.
-        .frame(minWidth: 560, maxWidth: 680)
+        //
+        // Raised again for the seventh segment. Online took multiplayer out
+        // of Game, and 560 across seven leaves about 75pt each -- close
+        // enough to the width that truncated at six to bring the problem
+        // back. 620 keeps every label whole at the floor.
+        .frame(minWidth: 620, maxWidth: 760)
         .background(dashMaterial(14))
     }
 
@@ -730,13 +737,14 @@ struct ContentView: View {
     private static func tabIsTunable(_ tab: PanelTab) -> Bool {
         switch tab {
         case .comfort, .weapon, .debug: return true
-        case .game, .admin, .capture: return false
+        case .game, .online, .admin, .capture: return false
         }
     }
 
     private static func tabName(_ tab: PanelTab) -> String {
         switch tab {
         case .game: return "game"
+        case .online: return "online"
         case .comfort: return "comfort"
         case .weapon: return "weapon"
         case .admin: return "admin"
@@ -1363,12 +1371,24 @@ struct ContentView: View {
     private var gameContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             saveLoadSection
-            Divider()
-            multiplayerSection
         }
         // The slot list is rescanned when you come to look at it. The POLL
         // itself is started at window level, not here -- see the body.
         .onAppear { session.refreshSlots() }
+    }
+
+    /// Multiplayer on its own tab rather than under the fold of Game.
+    ///
+    /// Game was doing four jobs -- the save deck, the covers, difficulty and
+    /// the map list -- and multiplayer was a fifth below a divider, which is
+    /// where a feature goes to be forgotten. It is also the one part of this
+    /// window whose device check needs a second machine on the network, so
+    /// separating it in the UI matches how the work is actually sequenced:
+    /// Online is its own item in docs/release-1.md, after Episodes.
+    private var onlineContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            multiplayerSection
+        }
     }
 
     private var saveLoadSection: some View {
