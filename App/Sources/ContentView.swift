@@ -1442,7 +1442,13 @@ struct ContentView: View {
                     Button("Delete", role: .destructive) { slotPendingDelete = slot }
                 }
                 Spacer()
-                Button("Rescan") { session.refreshSlots() }
+                // Rescan is also the tidy-up, because it is the one
+                // save-browser action the player asks for explicitly and the
+                // only safe moment to delete anything.
+                Button("Rescan") {
+                    session.sweepOrphanedCovers()
+                    session.refreshSlots()
+                }
                 if session.isSaving {
                     ProgressView().controlSize(.small)
                     Text("Saving…").foregroundStyle(.secondary)

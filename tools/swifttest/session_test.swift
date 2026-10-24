@@ -53,6 +53,7 @@ struct SessionTest {
         runTuningLogTests()
         runTuningStepTests()
         runScrollGutterTests()
+        runOrphanCoverTests()
         print("PASSED")
     }
 
@@ -707,6 +708,33 @@ struct SessionTest {
               "a very long tab's indicator stops shrinking at the floor")
         check(ScrollGutter.thumbLength(content: 1800, container: 900, track: 0) == 0,
               "an unmeasured track draws nothing at all")
+    }
+
+
+    // MARK: - orphaned covers
+
+    /// A cover is named after its save and means nothing without one, so a
+    /// cover whose save is gone is unreachable bytes. `list` already ignores
+    /// them, which is exactly why they piled up without anything breaking.
+    static func runOrphanCoverTests() {
+        let orphans = SaveGameHeader.orphanedCovers(
+            savNames: ["s0", "s1", "s2"],
+            coverNames: ["s1", "s2", "s3", "s7", "s11"])
+        check(orphans == ["s3", "s7", "s11"],
+              "a cover with no save beside it is an orphan")
+        check(!orphans.contains("s1") && !orphans.contains("s2"),
+              "and a cover that still has its save is never swept")
+
+        check(SaveGameHeader.orphanedCovers(savNames: ["s0"], coverNames: []).isEmpty,
+              "a save with no cover yields nothing to delete")
+        // The case that matters for safety: a save whose cover has not been
+        // rendered yet must never cause its SAVE to be touched, and nothing
+        // here can return a name that is not a cover.
+        check(SaveGameHeader.orphanedCovers(savNames: ["s0", "s1"],
+                                            coverNames: ["s0"]).isEmpty,
+              "a save still waiting for its cover sweeps nothing")
+        check(SaveGameHeader.orphanedCovers(savNames: [], coverNames: []).isEmpty,
+              "an empty directory sweeps nothing")
     }
 
 }

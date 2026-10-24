@@ -62,7 +62,6 @@ struct SaveCoverFlow: View {
                            alignment: .center)
             } else {
                 carousel
-                refusal
             }
         }
         .onChange(of: revision) { old, new in
@@ -73,36 +72,6 @@ struct SaveCoverFlow: View {
             // it is what you want to be looking at, and it also stops the
             // selection silently pointing at a different save than before.
             if slots.count > old.count { selectedIndex = 0 }
-        }
-    }
-
-    /// Why the card in front cannot be loaded, if it cannot.
-    ///
-    /// `CoverFlowMetrics.badges(for:)` has computed this since the deck was
-    /// written and nothing ever drew it: the Load button was correctly
-    /// disabled and the card looked ordinary, so the only way to find out why
-    /// was to try. A disabled control that does not say why it is disabled is
-    /// the thing the badge model exists to prevent, and a host test over a
-    /// model nobody renders is exactly the green-test-hiding-a-live-failure
-    /// this project keeps running into.
-    ///
-    /// Under the deck rather than on the card, because the captions are
-    /// sentences and a 230pt card has no room for one. The card itself
-    /// carries the mark.
-    @ViewBuilder
-    private var refusal: some View {
-        let badges = slots.indices.contains(selectedIndex)
-            ? CoverFlowMetrics.badges(for: slots[selectedIndex]) : []
-        if !badges.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(badges, id: \.self) { badge in
-                    Label(badge.caption, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(.top, 2)
         }
     }
 
@@ -256,16 +225,21 @@ struct SaveCoverFlow: View {
                     .clipped()
             }
             caption(slot)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        // An OVERLAY, not another ZStack child. A child sized to .infinity in
+        // there makes the stack as large as it is allowed to be, and the
+        // card's own frame cannot shrink it -- the same fault the cover image
+        // above carries a comment about. An overlay is proposed the size of
+        // what it sits on, so it cannot change the card's shape.
+        .overlay(alignment: .topTrailing) {
             if !CoverFlowMetrics.badges(for: slot).isEmpty {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity,
-                           alignment: .topTrailing)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(.white.opacity(isCentre ? 0.35 : 0.15))

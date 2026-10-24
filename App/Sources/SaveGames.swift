@@ -209,6 +209,21 @@ enum SaveGameHeader {
     /// save written under `-game hipnotic` is not listed while id1 is loaded,
     /// which is exactly what `load` would do with it. No cleverness about
     /// other gamedirs -- the engine has none either.
+    /// Cover files with no savegame beside them.
+    ///
+    /// A cover is named after its save and means nothing on its own, so one
+    /// whose save has gone is unreachable bytes: `list` already ignores it,
+    /// which is why these accumulated silently rather than breaking anything.
+    /// Deleting a save removes its cover now, so this is for history and for
+    /// saves removed outside the app.
+    ///
+    /// Pure, and takes both name sets rather than a directory, so the rule
+    /// can be tested without a filesystem.
+    static func orphanedCovers(savNames: Set<String>,
+                               coverNames: Set<String>) -> Set<String> {
+        coverNames.subtracting(savNames)
+    }
+
     static func list(in directory: URL) -> [SaveGameSlot] {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(

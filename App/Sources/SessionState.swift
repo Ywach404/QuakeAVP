@@ -208,12 +208,71 @@ final class SessionState {
     /// OVER if this scan cannot read it: that is the truncate-then-buffer
     /// window described on `pendingSave`, and showing the row disappear
     /// during it would say the save had been destroyed.
+    /// Print what is on disk beside what survived parsing, on every scan.
+    ///
+    /// Off by default; flip it when the browser disagrees with the directory.
+    /// The scan is silent on purpose -- an unreadable file is skipped so one
+    /// bad save cannot empty the browser -- and the price of that is that
+    /// "nothing to show" and "nothing found" look identical from outside.
+    ///
+    /// It earned its keep once already: two planted test files never appeared
+    /// and the trace put the real game directory on screen, which is
+    /// `Library/Application Support/QuakeAVP/id1` and NOT the `Documents/id1`
+    /// the paks are seeded into.
+    static let traceSlots = false
+
+    /// Remove covers whose savegame is gone.
+    ///
+    /// Only from an explicit Rescan, never from the 2 Hz poll: this deletes
+    /// files, and a delete on a timer is a thing that goes wrong quietly at
+    /// three in the morning. Skipped entirely while a save is in flight, so
+    /// it can never race the write it would be scanning through.
+    func sweepOrphanedCovers() {
+        guard pendingSave == nil, let gameDirectory else { return }
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: gameDirectory, includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants])
+        else { return }
+        var saves: Set<String> = []
+        var covers: Set<String> = []
+        for url in entries {
+            let stem = url.deletingPathExtension().lastPathComponent
+            switch url.pathExtension.lowercased() {
+            case "sav": saves.insert(stem)
+            case "jpg": covers.insert(stem)
+            default: break
+            }
+        }
+        let orphans = SaveGameHeader.orphanedCovers(savNames: saves, coverNames: covers)
+        guard !orphans.isEmpty else { return }
+        for stem in orphans {
+            try? fm.removeItem(at: gameDirectory.appendingPathComponent("\(stem).jpg"))
+        }
+        HandDebug.shared.log("[slots] swept \(orphans.count) cover(s) with no save: "
+            + orphans.sorted().joined(separator: ", "))
+    }
+
     func refreshSlots() {
         guard let gameDirectory else {
+            // Silent to the caller by design, and that made "no cards
+            // appeared" impossible to tell apart from "the directory is
+            // empty". Say which it was.
+            HandDebug.shared.log("[slots] no game directory yet")
             if !slots.isEmpty { slots = [] }
             return
         }
         var scanned = SaveGameHeader.list(in: gameDirectory)
+        if Self.traceSlots {
+            let fm = FileManager.default
+            let raw = (try? fm.contentsOfDirectory(atPath: gameDirectory.path)) ?? []
+            let savs = raw.filter { $0.lowercased().hasSuffix(".sav") }
+            HandDebug.shared.log("[slots] dir \(gameDirectory.path)")
+            let names = savs.sorted().joined(separator: ", ")
+            HandDebug.shared.log("[slots] \(savs.count) .sav on disk: \(names)")
+            HandDebug.shared.log("[slots] \(scanned.count) parsed: "
+                + scanned.map { "\($0.name) v\($0.version)" }.joined(separator: ", "))
+        }
 
         if let pending = pendingSave {
             let found = scanned.first { $0.name == pending.name }
@@ -269,6 +328,20 @@ final class SessionState {
                        previous: slots.first { $0.name == name }?.modified,
                        requestedAt: Date())
         QuakeEngineViewModel.shared.send("save \(name)")
+
+        // Drop the cover being replaced before the new one is attempted.
+        //
+        // The render can fail -- the commonest way is the immersive space not
+        // being open, which is exactly when someone saves from the flat
+        // window -- and the write is atomic, so a failure leaves the PREVIOUS
+        // cover in place. That picture then describes a moment this save no
+        // longer holds, and a card that lies about where it will put you is
+        // worse than one with no picture at all. A plain card is honest.
+        if let directory = gameDirectory,
+           slots.contains(where: { $0.name == name }) {
+            let save = directory.appendingPathComponent("\(name).sav")
+            try? FileManager.default.removeItem(at: SaveGameHeader.coverURL(forSave: save))
+        }
 
         // The cover, after the save is on its way and never able to stop it.
         // Off the main actor because the pass takes the renderer's consumer
@@ -341,6 +414,10 @@ final class SessionState {
         // watch first so the carry-over cannot resurrect the row.
         if pendingSave?.name == slot.name { pendingSave = nil }
         try? FileManager.default.removeItem(at: slot.url)
+        // The cover goes with it. A cover is named after its save and means
+        // nothing without one, so leaving it behind is unreachable bytes that
+        // accumulate every time a slot is cleared out.
+        try? FileManager.default.removeItem(at: SaveGameHeader.coverURL(forSave: slot.url))
         refreshSlots()
     }
 
