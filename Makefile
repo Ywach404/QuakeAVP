@@ -29,10 +29,11 @@ IPA_EXCLUDES := EXCLUDED_SOURCE_FILE_NAMES='pak0.pak pak1.pak pak2.pak PAK0.PAK 
 PAYLOAD_GUARD := \( -iname 'pak[0-9].pak' -o -iname '*.ogg' -o -iname '*.mp3' \
 	-o -iname '*.wav' -o -iname '*.flac' -o -type d -iname 'music' \)
 
-.PHONY: help gen build device run check ipa clean
+.PHONY: help gen build compile device run check ipa clean
 
 help:
 	@echo "make check    -- host-compile + link QuakeCore (no Xcode needed)"
+	@echo "make compile  -- real visionOS compile, UNSIGNED (cannot install)"
 	@echo "make gen      -- regenerate $(PROJECT) from project.yml"
 	@echo "make build    -- gen, then build for the visionOS simulator"
 	@echo "make device   -- gen, then build for a real Vision Pro"
@@ -45,6 +46,30 @@ help:
 # It does NOT prove the visionOS build: run `make build` for that.
 check:
 	@tools/check-core.sh
+
+# A real visionOS compile with signing switched off.
+#
+# `make check` uses the HOST compiler and cannot catch anything about the
+# actual target; Xcode is the only thing that proves it. But Xcode needs a
+# provisioning profile to produce something installable, and on a free
+# personal team those last seven days and every renewal spends one of ten App
+# IDs per rolling week -- so a run of probe projects can leave this one unable
+# to sign for days at a time.
+#
+# This builds every Swift file and every shader for visionOS and tells you
+# whether the code is correct, which is the part that was blocked. It CANNOT
+# be installed: no signature, no entitlements.
+#
+# Deliberately its own derived-data directory. `build/` is what
+# tools/run-device.sh installs from, and leaving an unsigned product there
+# would turn a signing problem into a confusing install problem.
+compile: gen
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
+		-destination generic/platform=visionOS \
+		-derivedDataPath build-nosign \
+		CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+		CODE_SIGN_IDENTITY="" ENTITLEMENTS_REQUIRED=NO \
+		build
 
 gen:
 	xcodegen generate

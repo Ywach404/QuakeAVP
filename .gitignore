@@ -40,3 +40,4 @@ App/DevGameData/music/*
 # Session scratch: brainstorming mockups and round reports. Already in
 # .git/info/exclude on this clone, which a fresh clone does not get.
 .superpowers/
+build-nosign/
