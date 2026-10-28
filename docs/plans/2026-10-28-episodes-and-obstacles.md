@@ -156,6 +156,40 @@ present on device:
 So the expected first failure is a hard exit during load with a named
 `Sys_Error`, not a render fault. Read the console before theorising.
 
+### Episodes: what the first device run established, 2026-10-28
+
+Far better than the checklist feared. `game mg3` works, the 468 MB pak reads,
+`hub.bsp` (genuine `BSP2` magic, 3.7 MB) and `map6` (30.3 MB) both LOAD AND
+PLAY. None of the fatal caps fired: no texture-cache exit, no vertex overflow.
+BSP2 is not the problem the item assumed.
+
+One real bug found and fixed: fog was 64x too dense, rendering episode maps as
+a flat beige wall (7529b0a). `gl_fog.c`'s `Fog_SetupFrame` divides by 64 on
+its way to `GL_FOG_DENSITY` and the port dropped that at the single point the
+value leaves the engine. Invisible for the whole project because no stock
+Quake map sets fog. The tell was that it looked right paused and flooded on
+Resume: `Fog_GetDensity` resolves its fade against `cl.time`, frozen while
+paused.
+
+Known cosmetic, NOT our bug: episode hint text shows raw tokens
+(`$mg3_hub_rune1_hint`). The re-release stores hints as localization keys and
+QuakeSpasm substitutes them from `localization/loc_english.txt`. A.'s dump has
+no real copy -- the only one, inside `QuakeEX.kpf`, is a 27-byte placeholder.
+Stock QuakeSpasm behaves identically. Needs a real loc file at
+`Documents/localization/loc_english.txt`; map titles are literals and already
+read correctly.
+
+Still to do on this track: the game-directory picker, and the mg3 laser cannon
+HUD slot. The picker grew in value -- `UIFileSharingEnabled` and
+`LSSupportsOpeningDocumentsInPlace` are both already true, so a user can drop
+ANY mod folder into Documents from the Files app and `game <dir>` it. Third
+party packs (A. asked about the Brutalist Quake series, 2026-10-28) therefore
+already work by console today; what is missing is only the UI to find them.
+
+Watch out: `Documents/id1/autoexec.cfg` contains `map range` and runs on every
+`game` change, so it stomps whatever map you just asked for. Comment it out
+before episode testing.
+
 ## Obstacles: the shape, from its design
 
 Read the design; this is only the spine.
