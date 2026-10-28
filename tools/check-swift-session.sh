@@ -23,6 +23,7 @@ swiftc -O \
 	"$ROOT_DIR/App/Sources/HeadPoseRing.swift" \
 	"$ROOT_DIR/App/Sources/TuningLockPolicy.swift" \
 	"$ROOT_DIR/App/Sources/ScrollGutterMetrics.swift" \
+	"$ROOT_DIR/App/Sources/GameDirectories.swift" \
 	"$ROOT_DIR/App/Sources/ConsoleArgument.swift" \
 	-o "$OUT"
 

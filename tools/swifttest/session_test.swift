@@ -54,6 +54,7 @@ struct SessionTest {
         runTuningStepTests()
         runScrollGutterTests()
         runOrphanCoverTests()
+        runGameDirectoryTests()
         print("PASSED")
     }
 
@@ -735,6 +736,52 @@ struct SessionTest {
               "a save still waiting for its cover sweeps nothing")
         check(SaveGameHeader.orphanedCovers(savNames: [], coverNames: []).isEmpty,
               "an empty directory sweeps nothing")
+    }
+
+
+    // MARK: - installed games, expansions and map packs
+
+    /// The engine could always play these; the window could not show them.
+    static func runGameDirectoryTests() {
+        // What makes a folder a game, and what keeps the neighbours out.
+        check(GameDirectories.isGameDirectory(contents: ["pak0.pak"]),
+              "a folder with a pak is a game directory")
+        check(GameDirectories.isGameDirectory(contents: ["maps", "progs.dat"]),
+              "so is one with a loose maps folder, which is how most packs ship")
+        check(!GameDirectories.isGameDirectory(contents: ["track02.ogg"]),
+              "a music folder is not a game directory")
+        check(!GameDirectories.isGameDirectory(contents: []),
+              "nor is an empty one")
+
+        // The mission packs need their flag or they load with id1's HUD.
+        check(GameDirectories.command(for: "hipnotic") == "game hipnotic -hipnotic",
+              "Scourge of Armagon gets its mission pack flag")
+        check(GameDirectories.command(for: "rogue") == "game rogue -rogue",
+              "and so does Dissolution of Eternity")
+        check(GameDirectories.command(for: "brutalist") == "game brutalist",
+              "a third party pack takes no flag")
+        check(GameDirectories.command(for: "HIPNOTIC") == "game HIPNOTIC -hipnotic",
+              "the flag is found whatever case the folder is in")
+
+        // id1 leads; everything else is alphabetical; duplicates across
+        // basedir and userdir are one entry, because the engine treats them
+        // as one game.
+        let merged = GameDirectories.merge(base: ["mg3", "id1", "brutalist"],
+                                           user: ["MG3", "zzz"])
+        check(merged == ["id1", "brutalist", "mg3", "zzz"],
+              "base first, then alphabetical, deduplicated case-insensitively")
+
+        // Map names as `map` wants them.
+        let maps = GameDirectories.mapNames(fromPaths: [
+            "maps/e1m1.bsp", "maps/START.BSP", "progs/player.mdl",
+            "maps/bmodel/b_shot2.bsp", "gfx.wad", "maps/e1m1.bsp",
+        ])
+        check(maps == ["e1m1", "start"],
+              "only loadable levels, lowercased, deduplicated, sorted")
+        check(!maps.contains("b_shot2"),
+              "a submodel bsp one folder deeper is not a level and is excluded")
+        check(GameDirectories.mapNames(fromPaths: []).isEmpty,
+              "an empty pack yields no maps rather than a phantom entry")
     }
 
 }

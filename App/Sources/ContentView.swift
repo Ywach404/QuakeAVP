@@ -185,12 +185,58 @@ struct ContentView: View {
     /// is gitignored and a public checkout has no range to launch. Appended
     /// last so `selectedEpisode` never points past the end.
     private var episodeStrips: [(name: String, ids: [String])] {
+        // A pack is not Quake, and the hardcoded episode table would offer
+        // e1m1..e4m8 for a mod that has none of them. Its own maps are the
+        // only honest answer, chunked so one strip is not two hundred wide.
+        if selectedGame.lowercased() != GameDirectories.base {
+            guard !packMaps.isEmpty else {
+                return [(GameDirectories.label(for: selectedGame), [])]
+            }
+            let label = GameDirectories.label(for: selectedGame)
+            if packMaps.count <= 24 { return [(label, packMaps)] }
+            return stride(from: 0, to: packMaps.count, by: 24).map { start in
+                let slice = Array(packMaps[start ..< min(start + 24, packMaps.count)])
+                return ("\(label) \(start / 24 + 1)", slice)
+            }
+        }
         var strips = Self.episodes
         if engine.paths?.hasBundledRangePak == true {
             strips.append(("Test range", ["range"]))
         }
         return strips
     }
+
+    /// Rescan what is installed, and what the live game holds.
+    private func refreshGameLibrary() {
+        guard let paths = engine.paths else { return }
+        installedGames = GameLibrary.installed(base: paths.baseDirectory,
+                                               user: paths.userDirectory)
+        if !installedGames.contains(where: { $0.lowercased() == selectedGame.lowercased() }) {
+            selectedGame = GameDirectories.base
+        }
+        refreshPackMaps()
+    }
+
+    private func refreshPackMaps() {
+        guard let paths = engine.paths,
+              selectedGame.lowercased() != GameDirectories.base else { packMaps = []; return }
+        // Either root can hold it, the same two COM_Game_f accepts.
+        let candidates = [paths.baseDirectory, paths.userDirectory]
+            .map { $0.appendingPathComponent(selectedGame, isDirectory: true) }
+        packMaps = candidates.flatMap { GameLibrary.maps(in: $0) }.sorted()
+    }
+    /// Installed games, expansions and map packs, and which one is live.
+    ///
+    /// The engine could always play these -- `game <dir>` is stock, and the
+    /// app sets UIFileSharingEnabled so a pack dropped into Documents from
+    /// the Files app is already loadable. Knowing the command and the
+    /// folder's exact name was the only thing in the way.
+    @State private var installedGames: [String] = [GameDirectories.base]
+    @State private var selectedGame: String = GameDirectories.base
+    /// Maps found in the selected game, for anything that is not id1. The
+    /// stock episode table cannot describe a pack it has never heard of.
+    @State private var packMaps: [String] = []
+
     @State private var confirmResetGun = false
     @State private var confirmResetProfile = false
     @State private var weaponBack: Float = 0
@@ -1275,6 +1321,24 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered).font(.caption)
                 Spacer()
+                // The installed games, left of the episodes they contain.
+                // Switching one re-execs the config chain engine-side, so the
+                // map strip is rebuilt after rather than before.
+                Picker("Game", selection: $selectedGame) {
+                    ForEach(installedGames, id: \.self) { dir in
+                        Text(GameDirectories.label(for: dir)).tag(dir)
+                    }
+                }
+                .pickerStyle(.menu).font(.caption)
+                .disabled(engine.status != .running)
+                .onChange(of: selectedGame) { _, dir in
+                    engine.send(GameDirectories.command(for: dir))
+                    selectedEpisode = 0
+                    refreshPackMaps()
+                    // The save browser follows com_gamedir, which the switch
+                    // moves, so its listing is about to be wrong.
+                    session.refreshSlots()
+                }
                 Picker("Episode", selection: $selectedEpisode) {
                     ForEach(Array(episodeStrips.enumerated()), id: \.offset) { i, ep in
                         Text(ep.name).tag(i)
@@ -1282,6 +1346,7 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu).font(.caption)
             }
+            .onAppear { refreshGameLibrary() }
             // Difficulty, beside the hub whose whole job is choosing it. The
             // hub's doors still work and write the same cvar; this is the same
             // flag reached without walking to it.
