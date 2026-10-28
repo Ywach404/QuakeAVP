@@ -58,9 +58,19 @@ hold B until the merge is done rather than reordering the merge around it.
 Nothing else in either track collides: obstacles is otherwise platform and
 renderer code, Episodes is engine, model and BSP loading.
 
-## Two decisions A. owes before obstacles can start
+## Two decisions A. owed -- BOTH SETTLED 2026-10-28
 
-Both are at the foot of the obstacles design, under "For A.".
+A. delegated them ("go with what you think is best"). Recorded in full, with
+reasoning, at the foot of the obstacles design under "For A.". Either can be
+overruled. In short: **Sight A first, then B**, because B is a seventh engine
+hunk and paying a permanent merge cost before the boxes are seen working on
+device is backwards; and **unknown-class geometry included by default**, with
+a cvar to exclude it, because Apple's classifier fails on exactly the
+furniture this demo is about.
+
+Obstacles is therefore unblocked.
+
+The original framing, for context:
 
 1. **Sight: A then B, or B from the start?**
    Out of the box a monster's `visible()` calls `traceline` with the

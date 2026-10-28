@@ -247,6 +247,33 @@ Record it.
 
 ## For A.
 
-- Sight: A then B, or B from the start.
-- Whether unknown-class geometry is included by default. This design says
-  yes, because an unclassified ottoman is the whole demo.
+Both delegated to the builder by A. on 2026-10-28 ("go with what you think is
+best") and settled below. Either can be overruled; the reasoning is recorded
+so overruling is cheap.
+
+- **Sight: A first, then B.** Taking the design's own recommendation, and the
+  deciding argument is the hunk count rather than the gameplay. B is a seventh
+  patch to the vendored engine, and `docs/working-notes.md` holds that every
+  hunk costs on each future merge and that one earns its place only on
+  specific grounds. Paying that before the boxes have been seen behaving on
+  device means paying it with no evidence the feature works at all, and if
+  scene reconstruction turns out too laggy or too noisy to place boxes well,
+  we would have bought a permanent merge cost for something that got reverted.
+  A is also revertible by cvar and B is not. Ship A, watch the boxes on
+  device, then add B.
+
+  The cost of A is honest and small: a grunt fires through the sofa. It cannot
+  reach you, which is the showcase, and a monster shooting at cover is not
+  strange in Quake's terms.
+
+- **Unknown-class geometry: INCLUDED by default.** As the design argued. Apple's
+  scene classifier is unreliable on exactly the furniture this demo is about,
+  so gating inclusion on a successful classification makes the showcase depend
+  on the one component most likely to fail. An unclassified ottoman is the
+  whole demo.
+
+  The risk this accepts is junk geometry becoming solid: a coat over a chair
+  back, a cardboard box, a reconstruction artefact. That is tolerable because
+  it is still real geometry in the room, which is the feature. Give it a cvar
+  to exclude unknown classes, for a clean environment or for filming, and
+  default it on.
