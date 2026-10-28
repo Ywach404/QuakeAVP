@@ -128,6 +128,34 @@ prints the residual hand-to-missile offset per weapon and is the check that
 `pr_cmds.c` survived: perp should sit near zero, not the 10-20 units it reads
 with the fix off.
 
+### BSP2 pre-flight, audited 2026-10-28 (static, no device)
+
+The engine side is fine: BSP2 / `2PSB` / RMQ constants are in `bspfile.h` and
+the vendored loader handles them, as QuakeSpasm 0.97 does. The risk is our own
+ported bridge, which is what `release-1.md` suspected.
+
+Four fixed limits exist in `qr_bridge.c`, and they fail in two different ways.
+That difference is the useful part, because it tells you how a failure will
+present on device:
+
+- **`QR_MAX_GLTEXTURES` 4096 -- FATAL.** `QR_TexMgr_NewTexture` calls
+  `Sys_Error` when the cache fills, and `Sys_Error` calls `exit()`. The
+  mission packs are texture-heavy, so this is the single most likely way
+  loading `mg1`/`mg3` kills the app. If an episode map quits the app during
+  load, look here FIRST and read the console: the error names itself. Raising
+  it is a one-line change in a static array's size.
+- **`MAXALIASVERTS` 2400 -- FATAL, already raised.** Was 2000; upstream bumped
+  it and we took it on 2026-10-28 (139d495). `MAXALIASTRIS` sits beside it and
+  upstream did NOT raise that, which is weak evidence it is sufficient.
+- **`QR_MAX_SECRET_SUBMODELS` 256 -- BENIGN.** Guarded by
+  `count < QR_MAX_SECRET_SUBMODELS`, so extra secrets are silently dropped.
+  A big map's 257th secret will not dissolve; nothing crashes. Worth knowing
+  so it is not chased as a phase bug.
+- **`QR_MAX_PARTICLES` 8192 and `QR_MAX_CACHED_PICS` 128** -- no concern.
+
+So the expected first failure is a hard exit during load with a named
+`Sys_Error`, not a render fault. Read the console before theorising.
+
 ## Obstacles: the shape, from its design
 
 Read the design; this is only the spine.
