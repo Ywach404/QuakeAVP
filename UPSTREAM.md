@@ -5,8 +5,21 @@
 QuakeSpasm, vendored (not a submodule) from `github.com/sezero/quakespasm`.
 
 - Version: **0.97.0**
-- Commit: `d27b64cf6c1aae84405918c75de13d2346d3008f` (also recorded in
+- Commit: `c9c8ee9895961669c4674e8f8ca8c64cc43e38b5` (also recorded in
   `Sources/QuakeCore/engine/.upstream-rev`)
+
+  Brought up from `d27b64cf6c1aae84405918c75de13d2346d3008f` on 2026-10-28.
+  Four upstream commits separated the two and only ONE touched anything
+  vendored here: `77ba452`, raising `MAXALIASVERTS` from 2000 to 2400 in
+  `gl_model.h`. `git diff d27b64c..c9c8ee9 -- Quake/` is that single line and
+  nothing else. The other three were documentation and two optional patches
+  under `Misc/`, which was never vendored.
+
+  None of the six patched hunks is in `gl_model.h`, so the update conflicted
+  with nothing. It matters rather than being housekeeping: `Mod_LoadAliasModel`
+  calls `Sys_Error` when a model exceeds the limit, and `Sys_Error` calls
+  `exit()`, so a mission-pack model with more than 2000 vertices takes the app
+  down. That is the episodes work this raises the ceiling for.
 - Licence: GPL-2.0-or-later — see `LICENSE.txt`
 
 Vendored rather than submoduled because the renderer and platform layers are
