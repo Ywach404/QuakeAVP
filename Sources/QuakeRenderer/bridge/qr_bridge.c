@@ -8119,7 +8119,15 @@ void QR_RenderView (void)
 	slot->frame.time = (float) cl.time;
 	{
 		float *fc = Fog_GetColor ();		/* fade resolves on read against cl.time */
-		float fd = Fog_GetDensity ();
+		/* /64 is upstream's, not a fudge: gl_fog.c's Fog_SetupFrame feeds
+		   GL_FOG_DENSITY with Fog_GetDensity()/64.0, so the density a map
+		   or a server sends is 64x the one the fog equation wants. The
+		   shaders implement GL_EXP2 faithfully, so they need GL's input,
+		   not the engine's.
+		   Dropping it was invisible for the whole project: no stock Quake
+		   map sets fog, so the path never ran until an episode did, and
+		   then it rendered a beige wall. */
+		float fd = Fog_GetDensity () / 64.f;
 		slot->frame.fog_density = fd;
 		slot->frame.fog_color[0] = fc[0];
 		slot->frame.fog_color[1] = fc[1];
