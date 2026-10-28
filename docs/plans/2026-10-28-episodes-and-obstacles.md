@@ -24,7 +24,20 @@ Its design is already written and thorough:
 dependency shipped on 2026-10-21 (the phase floor), and plane data is
 flowing: a device session logged 13 usable walls of 19.
 
-## THE ORDERING CONSTRAINT, which is the whole reason to plan these together
+## THE ORDERING CONSTRAINT -- RESOLVED 2026-10-28, same day. Kept for the
+## reasoning; it no longer gates anything.
+
+**The merge is done.** It was one line. `LOC_LoadFile` was already vendored
+(our commit is 2026-08-08, past the 2026-08-07 the checklist names), and the
+only vendored-relevant change in the four commits since was `MAXALIASVERTS`
+2000 -> 2400 in `gl_model.h`, which touches none of the six hunks. Landed in
+139d495; the engine is now at upstream HEAD `c9c8ee9`.
+
+So the seventh hunk has nothing to wait for, and the two tracks are now fully
+independent. The constraint below is left in place because the reasoning is
+still correct and will apply at the NEXT upstream merge.
+
+## The ordering constraint as originally written
 
 Both tracks reach into the vendored engine, and one ordering is much cheaper
 than the other.
@@ -80,10 +93,17 @@ From `docs/release-1.md`:
 Data is not a blocker: dopa, mg1, mg3 and both mission packs are already in
 A.'s QuakeDump.
 
-**First move, before any code:** do the merge in a scratch worktree and read
-the conflicts. The size of this track is entirely determined by what the merge
-does to the six hunks and whether BSP2 actually breaks, and neither is
-knowable from here. `make check` compiles all ~57 translation units in a couple
+**The merge is DONE** (139d495, 2026-10-28): one line, no conflicts, engine
+now at upstream HEAD. The first bullet of this track is closed.
+
+**Next move is therefore BSP2.** Load an `mg3` map and see what breaks. The
+size of this track is now entirely determined by whether BSP2 sizes overflow
+the world vertex arrays and lightmap atlases, which is not knowable from here.
+Worth knowing before starting: `MAXALIASVERTS` was raised because
+`Mod_LoadAliasModel` calls `Sys_Error` on an oversized model and `Sys_Error`
+calls `exit()`, so this class of failure takes the app down rather than
+drawing wrong. Expect other limits to behave the same way, and read the error
+rather than assuming a crash is a renderer bug. `make check` compiles all ~57 translation units in a couple
 of seconds and is the fast signal that the merged tree still builds; a passing
 `make check` is necessary and NOT sufficient, per working-notes, so the real
 proof is `make compile` for visionOS and then the device.
