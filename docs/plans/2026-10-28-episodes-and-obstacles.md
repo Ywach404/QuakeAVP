@@ -103,17 +103,20 @@ Worth knowing before starting: `MAXALIASVERTS` was raised because
 `Mod_LoadAliasModel` calls `Sys_Error` on an oversized model and `Sys_Error`
 calls `exit()`, so this class of failure takes the app down rather than
 drawing wrong. Expect other limits to behave the same way, and read the error
-rather than assuming a crash is a renderer bug. `make check` compiles all ~57 translation units in a couple
-of seconds and is the fast signal that the merged tree still builds; a passing
-`make check` is necessary and NOT sufficient, per working-notes, so the real
-proof is `make compile` for visionOS and then the device.
+rather than assuming a crash is a renderer bug.
 
-**Expected to bite:** the hunks in `quakedef.h`, `miniz.h`, `cl_tent.c`,
-`pr_cmds.c` and `net_dgrm.c`. Two of the three behavioural ones are about where
-a shot comes from and are load-bearing for the aim/body split; do not let a
-merge quietly drop them. `vr_projdebug 1` prints the residual hand-to-missile
-offset per weapon and is the check that `pr_cmds.c` survived: perp should sit
-near zero, not the 10-20 units it reads with the fix off.
+`make check` compiles all ~57 translation units in a couple of seconds and is
+the fast signal that the tree still builds. A passing `make check` is
+necessary and NOT sufficient, per working-notes, so the real proof is
+`make compile` for visionOS and then the device.
+
+**For the NEXT upstream merge, not this one.** The hunks live in
+`quakedef.h`, `miniz.h`, `cl_tent.c`, `pr_cmds.c` and `net_dgrm.c`. Two of the
+three behavioural ones are about where a shot comes from and are load-bearing
+for the aim/body split; do not let a merge quietly drop them. `vr_projdebug 1`
+prints the residual hand-to-missile offset per weapon and is the check that
+`pr_cmds.c` survived: perp should sit near zero, not the 10-20 units it reads
+with the fix off.
 
 ## Obstacles: the shape, from its design
 
