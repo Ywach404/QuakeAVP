@@ -766,10 +766,17 @@ struct SessionTest {
         // id1 leads; everything else is alphabetical; duplicates across
         // basedir and userdir are one entry, because the engine treats them
         // as one game.
-        let merged = GameDirectories.merge(base: ["mg3", "id1", "brutalist"],
-                                           user: ["MG3", "zzz"])
-        check(merged == ["id1", "brutalist", "mg3", "zzz"],
-              "base first, then alphabetical, deduplicated case-insensitively")
+        // CHRONOLOGICAL for the official games, which is the order they
+        // were meant to be played; alphabetical sorting put Dawn of the
+        // Machine second and Quake fourth.
+        let merged = GameDirectories.merge(base: ["mg3", "id1", "qbj3", "rogue"],
+                                           user: ["MG3", "hipnotic", "dopa"])
+        check(merged == ["id1", "hipnotic", "rogue", "dopa", "mg3", "qbj3"],
+              "official games in release order, then packs, deduplicated")
+        check(merged.firstIndex(of: "hipnotic")! < merged.firstIndex(of: "rogue")!,
+              "the two 1997 mission packs keep a stable order between them")
+        check(merged.last == "qbj3",
+              "a pack with no known year sorts after every official game")
 
         // Map names as `map` wants them.
         let maps = GameDirectories.mapNames(fromPaths: [

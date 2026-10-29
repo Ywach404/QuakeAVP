@@ -76,11 +76,32 @@ enum GameDirectories {
             || contents.contains { $0.lowercased() == "maps" }
     }
 
-    /// Installed game directories, base first and the rest alphabetical.
+    /// Release year of each official game, for ordering the picker.
+    ///
+    /// Chronological rather than alphabetical because that is the order they
+    /// were meant to be played and the order a player thinks in: Quake, then
+    /// its two 1997 mission packs, then the three modern episodes. Sorting by
+    /// name put Dawn of the Machine second and Quake fourth, which reads as
+    /// scrambled to anyone who knows the games.
+    static let releaseYear: [String: Int] = [
+        "id1": 1996,
+        "hipnotic": 1997,       // Scourge of Armagon
+        "rogue": 1997,          // Dissolution of Eternity
+        "dopa": 2016,           // Dimension of the Past
+        "mg1": 2021,            // Dimension of the Machine
+        "mg3": 2024,            // Dawn of the Machine
+    ]
+
+    /// Installed game directories: the official games in release order, then
+    /// everything else alphabetically.
     ///
     /// Merged across basedir and userdir because `COM_Game_f` accepts either,
     /// and deduplicated case-insensitively because the same pack can exist in
     /// both and the engine would treat them as one.
+    ///
+    /// A third-party pack has no year we can know, so it sorts after the
+    /// official ones rather than being given a guessed date. That also keeps
+    /// the official list stable as packs are added and removed.
     static func merge(base baseNames: [String], user userNames: [String]) -> [String] {
         var seen = Set<String>()
         var out: [String] = []
@@ -89,9 +110,17 @@ enum GameDirectories {
             if seen.insert(key).inserted { out.append(name) }
         }
         out.sort { a, b in
-            if a.lowercased() == Self.base { return true }
-            if b.lowercased() == Self.base { return false }
-            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+            let ya = releaseYear[a.lowercased()]
+            let yb = releaseYear[b.lowercased()]
+            switch (ya, yb) {
+            case let (ya?, yb?):
+                if ya != yb { return ya < yb }
+                // Same year: the two 1997 packs, in the order they shipped.
+                return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+            case (nil, _?): return false        // packs after the official games
+            case (_?, nil): return true
+            default: return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+            }
         }
         return out
     }

@@ -20,11 +20,22 @@
 
 #define QAVP_MAX_ARGS	64
 
-/* Upstream keeps this in main_sdl.c, which we don't compile. 384 MB matches
-   QuakeSpasm's 64-bit default -- it's a single up-front malloc for the zone
-   allocator, not resident memory, and Quake never comes close to touching it
-   all. Override with -heapsize (in KB). */
-#define QAVP_DEFAULT_MEMORY	(384 * 1024 * 1024)
+/* Upstream keeps this in main_sdl.c, which we don't compile. It is a single
+   up-front malloc for the zone allocator, not resident memory: untouched
+   pages are never faulted in, so the cost of a generous number is address
+   space rather than RAM.
+   
+   Was 384 MB, QuakeSpasm's 64-bit default, on the reasoning that Quake never
+   comes close to touching it all. That stopped being true the moment this
+   engine was pointed at modern community content: Brutalist Jam III ships
+   levels of 99, 101 and 123 MB, and a BSP is loaded whole into the hunk
+   before its lightmaps and surfaces are built on top. 384 MB cannot hold
+   that, and the failure is a hard Hunk_Alloc error rather than a degraded
+   frame.
+   
+   1 GB on a device with 16 GB of RAM, where the old number was chosen for
+   desktops of a different era. Still override with -heapsize (in KB). */
+#define QAVP_DEFAULT_MEMORY	(1024 * 1024 * 1024)
 
 static quakeparms_t	qavp_parms;
 static char		*qavp_argv[QAVP_MAX_ARGS];
