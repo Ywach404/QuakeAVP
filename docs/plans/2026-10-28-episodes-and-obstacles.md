@@ -223,6 +223,55 @@ actually owns plus the view models the server names, so a mod or a mission
 pack brings its own weapons. That is a feature, not a patch, and it is NOT
 release work: nothing on the release-1 checklist needs it.
 
+### The last Episodes item: the mg3 laser cannon, fully specified
+
+Scoped on 2026-10-28 and NOT built: the C half was written, found to force a
+Swift migration bigger than judged, and reverted so the tree stays consistent.
+Everything below is established fact, so this should be a short job with a
+fresh context.
+
+**What the weapon is.** mg3 reuses Scourge of Armagon's laser cannon outright:
+its `progs.dat` contains `IT_LASER_CANNON`, `HIP_FireLaser`, `HIP_LaunchLaser`
+and `HIP_LaserThink`. The engine already defines the bit in `quakedef.h` as
+`HIT_LASER_CANNON (1<<23)`. One new slot therefore covers BOTH hipnotic and
+mg3. Note the engine's `hipnotic` global is only set by the `-hipnotic`
+launch argument, so mg3 does not get `sbar.c`'s hipnotic HUD path; the wheel
+must carry it independently.
+
+**The C half (done once, reverted, straightforward).** `QC_WEAPON_SLOTS` in
+QuakeCore.h goes 8 to 9. Four parallel tables in `qr_bridge.c` gain a ninth
+entry and should be declared `[QC_WEAPON_SLOTS]` rather than `[8]`:
+`qr_wheel_bits` (`HIT_LASER_CANNON`), `qr_wheel_modelnames`
+(`progs/v_laserg.mdl`), `qr_wheel_pickupnames` (`progs/g_laserg.mdl`) and
+`qr_wheel_labels` ("LASER CANNON"). `models[8]`/`models_isview[8]` likewise.
+Five loops are bounded by a literal 8 and were verified to be slot walks:
+lines near 5595, 5646, 7098, 7131 and 7314. `make check` links clean after.
+Put the new slot LAST so the vanilla eight keep their ring order.
+
+**The Swift half, which is the real work.** `WeaponTrim.swift` holds three
+parallel arrays strided by `variant * 8` across four variants: `front`, `rear`
+and `place`, 32 entries each, with `defaultPlace32` carrying A.'s
+DEVICE-TUNED values baked into code. Widening the stride to 9 means:
+
+- `defaultPlace32`/`defaultFront32`/`defaultRear32` become 36, with the new
+  slot inserted at index 8 of EACH variant, not appended to the end.
+- `place` for the laser cannon starts untuned (nil) so it falls back to the
+  global cvars, which is what an unmeasured weapon should do.
+- `publish()` builds `count: 8` and must build `QC_WEAPON_SLOTS`. Until it
+  does, C reads a ninth entry Swift never wrote.
+- Persistence needs a `.v4` key with migration from `.v3`, following the
+  v2-to-v3 precedent already in `load()`: count checks (32, 16) and an
+  explicit remap. Inserting a slot per variant is NOT a length check away
+  from being safe, so the migration has to be written, not inferred.
+- `WheelState.swift`'s `bits` is `[4096, 1, 2, 4, 8, 16, 32, 64]` and
+  `impulseForOwnedIndex` returns `i + 1`, deriving the impulse from ring
+  POSITION. That breaks at nine. Give each entry an explicit impulse instead.
+
+**The one unknown.** Which impulse selects the laser cannon in mg3. Its own
+help text says "impulse 1-8 changes weapons", which cannot be the whole story
+for a ninth weapon. Determine it on device by typing `impulse 9` while holding
+one, before wiring the ring to it. Do not guess it into the table.
+
 ## Obstacles: the shape, from its design
 
 Read the design; this is only the spine.
