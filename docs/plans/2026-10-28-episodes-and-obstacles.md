@@ -393,6 +393,43 @@ third-party and not release-blocking. The useful question is where inside the
 official range the frame budget starts being missed, because that is the range
 release 1 has to hold.
 
+### Should we move to Ironwail? Measured 2026-10-29: NO. Raise one constant.
+
+Asked because several third-party packs say they require it. The answer is
+evidence rather than taste.
+
+Ironwail is a QuakeSpasm fork, so the lineage matches: all 47 of our vendored
+`.c` files exist there. The structure its GPU renderer removed, `glpoly_t`, is
+touched in only SIX places across qr_bridge.c's 8,590 lines, and its
+`msurface_t` still carries `vbo_firstvert`, the field we set. So a migration
+would be mechanically thinner than it sounds.
+
+It is still not worth it, because the limits are nearly identical:
+
+    MAX_EDICTS           32000   32000
+    MAX_MODELS            4096    4096
+    MAX_STATIC_ENTITIES   4096    4096
+    MAX_DLIGHTS             64      64
+    MAX_VISEDICTS         4096   16384   <- the only meaningful difference
+
+One constant. Raising `MAX_VISEDICTS` to 16384 buys what "requires Ironwail"
+actually refers to, for one line, with no migration at all.
+
+The reason the gain is so small is that we already took the thing Ironwail
+exists for. Its value is its renderer -- GPU-driven culling, a rewritten draw
+path -- and this project did not vendor QuakeSpasm's renderer either:
+`gl_rmain.c`, `r_world.c`, `r_alias.c` and the rest were replaced by Metal.
+Migrating would mean inheriting a renderer to throw away immediately, while
+re-porting six engine hunks, reworking `r_null.c` against a different `gl_*`
+API, redoing UPSTREAM.md's provenance and carrying 88 files instead of 47.
+
+It also explains why Brutalist Jam III ran despite its own warning: that
+warning is about ceilings, not features, and ceilings are one-line changes.
+
+**What would flip this:** a pack needing an Ironwail FEATURE rather than a
+ceiling -- an extended protocol or a QuakeC builtin. No evidence of that yet.
+If it happens, port the feature, not the engine.
+
 ## Obstacles: the shape, from its design
 
 Read the design; this is only the spine.
