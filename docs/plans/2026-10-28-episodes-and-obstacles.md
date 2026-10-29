@@ -190,6 +190,39 @@ Watch out: `Documents/id1/autoexec.cfg` contains `map range` and runs on every
 `game` change, so it stomps whatever map you just asked for. Comment it out
 before episode testing.
 
+### Third-party packs: Brutalist Jam III RUNS, 2026-10-28
+
+Its own page says it requires Ironwail 0.8.1+ and that other engines should
+"expect issues". It loaded and played on our QuakeSpasm 0.97 base
+(`qbj3_devroom`). That claim is about LIMITS its biggest maps hit, not about
+engine features, which matters for every other pack with the same warning:
+treat "needs Ironwail" as a thing to test rather than a closed door.
+
+The formats were never the problem. Of 92 levels, 52 are BSP29 and 40 are
+BSP2, both of which we handle. What is hard is bulk: 5.9 GB uncompressed, of
+which 812 MB is `mapsrc` (`.map` sources), 398 MB an art vault and 407 MB
+music, none of it needed to play. The playable content is about 250 MB.
+
+How it was installed, which is the reusable part: a trimmed `pak0.pak` built
+locally from `progs`, `sound`, `textures`, `gfx`, `progs.dat` and four small
+levels, 794 MB as ONE file. Pushing 1,448 loose files over devicectl is not
+practical; building a pak and pushing one is. The builder is a dozen lines of
+Python over the zip, and the format is twelve bytes of header plus 64-byte
+directory entries.
+
+**What breaks on a mod with its own arsenal, and why.** `QR_WeaponName` in
+qr_bridge.c is a switch over vanilla's eight `IT_*` bits, so a mod's weapons
+fall through to "(none)" and the wheel emits nothing. The per-weapon placement
+table published through `QC_SetWeaponPlacement` is the same eight slots. A.
+confirmed on device: the wheel does not work at all, the hand and weapon
+models sit wrong, and the modular HUD's glyphs do not match the new arsenal.
+
+This is [[weapon-wheel-slot-count]] arriving for real. The fix is to stop
+deriving the ring from a hardcoded bit table and take it from what the player
+actually owns plus the view models the server names, so a mod or a mission
+pack brings its own weapons. That is a feature, not a patch, and it is NOT
+release work: nothing on the release-1 checklist needs it.
+
 ## Obstacles: the shape, from its design
 
 Read the design; this is only the spine.
