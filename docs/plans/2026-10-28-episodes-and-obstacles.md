@@ -300,6 +300,39 @@ launched as hipnotic, so its `hipnotic` global is false. Bit 23 is free
 everywhere, so an unconditional laser cannon entry covers mg3 and hipnotic
 both. Rogue's own weapons are a separate set and have not been surveyed.
 
+### CORRECTION: rogue renumbers the bits, so the wheel needs TABLES, not slots
+
+Confirmed on device 2026-10-28: the wheel is visibly glitched under
+Dissolution of Eternity. The cause is that rogue does not extend vanilla's
+item bits, it reassigns them from 128 upward:
+
+    RIT_AXE           = 2048    <- vanilla IT_CELLS
+    RIT_LAVA_NAILGUN  = 4096    <- vanilla IT_AXE
+    RIT_SHELLS        = 128     <- vanilla IT_SUPER_LIGHTNING
+
+Our ring table begins `[4096, 1, 2, ...]` and calls 4096 the axe. Under rogue
+4096 is the LAVA NAILGUN, so the ring shows that weapon in the axe's slot
+wearing the axe's label and model, while the real axe at 2048 never appears.
+Bits 1 through 64 are unchanged, which is why it reads as partly wrong rather
+than wholly wrong, and why it was not obvious.
+
+**This supersedes the "add a ninth slot" plan above.** Three games mean three
+different readings of the same `cl.items` word:
+
+    vanilla / mg1 / mg3   IT_*   8 weapons, + laser cannon at 1<<23 for mg3
+    hipnotic              IT_*   8 + Mjolnir (1<<7) + proximity gun (1<<16)
+    rogue                 RIT_*  a DIFFERENT axe bit + 5 new weapons
+
+So the bits, model names, pickup names and labels all become per-game tables
+chosen by the `standard_quake`/`rogue`/`hipnotic` globals, rather than one
+table with entries appended. Slot COUNT must then cover the largest game
+(rogue reaches 13), which makes the Swift stride `variant * 8` wrong by more
+than one and the `.v4` persistence migration correspondingly larger.
+
+Do this as a designed change with its own document, not as an increment. The
+device test is already described below and detects exactly this: a count per
+game, with vanilla the case that catches a leak.
+
 ### How to TEST the wheel, which already exists
 
 `Documents/id1/autoexec.cfg` holds exactly:
