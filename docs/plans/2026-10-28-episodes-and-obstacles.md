@@ -272,6 +272,65 @@ help text says "impulse 1-8 changes weapons", which cannot be the whole story
 for a ninth weapon. Determine it on device by typing `impulse 9` while holding
 one, before wiring the ring to it. Do not guess it into the table.
 
+### Weapon wheel: the newer weapons, and the bit collision that governs it
+
+The laser cannon is one slot and is safe. The OTHER mission pack weapons are
+not, and the reason is that hipnotic reuses bits vanilla already spends:
+
+    HIT_MJOLNIR        1<<7   = 128     == IT_SUPER_LIGHTNING
+    HIT_PROXIMITY_GUN  1<<16  = 65536   == IT_SUPERHEALTH
+    HIT_LASER_CANNON   1<<23  = 8388608 == (unused in vanilla)
+
+Add all three unconditionally and the wheel grows a Mjolnir every time the
+player picks up a megahealth in stock Quake. Only the laser cannon's bit is
+free, which is why it can be added on its own and the other two cannot.
+
+The engine already solves this: `common.h` exports the globals
+`standard_quake, rogue, hipnotic`, and `sbar.c` gates its mission pack HUD on
+them. The bridge can read the same globals, so a bit means a weapon only in
+the game that defines it.
+
+That works BECAUSE of the game picker added the same day: `COM_Game_f` only
+sets `hipnotic` when given `-hipnotic`, and the picker now passes it for the
+hipnotic and rogue directories. The flag added for HUD correctness turns out
+to be the signal the wheel needs.
+
+Note mg3 is a third case: it uses hipnotic's laser cannon CODE but is not
+launched as hipnotic, so its `hipnotic` global is false. Bit 23 is free
+everywhere, so an unconditional laser cannon entry covers mg3 and hipnotic
+both. Rogue's own weapons are a separate set and have not been surveyed.
+
+### Performance sweep: the maps to measure, and how
+
+The renderer already prints what is wanted, once every 300 frames:
+
+    [immersive] 93.8 fps over 300 frames, gpu avg 6.76 ms worst 23.14 ms
+
+It is a raw `print`, so it reaches stdout rather than the in-headset console.
+`tools/run-device.sh` launches with `--console` and streams stdout to its log,
+so a session started that way captures the whole sweep for later parsing. Note
+the WORST column rather than only the average: a 90 Hz frame budget is 11.1 ms,
+and the figure above already shows a 23 ms spike on a vanilla map.
+
+Sizes span two orders of magnitude, measured from the paks on 2026-10-28:
+
+    e1m1        1.3 MB  v29    vanilla baseline
+    hip1m3      2.1 MB  v29    Scourge of Armagon, biggest
+    r2m7        2.2 MB  v29    Dissolution of Eternity, biggest
+    e5sm1       3.5 MB  BSP2   Dimension of the Past, biggest
+    mg3 hub     3.7 MB  BSP2
+    mg3 start   7.7 MB  BSP2
+    mg3 map1   12.5 MB  BSP2
+    mg1 hub    31.4 MB  BSP2   Dimension of the Machine, biggest
+    mg3 map6   30.3 MB  BSP2
+    qbj3_jm   122.7 MB  BSP2   Brutalist Jam III, biggest (A. reports a
+                               definite performance hit here, 2026-10-28)
+
+The official content tops out around 31 MB, so anything above that is
+third-party and not release-blocking. The useful question is where inside the
+official range the frame budget starts being missed, because that is the range
+release 1 has to hold.
+
 ## Obstacles: the shape, from its design
 
 Read the design; this is only the spine.
