@@ -300,6 +300,35 @@ launched as hipnotic, so its `hipnotic` global is false. Bit 23 is free
 everywhere, so an unconditional laser cannon entry covers mg3 and hipnotic
 both. Rogue's own weapons are a separate set and have not been surveyed.
 
+### How to TEST the wheel, which already exists
+
+`Documents/id1/autoexec.cfg` holds exactly:
+
+    map range
+    impulse 9
+
+That is the devtest rig: load the test range, grant every weapon. It fires on
+startup AND on every `game` change, which makes it the harness this work
+needs rather than the nuisance it was mistaken for earlier the same day (it
+was stomping deliberate `map` commands during episode testing, and was twice
+recommended for removal -- do not remove it).
+
+`range` lives in `id1/pak2.pak` and stays reachable from every game, because
+id1 remains in the search path beneath whatever mod directory is selected.
+
+So the three cases come for free, and the expected answer is a COUNT, which is
+why this catches the bit collision rather than merely exercising it:
+
+    game id1        -> wheel shows 8   (vanilla)
+    game mg3        -> wheel shows 9   (+ laser cannon)
+    game hipnotic   -> wheel shows 11  (+ Mjolnir, + proximity gun)
+
+The vanilla case is the important one, not the control. `impulse 9` in stock
+Quake grants `IT_SUPER_LIGHTNING`, which is the very bit Mjolnir collides on,
+so a naive implementation shows NINE weapons in vanilla and that is the
+failure announcing itself. Admin's "All weapons + ammo" button sends the same
+`impulse 9` if the rig is wanted mid-session.
+
 ### Performance sweep: the maps to measure, and how
 
 The renderer already prints what is wanted, once every 300 frames:
