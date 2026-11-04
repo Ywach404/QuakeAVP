@@ -35,6 +35,7 @@
 
 #include "quakedef.h"
 #include "qr_bridge.h"
+#include "qr_weapons.h"
 
 /* ========================================================================
  * gl_rmain.c -- view state and cvars
@@ -216,6 +217,10 @@ void R_Init (void)
 	Cvar_RegisterVariable (&vid_contrast);
 
 	QR_Init ();
+	/* The per-game weapon tables are their own translation unit and own
+	   their own console instrument, so it registers from here with the
+	   renderer's other commands rather than through the bridge. */
+	QR_Weapons_Init ();
 
 	Con_Printf ("R_Init: Metal world renderer bridge\n");
 }
