@@ -1,6 +1,10 @@
 # Per-game weapon tables Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Work this task by task, in order. Steps carry checkboxes (`- [ ]`) so progress
+> is trackable, and every task ends with a deliverable that can be verified on
+> its own. Tasks 1 and 2 are independent; 3, 4 and 5 are a chain; 6 and 7 both
+> need Task 2's ABI; Task 8 is a headset session and nothing before it can
+> stand in for it.
 
 **Goal:** Make the weapon wheel read `cl.items` correctly in id1, dopa, mg1, mg3, hipnotic and rogue, by keying every weapon on its view model instead of on a bit or a ring position.
 
@@ -208,12 +212,16 @@ Then, with a host boot (`make check` accepts a basedir), run `weapontable` under
 
 `docs/working-notes.md` enumerates the any-thread `QC_*` functions by name. `QC_WeaponLabel` belongs on it, since it reads immutable static data and the consumer calls it off the engine thread. A function that is any-thread in practice but absent from that list is how the next person reasons about it wrongly.
 
+**Do not stage that file.** It sits in `.git/info/exclude` alongside `docs/release-1.md` and the repo-root instruction file, all three deliberately untracked. This repo has a public remote and git pushes commits rather than files, so the development context stays on disk and out of the history by design. The edit is still worth making; it just never reaches a commit.
+
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Sources/QuakeRenderer/bridge/qr_weapons.c Sources/QuakeRenderer/bridge/qr_weapons.h docs/working-notes.md
+git add Sources/QuakeRenderer/bridge/qr_weapons.c Sources/QuakeRenderer/bridge/qr_weapons.h Sources/QuakeCore/platform/r_null.c
 git commit -m "feat(wheel): per-game weapon rows and 17 identities"
 ```
+
+`r_null.c` is in the list because `QR_Init` lives in `qr_bridge.c`, which this task does not touch, so the `weapontable` command registers from `R_Init` instead.
 
 ---
 
