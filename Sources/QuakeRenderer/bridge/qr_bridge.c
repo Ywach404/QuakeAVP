@@ -5476,21 +5476,6 @@ static qboolean QR_MyMissile (int ednum)
 	return mt == MOVETYPE_FLYMISSILE || mt == MOVETYPE_BOUNCE;
 }
 
-/* The current game's entry for an identity, or NULL where this game does not
-   carry that weapon. The bit, the impulse and the selection kind all live
-   there, so nothing here keeps a second copy of any of them. */
-static const qr_weapon_entry_t *QR_WeaponEntry (int identity)
-{
-	const qr_weapon_entry_t	*row;
-
-	if (identity < 0)
-		return NULL;
-	for (row = QR_WeaponRow (); row->bit; row++)
-		if ((int) row->identity == identity)
-			return row;
-	return NULL;
-}
-
 /*
 ================
 QR_ActiveIdentity -- the held weapon's identity, or -1 for none.
@@ -5513,9 +5498,13 @@ An identity owns a LIST of view models (mg3 swaps the shotgun for a bloody
 variant, the Mjolnir has a glowing model), so every name is tried. The raw
 stat remains the fallback for a weapon outside the game's table, resolved
 through the current row so what comes back is still an identity.
+
+Declared in qr_weapons.h, not file-local: the input drain's weapon cycle
+needs it to know when it has arrived. Engine thread only, as that header
+says, because cl.viewent and cl.stats have no locking.
 ================
 */
-static int QR_ActiveIdentity (void)
+int QR_ActiveIdentity (void)
 {
 	int	id, n;
 
@@ -7065,9 +7054,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	static int	models_isview[QC_WEAPON_IDENTITIES];	/* fell back to the v_ viewmodel */
 	static qmodel_t	*cachekey;
 	static uint32_t	cachegame;
-	/* full-menu gaze state, function scope so a close can reset it. The menu
-	   commits on RELEASE: you hold to open, look at a weapon, let go to pick. */
-	static int	menu_held = -1, menu_open_prev;
+	/* full-menu gaze state, function scope so a close can reset it. Selection
+	   is on RELEASE -- hold to open, look at a weapon, let go to pick -- so
+	   this has to survive the close ramp for the drain to read. */
+	static int	menu_held = -1;
 	const qr_weapon_entry_t	*row;
 	float		frac, radius, step, theta, spin;
 	vec3_t		fwdv, rightv, upv, angles, center;
@@ -7082,7 +7072,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		   and the drain reading it then needs the last live set. */
 		if (cls.signon != SIGNONS || !cl.worldmodel)
 			qr_owned_identities = 0;
-		menu_open_prev = 0;
 		menu_held = -1;
 		return;
 	}
@@ -7155,10 +7144,11 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		if ((cl.items & row->bit) && models[row->identity])
 			qr_owned_identities |= 1u << row->identity;
 
-	/* ASCENDING IDENTITY order, here and in the emit loop and the commit
-	   below: the ring position a player lets go on is only a weapon because
-	   every enumeration of this mask agrees on the order. For the vanilla
-	   eight that is the order the wheel has always drawn. */
+	/* ASCENDING IDENTITY order, here, in the emit loop below and in the
+	   drain's walk in in_null.c: the ring position a player lets go on is
+	   only a weapon because every enumeration of this mask agrees on the
+	   order. For the vanilla eight that is the order the wheel has always
+	   drawn. */
 	owned = 0;
 	for (i = 0; i < QC_WEAPON_IDENTITIES; i++)
 		if (qr_owned_identities & (1u << i))
@@ -7261,10 +7251,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 
 	/* Full menu selects by GAZE, engine-side: cast the head-forward ray
 	   (body yaw + head yaw, head pitch) onto the ring plane and pick the
-	   nearest slot; resting on one for a beat commits it. This has to live
-	   here -- only the engine knows the eye position and the panel's world
-	   pose, so the consumer's wrist-frame pointer can't do it once you move.
-	   It overrides the fed highlight and drives the impulse itself. */
+	   nearest slot. This has to live here -- only the engine knows the eye
+	   position and the panel's world pose, so the consumer's wrist-frame
+	   pointer can't do it once you move. It overrides the fed highlight;
+	   acting on the release is the drain's job. */
 	if (vr_fullmenu.value)
 	{
 		vec3_t		gaze_ang, gf, gr, gu, toplane, hit, rel;
@@ -7301,10 +7291,12 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			}
 		}
 
-		/* Commit on RELEASE. While the grip is held, track and show the
-		   gazed row; when it lets go, fire the impulse for whatever was
-		   highlighted. Freeze the highlight during the close ramp so a
-		   glance away as you release can't change the pick. */
+		/* While the grip is held, track and show the gazed row; freeze the
+		   highlight during the close ramp so a glance away as you release
+		   can't change the pick. The RELEASE itself is acted on by the
+		   input drain in in_null.c, which reads this highlight back out --
+		   a pick made must not be able to go missing because a frame was
+		   never built. */
 		if (qr_wheel_open)
 		{
 			menu_held = gsel;
@@ -7312,36 +7304,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		}
 		else
 			qr_wheel_highlight = menu_held;
-
-		if (menu_open_prev && !qr_wheel_open && menu_held >= 0)
-		{
-			int	id, seen = 0;
-
-			/* Enumerate the SAME mask the ring was drawn from. Testing
-			   cl.items alone, as this did, let a weapon whose model
-			   failed to resolve count here but not on the ring, and from
-			   that row down the commit fired at the player's neighbour. */
-			for (id = 0; id < QC_WEAPON_IDENTITIES; id++)
-			{
-				if (!(qr_owned_identities & (1u << id)))
-					continue;
-				if (seen == menu_held)
-				{
-					const qr_weapon_entry_t	*ent = QR_WeaponEntry (id);
-
-					/* The entry carries the impulse, so the number is
-					   never derived from a ring position. Impulse 0
-					   means UNMEASURED and sends nothing: a guessed
-					   number hands the player the wrong gun, and
-					   impulse 9 is `give all`. */
-					if (ent && ent->impulse)
-						Cbuf_AddText (va ("impulse %d\n", (int) ent->impulse));
-					break;
-				}
-				seen++;
-			}
-		}
-		menu_open_prev = qr_wheel_open;
 	}
 
 	/* publish the guide ring so the consumer can draw the wireframe circle

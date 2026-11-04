@@ -71,6 +71,14 @@ int QR_WeaponRearClip (int identity);
 /* The identity carrying `bit` in the current game, or -1. */
 int QR_WeaponIdentityForBit (uint32_t bit);
 
+/* The current game's entry for `identity`, or NULL where this game does not
+   carry that weapon. The bit, the impulse and the selection kind all live
+   there, so no caller keeps a second copy of any of them. It was a file-local
+   helper in qr_bridge.c until two translation units wanted it: the frame
+   build, to read a bit back out of the identity it is drawing, and the input
+   drain, to turn a released ring slot into a selection. */
+const qr_weapon_entry_t *QR_WeaponEntry (int identity);
+
 /* The resolved owned set from the renderer bridge's last frame build: bit N
    set means identity N is owned AND its model resolved. Declared here rather
    than as a bare extern at its consumer because the input drain's weapon
@@ -78,6 +86,16 @@ int QR_WeaponIdentityForBit (uint32_t bit);
    one set. STATE, not a per-game fact, so it is defined in qr_bridge.c beside
    the model resolution it comes out of. Engine thread. */
 uint32_t QR_OwnedIdentities (void);
+
+/* The identity of the weapon currently HELD, or -1 for none, resolved from
+   the drawn view model because the protocol cannot be trusted to deliver it
+   (the definition in qr_bridge.c carries the argument). Declared here for the
+   same reason as QR_OwnedIdentities: the input drain's cycle has to know when
+   it has arrived at the weapon it was asked for.
+
+   ENGINE THREAD ONLY. It reads cl.viewent and cl.stats, and Quake's client
+   globals have no locking. */
+int QR_ActiveIdentity (void);
 
 /* Registers `weapontable`. Called from R_Init, beside the renderer's other
    console commands. */

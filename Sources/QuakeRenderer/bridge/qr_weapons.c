@@ -309,6 +309,22 @@ uint32_t QR_WeaponGameKey (void)
 	return qr_row_generation;
 }
 
+/* The reverse lookup, and the one every consumer of a SELECTION goes through:
+   whoever knows the identity gets the bit, the impulse and the kind together,
+   from the row, rather than deriving a number from a ring position the way
+   both sides of the boundary used to. */
+const qr_weapon_entry_t *QR_WeaponEntry (int identity)
+{
+	const qr_weapon_entry_t	*row;
+
+	if (identity < 0)
+		return NULL;
+	for (row = QR_WeaponRow (); row->bit; row++)
+		if ((int) row->identity == identity)
+			return row;
+	return NULL;
+}
+
 int QR_WeaponIdentityForBit (uint32_t bit)
 {
 	const qr_weapon_entry_t	*row;

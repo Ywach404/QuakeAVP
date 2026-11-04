@@ -646,9 +646,16 @@ void QC_InputSetGamepad (const qc_gamepad_state_t *state);
    models as a ring of alias entities anchored at `anchor` (body frame,
    Quake units: fwd/right/up from the eye). has_anchor 0 means no wrist to
    anchor to (flat window): the ring sits at a fixed offset ahead of the
-   view. highlight is the index into the OWNED-weapon ring (impulse
-   order), -1 for none; committing the selection is the caller's job via
-   QC_ExecuteCommand("impulse N"). Callable from any thread. */
+   view. highlight is the index into the ring of OWNED identities, counted
+   in ascending identity order (the order owned_identities is walked
+   everywhere), -1 for none.
+
+   The ENGINE commits the selection, on the release: pass open 0 with the
+   highlight the hand had and it issues the weapon change itself. The caller
+   sends no impulse. The impulse and the way it has to be sent are per-game
+   facts C owns, and a commit made by the caller would also be lost whenever
+   the renderer had not built a frame to resolve the ring against.
+   Callable from any thread. */
 void QC_InputSetWheel (int open, int has_anchor,
 		       float fwd, float right, float up, int highlight);
 

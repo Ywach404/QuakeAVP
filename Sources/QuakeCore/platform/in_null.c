@@ -26,6 +26,9 @@
 #include "QuakeCore.h"
 #include "admin_avp.h"
 #include "align_math.h"
+/* The weapon rows: the drain turns a released ring slot into a selection and
+   the row is the only place the impulse and the selection kind live. */
+#include "qr_weapons.h"
 
 #include <pthread.h>
 
@@ -65,6 +68,14 @@ static int			qc_wheel_open_shared;
 static int			qc_wheel_anchor_shared;
 static float			qc_wheel_pos_shared[3];
 static int			qc_wheel_highlight_shared;
+/* The consumer's CLOSING edge, latched with the highlight it held at that
+   instant, and drained in IN_Commands -- the same idiom and the same reason
+   as qc_tp_commit_shared. The wheel can be opened and let go again entirely
+   between two drains, and a drain that only sampled qc_wheel_open_shared
+   would read it closed both times and commit nothing. The selection this
+   replaces was made synchronously by the consumer and could not miss. */
+static int			qc_wheel_release_shared;
+static int			qc_wheel_release_hl_shared = -1;
 static float			qc_head_yaw_shared;
 static float			qc_head_pitch_shared;
 static int			qc_paused_shared;	/* console pause request */
@@ -314,6 +325,13 @@ void QC_InputSetWheel (int open, int has_anchor,
 		       float fwd, float right, float up, int highlight)
 {
 	pthread_mutex_lock (&qc_input_lock);
+	/* Latch the release here, where the highlight that goes with it is still
+	   the one the hand had: see qc_wheel_release_shared. */
+	if (qc_wheel_open_shared && !open)
+	{
+		qc_wheel_release_shared = 1;
+		qc_wheel_release_hl_shared = highlight;
+	}
 	qc_wheel_open_shared = open;
 	qc_wheel_anchor_shared = has_anchor;
 	qc_wheel_pos_shared[0] = fwd;
@@ -686,6 +704,212 @@ static void IN_WheelRamp (void)
 	Cvar_SetValueQuick (&host_timescale, ts);
 }
 
+/* ========================================================================
+ * the weapon wheel's selection
+ * ===================================================================== */
+
+/* A selection the player has made and the engine has not yet arrived at:
+   the identity being cycled toward, and how many more cycle steps may be
+   spent reaching it. The bound is what stops a weapon the cycle cannot
+   reach from spinning forever, which with the ring already closed would be
+   an invisible loop. */
+static int	qr_wheel_target = -1;
+static int	qr_wheel_tries;
+
+static int IN_WheelOwnedCount (void)
+{
+	uint32_t	owned = QR_OwnedIdentities ();
+	int		i, n = 0;
+
+	for (i = 0; i < QC_WEAPON_IDENTITIES; i++)
+		if (owned & (1u << i))
+			n++;
+	return n;
+}
+
+/* The identity drawn at ring index `index`, or -1 if the ring is shorter
+   than that.
+
+   ASCENDING IDENTITY order, which is the order the frame build's own two
+   walks of this mask use -- the owned count and the emit loop. It is a
+   shared contract, not a detail: walk it any other way and the slot the
+   player let go on names a different weapon than the ring drew under it.
+
+   The MASK, never cl.items. The mask is the bit AND a resolved model; a
+   weapon whose model is missing is counted by cl.items but is not on the
+   ring, and from that row down a walk of the raw bits fires at the pick's
+   neighbour. */
+static int IN_WheelIdentityForIndex (int index)
+{
+	uint32_t	owned = QR_OwnedIdentities ();
+	int		i, seen = 0;
+
+	if (index < 0)
+		return -1;
+	for (i = 0; i < QC_WEAPON_IDENTITIES; i++)
+	{
+		if (!(owned & (1u << i)))
+			continue;
+		if (seen == index)
+			return i;
+		seen++;
+	}
+	return -1;
+}
+
+/* Issue the selection for a released ring slot. */
+static void IN_WheelSelect (int index)
+{
+	const qr_weapon_entry_t	*ent;
+	int			identity = IN_WheelIdentityForIndex (index);
+
+	qr_wheel_target = -1;		/* a new pick abandons an unfinished one */
+
+	if (identity < 0)
+		return;
+	ent = QR_WeaponEntry (identity);
+	if (!ent)
+		return;
+
+	/* UNMEASURED, and that is the whole of what a zero here says: the kind
+	   beside it is the struct's zero value and carries no claim either, so
+	   neither column may be acted on. Name what was picked and send
+	   nothing. A guessed number hands the player the wrong gun, and
+	   impulse 9 is `give all`. */
+	if (!ent->impulse)
+	{
+		Con_Printf ("%s: impulse not measured yet, not selected\n",
+			    QR_WeaponLabel (identity));
+		return;
+	}
+
+	if (ent->kind == QR_SELECT_DIRECT)
+	{
+		Cbuf_AddText (va ("impulse %d\n", (int) ent->impulse));
+		return;
+	}
+
+	/* A toggle is NOT a selector: its number is shared with another weapon,
+	   so sending it from the wrong one hands you that other weapon. Cycle
+	   instead, and stop when the drawn view model says we arrived -- which
+	   is checkable only because the target is an identity. The cycle is
+	   upstream's impulse 10 rather than the entry's own number, for the same
+	   reason: the entry's number is the shared one. */
+	qr_wheel_target = identity;
+	qr_wheel_tries = IN_WheelOwnedCount ();
+}
+
+/* One cycle step per drain, re-checked against the weapon actually drawn.
+   Called every IN_Commands so a pick that needs several steps finishes
+   whether or not the ring is still open. */
+static void IN_WheelCycle (void)
+{
+	if (qr_wheel_target < 0)
+		return;
+
+	/* Arrived. Checked before anything is spent, so a target the player
+	   already holds costs no impulse at all. */
+	if (QR_ActiveIdentity () == qr_wheel_target)
+	{
+		qr_wheel_target = -1;
+		return;
+	}
+
+	if (qr_wheel_tries <= 0)
+	{
+		Con_Printf ("%s: cycle did not reach it\n",
+			    QR_WeaponLabel (qr_wheel_target));
+		qr_wheel_target = -1;
+		return;
+	}
+
+	Cbuf_AddText ("impulse 10\n");
+	qr_wheel_tries--;
+}
+
+/*
+================
+IN_WheelCommit -- turn a released ring slot into a weapon selection.
+
+Engine thread, once per IN_Commands. It lives here rather than in the frame
+build because a selection the player has already made must not be able to
+go missing: the build is gated on a free frame slot, on cls.signon, on
+cl.worldmodel and on the open fraction, and none of those are reasons to
+drop a release.
+
+It depends on one thing the build owns: QR_OwnedIdentities, which is zeroed
+only when the world is gone and deliberately NOT when the wheel closes,
+because the release that picks a weapon lands during the close ramp.
+
+TWO triggers, because either alone misses a case. The sampled EDGE is how
+the console's +wheel/-wheel and the full menu's gaze pick are seen at all,
+since neither goes near the consumer's latch. The LATCH closes the hole the
+other way: an open-and-release that lands entirely between two drains shows
+no open to sample. Both reduce to "not open, and either we saw the hold or
+a release was latched", so exactly one commit comes out.
+
+Runs BEFORE IN_SnapshotInputs on purpose. qr_wheel_highlight is the merged
+highlight, and the snapshot overwrites it with the consumer's value, so the
+full menu's engine-side gaze pick -- written by the frame build, which knows
+nothing of the latch -- exists in it only between that build and the next
+snapshot. Reading it here is what lets one drain commit whichever source
+owned the highlight.
+================
+*/
+static void IN_WheelCommit (void)
+{
+	static int	open_prev;
+	static int	held = -1;	/* the highlight while the hold lasted */
+	static int	rel_seen;	/* the consumer let go during this hold */
+	static int	rel_hl = -1;	/* ...and this is what it held then */
+	int		pick;
+
+	pthread_mutex_lock (&qc_input_lock);
+	if (qc_wheel_release_shared)
+	{
+		qc_wheel_release_shared = 0;
+		rel_hl = qc_wheel_release_hl_shared;
+		rel_seen = 1;
+	}
+	pthread_mutex_unlock (&qc_input_lock);
+
+	/* A set resolved against a world that is gone names nothing, and the
+	   identity may not even exist in the next game. Forget the hold rather
+	   than commit into it. */
+	if (cls.signon != SIGNONS || !cl.worldmodel)
+	{
+		open_prev = 0;
+		held = -1;
+		rel_seen = 0;
+		rel_hl = -1;
+		qr_wheel_target = -1;
+		return;
+	}
+
+	if (qr_wheel_open)
+		held = qr_wheel_highlight;
+
+	if (!qr_wheel_open && (open_prev || rel_seen))
+	{
+		/* The latched highlight is the consumer's own, taken at the
+		   instant it let go, so it is the truer value wherever the
+		   consumer owns the highlight at all. In the full menu it does
+		   not: the pick there is the gaze the frame build tracked, and a
+		   release with no frame built between has nothing to commit. */
+		pick = held;
+		if (!vr_fullmenu.value && rel_seen && rel_hl >= 0)
+			pick = rel_hl;
+		if (pick >= 0)
+			IN_WheelSelect (pick);
+		held = -1;
+		rel_seen = 0;
+		rel_hl = -1;
+	}
+	open_prev = qr_wheel_open;
+
+	IN_WheelCycle ();
+}
+
 static void IN_WheelDown_f (void) { qr_wheel_console_open = 1; }
 static void IN_WheelUp_f (void) { qr_wheel_console_open = 0; }
 
@@ -821,6 +1045,9 @@ void IN_Commands (void)
 {
 	size_t i;
 	uint32_t changed;
+
+	/* Before the snapshot, and the comment on IN_WheelCommit says why. */
+	IN_WheelCommit ();
 
 	IN_SnapshotInputs ();
 	IN_ApplyPause ();
