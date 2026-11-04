@@ -407,9 +407,24 @@ typedef struct qc_frame_s {
 	   feel. */
 	float		damage_flash;
 	uint32_t	active_weapon;
-	uint32_t	items;		/* cl.items: owned-weapon IT_* bits,
-					   the wheel's source of truth for
-					   what may be offered */
+	uint32_t	items;		/* cl.items, the raw word: the HUD and
+					   the export path read it directly.
+					   No longer the wheel's source of
+					   truth, see owned_identities */
+	/* The wheel's source of truth: bit N set means identity N is owned AND
+	   its view model resolved, so the ring that is drawn and anything
+	   counting the ring cannot enumerate differently. It supersedes `items`
+	   because one cl.items word means different things in different games
+	   (rogue alone moves the axe and renumbers five more weapons), so the
+	   bridge resolves bit to identity per game and publishes the answer
+	   rather than the question. */
+	uint32_t	owned_identities;
+	/* The held weapon's identity PLUS ONE, 0 meaning nothing held. The
+	   offset is not decoration: identity 0 is the axe and the consumer's
+	   "nothing held" test is a zero check, so a raw index would make the
+	   axe indistinguishable from an empty hand and it would silently never
+	   receive its trim, in every game. */
+	uint32_t	active_identity;
 	/* Monotonic counter the engine bumps each time the held weapon ACTUALLY
 	   fires (ammo spent, weapon unchanged), so the consumer pulses the fire
 	   haptic on the real shot cadence -- respecting a weapon's refire delay
@@ -697,10 +712,22 @@ void QC_InputSetTeleport (int active, int commit, float org_fwd, float org_right
    standing down) so a stuck hold never outlives the reach that set it. */
 void QC_InputSetTurnHold (int hold);
 
-/* Per-weapon gun placement, one entry per weapon slot in wheel order:
-   axe, shotgun, super shotgun, nailgun, super nailgun, grenade launcher,
-   rocket launcher, lightning gun. Quake units, in the gun's own drawn frame:
-   `back` toward the player along the barrel, `up` raises, `side` moves right.
+/* Per-weapon gun placement, one entry per weapon IDENTITY. An identity is a
+   weapon as a MODEL, and it is game-independent: identity 1 is the shotgun in
+   id1, hipnotic, rogue and mg3 alike, whichever item bit happens to carry it
+   there and wherever it lands on the ring.
+
+   Keying on the identity rather than on the bit or the ring position is not
+   bookkeeping, it is what the numbers are about. What was tuned is where
+   progs/v_shot.mdl sits in the hand, which is a property of the model, so the
+   same shotgun tuning is correct in every game that draws that model and a
+   mission pack inherits it with no second tuning session. Keyed on the bit it
+   would be one table per game for one physical fact, and rogue -- which moves
+   the axe to 1<<11 and renumbers five more weapons -- would start from
+   nothing even though it draws id1's own axe.
+
+   Quake units, in the gun's own drawn frame: `back` toward the player along
+   the barrel, `up` raises, `side` moves right.
 
    NOT grip. Grip is the 0..1 point along the trimmed barrel that sits in the
    hand, and it moves the gun along the SAME axis as `back` -- two knobs over
@@ -726,9 +753,65 @@ typedef struct {
 	int	custom;			/* 0 = never tuned, use the cvars */
 } qc_weapon_placement_t;
 
-#define QC_WEAPON_SLOTS	8
+/* The identity space. The vanilla eight hold 0 to 7 in their long-standing
+   order, so widening the persisted placement table is a widening and never a
+   remap of A.'s tuned numbers. */
+typedef enum {
+	QC_WEAPON_AXE = 0,
+	QC_WEAPON_SHOTGUN,
+	QC_WEAPON_SUPER_SHOTGUN,
+	QC_WEAPON_NAILGUN,
+	QC_WEAPON_SUPER_NAILGUN,
+	QC_WEAPON_GRENADE_LAUNCHER,
+	QC_WEAPON_ROCKET_LAUNCHER,
+	QC_WEAPON_THUNDERBOLT,
+	QC_WEAPON_LASER_CANNON,
+	QC_WEAPON_MJOLNIR,
+	QC_WEAPON_PROXIMITY_GUN,
+	QC_WEAPON_LAVA_NAILGUN,
+	QC_WEAPON_LAVA_SUPER_NAILGUN,
+	QC_WEAPON_MULTI_GRENADE,
+	QC_WEAPON_MULTI_ROCKET,
+	QC_WEAPON_PLASMA_GUN,
+	QC_WEAPON_GRAPPLE = 16,
+	QC_WEAPON_IDENTITIES = 17
+} qc_weapon_identity_t;
 
-void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots);
+/* A slot IS an identity now, so these are one width under two spellings. The
+   literal is deliberate rather than an alias for QC_WEAPON_IDENTITIES: every
+   other QC_ width in this header is a plain integer, and the consumer's
+   bridging imports a macro only when it expands to a literal, so aliasing the
+   enum would quietly make this one unreachable from Swift while its siblings
+   stayed visible. The assert is what stops the two spellings drifting, which
+   is the only reason to prefer an alias in the first place. */
+#define QC_WEAPON_SLOTS	17
+_Static_assert (QC_WEAPON_SLOTS == QC_WEAPON_IDENTITIES,
+		"placement table width must equal the identity count");
+
+/* `count` entries are taken (clamped to QC_WEAPON_SLOTS) and the remainder is
+   zeroed. The count is not redundant with the constant: without it the copy is
+   sized off the DESTINATION, so a caller holding a narrower table has its
+   length read from the wrong side and the setter walks past the end of the
+   caller's array the moment the two widths differ. Zeroing the tail is what
+   makes a short publish correct and not merely in bounds, because custom == 0
+   already means "never tuned, use the cvars", so the identities a caller did
+   not speak to fall back to the globals instead of wearing whatever was
+   published before them. Count 0 therefore clears the table.
+
+   Callable from any thread. */
+void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots, int count);
+
+/* The weapon's display name, so a consumer can label a ring entry or a tuning
+   row without keeping seventeen strings of its own -- the same reason the
+   placement table is pulled rather than mirrored. Never returns NULL: an
+   identity out of range yields a fixed placeholder, as the bridge's existing
+   weapon-name diagnostic already does, because the consumer's bridging turns a
+   NULL into a crash rather than into a blank label.
+
+   Immutable static data, so callable from any thread with no lock. It is
+   defined beside the identity table in the renderer bridge, which is the sole
+   owner of every per-game weapon fact. */
+const char *QC_WeaponLabel (int identity);
 
 /* Room alignment: the wall directions the headset can see, so the engine
    can turn the player until the level's walls run the way the room's do.

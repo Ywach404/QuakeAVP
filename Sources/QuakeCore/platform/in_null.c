@@ -42,10 +42,12 @@ extern cvar_t phase;		/* the melt, r_null.c -- room alignment rides its edge */
 static pthread_mutex_t		qc_input_lock = PTHREAD_MUTEX_INITIALIZER;
 static qc_gamepad_state_t	qc_pad_shared;
 static float			qc_head_shared[3];	/* fwd, right, up */
-/* Per-weapon gun placement. Written by the UI from any thread, read on the
-   engine thread by QR_WeaponPlacement while the renderer builds the frame --
-   so a weapon switch needs no console round trip and cannot be left stale by
-   a dropped command. See QC_SetWeaponPlacement in QuakeCore.h. */
+/* Gun placement, one entry per weapon IDENTITY rather than per ring slot, so
+   one tuned shotgun serves every game that draws the shotgun's model. Written
+   by the UI from any thread, read on the engine thread by QR_WeaponPlacement
+   while the renderer builds the frame -- so a weapon switch needs no console
+   round trip and cannot be left stale by a dropped command. See
+   QC_SetWeaponPlacement in QuakeCore.h. */
 static pthread_mutex_t		qc_place_lock = PTHREAD_MUTEX_INITIALIZER;
 static qc_weapon_placement_t	qc_place_shared[QC_WEAPON_SLOTS];
 
@@ -208,33 +210,49 @@ int QR_FloorBounds (qc_floor_bounds_t *out)
 	return valid;
 }
 
-void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots)
+void QC_SetWeaponPlacement (const qc_weapon_placement_t *slots, int count)
 {
+	int	n;
+
 	if (!slots)
 		return;
+
+	n = count < 0 ? 0 : count;
+	if (n > QC_WEAPON_SLOTS)
+		n = QC_WEAPON_SLOTS;
+
 	pthread_mutex_lock (&qc_place_lock);
-	memcpy (qc_place_shared, slots, sizeof qc_place_shared);
+	/* The caller's count, never sizeof qc_place_shared: sizing the copy off
+	   the DESTINATION reads past the end of a shorter caller's array, which
+	   is latent only while the two widths agree. Zeroing the tail rather
+	   than leaving it is what makes a short publish correct, since custom
+	   == 0 already means "never tuned, use the cvars". */
+	memcpy (qc_place_shared, slots, (size_t) n * sizeof *slots);
+	if (n < QC_WEAPON_SLOTS)
+		memset (qc_place_shared + n, 0,
+			(size_t) (QC_WEAPON_SLOTS - n) * sizeof *qc_place_shared);
 	pthread_mutex_unlock (&qc_place_lock);
 }
 
 /*
 ================
-QR_WeaponPlacement -- the held gun's own placement, or 0 if it has none.
+QR_WeaponPlacement -- the drawn gun's own placement, or 0 if it has none.
 
-Engine thread, called while the renderer places the view weapon. Returns 0
-for a weapon the UI never tuned, and the caller uses the vr_weapon* cvars --
-still the global setting, and still what the console sets.
+Engine thread, called while the renderer places the view weapon, keyed on the
+identity of the model it is drawing. Returns 0 for a weapon the UI never
+tuned, and the caller uses the vr_weapon* cvars -- still the global setting,
+and still what the console sets.
 ================
 */
-int QR_WeaponPlacement (int slot, float *back, float *up, float *side)
+int QR_WeaponPlacement (int identity, float *back, float *up, float *side)
 {
 	qc_weapon_placement_t	p;
 
-	if (slot < 0 || slot >= QC_WEAPON_SLOTS)
+	if (identity < 0 || identity >= QC_WEAPON_SLOTS)
 		return 0;
 
 	pthread_mutex_lock (&qc_place_lock);
-	p = qc_place_shared[slot];
+	p = qc_place_shared[identity];
 	pthread_mutex_unlock (&qc_place_lock);
 
 	if (!p.custom)
