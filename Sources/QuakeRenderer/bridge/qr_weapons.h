@@ -71,6 +71,14 @@ int QR_WeaponRearClip (int identity);
 /* The identity carrying `bit` in the current game, or -1. */
 int QR_WeaponIdentityForBit (uint32_t bit);
 
+/* The resolved owned set from the renderer bridge's last frame build: bit N
+   set means identity N is owned AND its model resolved. Declared here rather
+   than as a bare extern at its consumer because the input drain's weapon
+   selection reads it, and the ring, the commit and the count must enumerate
+   one set. STATE, not a per-game fact, so it is defined in qr_bridge.c beside
+   the model resolution it comes out of. Engine thread. */
+uint32_t QR_OwnedIdentities (void);
+
 /* Registers `weapontable`. Called from R_Init, beside the renderer's other
    console commands. */
 void QR_Weapons_Init (void);

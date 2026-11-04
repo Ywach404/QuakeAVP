@@ -29,6 +29,7 @@
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include "qr_bridge.h"
+#include "qr_weapons.h"
 #include "image.h"
 
 #include <pthread.h>
@@ -87,7 +88,7 @@ extern cvar_t vr_weapongrip;		/* M6 hand-weapon grip fraction */
 extern cvar_t vr_weaponback, vr_weaponup, vr_weaponside;	/* M6 live position nudge */
 /* The held gun's own placement, pulled from the table the UI publishes; 0
    means untuned and the cvars above are the answer (in_null.c). */
-extern int QR_WeaponPlacement (int slot, float *back, float *up, float *side);
+extern int QR_WeaponPlacement (int identity, float *back, float *up, float *side);
 /* in_null.c, the engine-thread reader for QC_SetFloorBounds. */
 extern int QR_FloorBounds (qc_floor_bounds_t *out);
 extern cvar_t vr_laserforward, vr_laserup, vr_laserside;	/* M6 laser start offset */
@@ -163,6 +164,11 @@ extern float qr_height_trim;		/* eye-height trim, Quake units */
    eye are never back-face culled, so a stair tread the eye is grazing doesn't
    wink out and reveal the level behind it. Roughly a step and a quarter. */
 #define QR_BACKFACE_KEEP	20.0f
+
+/* Row pitch of the full weapon menu's vertical list, Quake units. Gaze
+   height picks the row, so this is also the angular size of a selection
+   target at the panel's distance. */
+#define QR_MENU_SPACING		6.0f
 
 /* ========================================================================
  * globals the engine headers declare and upstream's renderer defined
@@ -5470,20 +5476,60 @@ static qboolean QR_MyMissile (int ednum)
 	return mt == MOVETYPE_FLYMISSILE || mt == MOVETYPE_BOUNCE;
 }
 
-static const char *QR_WeaponName (int bit)
+/* The current game's entry for an identity, or NULL where this game does not
+   carry that weapon. The bit, the impulse and the selection kind all live
+   there, so nothing here keeps a second copy of any of them. */
+static const qr_weapon_entry_t *QR_WeaponEntry (int identity)
 {
-	switch (bit)
-	{
-	case IT_AXE:			return "axe";
-	case IT_SHOTGUN:		return "shotgun";
-	case IT_SUPER_SHOTGUN:		return "super shotgun";
-	case IT_NAILGUN:		return "nailgun";
-	case IT_SUPER_NAILGUN:		return "super nailgun";
-	case IT_GRENADE_LAUNCHER:	return "grenade launcher";
-	case IT_ROCKET_LAUNCHER:	return "rocket launcher";
-	case IT_LIGHTNING:		return "lightning gun";
-	default:			return "(none)";
-	}
+	const qr_weapon_entry_t	*row;
+
+	if (identity < 0)
+		return NULL;
+	for (row = QR_WeaponRow (); row->bit; row++)
+		if ((int) row->identity == identity)
+			return row;
+	return NULL;
+}
+
+/*
+================
+QR_ActiveIdentity -- the held weapon's identity, or -1 for none.
+
+The protocol cannot be trusted to deliver the held weapon. Under
+standard_quake the server writes the BIT itself with MSG_WriteByte and the
+client stores the byte as it arrives (cl_parse.c:813-820), so IT_AXE, 4096,
+arrives as 0: cl.stats[STAT_ACTIVEWEAPON] reads zero for the entire time you
+are holding the axe. Upstream only uses that stat to light a statusbar icon,
+and the axe's icon is driven from cl.items instead, so the truncation never
+mattered there.
+
+Under the mission packs the byte is the bit's INDEX and the client shifts it
+back to 1<<i, so the stat arrives intact. That asymmetry is itself the
+argument for the view model: it is the one answer that is right in both
+cases, and it is the thing whose placement and trim we are deciding, so it
+is the more direct answer anyway.
+
+An identity owns a LIST of view models (mg3 swaps the shotgun for a bloody
+variant, the Mjolnir has a glowing model), so every name is tried. The raw
+stat remains the fallback for a weapon outside the game's table, resolved
+through the current row so what comes back is still an identity.
+================
+*/
+static int QR_ActiveIdentity (void)
+{
+	int	id, n;
+
+	if (cl.viewent.model && cl.viewent.model->name[0])
+		for (id = 0; id < QC_WEAPON_IDENTITIES; id++)
+		{
+			const char *const	*names = QR_WeaponViewModels (id);
+
+			for (n = 0; names[n]; n++)
+				if (!strcmp (cl.viewent.model->name, names[n]))
+					return id;
+		}
+
+	return QR_WeaponIdentityForBit ((uint32_t) cl.stats[STAT_ACTIVEWEAPON]);
 }
 
 static void QR_ProjDebug (void)
@@ -5555,7 +5601,7 @@ static void QR_ProjDebug (void)
 		VectorMA (d, -along, fwd, perp);
 
 		Con_Printf ("[proj] %-16s perp %5.1f along %5.1f (right %5.1f up %5.1f)\n",
-			    QR_WeaponName ((int) cl.stats[STAT_ACTIVEWEAPON]),
+			    QR_WeaponLabel (QR_ActiveIdentity ()),
 			    VectorLength (perp), along,
 			    DotProduct (d, right), DotProduct (d, up));
 	}
@@ -5577,70 +5623,21 @@ at full speed while the weapons' own idle lerp (cl.time-driven) crawls
 with the world. That contrast is the effect.
 ================
 */
-static const uint32_t qr_wheel_bits[8] = {
-	IT_AXE, IT_SHOTGUN, IT_SUPER_SHOTGUN, IT_NAILGUN,
-	IT_SUPER_NAILGUN, IT_GRENADE_LAUNCHER, IT_ROCKET_LAUNCHER,
-	IT_LIGHTNING,
-};
-/* IT_* bit to wheel slot, or -1. Shared by the wheel and by the view
-   weapon's placement lookup, so the two cannot disagree about ordering. */
-static int QR_WheelSlot (uint32_t bit)
+/* The resolved owned set from the last frame build: bit N set means identity
+   N is owned AND its model resolved. Engine-thread STATE, not a per-game
+   fact, which is why it lives here beside the resolution it comes out of
+   rather than in qr_weapons.c with the tables.
+
+   It exists as a global because the ring, the gaze commit and the input
+   drain's weapon selection must all enumerate ONE set. The ring would
+   otherwise be drawn from `cl.items` and a resolved model while a commit
+   tested `cl.items` alone, and a weapon whose model is missing would shift
+   the two apart so the player's pick landed on the wrong gun. */
+static uint32_t	qr_owned_identities;
+
+uint32_t QR_OwnedIdentities (void)
 {
-	int	i;
-
-	for (i = 0; i < 8; i++)
-		if (qr_wheel_bits[i] == bit)
-			return i;
-	return -1;
-}
-
-static const char *qr_wheel_modelnames[8] = {
-	"progs/v_axe.mdl", "progs/v_shot.mdl", "progs/v_shot2.mdl",
-	"progs/v_nail.mdl", "progs/v_nail2.mdl", "progs/v_rock.mdl",
-	"progs/v_rock2.mdl", "progs/v_light.mdl",
-};
-/* Clean pickup models, preferred over the viewmodels above. Axe and single
-   shotgun are start weapons with no pickup model -- their viewmodels carry no
-   projectile anyway, so NULL falls straight through. */
-#define QR_MENU_SPACING	6.0f	/* full-menu row pitch, Quake units */
-
-static const char *qr_wheel_pickupnames[8] = {
-	NULL, NULL, "progs/g_shot.mdl",
-	"progs/g_nail.mdl", "progs/g_nail2.mdl", "progs/g_rock.mdl",
-	"progs/g_rock2.mdl", "progs/g_light.mdl",
-};
-static const char *qr_wheel_labels[8] = {
-	"AXE", "SHOTGUN", "SUPER SHOTGUN", "NAILGUN",
-	"SUPER NAILGUN", "GRENADE LAUNCHER", "ROCKET LAUNCHER", "THUNDERBOLT",
-};
-
-/*
-================
-QR_ActiveWeaponBit -- the held weapon as an IT_ bit, which the protocol
-cannot be trusted to deliver.
-
-sv_main.c writes ent->v.weapon with MSG_WriteByte, and IT_AXE is 4096, so it
-arrives as 0: cl.stats[STAT_ACTIVEWEAPON] reads zero for the entire time you
-are holding the axe. Upstream only uses that stat to light a statusbar icon,
-and the axe's icon is driven from cl.items instead, so the truncation never
-mattered there.
-
-It matters for anything keyed to the held weapon. Resolve it from the VIEW
-MODEL actually being drawn -- which is the thing whose placement and trim we
-are deciding, so it is the more direct answer anyway -- and fall back to the
-stat for a weapon outside the wheel table (a mod's extra weapon).
-================
-*/
-static uint32_t QR_ActiveWeaponBit (void)
-{
-	int	i;
-
-	if (cl.viewent.model && cl.viewent.model->name[0])
-		for (i = 0; i < 8; i++)
-			if (!strcmp (cl.viewent.model->name, qr_wheel_modelnames[i]))
-				return qr_wheel_bits[i];
-
-	return (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+	return qr_owned_identities;
 }
 
 /*
@@ -6834,9 +6831,10 @@ static void QR_EmitModularHud (qr_frame_slot_t *slot)
 
 	/* The axe carries no ammo, so its count tile is meaningless -- skip it
 	   (vert_count stays 0 from QR_ResolveHudLayout, so the consumer hides
-	   it). QR_ActiveWeaponBit resolves the axe from the drawn view model,
-	   since the protocol truncates IT_AXE to 0 in STAT_ACTIVEWEAPON. */
-	axe = (QR_ActiveWeaponBit () == IT_AXE);
+	   it). QR_ActiveIdentity resolves the axe from the drawn view model,
+	   since under standard_quake the protocol truncates IT_AXE to 0 in
+	   STAT_ACTIVEWEAPON. */
+	axe = (QR_ActiveIdentity () == QC_WEAPON_AXE);
 	qr_overlay_slot = slot;
 	for (i = 0; i < QC_HUD_TILE_COUNT; i++)
 	{
@@ -7063,12 +7061,14 @@ void QR_TestEmitScreen2DInto (int kdest, int prefix_quads, int prefix_x,
 
 static void QR_EmitWheel (qr_frame_slot_t *slot)
 {
-	static qmodel_t	*models[8];
-	static int	models_isview[8];	/* slot fell back to the v_ viewmodel */
+	static qmodel_t	*models[QC_WEAPON_IDENTITIES];
+	static int	models_isview[QC_WEAPON_IDENTITIES];	/* fell back to the v_ viewmodel */
 	static qmodel_t	*cachekey;
+	static uint32_t	cachegame;
 	/* full-menu gaze state, function scope so a close can reset it. The menu
 	   commits on RELEASE: you hold to open, look at a weapon, let go to pick. */
 	static int	menu_held = -1, menu_open_prev;
+	const qr_weapon_entry_t	*row;
 	float		frac, radius, step, theta, spin;
 	vec3_t		fwdv, rightv, upv, angles, center;
 	vec3_t		bfwd, bright, bup, bangles;	/* untilted placement basis */
@@ -7076,54 +7076,100 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 
 	if (qr_wheel_frac <= 0.01f || cls.signon != SIGNONS || !cl.worldmodel)
 	{
+		/* A set resolved against a world that is gone is stale and nothing
+		   may act on it. Merely closing the wheel is a different case: the
+		   release that commits a selection happens during the close ramp,
+		   and the drain reading it then needs the last live set. */
+		if (cls.signon != SIGNONS || !cl.worldmodel)
+			qr_owned_identities = 0;
 		menu_open_prev = 0;
 		menu_held = -1;
 		return;
 	}
 
-	/* Resolve each slot's model once per worldmodel. Prefer the clean PICKUP
+	/* Resolve each identity's model once per world. Prefer the clean PICKUP
 	   model (g_*.mdl) -- the weapon as it sits on the ground, no held nail or
-	   rocket poking out -- and fall back to the first-person viewmodel
-	   (v_*.mdl, always precached) when the map didn't precache the pickup. */
-	if (cachekey != cl.worldmodel)
+	   rocket poking out -- and fall back through the identity's view models
+	   (v_*.mdl, always precached) when the map didn't precache the pickup.
+	   The list is tried in order, so a game that dresses a weapon differently
+	   (mg3's bloody shotgun, the glowing Mjolnir) still resolves.
+
+	   The key is the world AND the game, because the world alone cannot see a
+	   `game` change: COM_Game_f calls Mod_ResetAll, which memsets every
+	   qmodel_t and sets mod_numknown to 0, so the next world lands back at
+	   mod_known[0] and the pointer compares EQUAL across exactly the switch
+	   the cache has to invalidate on. The stale pointers would then be reused,
+	   drawing the previous game's models or running Mod_Extradata on a zeroed
+	   model. */
+	if (cachekey != cl.worldmodel || cachegame != QR_WeaponGameKey ())
 	{
 		cachekey = cl.worldmodel;
-		for (i = 0; i < 8; i++)
+		cachegame = QR_WeaponGameKey ();
+		memset (models, 0, sizeof models);
+		memset (models_isview, 0, sizeof models_isview);
+
+		for (row = QR_WeaponRow (); row->bit; row++)
 		{
-			int m;
-			models[i] = NULL;
-			models_isview[i] = 0;
-			if (qr_wheel_pickupnames[i])
+			const char *const	*views;
+			const char		*pickup;
+			int			id = (int) row->identity;
+			int			m, n;
+
+			pickup = QR_WeaponPickupModel (id);
+			if (pickup)
+			{
 				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
-					if (!strcmp (cl.model_precache[m]->name, qr_wheel_pickupnames[i]))
+					if (!strcmp (cl.model_precache[m]->name, pickup))
 					{
-						models[i] = cl.model_precache[m];
+						models[id] = cl.model_precache[m];
 						break;
 					}
-			/* Not placed as a pickup on this map, so the server never
-			   precached it. Load the clean g_*.mdl on demand -- Mod_ForName
-			   runs Mod_LoadAliasModel, which builds the mesh VBO, so it draws
-			   like any precached model -- rather than falling back to the
-			   arm-and-muzzle viewmodel. crash=false falls through to the
-			   viewmodel below if the file is absent (e.g. shareware). Cached
-			   per worldmodel, on the engine thread (same as map load). */
-			if (!models[i] && qr_wheel_pickupnames[i])
-				models[i] = Mod_ForName (qr_wheel_pickupnames[i], false);
-			if (!models[i])
+				/* Not placed as a pickup on this map, so the server never
+				   precached it. Load the clean g_*.mdl on demand --
+				   Mod_ForName runs Mod_LoadAliasModel, which builds the
+				   mesh VBO, so it draws like any precached model --
+				   rather than falling back to the arm-and-muzzle
+				   viewmodel. crash=false falls through to the viewmodels
+				   below if the file is absent (e.g. shareware). Cached
+				   per world, on the engine thread (same as map load). */
+				if (!models[id])
+					models[id] = Mod_ForName (pickup, false);
+			}
+			views = QR_WeaponViewModels (id);
+			for (n = 0; views[n] && !models[id]; n++)
 				for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
-					if (!strcmp (cl.model_precache[m]->name, qr_wheel_modelnames[i]))
+					if (!strcmp (cl.model_precache[m]->name, views[n]))
 					{
-						models[i] = cl.model_precache[m];
-						models_isview[i] = 1;	/* viewmodel: may bake a round */
+						models[id] = cl.model_precache[m];
+						models_isview[id] = 1;	/* viewmodel: may bake a round */
 						break;
 					}
 		}
 	}
 
+	/* Both the bit and a resolved model are required: a weapon whose model is
+	   missing is not on the ring, so counting it would shift every slot after
+	   it and the player's pick would land on the wrong gun. */
+	qr_owned_identities = 0;
+	for (row = QR_WeaponRow (); row->bit; row++)
+		if ((cl.items & row->bit) && models[row->identity])
+			qr_owned_identities |= 1u << row->identity;
+
+	/* ASCENDING IDENTITY order, here and in the emit loop and the commit
+	   below: the ring position a player lets go on is only a weapon because
+	   every enumeration of this mask agrees on the order. For the vanilla
+	   eight that is the order the wheel has always drawn. */
 	owned = 0;
-	for (i = 0; i < 8; i++)
-		if ((cl.items & qr_wheel_bits[i]) && models[i])
+	for (i = 0; i < QC_WEAPON_IDENTITIES; i++)
+		if (qr_owned_identities & (1u << i))
 			owned++;
+
+	/* QR_RenderView publishes the mask before this runs, so refresh the
+	   packet from the fresh value rather than letting the drawn ring and the
+	   published set sit a frame apart. One variable, two writes, no second
+	   source of truth. */
+	slot->frame.owned_identities = qr_owned_identities;
+
 	if (!owned)
 		return;
 
@@ -7269,17 +7315,31 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 
 		if (menu_open_prev && !qr_wheel_open && menu_held >= 0)
 		{
-			int b, seen = 0;
-			for (b = 0; b < 8; b++)
-				if (cl.items & qr_wheel_bits[b])
+			int	id, seen = 0;
+
+			/* Enumerate the SAME mask the ring was drawn from. Testing
+			   cl.items alone, as this did, let a weapon whose model
+			   failed to resolve count here but not on the ring, and from
+			   that row down the commit fired at the player's neighbour. */
+			for (id = 0; id < QC_WEAPON_IDENTITIES; id++)
+			{
+				if (!(qr_owned_identities & (1u << id)))
+					continue;
+				if (seen == menu_held)
 				{
-					if (seen == menu_held)
-					{
-						Cbuf_AddText (va ("impulse %d\n", b + 1));
-						break;
-					}
-					seen++;
+					const qr_weapon_entry_t	*ent = QR_WeaponEntry (id);
+
+					/* The entry carries the impulse, so the number is
+					   never derived from a ring position. Impulse 0
+					   means UNMEASURED and sends nothing: a guessed
+					   number hands the player the wrong gun, and
+					   impulse 9 is `give all`. */
+					if (ent && ent->impulse)
+						Cbuf_AddText (va ("impulse %d\n", (int) ent->impulse));
+					break;
 				}
+				seen++;
+			}
 		}
 		menu_open_prev = qr_wheel_open;
 	}
@@ -7304,7 +7364,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	slot->frame.wheel_count = owned;
 	slot->frame.wheel_highlight = qr_wheel_highlight;
 	k = 0;
-	for (i = 0; i < 8; i++)
+	for (i = 0; i < QC_WEAPON_IDENTITIES; i++)
 	{
 		entity_t	e;
 		qc_entity_t	*rec;
@@ -7313,7 +7373,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		int		c;
 		vec3_t		slotpos;	/* the ring slot the model must sit ON */
 
-		if (!(cl.items & qr_wheel_bits[i]) || !models[i])
+		if (!(qr_owned_identities & (1u << i)))
 			continue;
 
 		highlighted = (k == qr_wheel_highlight);
@@ -7340,7 +7400,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		   RING only. The weapons and their labels keep the placement and
 		   spin they always had. */
 		e.angles[0] = 0;
-		e.angles[1] = spin + k * 45.f;
+		/* Stagger each weapon's yaw by its own ring step, so the models
+		   stay evenly phased at any owned count. A fixed 45 degrees was
+		   360 over 8 and broke the moment a game carried more. */
+		e.angles[1] = spin + k * step;
 		e.angles[2] = 0;
 		e.frame = 0;
 		e.skinnum = 0;
@@ -7377,10 +7440,13 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		}
 
 		before = slot->frame.num_entities;
-		/* Only trim a slot that fell back to the viewmodel (clean pickup
-		   models need none), and never the axe (0) or lightning (7), which
-		   load no round and whose rear is real geometry. */
-		qr_wheelclip_on = (models_isview[i] && i != 0 && i != 7) ? 1 : 0;
+		/* Only trim an identity that fell back to its viewmodel (clean
+		   pickup models need none), and only one whose rear really is a
+		   loaded round: the axe and the thunderbolt load nothing and
+		   their rear is real geometry. Per identity rather than by ring
+		   position, since rogue's six draw from view models and sit
+		   nowhere near 0 and 7. */
+		qr_wheelclip_on = (models_isview[i] && QR_WeaponRearClip (i)) ? 1 : 0;
 		QR_EmitAliasModel (slot, &e);
 		qr_wheelclip_on = 0;
 		if (slot->frame.num_entities > before)
@@ -7428,7 +7494,7 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			lcol[0] = lcol[1] = lcol[2] = highlighted ? 1.f : 0.7f;
 			lcol[3] = 1.f;
 			{
-				const char	*lbl = qr_wheel_labels[i];
+				const char	*lbl = QR_WeaponLabel (i);
 				const char	*sp = strchr (lbl, ' ');
 				const float	lcw = 1.6f;
 
@@ -7786,10 +7852,12 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 			pup   = vr_weaponup.value;
 			pside = vr_weaponside.value;
 			{
-				int	wslot = QR_WheelSlot (QR_ActiveWeaponBit ());
+				int	identity = QR_ActiveIdentity ();
 
-				if (wslot >= 0)
-					QR_WeaponPlacement (wslot, &pback, &pup, &pside);
+				/* >= 0 and not a truth test: identity 0 is the axe,
+				   and it has tuning like every other weapon. */
+				if (identity >= 0)
+					QR_WeaponPlacement (identity, &pback, &pup, &pside);
 			}
 
 			/* Grip stays GLOBAL. It is a fraction of the trimmed length, so it
@@ -7991,6 +8059,8 @@ void QR_BeginFrame (void)
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
 	slot->frame.items = 0;
+	slot->frame.owned_identities = 0;
+	slot->frame.active_identity = 0;	/* 0 is "nothing held" */
 	/* monotonic -- publish the live counter, never reset it to 0, or the
 	   consumer would read the wrap-back as a fresh shot */
 	slot->frame.weapon_fire_seq = qr_weapon_fire_seq;
@@ -8242,10 +8312,29 @@ void QR_RenderView (void)
 	   V_UpdateBlend decays it) and the held weapon's IT_ bit, for haptic
 	   pulses and per-weapon trigger feel on the consumer side */
 	slot->frame.damage_flash = cl.cshifts[CSHIFT_DAMAGE].percent;
-	/* NOT cl.stats[STAT_ACTIVEWEAPON] -- the protocol truncates it to a byte
-	   and the axe (IT_AXE, 4096) arrives as 0. See QR_ActiveWeaponBit. */
-	slot->frame.active_weapon = QR_ActiveWeaponBit ();
+	{
+		int				identity = QR_ActiveIdentity ();
+		const qr_weapon_entry_t		*ent = QR_WeaponEntry (identity);
+
+		/* NOT cl.stats[STAT_ACTIVEWEAPON] -- under standard_quake the
+		   protocol truncates it to a byte and the axe (IT_AXE, 4096)
+		   arrives as 0. See QR_ActiveIdentity. The bit comes back out of
+		   the current game's row, so it is the bit THIS game carries the
+		   weapon on and not a vanilla assumption. */
+		slot->frame.active_weapon = ent ? ent->bit
+						: (uint32_t) cl.stats[STAT_ACTIVEWEAPON];
+		/* Identity PLUS ONE, 0 meaning nothing held: identity 0 is the axe
+		   and the consumer's "nothing held" test is a zero check, so a raw
+		   index would starve the axe of its trim in every game. */
+		slot->frame.active_identity = (identity >= 0)
+						? (uint32_t) identity + 1 : 0;
+	}
 	slot->frame.items = cl.items;
+	/* The wheel's source of truth, superseding `items` for anything that
+	   enumerates weapons. QR_EmitWheel refreshes it with this frame's set
+	   once the models have resolved; this write is what keeps every packet
+	   carrying one, including the frames the wheel is closed. */
+	slot->frame.owned_identities = QR_OwnedIdentities ();
 
 	/* A shot fired iff the held weapon's ammo dropped while the weapon stayed
 	   the same. A weapon switch also changes STAT_AMMO, so gate on the weapon
