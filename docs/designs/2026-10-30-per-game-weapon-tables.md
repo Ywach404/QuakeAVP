@@ -445,13 +445,21 @@ axe.
    (laser cannon, Mjolnir, which may differ from hipnotic's), and rogue's five
    powered-up weapons. Hold the weapon, try the candidate, record whether it
    selects directly, toggles, or only cycles.
-3. **Do rogue's powered-up bits 12 to 16 appear in `cl.items` as ownership?**
-   Upstream never tests them against `cl.items`; `sbar.c` draws those five from
-   `STAT_ACTIVEWEAPON` only. If the progs do not set them as ownership bits, the
-   ring cannot show them and rogue's real total is 8, not 13. Settle it from a
-   printed `cl.items` under `game rogue`, **not** from the previously observed
-   glitched rogue ring, because the stale model cache above produces the same
-   symptom and so that observation is not evidence about bits.
+3. **ANSWERED on device 2026-11-05: yes, they are ownership bits. Rogue's row
+   stays at 13.** Under Dissolution of Eternity with everything granted, all
+   five came up owned with their models resolved, filling ring slots 8 to 12:
+   lava nailgun `1<<12`, lava super nailgun `1<<13`, multi grenade `1<<14`,
+   multi rocket `1<<15`, plasma gun `1<<16`. Thirteen entries, thirteen
+   drawable.
+
+   Worth keeping as a lesson rather than deleting. The doubt was reasonable and
+   wrong: upstream never tests those five against `cl.items`, drawing them from
+   `STAT_ACTIVEWEAPON` alone, so reading the ENGINE suggested they might be
+   current-weapon identities rather than ownership flags. But what the engine
+   chooses to read is not what the PROGS choose to set, and rogue's progs set
+   them. That is the same rule as Correction 1: for what a game actually does,
+   the game's own compiled code beats the engine's treatment of it, and a
+   measurement beats both.
 
 ## What is left to the builder
 
