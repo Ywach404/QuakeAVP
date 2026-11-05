@@ -159,10 +159,16 @@ float QR_WeaponRingRoll (int identity)
    shipped wheel's `impulse slot + 1` already sends, so they are established
    by behaviour rather than assumed. They are the same in every row.
 
-   Every other impulse below is 0, meaning UNMEASURED, awaiting a headset.
-   Where the impulse is 0 the kind carries no claim either: it is the zero
-   value because the struct needs one, and a weapon whose impulse is unmeasured
-   has an unmeasured kind by definition. Read the pair together. */
+   Rogue's row is also measured end to end, on device 2026-11-05: its axe
+   keeps impulse 1 despite moving to its own bit, and all five powered-up
+   weapons are TOGGLES sharing their base gun's number rather than having one
+   of their own. That shape is why this table stores a kind beside the number:
+   an integer alone would have been the wrong model, not merely a blank one.
+
+   Hipnotic's three and mg3's two are still 0, meaning UNMEASURED, awaiting a
+   headset. Where the impulse is 0 the kind carries no claim either: it is the
+   zero value because the struct needs one, and a weapon whose impulse is
+   unmeasured has an unmeasured kind by definition. Read the pair together. */
 static const qr_weapon_entry_t qr_row_vanilla[] = {
 	{ 1u<<12, QC_WEAPON_AXE,		1, QR_SELECT_DIRECT },
 	{ 1u<<0,  QC_WEAPON_SHOTGUN,		2, QR_SELECT_DIRECT },
