@@ -8318,11 +8318,20 @@ void QR_RenderView (void)
 	if (vr_weapontrace.value)
 	{
 		static uint32_t	traced_items;
+		static uint32_t	traced_game;
 		static int	traced_valid;
+		uint32_t	gamekey = QR_WeaponGameKey ();
 
-		if (!traced_valid || traced_items != (uint32_t) cl.items)
+		/* The GAME is half the key, not just the items word. Two games
+		   hand out the same starting pair, so switching from id1 to
+		   hipnotic changes the row under the player without changing a
+		   single bit, and keying on items alone stayed silent through
+		   exactly the switch worth reporting. */
+		if (!traced_valid || traced_items != (uint32_t) cl.items
+		    || traced_game != gamekey)
 		{
 			traced_items = (uint32_t) cl.items;
+			traced_game = gamekey;
 			traced_valid = 1;
 			QR_WeaponTablePrint ();
 		}
