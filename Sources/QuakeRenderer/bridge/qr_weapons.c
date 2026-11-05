@@ -407,7 +407,7 @@ static const char *QR_SelectKindName (int kind)
    counts spelled out at the end. The entry count is what confirms the right
    row was selected; the drawable count is the ring the player will see, which
    is lower whenever a bit is clear or a model is missing. */
-static void QR_WeaponTable_f (void)
+void QR_WeaponTablePrint (void)
 {
 	int	id, entries = 0, drawable = 0, ring = 0;
 
@@ -467,5 +467,5 @@ static void QR_WeaponTable_f (void)
 
 void QR_Weapons_Init (void)
 {
-	Cmd_AddCommand ("weapontable", QR_WeaponTable_f);
+	Cmd_AddCommand ("weapontable", QR_WeaponTablePrint);
 }

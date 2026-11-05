@@ -4054,6 +4054,7 @@ per weapon in the Weapon menu -- you can see the model, the math can't.
 */
 extern cvar_t vr_weaponclip, vr_weaponclipback;
 extern cvar_t vr_wheelpitch, vr_wheelyaw, vr_wheelroll, vr_wheelradius;
+extern cvar_t vr_weapontrace;
 extern cvar_t vr_wheelfwd, vr_wheelup, vr_wheelside;	/* ring fine-placement, body frame */
 
 static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
@@ -8309,6 +8310,23 @@ void QR_RenderView (void)
 						? (uint32_t) identity + 1 : 0;
 	}
 	slot->frame.items = cl.items;
+
+	/* vr_weapontrace: dump the table whenever the owned set changes. Keyed on
+	   cl.items rather than on the wheel's resolved mask, because the wheel
+	   only recomputes while it is open and the interesting moment (a grant
+	   landing) happens with it closed. */
+	if (vr_weapontrace.value)
+	{
+		static uint32_t	traced_items;
+		static int	traced_valid;
+
+		if (!traced_valid || traced_items != (uint32_t) cl.items)
+		{
+			traced_items = (uint32_t) cl.items;
+			traced_valid = 1;
+			QR_WeaponTablePrint ();
+		}
+	}
 	/* The wheel's source of truth, superseding `items` for anything that
 	   enumerates weapons. QR_EmitWheel refreshes it with this frame's set
 	   once the models have resolved; this write is what keeps every packet

@@ -456,6 +456,13 @@ cvar_t		vr_wheelpitch  = {"vr_wheelpitch",  "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelyaw    = {"vr_wheelyaw",    "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelroll   = {"vr_wheelroll",   "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelradius = {"vr_wheelradius", "1", CVAR_ARCHIVE};
+/* Print the weapon table whenever the owned set changes. Off by default: it is
+   a measuring tool, not a diagnostic. It exists because the window pauses the
+   simulation while it is open, so nobody can grant weapons and read the result
+   back without closing the console in between, and a script cannot do it at
+   all. With this on, switching game and letting the world run prints the table
+   by itself. */
+cvar_t		vr_weapontrace = {"vr_weapontrace", "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_ARCHIVE};
@@ -2188,6 +2195,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_wheelyaw);
 	Cvar_RegisterVariable (&vr_wheelroll);
 	Cvar_RegisterVariable (&vr_wheelradius);
+	Cvar_RegisterVariable (&vr_weapontrace);
 	Cvar_RegisterVariable (&vr_wheelfwd);
 	Cvar_RegisterVariable (&vr_wheelup);
 	Cvar_RegisterVariable (&vr_wheelside);

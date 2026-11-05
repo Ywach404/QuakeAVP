@@ -74,6 +74,14 @@ int QR_WeaponRearClip (int identity);
    everything that already looked right. */
 float QR_WeaponRingRoll (int identity);
 
+/* Dump the resolved row: ring slot, identity, bit, ownership, whether a model
+   resolved, impulse and kind. Also the `weapontable` console command. Public
+   because vr_weapontrace fires it on its own when the owned set changes, which
+   is the only way the table reaches a development machine without somebody in
+   the headset typing it: the window pauses the simulation while it is open, so
+   a script cannot grant weapons and read them back in one sitting. */
+void QR_WeaponTablePrint (void);
+
 /* The identity carrying `bit` in the current game, or -1. */
 int QR_WeaponIdentityForBit (uint32_t bit);
 

@@ -45,6 +45,18 @@ void QC_SetCallbacks (qc_log_fn log, qc_error_fn err, void *ctx)
 
 static void QAVP_Emit (const char *text)
 {
+	/* Mirrored to stdout as well as handed to the app, because the two are
+	   readable by different people. The app's console is a Swift-side buffer
+	   that only becomes a file when a human in the headset taps save, so
+	   every engine line was invisible from a development machine; stdout is
+	   streamed off the device by `devicectl --console`, which is what
+	   tools/run-device.sh already attaches.
+	   Flushed per line on purpose: stdout is not a tty here, so it is block
+	   buffered, and a buffered diagnostic arrives after the thing it was
+	   explaining. */
+	fputs (text, stdout);
+	fflush (stdout);
+
 	if (qavp_log_fn)
 		qavp_log_fn (qavp_cb_ctx, text);
 	else
