@@ -8308,6 +8308,24 @@ void QR_RenderView (void)
 		   index would starve the axe of its trim in every game. */
 		slot->frame.active_identity = (identity >= 0)
 						? (uint32_t) identity + 1 : 0;
+
+		/* vr_weapontrace also reports the HELD weapon when it changes.
+		   Selecting a weapon does not change what you own, so the items
+		   trace above cannot see it, and measuring which impulse selects
+		   what would otherwise mean a person reading each result back by
+		   eye, one console round trip at a time. */
+		if (vr_weapontrace.value)
+		{
+			static int	traced_held = -2;
+
+			if (traced_held != identity)
+			{
+				traced_held = identity;
+				Con_Printf ("held: %s\n", identity >= 0
+					    ? QR_WeaponLabel (identity)
+					    : "(nothing)");
+			}
+		}
 	}
 	slot->frame.items = cl.items;
 

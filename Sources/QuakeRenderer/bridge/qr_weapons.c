@@ -228,7 +228,11 @@ static const qr_weapon_entry_t qr_row_hipnotic[] = {
    a phantom weapon every time the player picks up armour. The grapple keeps an
    identity so it can be drawn and tuned when held; it has no ownership bit. */
 static const qr_weapon_entry_t qr_row_rogue[] = {
-	{ 1u<<11, QC_WEAPON_AXE,		0, QR_SELECT_DIRECT },
+	/* Measured on device 2026-11-05: impulse 1 still selects the axe here,
+	   even though rogue moved its bit from 1<<12 to 1<<11. Worth having
+	   waited for: the old wheel sent ring index plus one and got this right
+	   by luck, which is not a reason to write a number down. */
+	{ 1u<<11, QC_WEAPON_AXE,		1, QR_SELECT_DIRECT },
 	{ 1u<<0,  QC_WEAPON_SHOTGUN,		2, QR_SELECT_DIRECT },
 	{ 1u<<1,  QC_WEAPON_SUPER_SHOTGUN,	3, QR_SELECT_DIRECT },
 	{ 1u<<2,  QC_WEAPON_NAILGUN,		4, QR_SELECT_DIRECT },
