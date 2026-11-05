@@ -409,39 +409,55 @@ static const char *QR_SelectKindName (int kind)
    is lower whenever a bit is clear or a model is missing. */
 static void QR_WeaponTable_f (void)
 {
-	const qr_weapon_entry_t	*row;
-	int			entries = 0, drawable = 0;
-
-	row = QR_WeaponRow ();
+	int	id, entries = 0, drawable = 0, ring = 0;
 
 	Con_Printf ("weapontable: game \"%s\", row %s\n",
 		    COM_SkipPath (com_gamedir), qr_row_name);
-	Con_Printf ("id  label                      bit  have  model  impulse\n");
+	Con_Printf ("ring  id  label                      bit  have  model  impulse\n");
 
-	for (; row->bit; row++)
+	/* Walked in ASCENDING IDENTITY, which is how the ring is laid out and
+	   how the selection commit counts, NOT in row order. Printing the row's
+	   own order numbered these lines differently from the slots they
+	   describe, in the one place the two are read side by side. The ring
+	   column is the slot a weapon actually occupies, so an impulse measured
+	   against it can be written down against the right weapon. */
+	for (id = 0; id < QC_WEAPON_IDENTITIES; id++)
 	{
-		int	have = (cl.items & row->bit) ? 1 : 0;
-		int	model = QR_WeaponModelResolved ((int) row->identity);
+		const qr_weapon_entry_t	*e = QR_WeaponEntry (id);
+		char			slot[8];
+		int			have, model;
 
+		if (!e)
+			continue;
+
+		have = (cl.items & e->bit) ? 1 : 0;
+		model = QR_WeaponModelResolved (id);
 		entries++;
+
+		/* Only a weapon that is owned AND whose model resolved is on the
+		   ring, so only those take a slot number. The rest print a dash
+		   rather than a misleading index. */
 		if (have && model)
+		{
+			q_snprintf (slot, sizeof (slot), "%d", ring++);
 			drawable++;
+		}
+		else
+			q_strlcpy (slot, "-", sizeof (slot));
 
 		/* An unmeasured impulse prints as a word rather than as "0
 		   direct", because a kind read aloud beside a zero is a claim
 		   nobody made. */
-		if (row->impulse)
-			Con_Printf ("%2d  %-18s %9u  %-4s  %-5s  %d %s\n",
-				    (int) row->identity,
-				    QR_WeaponLabel ((int) row->identity),
-				    (unsigned) row->bit, have ? "yes" : "no",
-				    model ? "yes" : "no", (int) row->impulse,
-				    QR_SelectKindName ((int) row->kind));
+		if (e->impulse)
+			Con_Printf ("%4s  %2d  %-18s %9u  %-4s  %-5s  %d %s\n",
+				    slot, id, QR_WeaponLabel (id),
+				    (unsigned) e->bit, have ? "yes" : "no",
+				    model ? "yes" : "no", (int) e->impulse,
+				    QR_SelectKindName ((int) e->kind));
 		else
-			Con_Printf ("%2d  %-18s %9u  %-4s  %-5s  unmeasured\n",
-				    (int) row->identity,
-				    QR_WeaponLabel ((int) row->identity),
-				    (unsigned) row->bit, have ? "yes" : "no",
+			Con_Printf ("%4s  %2d  %-18s %9u  %-4s  %-5s  unmeasured\n",
+				    slot, id, QR_WeaponLabel (id),
+				    (unsigned) e->bit, have ? "yes" : "no",
 				    model ? "yes" : "no");
 	}
 
