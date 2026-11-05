@@ -824,13 +824,28 @@ static void IN_WheelCycle (void)
 
 	if (qr_wheel_tries <= 0)
 	{
-		Con_Printf ("%s: cycle did not reach it\n",
+		Con_Printf ("%s: could not reach it\n",
 			    QR_WeaponLabel (qr_wheel_target));
 		qr_wheel_target = -1;
 		return;
 	}
 
-	Cbuf_AddText ("impulse 10\n");
+	/* A TOGGLE re-sends its OWN impulse; only a CYCLE walks with 10.
+	   Measured under Dissolution of Eternity: its powered-up weapons have no
+	   number of their own, they share the base weapon's and swap with it, so
+	   holding the thunderbolt and sending 8 again gives the plasma gun. From
+	   anything else the first 8 lands on the thunderbolt and the second on
+	   the plasma gun, which is why re-sending converges either way. Sending
+	   10 here would have walked straight past the weapon that was asked
+	   for. */
+	{
+		const qr_weapon_entry_t	*e = QR_WeaponEntry (qr_wheel_target);
+
+		if (e && e->kind == QR_SELECT_TOGGLE && e->impulse)
+			Cbuf_AddText (va ("impulse %d\n", (int) e->impulse));
+		else
+			Cbuf_AddText ("impulse 10\n");
+	}
 	qr_wheel_tries--;
 }
 

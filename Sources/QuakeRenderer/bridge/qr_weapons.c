@@ -244,7 +244,14 @@ static const qr_weapon_entry_t qr_row_rogue[] = {
 	{ 1u<<13, QC_WEAPON_LAVA_SUPER_NAILGUN,	0, QR_SELECT_DIRECT },
 	{ 1u<<14, QC_WEAPON_MULTI_GRENADE,	0, QR_SELECT_DIRECT },
 	{ 1u<<15, QC_WEAPON_MULTI_ROCKET,	0, QR_SELECT_DIRECT },
-	{ 1u<<16, QC_WEAPON_PLASMA_GUN,		0, QR_SELECT_DIRECT },
+	/* Measured 2026-11-05: holding the thunderbolt and sending 8 again gives
+	   the plasma gun. Rogue's powered-up weapons have no impulse of their
+	   own, they share the base weapon's and swap with it, which is why the
+	   kind column exists at all. The other four pairings are the same ammo
+	   relationship and almost certainly behave the same way, but almost
+	   certainly is what this table refuses to record, so they stay at 0
+	   until each is seen. */
+	{ 1u<<16, QC_WEAPON_PLASMA_GUN,		8, QR_SELECT_TOGGLE },
 	{ 0, 0, 0, 0 }
 };
 
