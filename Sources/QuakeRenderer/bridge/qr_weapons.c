@@ -195,8 +195,9 @@ static const qr_weapon_entry_t qr_row_mg3[] = {
 	{ 1u<<4,  QC_WEAPON_GRENADE_LAUNCHER,	6, QR_SELECT_DIRECT },
 	{ 1u<<5,  QC_WEAPON_ROCKET_LAUNCHER,	7, QR_SELECT_DIRECT },
 	{ 1u<<6,  QC_WEAPON_THUNDERBOLT,	8, QR_SELECT_DIRECT },
-	{ 1u<<7,  QC_WEAPON_MJOLNIR,		0, QR_SELECT_DIRECT },
-	{ 1u<<23, QC_WEAPON_LASER_CANNON,	0, QR_SELECT_DIRECT },
+	/* Same inference as hipnotic's row above, same safety net. */
+	{ 1u<<7,  QC_WEAPON_MJOLNIR,		1, QR_SELECT_TOGGLE },
+	{ 1u<<23, QC_WEAPON_LASER_CANNON,	8, QR_SELECT_TOGGLE },
 	{ 0, 0, 0, 0 }
 };
 
@@ -211,9 +212,21 @@ static const qr_weapon_entry_t qr_row_hipnotic[] = {
 	{ 1u<<4,  QC_WEAPON_GRENADE_LAUNCHER,	6, QR_SELECT_DIRECT },
 	{ 1u<<5,  QC_WEAPON_ROCKET_LAUNCHER,	7, QR_SELECT_DIRECT },
 	{ 1u<<6,  QC_WEAPON_THUNDERBOLT,	8, QR_SELECT_DIRECT },
-	{ 1u<<7,  QC_WEAPON_MJOLNIR,		0, QR_SELECT_DIRECT },
-	{ 1u<<16, QC_WEAPON_PROXIMITY_GUN,	0, QR_SELECT_DIRECT },
-	{ 1u<<23, QC_WEAPON_LASER_CANNON,	0, QR_SELECT_DIRECT },
+	/* INFERRED from rogue's measured shape, not yet seen here. Rogue's extra
+	   weapons proved to share their base gun's impulse and toggle with it,
+	   and the same pairing argument applies: the Mjolnir is the other melee
+	   weapon, the proximity gun is a grenade launcher variant whose HUD cell
+	   upstream literally shares with the GL, and the laser cannon is a cells
+	   weapon like the thunderbolt.
+
+	   Safe to infer for the same reason it was in rogue: the toggle commit
+	   stops on the DRAWN MODEL matching, so a wrong pairing cannot hand over
+	   the wrong gun. It prints "could not reach it" and the number changes
+	   here. Confirm each by holding the base weapon and pressing its number
+	   again. */
+	{ 1u<<7,  QC_WEAPON_MJOLNIR,		1, QR_SELECT_TOGGLE },
+	{ 1u<<16, QC_WEAPON_PROXIMITY_GUN,	6, QR_SELECT_TOGGLE },
+	{ 1u<<23, QC_WEAPON_LASER_CANNON,	8, QR_SELECT_TOGGLE },
 	{ 0, 0, 0, 0 }
 };
 

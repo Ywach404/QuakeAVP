@@ -463,6 +463,14 @@ cvar_t		vr_wheelradius = {"vr_wheelradius", "1", CVAR_ARCHIVE};
    all. With this on, switching game and letting the world run prints the table
    by itself. */
 cvar_t		vr_weapontrace = {"vr_weapontrace", "0", CVAR_ARCHIVE};
+/* Front keep-fraction for a VIEW model on the ring, muzzle end. Default 1,
+   meaning no trim, because an earlier pass trimmed the front globally and
+   chopped the barrels to stubs. It exists because the packs made the problem
+   unavoidable: rogue ships no pickup models at all, so every one of its
+   weapons hangs its v_ model on the ring complete with the muzzle flash and
+   projectile polys that model bakes in, where vanilla mostly shows clean g_
+   models instead. Tune it on device and bake the value that works. */
+cvar_t		vr_wheelclipfront = {"vr_wheelclipfront", "1", CVAR_ARCHIVE};
 cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_ARCHIVE};
@@ -2211,6 +2219,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_wheelroll);
 	Cvar_RegisterVariable (&vr_wheelradius);
 	Cvar_RegisterVariable (&vr_weapontrace);
+	Cvar_RegisterVariable (&vr_wheelclipfront);
 	Cvar_RegisterVariable (&vr_wheelfwd);
 	Cvar_RegisterVariable (&vr_wheelup);
 	Cvar_RegisterVariable (&vr_wheelside);

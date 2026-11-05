@@ -4055,6 +4055,7 @@ per weapon in the Weapon menu -- you can see the model, the math can't.
 extern cvar_t vr_weaponclip, vr_weaponclipback;
 extern cvar_t vr_wheelpitch, vr_wheelyaw, vr_wheelroll, vr_wheelradius;
 extern cvar_t vr_weapontrace;
+extern cvar_t vr_wheelclipfront;
 extern cvar_t vr_wheelfwd, vr_wheelup, vr_wheelside;	/* ring fine-placement, body frame */
 
 static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
@@ -4188,12 +4189,21 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 		if (vr_weapontint.value)
 			rec.dbg[0] = 1.f;   /* debug: paint the hand weapon green */
 	}
-	else if (qr_wheelclip_on && vr_wheelclip.value < 0.999f)
-		/* Trim the REAR only (ff = 1), exactly like the hand weapon's
-		   vr_weaponclipback: the baked round sits near the grip, NOT at the
-		   muzzle, so front-trimming (what the first pass did) chopped the
-		   barrels to stubs. Keep the whole barrel, retract the rear round. */
-		QR_WeaponClipF (paliashdr, 1.f, vr_wheelclip.value, rec.clip);
+	else if (qr_wheelclip_on
+		 && (vr_wheelclip.value < 0.999f
+		     || vr_wheelclipfront.value < 0.999f))
+		/* The REAR trim is the one that is always wanted, exactly like the
+		   hand weapon's vr_weaponclipback: the baked round sits near the
+		   grip, and an early pass that trimmed the FRONT globally chopped
+		   the barrels to stubs.
+
+		   The front fraction is therefore a separate knob defaulting to 1,
+		   not a revival of that mistake. The packs forced it: rogue ships
+		   no pickup models, so all six of its weapons hang a v_ model on
+		   the ring with the muzzle flash polys that model bakes in, and
+		   there is nothing at the rear to cut that helps. */
+		QR_WeaponClipF (paliashdr, vr_wheelclipfront.value,
+				vr_wheelclip.value, rec.clip);
 
 	entity = QR_AppendEntity (slot, &rec);
 
