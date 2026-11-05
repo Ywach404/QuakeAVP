@@ -114,6 +114,7 @@ static int qr_handweapon;
    front-trim the baked muzzle round off wheel icons (vr_wheelclip) the way the
    hand weapon trims its own (vr_weaponclip). */
 static int qr_wheelclip_on;
+static int qr_wheelclip_pack;   /* clip with vr_wheelclippack, not vr_wheelclip */
 
 /* Visual weapon recoil: an eased 0..1 kick on the hand weapon, armed when the
    view weapon animates a new fire frame and decayed on the sim clock. */
@@ -4056,6 +4057,7 @@ extern cvar_t vr_weaponclip, vr_weaponclipback;
 extern cvar_t vr_wheelpitch, vr_wheelyaw, vr_wheelroll, vr_wheelradius;
 extern cvar_t vr_weapontrace;
 extern cvar_t vr_wheelclipfront;
+extern cvar_t vr_wheelclippack;
 extern cvar_t vr_wheelfwd, vr_wheelup, vr_wheelside;	/* ring fine-placement, body frame */
 
 static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
@@ -4190,7 +4192,8 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 			rec.dbg[0] = 1.f;   /* debug: paint the hand weapon green */
 	}
 	else if (qr_wheelclip_on
-		 && (vr_wheelclip.value < 0.999f
+		 && ((qr_wheelclip_pack ? vr_wheelclippack.value
+					: vr_wheelclip.value) < 0.999f
 		     || vr_wheelclipfront.value < 0.999f))
 		/* The REAR trim is the one that is always wanted, exactly like the
 		   hand weapon's vr_weaponclipback: the baked round sits near the
@@ -4203,7 +4206,9 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 		   the ring with the muzzle flash polys that model bakes in, and
 		   there is nothing at the rear to cut that helps. */
 		QR_WeaponClipF (paliashdr, vr_wheelclipfront.value,
-				vr_wheelclip.value, rec.clip);
+				qr_wheelclip_pack ? vr_wheelclippack.value
+						  : vr_wheelclip.value,
+				rec.clip);
 
 	entity = QR_AppendEntity (slot, &rec);
 
@@ -7436,9 +7441,15 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		   their rear is real geometry. Per identity rather than by ring
 		   position, since rogue's six draw from view models and sit
 		   nowhere near 0 and 7. */
+		/* The packs clip on their own fraction. Vanilla's depth takes the
+		   round out of a shotgun; at that same depth rogue's models lose
+		   their grips with it, because nothing makes two authors agree on
+		   how far back a round sits. */
 		qr_wheelclip_on = (models_isview[i] && QR_WeaponRearClip (i)) ? 1 : 0;
+		qr_wheelclip_pack = (i >= QC_WEAPON_LASER_CANNON) ? 1 : 0;
 		QR_EmitAliasModel (slot, &e);
 		qr_wheelclip_on = 0;
+		qr_wheelclip_pack = 0;
 		if (slot->frame.num_entities > before)
 		{
 			/* room lighting is right in spirit but a wheel item

@@ -67,16 +67,17 @@ typedef struct {
    load nothing and their rear IS real geometry, so they are 0 -- that
    preserves exactly what the old raw-index test (i != 0 && i != 7) did.
 
-   The nine the packs add shipped as 1, a visual default to confirm on device,
-   and the device said NO on 2026-11-05: rogue's weapons came out with their
-   grips, triggers and handles missing, trailing thin polys that read as a
-   muzzle flare. Both symptoms are this one setting. The clip does not delete
-   the vertices it cuts, it collapses them onto the mean centre of what
-   survives, so the removed grip becomes a fan of degenerate triangles.
-   Vanilla hid it because the ring draws clean g_ pickup models for six of its
-   eight, which are never clipped at all; rogue ships no pickup models, so
-   every weapon it owns was being cut. They are 0 now, which is the rule this
-   comment already stated: no baked round, no reason to trim.
+   The nine the packs add DO bake a round, confirmed on device 2026-11-05: with
+   the clip off they each hang a bright projectile quad in the air beside the
+   gun. So the flag is 1 for all of them. What is wrong is not whether to trim
+   but HOW MUCH: vanilla's vr_wheelclip keeps 0.79, and at that depth rogue's
+   models lose their grips, triggers and handles along with the projectile.
+   The packs therefore clip on their own fraction, vr_wheelclippack, which is
+   tuned to take the round and leave the handle.
+
+   Vanilla hides all of this because the ring draws clean g_ pickup models for
+   six of its eight weapons, and those are never clipped at all. Rogue ships no
+   pickup models, so every weapon it owns goes through this path.
 
    ring_roll exists because a view model is authored to sit in a hand, not to
    hang on a ring, and nothing makes the packs agree with id1 about which way
@@ -94,17 +95,17 @@ static const qr_weapon_info_t qr_weapons[QC_WEAPON_IDENTITIES] = {
 	{ "GRENADE LAUNCHER",	qr_models_rock,	  "progs/g_rock.mdl",	1,   0.f },
 	{ "ROCKET LAUNCHER",	qr_models_rock2,  "progs/g_rock2.mdl",	1,   0.f },
 	{ "THUNDERBOLT",	qr_models_light,  "progs/g_light.mdl",	0,   0.f },
-	{ "LASER CANNON",	qr_models_laserg, "progs/g_laserg.mdl",	0,   0.f },
-	{ "MJOLNIR",		qr_models_hammer, "progs/g_hammer.mdl",	0, 180.f },
-	{ "PROXIMITY GUN",	qr_models_prox,	  "progs/g_prox.mdl",	0,   0.f },
+	{ "LASER CANNON",	qr_models_laserg, "progs/g_laserg.mdl",	1,   0.f },
+	{ "MJOLNIR",		qr_models_hammer, "progs/g_hammer.mdl",	1, 180.f },
+	{ "PROXIMITY GUN",	qr_models_prox,	  "progs/g_prox.mdl",	1,   0.f },
 	/* Rogue ships no g_* weapon models at all, so its six fall back to
 	   their view models. */
-	{ "LAVA NAILGUN",	qr_models_lava,	  NULL,			0,   0.f },
-	{ "LAVA SUPER NAILGUN",	qr_models_lava2,  NULL,			0,   0.f },
-	{ "MULTI GRENADE",	qr_models_multi,  NULL,			0,   0.f },
-	{ "MULTI ROCKET",	qr_models_multi2, NULL,			0,   0.f },
-	{ "PLASMA GUN",		qr_models_plasma, NULL,			0,   0.f },
-	{ "GRAPPLE",		qr_models_grpple, NULL,			0,   0.f },
+	{ "LAVA NAILGUN",	qr_models_lava,	  NULL,			1,   0.f },
+	{ "LAVA SUPER NAILGUN",	qr_models_lava2,  NULL,			1,   0.f },
+	{ "MULTI GRENADE",	qr_models_multi,  NULL,			1,   0.f },
+	{ "MULTI ROCKET",	qr_models_multi2, NULL,			1,   0.f },
+	{ "PLASMA GUN",		qr_models_plasma, NULL,			1,   0.f },
+	{ "GRAPPLE",		qr_models_grpple, NULL,			1,   0.f },
 };
 
 /* The consumer's bridging turns a NULL into a crash rather than a blank

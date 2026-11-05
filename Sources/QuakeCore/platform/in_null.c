@@ -471,6 +471,14 @@ cvar_t		vr_weapontrace = {"vr_weapontrace", "0", CVAR_ARCHIVE};
    projectile polys that model bakes in, where vanilla mostly shows clean g_
    models instead. Tune it on device and bake the value that works. */
 cvar_t		vr_wheelclipfront = {"vr_wheelclipfront", "1", CVAR_ARCHIVE};
+/* Rear keep-fraction for the PACKS' weapons on the ring, separate from
+   vanilla's vr_wheelclip. They need their own because the two are being asked
+   for different things at the same depth: vanilla's 0.79 takes the baked round
+   out of a shotgun, and at 0.79 rogue's models lose their grips, triggers and
+   handles with it. Higher keeps more of the gun. Tune until the floating
+   projectile quad is gone and the handle is still there, then bake the number
+   here. */
+cvar_t		vr_wheelclippack = {"vr_wheelclippack", "0.88", CVAR_ARCHIVE};
 cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_ARCHIVE};
 cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_ARCHIVE};
@@ -2220,6 +2228,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_wheelradius);
 	Cvar_RegisterVariable (&vr_weapontrace);
 	Cvar_RegisterVariable (&vr_wheelclipfront);
+	Cvar_RegisterVariable (&vr_wheelclippack);
 	Cvar_RegisterVariable (&vr_wheelfwd);
 	Cvar_RegisterVariable (&vr_wheelup);
 	Cvar_RegisterVariable (&vr_wheelside);
