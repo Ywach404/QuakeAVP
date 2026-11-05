@@ -838,6 +838,15 @@ static void IN_WheelCycle (void)
 		return;
 	}
 
+	/* Spend nothing while the world is stopped. The window pauses the
+	   simulation whenever the console is open, so an impulse sent now is
+	   never processed and the weapon never changes: counting those as failed
+	   attempts burned the whole budget and reported "could not reach it" for
+	   a weapon that was perfectly reachable. Waiting costs nothing, because
+	   the target is cleared when the world goes away. */
+	if (sv.active && sv.paused)
+		return;
+
 	if (qr_wheel_tries <= 0)
 	{
 		Con_Printf ("%s: could not reach it\n",
