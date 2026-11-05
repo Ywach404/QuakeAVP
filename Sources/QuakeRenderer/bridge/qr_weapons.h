@@ -68,6 +68,12 @@ const char *const *QR_WeaponViewModels (int identity);	/* NULL-terminated */
 const char *QR_WeaponPickupModel (int identity);	/* NULL: none shipped */
 int QR_WeaponRearClip (int identity);
 
+/* Degrees of roll to apply to this weapon ON THE RING, about the model's own
+   forward axis. A view model is authored to sit in a hand and the packs do not
+   agree with id1 about which way is up, so one of them hangs inverted. 0 for
+   everything that already looked right. */
+float QR_WeaponRingRoll (int identity);
+
 /* The identity carrying `bit` in the current game, or -1. */
 int QR_WeaponIdentityForBit (uint32_t bit);
 

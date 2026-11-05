@@ -52,6 +52,8 @@ typedef struct {
 	const char *const	*view_models;
 	const char		*pickup_model;	/* NULL where the game ships none */
 	int			rear_clip;
+	float			ring_roll;	/* degrees, about the model's own
+						   forward axis, on the wheel only */
 } qr_weapon_info_t;
 
 /* Indexed by qc_weapon_identity_t, so the order here is the ABI's order and
@@ -67,27 +69,35 @@ typedef struct {
    nine new identities are set to 1 as a VISUAL DEFAULT to confirm on device.
    It is not a measurement, and rogue is where it will show first, since rogue
    ships no pickup models at all and therefore draws every weapon from its
-   view model. */
+   view model.
+
+   ring_roll exists because a view model is authored to sit in a hand, not to
+   hang on a ring, and nothing makes the packs agree with id1 about which way
+   is up. The Mjolnir came out inverted on device, so it carries 180. The
+   vanilla eight are 0 and must stay 0: they looked right before this field
+   existed. This is the wheel only; the held weapon is placed by its own
+   table. Confirmed by eye, not measured, so a model that still reads wrong
+   is a number to change here and nothing more. */
 static const qr_weapon_info_t qr_weapons[QC_WEAPON_IDENTITIES] = {
-	{ "AXE",		qr_models_axe,	  NULL,			0 },
-	{ "SHOTGUN",		qr_models_shot,	  NULL,			1 },
-	{ "SUPER SHOTGUN",	qr_models_shot2,  "progs/g_shot.mdl",	1 },
-	{ "NAILGUN",		qr_models_nail,	  "progs/g_nail.mdl",	1 },
-	{ "SUPER NAILGUN",	qr_models_nail2,  "progs/g_nail2.mdl",	1 },
-	{ "GRENADE LAUNCHER",	qr_models_rock,	  "progs/g_rock.mdl",	1 },
-	{ "ROCKET LAUNCHER",	qr_models_rock2,  "progs/g_rock2.mdl",	1 },
-	{ "THUNDERBOLT",	qr_models_light,  "progs/g_light.mdl",	0 },
-	{ "LASER CANNON",	qr_models_laserg, "progs/g_laserg.mdl",	1 },
-	{ "MJOLNIR",		qr_models_hammer, "progs/g_hammer.mdl",	1 },
-	{ "PROXIMITY GUN",	qr_models_prox,	  "progs/g_prox.mdl",	1 },
+	{ "AXE",		qr_models_axe,	  NULL,			0,   0.f },
+	{ "SHOTGUN",		qr_models_shot,	  NULL,			1,   0.f },
+	{ "SUPER SHOTGUN",	qr_models_shot2,  "progs/g_shot.mdl",	1,   0.f },
+	{ "NAILGUN",		qr_models_nail,	  "progs/g_nail.mdl",	1,   0.f },
+	{ "SUPER NAILGUN",	qr_models_nail2,  "progs/g_nail2.mdl",	1,   0.f },
+	{ "GRENADE LAUNCHER",	qr_models_rock,	  "progs/g_rock.mdl",	1,   0.f },
+	{ "ROCKET LAUNCHER",	qr_models_rock2,  "progs/g_rock2.mdl",	1,   0.f },
+	{ "THUNDERBOLT",	qr_models_light,  "progs/g_light.mdl",	0,   0.f },
+	{ "LASER CANNON",	qr_models_laserg, "progs/g_laserg.mdl",	1,   0.f },
+	{ "MJOLNIR",		qr_models_hammer, "progs/g_hammer.mdl",	1, 180.f },
+	{ "PROXIMITY GUN",	qr_models_prox,	  "progs/g_prox.mdl",	1,   0.f },
 	/* Rogue ships no g_* weapon models at all, so its six fall back to
 	   their view models. */
-	{ "LAVA NAILGUN",	qr_models_lava,	  NULL,			1 },
-	{ "LAVA SUPER NAILGUN",	qr_models_lava2,  NULL,			1 },
-	{ "MULTI GRENADE",	qr_models_multi,  NULL,			1 },
-	{ "MULTI ROCKET",	qr_models_multi2, NULL,			1 },
-	{ "PLASMA GUN",		qr_models_plasma, NULL,			1 },
-	{ "GRAPPLE",		qr_models_grpple, NULL,			1 },
+	{ "LAVA NAILGUN",	qr_models_lava,	  NULL,			1,   0.f },
+	{ "LAVA SUPER NAILGUN",	qr_models_lava2,  NULL,			1,   0.f },
+	{ "MULTI GRENADE",	qr_models_multi,  NULL,			1,   0.f },
+	{ "MULTI ROCKET",	qr_models_multi2, NULL,			1,   0.f },
+	{ "PLASMA GUN",		qr_models_plasma, NULL,			1,   0.f },
+	{ "GRAPPLE",		qr_models_grpple, NULL,			1,   0.f },
 };
 
 /* The consumer's bridging turns a NULL into a crash rather than a blank
@@ -131,6 +141,13 @@ int QR_WeaponRearClip (int identity)
 	if (identity < 0 || identity >= QC_WEAPON_IDENTITIES)
 		return 0;
 	return qr_weapons[identity].rear_clip;
+}
+
+float QR_WeaponRingRoll (int identity)
+{
+	if (identity < 0 || identity >= QC_WEAPON_IDENTITIES)
+		return 0.f;
+	return qr_weapons[identity].ring_roll;
 }
 
 /* ========================================================================

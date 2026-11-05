@@ -7170,8 +7170,22 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 	   wrist far enough that moving the whole hand toward a weapon is the
 	   selection gesture, not a cramped finger flick. Grow the radius with the
 	   owned count so 8 weapons don't overlap on a fixed ring (selection is
-	   angle-based, so a wider ring doesn't change how far the wrist travels). */
-	radius = (9.f + 2.1f * owned) * frac * CLAMP (0.4f, vr_wheelradius.value, 2.5f);
+	   angle-based, so a wider ring doesn't change how far the wrist travels).
+
+	   Past eight it TAPERS. Growing straight with the count holds the arc
+	   spacing between models constant, which is the right rule and stays the
+	   rule here, but it was tuned when eight was the only count there was:
+	   hipnotic's eleven and rogue's thirteen opened the ring wide enough to
+	   put its lowest weapons through the floor. So the vanilla eight keep the
+	   exact radius they have always had and the ring creeps beyond that
+	   instead of climbing. vr_wheelradius still scales the whole thing. */
+	{
+		float	grow = (owned <= 8) ? (float) owned
+					    : 8.f + (owned - 8) * 0.45f;
+
+		radius = (9.f + 2.1f * grow) * frac
+			 * CLAMP (0.4f, vr_wheelradius.value, 2.5f);
+	}
 	spin = (float) fmod (realtime * 30.0, 360.0);
 
 	/* Ring plane = the body basis, tilted by the vr_wheel* trims. WheelState
@@ -7366,7 +7380,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		   stay evenly phased at any owned count. A fixed 45 degrees was
 		   360 over 8 and broke the moment a game carried more. */
 		e.angles[1] = spin + k * step;
-		e.angles[2] = 0;
+		/* Per-identity, because a view model is authored for a hand and
+		   the packs do not agree with id1 about which way is up. The
+		   vanilla eight are 0 and read exactly as they always have. */
+		e.angles[2] = QR_WeaponRingRoll (i);
 		e.frame = 0;
 		e.skinnum = 0;
 		e.scale = (unsigned char)(highlighted ? 8 : 5);	/* /16; smaller to fit the tight ring */
