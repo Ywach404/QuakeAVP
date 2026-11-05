@@ -8,14 +8,18 @@
 //  tracking space and leaves for the engine as body-frame Quake units through
 //  QC_InputSetWheel. On open the ring locks at the wrist's opening pose and
 //  the highlight is read from how far the wrist has since travelled in the
-//  ring plane -- reach toward a weapon to pick it. Committing sends
-//  `impulse N` through the one existing console route -- no second path in.
+//  ring plane -- reach toward a weapon to pick it. Releasing ships only
+//  that highlight index: the engine performs the weapon change itself,
+//  because which impulse selects a weapon, and whether an impulse selects
+//  it at all, are per-game facts C owns.
 //
 //  Highlight math mirrors the engine's ring layout exactly: owned weapons
-//  in impulse order, item k at (90 - k*step) degrees in the plane spanned
-//  by body-right and world-up. Both sides derive the owned set from
-//  cl.items (published in the packet), so they cannot disagree about what
-//  the ring contains. (Sense controllers still ray-point via setPointer.)
+//  in ascending identity order, item k at (90 - k*step) degrees in the
+//  plane spanned by body-right and world-up. There is ONE enumeration of
+//  the ring, computed in C and published as owned_identities, and nothing
+//  here derives it -- no item bit is read on this side -- so the slot
+//  released on and the slot drawn under it cannot name different weapons.
+//  (Sense controllers still ray-point via setPointer.)
 //
 //  Body-frame convention throughout: SIMD3(fwd, right, up), Quake units.
 //
@@ -31,12 +35,13 @@ final class WheelState: @unchecked Sendable {
 
     enum Source: Hashable { case hands, sense }
 
-    /// Ring order = impulse order 1...8.
-    private static let bits: [UInt32] = [4096, 1, 2, 4, 8, 16, 32, 64]
-
     private let lock = NSLock()
     private var holds: Set<Source> = []
-    private var items: UInt32 = 0
+    /// The packet's owned-identity mask, straight from the frame build: bit N
+    /// means identity N is owned AND its view model resolved. Not cl.items,
+    /// and never unpacked into one -- the ring's length is a count of these
+    /// bits and nothing else here looks at which weapons they are.
+    private var ownedIdentities: UInt32 = 0
     private var worldScale: Float = 0.0254
     private var anchor: SIMD3<Float>?
     /// Where the wrist was when the wheel opened. The ring locks here (the
@@ -46,9 +51,6 @@ final class WheelState: @unchecked Sendable {
     private var highlight = -1
     private var sensePump: Task<Void, Never>?
 
-    /// Wired by the UI to the engine's console queue.
-    nonisolated(unsafe) var sendCommand: (@Sendable (String) -> Void)?
-
     var isOpen: Bool {
         lock.lock(); defer { lock.unlock() }
         return !holds.isEmpty
@@ -56,9 +58,9 @@ final class WheelState: @unchecked Sendable {
 
     // MARK: - Packet facts (render thread)
 
-    func frame(items: UInt32, worldScale: Float) {
+    func frame(ownedIdentities: UInt32, worldScale: Float) {
         lock.lock()
-        self.items = items
+        self.ownedIdentities = ownedIdentities
         if worldScale > 0 { self.worldScale = worldScale }
         lock.unlock()
     }
@@ -96,16 +98,12 @@ final class WheelState: @unchecked Sendable {
         }
         // Commit on RELEASE: hold to open, aim at a weapon, let go to pick.
         // (Dwell-while-held kept resetting on the slightest jitter and never
-        // fired.) The full menu commits engine-side, so skip it there.
-        var releaseImpulse: Int?
-        if wasOpen, !nowOpen {
-            lockedAnchor = nil
-            if !VRSettings.shared.fullMenu, highlight >= 0 {
-                releaseImpulse = impulseForOwnedIndex(highlight)
-            }
-        }
+        // fired.) The pick itself is the engine's: the push below carries the
+        // highlight the hand had with open 0, which is the whole commit;
+        // the engine merges the full menu's own gaze pick into that same
+        // drain itself, so there is no mode branch to make here.
+        if wasOpen, !nowOpen { lockedAnchor = nil }
         lock.unlock()
-        if let impulse = releaseImpulse { sendCommand?("impulse \(impulse)\n") }
         push()
 
         if on, source == .sense { startSensePump() }
@@ -224,17 +222,12 @@ final class WheelState: @unchecked Sendable {
 
     // MARK: - Internals
 
+    /// Ring length. The published mask already excludes an identity whose
+    /// view model failed to resolve, which a count of cl.items did not: the
+    /// two sides then disagreed about how many slots the ring had and the
+    /// highlight named a weapon other than the one drawn under it.
     private func ownedCount() -> Int {
-        Self.bits.reduce(0) { $0 + ((items & $1) != 0 ? 1 : 0) }
-    }
-
-    private func impulseForOwnedIndex(_ k: Int) -> Int? {
-        var seen = 0
-        for (i, bit) in Self.bits.enumerated() where (items & bit) != 0 {
-            if seen == k { return i + 1 }
-            seen += 1
-        }
-        return nil
+        ownedIdentities.nonzeroBitCount
     }
 
     private func push() {

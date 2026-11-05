@@ -683,7 +683,7 @@ final class ImmersiveRenderer {
             ControllerOutput.shared.frame(damageFlash: packet.damage_flash,
                                           activeWeapon: packet.active_weapon,
                                           fireSeq: packet.weapon_fire_seq)
-            WheelState.shared.frame(items: packet.items,
+            WheelState.shared.frame(ownedIdentities: packet.owned_identities,
                                     worldScale: packet.world_scale)
             WeaponTrim.shared.frame(publishedIdentity: packet.active_identity)
         }

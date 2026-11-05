@@ -346,11 +346,7 @@ struct ContentView: View {
         .onAppear {
             engine.boot()
             _ = input          // ensure the app-lifetime input host exists
-            // The wheel commits through the one console route.
             let engine = self.engine
-            WheelState.shared.sendCommand = { command in
-                Task { @MainActor in engine.send(command) }
-            }
             WeaponTrim.shared.sendCommand = { command in
                 Task { @MainActor in engine.send(command) }
             }
