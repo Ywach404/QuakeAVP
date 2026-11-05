@@ -402,13 +402,30 @@ reachable from every game.
 
 The acceptance criterion is a count per game, plus eyes on the ring:
 
-| `game` | expected ring | note |
-|---|---|---|
-| `id1` | 8 | the important case, subject to open question 1 |
-| `dopa`, `mg1` | 8 | vanilla arsenal, confirmed from their progs |
-| `mg3` | 10 | corrected from the plan's 9 |
-| `hipnotic` | 11 | |
-| `rogue` | 13 | and **pick up a green armour: the count must not change.** That is the Correction 3 regression test, and it is the one the count alone cannot catch. |
+| `game` | expected ring | measured on device 2026-11-05 | note |
+|---|---|---|---|
+| `id1` | 8 | **8, row vanilla** | the important case |
+| `dopa` | 8 | **8, row vanilla** | fell through to vanilla by directory name |
+| `mg1` | 8 | **8, row vanilla** | same |
+| `mg3` | 10 | **10, row mg3** | corrected from the plan's 9 |
+| `hipnotic` | 11 | **11, row hipnotic** | |
+| `rogue` | 13 | **13, row rogue, axe on 2048** | and **pick up a green armour: the count must not change.** That is the Correction 3 regression test, and it is the one the count alone cannot catch. Still outstanding. |
+
+**All six rows confirmed on device, every identity resolving a model.** Two
+results are worth stating as more than ticks.
+
+mg3 selected the **mg3** row rather than vanilla, carrying the Mjolnir on bit
+128. That is Correction 2 proved rather than argued: mg3 reports
+`standard_quake`, so the engine globals alone would have handed it the vanilla
+row, and bit 128 is the one that makes a phantom appear in id1.
+
+The vanilla row *contains* eight entries, so a phantom in id1 is impossible by
+construction rather than merely absent on the day. That is stronger than the
+count test this section originally specified, and it means open question 1
+(whether `impulse 9` sets bit 7 in id1) no longer gates the anti-goal: the row
+has no entry for that bit to land in.
+
+Rogue reading its axe from 2048 is the original bug dead at the source.
 
 Alongside the counts, not instead of them: a described frame per game showing
 each weapon on the ring wearing its own model and its own label, and the held
