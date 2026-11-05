@@ -37,7 +37,42 @@ struct WeaponsTest {
     static func main() {
         runWideningTests()
         runPlacementDecodeTests()
+        runPublishedIdentityTests()
+        runSlotTests()
         print("PASSED (weapons_test.swift)")
+    }
+
+    /// The ABI publishes the held identity PLUS ONE. The offset exists because
+    /// the consumer's "nothing held" test is a zero check and identity 0 is
+    /// the axe, so a raw index would make an empty hand and the axe the same
+    /// value and the axe would silently never receive its trim, in any game.
+    static func runPublishedIdentityTests() {
+        check(WeaponTrimMigration.identity(fromPublished: 1) == 0,
+              "published 1 decodes to identity 0, the axe")
+        check(WeaponTrimMigration.identity(fromPublished: 0) == nil,
+              "published 0 means nothing held")
+        check(WeaponTrimMigration.identity(fromPublished: 17) == 16,
+              "published 17 decodes to the last identity")
+    }
+
+    /// The slot formula, which every table in WeaponTrim indexes through and
+    /// which the migration's destination writes have to agree with. It had two
+    /// copies at the old stride and the loader's copy was the one that did not
+    /// get widened, which puts a migrated value in the wrong VARIANT: not a
+    /// crash, just A.'s hands-tuned numbers showing up under psvr2.
+    static func runSlotTests() {
+        check(WeaponTrimMigration.slot(variant: 0, identity: 0) == 0,
+              "variant 0 identity 0 is slot 0")
+        check(WeaponTrimMigration.slot(variant: 1, identity: 0) == 17,
+              "variant 1 starts at 17, not 8")
+        check(WeaponTrimMigration.slot(variant: 3, identity: 16) == 67,
+              "the last slot of the last variant is 67")
+        // The destination the two-mode v2 and v1 formats fold into: mode m
+        // lands in the limbs-ON variant, which is m*2 + 1.
+        check(WeaponTrimMigration.slot(variant: 0 * 2 + 1, identity: 0) == 17,
+              "mode 0 folds to the limbs-on variant at 17")
+        check(WeaponTrimMigration.slot(variant: 1 * 2 + 1, identity: 7) == 58,
+              "mode 1 folds to the limbs-on variant at 51 + 7")
     }
 
     /// The stride goes 8 to 17 while the variant count stays 4, so every

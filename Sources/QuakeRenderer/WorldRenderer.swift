@@ -82,7 +82,7 @@ final class WorldRenderer: NSObject, MTKViewDelegate {
             // the immersive path, so in the flat console WeaponTrim stayed on
             // the default weapon and the Weapon tab's placement sliders never
             // reflected the gun you were holding.
-            WeaponTrim.shared.frame(activeWeapon: frame.pointee.active_weapon)
+            WeaponTrim.shared.frame(publishedIdentity: frame.pointee.active_identity)
         }
 
         guard

@@ -41,6 +41,35 @@ enum WeaponTrimMigration {
     /// two cannot drift in field order.
     struct Placement: Equatable { var back, up, side: Float }
 
+    /// Decodes the held weapon as the frame packet carries it: the identity
+    /// PLUS ONE, with 0 meaning nothing held.
+    ///
+    /// The offset is the whole point of the encoding. The consumer's
+    /// "nothing held" test is a zero check and identity 0 is the axe, so a
+    /// raw index would make an empty hand and the axe the same value and the
+    /// axe would silently never receive its trim, in every game. Returning
+    /// nil rather than a fallback slot matters for the same reason: the
+    /// predecessor mapped an unknown weapon to slot 1 and so an unrecognised
+    /// gun wore the shotgun's tuning, then overwrote it on the next slider
+    /// move.
+    static func identity(fromPublished published: UInt32) -> Int? {
+        guard published > 0, published < UInt32(identityCount) + 1 else {
+            return nil
+        }
+        return Int(published) - 1
+    }
+
+    /// Where one variant's identity sits in the flat tables.
+    ///
+    /// This has exactly one definition on purpose. The formula lived in two
+    /// places at the old stride, the live tables and the persistence loader,
+    /// and widening only one of them is the quiet failure mode here: a
+    /// migrated value lands in the wrong VARIANT, so hands-tuned numbers turn
+    /// up under psvr2 and nothing crashes or looks obviously wrong.
+    static func slot(variant: Int, identity: Int) -> Int {
+        variant * identityCount + identity
+    }
+
     /// Restripes a flat `variantCount * oldStride` table of keep-fractions
     /// onto the current stride, preserving each slot's index within its
     /// variant.

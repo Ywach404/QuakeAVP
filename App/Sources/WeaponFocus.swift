@@ -20,8 +20,14 @@ import Foundation
 final class WeaponFocus {
     static let shared = WeaponFocus()
 
-    /// IT_* bit of the weapon currently held, 0 before the first packet.
-    /// The Weapon tab watches this with .onChange and re-syncs its sliders.
+    /// The held weapon as the frame packet carries it: its IDENTITY plus one,
+    /// 0 for an empty hand and before the first packet. Not an IT_* bit any
+    /// more, because one item bit means different weapons in different games.
+    ///
+    /// Only ever compared for CHANGE, never decoded: the Weapon tab watches it
+    /// with .onChange and re-syncs its sliders from WeaponTrim, which holds the
+    /// identity itself. Decode it with WeaponTrimMigration.identity(fromPublished:)
+    /// rather than subtracting one here, if that ever becomes necessary.
     private(set) var weapon: UInt32 = 0
 
     private init() {}
