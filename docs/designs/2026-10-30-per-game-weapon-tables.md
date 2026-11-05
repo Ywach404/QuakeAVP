@@ -440,11 +440,38 @@ axe.
    settled from the globals table. If the cheat does not set it, the primary
    alarm is silent even with a fully broken table. Print `cl.items` after
    `impulse 9` in id1. One line, and it either confirms the net or replaces it.
-2. **Every non-vanilla impulse, and its kind.** Ten measurements across three
-   games: hipnotic's three (laser cannon, Mjolnir, proximity gun), mg3's two
-   (laser cannon, Mjolnir, which may differ from hipnotic's), and rogue's five
-   powered-up weapons. Hold the weapon, try the candidate, record whether it
-   selects directly, toggles, or only cycles.
+2. **Every non-vanilla impulse, and its kind. ANSWERED for rogue on device
+   2026-11-05; hipnotic's three and mg3's two are inferred from it and still
+   unconfirmed.**
+
+   The finding was the SHAPE, not the numbers. Rogue's powered-up weapons have
+   no impulse of their own: each shares its base gun's number and TOGGLES with
+   it, confirmed five for five by selecting each off the ring.
+
+       axe 1 direct (keeps impulse 1 despite its renumbered bit)
+       4 nailgun <-> lava nailgun       7 rocket launcher <-> multi rocket
+       5 super nailgun <-> lava super   8 thunderbolt <-> plasma gun
+       6 grenade launcher <-> multi grenade
+
+   This is why the table stores a kind beside the number. A plain integer per
+   weapon was the wrong MODEL, not merely an unfilled one, and it would have
+   been discovered only when the ring refused to reach anything. It also
+   exposed a bug in the commit path: `IN_WheelCycle` sent `impulse 10` for both
+   kinds, which walks the weapon list and steps straight past the weapon asked
+   for. A toggle re-sends its own impulse, which converges from any starting
+   weapon.
+
+   Hipnotic's three and mg3's two now carry inferred pairings on the same
+   argument (Mjolnir with the axe, proximity gun with the grenade launcher,
+   laser cannon with the thunderbolt) and remain unconfirmed.
+
+   **Why inferring is acceptable for an impulse and was not for a bit.** The
+   toggle commit is self-verifying: it stops when the DRAWN MODEL matches the
+   weapon asked for, bounded by the owned count. A wrong impulse cannot hand
+   the player the wrong gun, it fails to arrive and names itself. A wrong BIT
+   has no such backstop; it silently draws one weapon wearing another's label,
+   which is the fault this whole design exists to remove. That asymmetry, not
+   confidence, is what decides where a guess is allowed.
 3. **ANSWERED on device 2026-11-05: yes, they are ownership bits. Rogue's row
    stays at 13.** Under Dissolution of Eternity with everything granted, all
    five came up owned with their models resolved, filling ring slots 8 to 12:
