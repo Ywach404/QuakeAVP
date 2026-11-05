@@ -115,6 +115,7 @@ static int qr_handweapon;
    hand weapon trims its own (vr_weaponclip). */
 static int qr_wheelclip_on;
 static int qr_wheelclip_pack;   /* clip with vr_wheelclippack, not vr_wheelclip */
+static float qr_wheelclip_keep;  /* this weapon's own depth, 0 = use the cvar */
 
 /* Visual weapon recoil: an eased 0..1 kick on the hand weapon, armed when the
    view weapon animates a new fire frame and decayed on the sim clock. */
@@ -4105,6 +4106,17 @@ QR_EmitAliasModel -- port of R_DrawAliasModel, emitting an entity record
 and one QC_BATCH_ALIAS batch instead of GL state and a draw.
 =================
 */
+/* The depth to cut this ring model at: its own if it has been tuned, else the
+   cvar for its class. Per model because two authors put a baked round in two
+   places, which the device showed plainly: the depth that finally took the
+   multi rocket's round cut every other weapon in the pack to a sliver. */
+static float QR_WheelClipKeep (void)
+{
+	if (qr_wheelclip_keep != 0.f)
+		return qr_wheelclip_keep;
+	return qr_wheelclip_pack ? vr_wheelclippack.value : vr_wheelclip.value;
+}
+
 static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 {
 	aliashdr_t	*paliashdr;
@@ -4191,10 +4203,8 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 		if (vr_weapontint.value)
 			rec.dbg[0] = 1.f;   /* debug: paint the hand weapon green */
 	}
-	else if (qr_wheelclip_on
-		 && ((qr_wheelclip_pack ? vr_wheelclippack.value
-					: vr_wheelclip.value) < 0.999f
-		     || vr_wheelclipfront.value < 0.999f))
+	else if (qr_wheelclip_on && (QR_WheelClipKeep () < 0.999f
+				     || vr_wheelclipfront.value < 0.999f))
 		/* The REAR trim is the one that is always wanted, exactly like the
 		   hand weapon's vr_weaponclipback: the baked round sits near the
 		   grip, and an early pass that trimmed the FRONT globally chopped
@@ -4206,9 +4216,7 @@ static void QR_EmitAliasModel (qr_frame_slot_t *slot, entity_t *e)
 		   the ring with the muzzle flash polys that model bakes in, and
 		   there is nothing at the rear to cut that helps. */
 		QR_WeaponClipF (paliashdr, vr_wheelclipfront.value,
-				qr_wheelclip_pack ? vr_wheelclippack.value
-						  : vr_wheelclip.value,
-				rec.clip);
+				QR_WheelClipKeep (), rec.clip);
 
 	entity = QR_AppendEntity (slot, &rec);
 
@@ -7447,9 +7455,11 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		   how far back a round sits. */
 		qr_wheelclip_on = (models_isview[i] && QR_WeaponRearClip (i)) ? 1 : 0;
 		qr_wheelclip_pack = (i >= QC_WEAPON_LASER_CANNON) ? 1 : 0;
+		qr_wheelclip_keep = QR_WeaponRearKeep (i);
 		QR_EmitAliasModel (slot, &e);
 		qr_wheelclip_on = 0;
 		qr_wheelclip_pack = 0;
+		qr_wheelclip_keep = 0.f;
 		if (slot->frame.num_entities > before)
 		{
 			/* room lighting is right in spirit but a wheel item

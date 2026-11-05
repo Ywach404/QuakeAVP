@@ -74,6 +74,12 @@ int QR_WeaponRearClip (int identity);
    everything that already looked right. */
 float QR_WeaponRingRoll (int identity);
 
+/* This weapon's own rear clip keep-fraction on the ring, or 0 to follow the
+   cvar for its class. Set with the `wheelclip` console command; a shared
+   depth cannot serve two models whose authors put the baked round in
+   different places. */
+float QR_WeaponRearKeep (int identity);
+
 /* Dump the resolved row: ring slot, identity, bit, ownership, whether a model
    resolved, impulse and kind. Also the `weapontable` console command. Public
    because vr_weapontrace fires it on its own when the owned set changes, which

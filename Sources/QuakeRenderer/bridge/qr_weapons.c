@@ -158,6 +158,53 @@ float QR_WeaponRingRoll (int identity)
 	return qr_weapons[identity].ring_roll;
 }
 
+/* ---- per-identity rear clip depth ------------------------------------- */
+
+/* 0 means "use the cvar for this weapon's class". Anything else is this
+   weapon's own keep-fraction.
+   A shared fraction cannot work and the device showed why: at the depth that
+   finally took the multi rocket's baked round, every other model in the pack
+   was cut to a sliver. Two authors put a round in two places, so the depth is
+   a property of the MODEL, like the roll above and like the placement table.
+   Tuned with the `wheelclip` command, which prints the whole table so the
+   numbers can be read off and baked here. */
+static float qr_rear_keep[QC_WEAPON_IDENTITIES];
+
+float QR_WeaponRearKeep (int identity)
+{
+	if (identity < 0 || identity >= QC_WEAPON_IDENTITIES)
+		return 0.f;
+	return qr_rear_keep[identity];
+}
+
+static void QR_WheelClip_f (void)
+{
+	int	id, held;
+
+	if (Cmd_Argc () < 2)
+	{
+		Con_Printf ("wheelclip <keep>  -- rear clip depth for the HELD weapon\n");
+		Con_Printf ("  1 = no trim, lower cuts more off the grip end.\n");
+		Con_Printf ("  0 = follow the cvar for its class.\n");
+		for (id = 0; id < QC_WEAPON_IDENTITIES; id++)
+			if (qr_rear_keep[id] != 0.f)
+				Con_Printf ("  %-18s %.3f\n",
+					    QR_WeaponLabel (id), qr_rear_keep[id]);
+		return;
+	}
+
+	held = QR_ActiveIdentity ();
+	if (held < 0)
+	{
+		Con_Printf ("wheelclip: nothing held\n");
+		return;
+	}
+
+	qr_rear_keep[held] = (float) atof (Cmd_Argv (1));
+	Con_Printf ("wheelclip: %s = %.3f\n", QR_WeaponLabel (held),
+		    qr_rear_keep[held]);
+}
+
 /* ========================================================================
  * The per-game bit maps
  * ====================================================================== */
@@ -521,4 +568,5 @@ void QR_WeaponTablePrint (void)
 void QR_Weapons_Init (void)
 {
 	Cmd_AddCommand ("weapontable", QR_WeaponTablePrint);
+	Cmd_AddCommand ("wheelclip", QR_WheelClip_f);
 }
