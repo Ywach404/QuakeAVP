@@ -244,10 +244,10 @@ static const qr_weapon_entry_t qr_row_rogue[] = {
 	   gun and shares that gun's impulse, swapping with it rather than
 	   having a number of its own.
 
-	   Three of these four were inferred from the plasma gun's measurement
-	   and then CONFIRMED on device 2026-11-05 by selecting them off the
-	   ring: the toggle commit drove each one and arrived. Only the multi
-	   rocket is still untried, and it is the same pairing.
+	   All four were inferred from the plasma gun's measurement and then
+	   CONFIRMED on device 2026-11-05 by selecting each off the ring: the
+	   toggle commit drove every one and arrived. Rogue's row carries no
+	   guesses.
 
 	   The reason inferring was tolerable here and would not have been in the
 	   bit columns: the toggle commit is self-verifying. It re-sends the
@@ -258,7 +258,7 @@ static const qr_weapon_entry_t qr_row_rogue[] = {
 	{ 1u<<12, QC_WEAPON_LAVA_NAILGUN,	4, QR_SELECT_TOGGLE },	/* confirmed */
 	{ 1u<<13, QC_WEAPON_LAVA_SUPER_NAILGUN,	5, QR_SELECT_TOGGLE },	/* confirmed */
 	{ 1u<<14, QC_WEAPON_MULTI_GRENADE,	6, QR_SELECT_TOGGLE },	/* confirmed */
-	{ 1u<<15, QC_WEAPON_MULTI_ROCKET,	7, QR_SELECT_TOGGLE },	/* untried */
+	{ 1u<<15, QC_WEAPON_MULTI_ROCKET,	7, QR_SELECT_TOGGLE },	/* confirmed */
 	/* Measured 2026-11-05: holding the thunderbolt and sending 8 again gives
 	   the plasma gun. Rogue's powered-up weapons have no impulse of their
 	   own, they share the base weapon's and swap with it, which is why the
