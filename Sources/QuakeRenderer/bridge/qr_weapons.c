@@ -240,21 +240,25 @@ static const qr_weapon_entry_t qr_row_rogue[] = {
 	{ 1u<<4,  QC_WEAPON_GRENADE_LAUNCHER,	6, QR_SELECT_DIRECT },
 	{ 1u<<5,  QC_WEAPON_ROCKET_LAUNCHER,	7, QR_SELECT_DIRECT },
 	{ 1u<<6,  QC_WEAPON_THUNDERBOLT,	8, QR_SELECT_DIRECT },
-	/* INFERRED, not measured, and the distinction is recorded on purpose.
-	   Only the plasma gun below was seen to toggle. These four are the same
-	   structural relationship: each powered-up weapon is the ammo-upgraded
-	   form of exactly one base gun, and takes that gun's impulse.
+	/* Each powered-up weapon is the ammo-upgraded form of exactly one base
+	   gun and shares that gun's impulse, swapping with it rather than
+	   having a number of its own.
 
-	   Inferring is tolerable HERE and would not be in the bit columns,
-	   because the toggle commit is self-verifying: it re-sends the impulse
-	   and stops only when the drawn model matches the weapon asked for,
-	   bounded by the owned count. A wrong pairing therefore cannot hand the
-	   player the wrong gun, it fails to arrive and says so. Confirm each by
-	   holding the base weapon and pressing its number again. */
-	{ 1u<<12, QC_WEAPON_LAVA_NAILGUN,	4, QR_SELECT_TOGGLE },
-	{ 1u<<13, QC_WEAPON_LAVA_SUPER_NAILGUN,	5, QR_SELECT_TOGGLE },
-	{ 1u<<14, QC_WEAPON_MULTI_GRENADE,	6, QR_SELECT_TOGGLE },
-	{ 1u<<15, QC_WEAPON_MULTI_ROCKET,	7, QR_SELECT_TOGGLE },
+	   Three of these four were inferred from the plasma gun's measurement
+	   and then CONFIRMED on device 2026-11-05 by selecting them off the
+	   ring: the toggle commit drove each one and arrived. Only the multi
+	   rocket is still untried, and it is the same pairing.
+
+	   The reason inferring was tolerable here and would not have been in the
+	   bit columns: the toggle commit is self-verifying. It re-sends the
+	   impulse and stops only when the drawn model matches the weapon asked
+	   for, bounded by the owned count, so a wrong pairing cannot hand the
+	   player the wrong gun. It fails to arrive and says so. A wrong BIT has
+	   no such backstop, which is why those were measured first. */
+	{ 1u<<12, QC_WEAPON_LAVA_NAILGUN,	4, QR_SELECT_TOGGLE },	/* confirmed */
+	{ 1u<<13, QC_WEAPON_LAVA_SUPER_NAILGUN,	5, QR_SELECT_TOGGLE },	/* confirmed */
+	{ 1u<<14, QC_WEAPON_MULTI_GRENADE,	6, QR_SELECT_TOGGLE },	/* confirmed */
+	{ 1u<<15, QC_WEAPON_MULTI_ROCKET,	7, QR_SELECT_TOGGLE },	/* untried */
 	/* Measured 2026-11-05: holding the thunderbolt and sending 8 again gives
 	   the plasma gun. Rogue's powered-up weapons have no impulse of their
 	   own, they share the base weapon's and swap with it, which is why the
