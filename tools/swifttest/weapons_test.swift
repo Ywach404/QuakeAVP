@@ -39,6 +39,7 @@ struct WeaponsTest {
         runPlacementDecodeTests()
         runPublishedIdentityTests()
         runSlotTests()
+        runInheritanceTests()
         print("PASSED (weapons_test.swift)")
     }
 
@@ -75,6 +76,63 @@ struct WeaponsTest {
               "mode 1 folds to the limbs-on variant at 51 + 7")
     }
 
+    /// A weapon the packs add has no tuning of its own, and falling back to the
+    /// global cvars put it somewhere that reads wrong in the hand. Each one
+    /// instead starts from its vanilla SIBLING, per variant, so a weapon that
+    /// is a variant of the nailgun starts where the nailgun sits.
+    static func runInheritanceTests() {
+        // Distinct per-slot values so a wrong source is visible as a number.
+        let old: [Float] = (0..<32).map { Float($0) }
+        let new = WeaponTrimMigration.widen(old, oldStride: 8)
+
+        check(new.count == 68, "inherited widening is still 4 * 17")
+
+        // The vanilla eight are untouched, in every variant.
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 3)] == 3,
+              "vanilla nailgun unchanged in variant 0")
+        check(new[WeaponTrimMigration.slot(variant: 2, identity: 3)] == 19,
+              "vanilla nailgun unchanged in variant 2")
+
+        // The rogue pairings, which the device confirmed as the toggle pairs.
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 11)] == 3,
+              "lava nailgun inherits the nailgun")
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 12)] == 4,
+              "lava super nailgun inherits the super nailgun")
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 13)] == 5,
+              "multi grenade inherits the grenade launcher")
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 14)] == 6,
+              "multi rocket inherits the rocket launcher")
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 15)] == 7,
+              "plasma gun inherits the thunderbolt")
+
+        // Hipnotic's three, and the grapple's fallback.
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 8)] == 7,
+              "laser cannon inherits the thunderbolt")
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 9)] == 0,
+              "mjolnir inherits the axe")
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 10)] == 5,
+              "proximity gun inherits the grenade launcher")
+        check(new[WeaponTrimMigration.slot(variant: 0, identity: 16)] == 1,
+              "grapple inherits the shotgun")
+
+        // Inheritance is PER VARIANT: variant 3's lava nailgun takes variant
+        // 3's nailgun, not variant 0's. Getting this wrong would put the
+        // hands-tuned value under psvr2.
+        check(new[WeaponTrimMigration.slot(variant: 3, identity: 11)] == 27,
+              "variant 3 lava nailgun takes variant 3's nailgun")
+
+        // Placement inherits too, rather than staying nil and falling back to
+        // the global cvars.
+        let places: [WeaponTrimMigration.Placement?] = (0..<32).map {
+            .init(back: Float($0), up: 0, side: 0)
+        }
+        let np = WeaponTrimMigration.widen(places, oldStride: 8)
+        check(np[WeaponTrimMigration.slot(variant: 0, identity: 15)]?.back == 7,
+              "plasma gun placement inherits the thunderbolt's")
+        check(np[WeaponTrimMigration.slot(variant: 1, identity: 9)]?.back == 8,
+              "variant 1 mjolnir placement takes variant 1's axe")
+    }
+
     /// The stride goes 8 to 17 while the variant count stays 4, so every
     /// variant after the first MOVES. Restriping it by hand is where the
     /// tuning gets lost, which is what these indices are guarding.
@@ -87,7 +145,11 @@ struct WeaponsTest {
         check(new[7]  == 7,  "variant 0 slot 7 preserved")
         check(new[17] == 8,  "variant 1 slot 0 lands at 17, not 8")
         check(new[51] == 24, "variant 3 slot 0 lands at 51")
-        check(new[16] == 1,  "variant 0 new tail is the fill value")
+        // Index 16 is the grapple, which now INHERITS the shotgun (slot 1)
+        // rather than taking the flat fill. Checked against slot 1's value so
+        // the assertion fails if the inheritance is dropped, which a bare
+        // "== 1" would not, since the fill happens to be 1 as well.
+        check(new[16] == new[1], "the grapple tail inherits the shotgun")
 
         // A new identity has no placement, and nil already means "follow the
         // global vr_weapon* cvars", so the tail must not become a zeroed
@@ -98,7 +160,14 @@ struct WeaponsTest {
         check(newPlace.count == 68, "widened placement is 4 * 17")
         check(newPlace[17] == .init(back: 8, up: 0, side: 0),
               "variant 1 slot 0 placement lands at 17")
-        check(newPlace[16] == nil, "a new placement slot is untuned, not zeroed")
+        // A pack weapon's placement used to stay nil and fall through to the
+        // global cvars, which read wrong in the hand. It now starts at its
+        // vanilla sibling. Still never ZERO, which would be a real placement
+        // at the origin rather than an absent one.
+        check(newPlace[16] == newPlace[1],
+              "a new placement slot inherits its sibling, not nil")
+        check(newPlace[16] != .init(back: 0, up: 0, side: 0),
+              "and is never a zeroed placement")
     }
 
     /// Each persisted key is gated on an EXACT count, because a v2 blob read

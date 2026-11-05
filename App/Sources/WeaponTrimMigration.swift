@@ -97,6 +97,37 @@ enum WeaponTrimMigration {
     /// trapped: the exact-count gating belongs to the loader, which still
     /// has the key name and can fall through to an older one, and a crash
     /// in the headset is worse than the tuning this guards.
+    /// Which vanilla weapon a pack's weapon borrows its rig from, by identity.
+    /// nil for the vanilla eight, which answer for themselves.
+    ///
+    /// A weapon the packs add ships with no tuning, and an untuned weapon used
+    /// to fall through to the global `vr_weapon*` cvars, which put it somewhere
+    /// that reads wrong in the hand. Starting it at its nearest vanilla sibling
+    /// is a better zero: these are variants of those weapons and hang in the
+    /// hand about the same way.
+    ///
+    /// The rogue five are not a judgement call. They are the same pairings the
+    /// device confirmed for SELECTION, where each powered-up gun toggles off
+    /// its base weapon's impulse, so the weapon that shares your button also
+    /// shares your placement. The other four have no measured pairing: the
+    /// laser cannon and the plasma gun are both cells weapons with a long
+    /// barrel, the Mjolnir is the only other melee weapon, the proximity gun
+    /// is a grenade launcher variant that upstream's statusbar even shares a
+    /// cell with, and the grapple has no analogue at all so it takes the
+    /// shotgun, which was already the fallback weapon elsewhere.
+    static let inheritsFrom: [Int?] = [
+        nil, nil, nil, nil, nil, nil, nil, nil,   // the vanilla eight
+        7,                                        // laser cannon <- thunderbolt
+        0,                                        // mjolnir <- axe
+        5,                                        // proximity gun <- grenade launcher
+        3,                                        // lava nailgun <- nailgun
+        4,                                        // lava super nailgun <- super nailgun
+        5,                                        // multi grenade <- grenade launcher
+        6,                                        // multi rocket <- rocket launcher
+        7,                                        // plasma gun <- thunderbolt
+        1,                                        // grapple <- shotgun
+    ]
+
     private static func restriped<Value>(_ old: [Value], oldStride: Int,
                                          fill: Value) -> [Value] {
         var new = [Value](repeating: fill, count: variantCount * identityCount)
@@ -106,10 +137,23 @@ enum WeaponTrimMigration {
             for slot in 0..<carried {
                 let source = variant * oldStride + slot
                 guard source < old.count else { return new }
-                new[variant * identityCount + slot] = old[source]
+                new[slot_(variant, slot)] = old[source]
+            }
+            // Then the pack weapons, from their vanilla sibling IN THIS
+            // VARIANT. Per variant matters: taking variant 0's value would put
+            // the hands-tuned number under psvr2.
+            for identity in carried..<identityCount {
+                guard let from = inheritsFrom[identity], from < carried else {
+                    continue
+                }
+                new[slot_(variant, identity)] = new[slot_(variant, from)]
             }
         }
         return new
+    }
+
+    private static func slot_(_ variant: Int, _ identity: Int) -> Int {
+        slot(variant: variant, identity: identity)
     }
 
     /// Decodes one persisted placement blob, or nil if the blob is not

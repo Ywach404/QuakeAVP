@@ -488,7 +488,27 @@ final class WeaponTrim: @unchecked Sendable {
             } else {
                 Self.overlayTwoMode(decoded, into: &place, acrossLimbs: false)
             }
-            return
+            break
+        }
+
+        // Last: any pack weapon still without a placement takes its vanilla
+        // sibling. The widening already does this for the shipped defaults, but
+        // a device that stored a v4 table before the siblings existed holds
+        // explicit nils, and nil means "fall through to the global cvars",
+        // which is the thing that read wrong in the hand. Doing it here rather
+        // than only in the widening is what makes it true for every device
+        // regardless of what it has already written.
+        for identity in 0..<WeaponTrimMigration.identityCount {
+            guard let from = WeaponTrimMigration.inheritsFrom[identity] else {
+                continue
+            }
+            for variant in 0..<WeaponTrimMigration.variantCount {
+                let dst = WeaponTrimMigration.slot(variant: variant,
+                                                   identity: identity)
+                guard place[dst] == nil else { continue }
+                place[dst] = place[WeaponTrimMigration.slot(variant: variant,
+                                                            identity: from)]
+            }
         }
     }
 
