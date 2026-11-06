@@ -1088,6 +1088,97 @@ static void IN_MenuKeys (void)
 	}
 }
 
+
+/*
+================
+Impulse scan -- find which impulse selects which weapon, by trying them.
+
+Two of the five games' extra weapons were given INFERRED impulses, reasoning
+from the shape rogue's row proved, and the inference was wrong. Guessing a
+second time is not better than guessing once, and a person reading results
+back out of a headset one console round trip at a time is slow enough that it
+does not get finished.
+
+So the engine tries them itself. Each impulse is sent TWICE with a settle
+between, because a mission pack's extra weapon shares its base gun's number
+and swaps with it: one press shows only the first of the pair, and the second
+press is the whole point.
+
+Runs on the engine thread off the same drain as the wheel commit, and spends
+no step while the world is paused, for the reason given there: the console
+pauses the simulation, so a step taken then would report nothing changing and
+blame the impulse.
+================
+*/
+static int	qr_scan_impulse;	/* 0 = idle, else the impulse under test */
+static int	qr_scan_press;		/* 1 or 2 */
+static int	qr_scan_settle;
+static int	qr_scan_first;		/* identity after press 1 */
+
+static void IN_ImpulseScan_f (void)
+{
+	if (!sv.active)
+	{
+		Con_Printf ("impulsescan: no map loaded\n");
+		return;
+	}
+	Con_Printf ("impulsescan: trying 1..8, twice each."
+		    " CLOSE THE CONSOLE so the world runs.\n");
+	qr_scan_impulse = 1;
+	qr_scan_press = 1;
+	qr_scan_settle = 0;
+	qr_scan_first = -1;
+}
+
+static void IN_ImpulseScanTick (void)
+{
+	int	held;
+
+	if (!qr_scan_impulse)
+		return;
+	if (!sv.active || sv.paused)
+		return;
+
+	if (qr_scan_settle > 0)
+	{
+		qr_scan_settle--;
+		return;
+	}
+
+	held = QR_ActiveIdentity ();
+
+	if (qr_scan_press == 1)
+	{
+		qr_scan_first = held;
+		Cbuf_AddText (va ("impulse %d\n", qr_scan_impulse));
+		qr_scan_press = 2;
+		qr_scan_settle = 12;
+		return;
+	}
+
+	if (qr_scan_press == 2)
+	{
+		qr_scan_first = held;
+		Cbuf_AddText (va ("impulse %d\n", qr_scan_impulse));
+		qr_scan_press = 3;
+		qr_scan_settle = 12;
+		return;
+	}
+
+	/* Both presses done: report what each landed on. */
+	Con_Printf ("impulse %d:  first %s   again %s\n", qr_scan_impulse,
+		    QR_WeaponLabel (qr_scan_first), QR_WeaponLabel (held));
+
+	qr_scan_impulse++;
+	qr_scan_press = 1;
+	qr_scan_settle = 12;
+	if (qr_scan_impulse > 8)
+	{
+		Con_Printf ("impulsescan: done\n");
+		qr_scan_impulse = 0;
+	}
+}
+
 void IN_Commands (void)
 {
 	size_t i;
@@ -1095,6 +1186,7 @@ void IN_Commands (void)
 
 	/* Before the snapshot, and the comment on IN_WheelCommit says why. */
 	IN_WheelCommit ();
+	IN_ImpulseScanTick ();
 
 	IN_SnapshotInputs ();
 	IN_ApplyPause ();
@@ -2278,6 +2370,7 @@ void IN_Init (void)
 	/* Align on demand, so the turn can be tried and the refusals read
 	   without phasing in and out to provoke an edge. */
 	Cmd_AddCommand ("align_room", IN_AlignRoom_f);
+	Cmd_AddCommand ("impulsescan", IN_ImpulseScan_f);
 	Admin_Init ();
 	Cmd_AddCommand ("+wheel", IN_WheelDown_f);
 	Cmd_AddCommand ("-wheel", IN_WheelUp_f);
