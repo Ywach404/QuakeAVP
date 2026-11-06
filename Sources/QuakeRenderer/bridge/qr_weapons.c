@@ -169,17 +169,23 @@ float QR_WeaponRingRoll (int identity)
    Tuned with the `wheelclip` command, which prints the whole table so the
    numbers can be read off and baked here. */
 static float qr_rear_keep[QC_WEAPON_IDENTITIES] = {
-	/* Dissolution's, found on device 2026-11-05 and baked so a rebuild does
-	   not cost the session that found them. They are deeper than vanilla's
-	   0.79 because rogue's models carry their round further forward, and
-	   they are not final: they were judged while the ring was still centring
-	   on the UNCLIPPED mesh, so each gun was hanging off its spoke by half
-	   of what had been cut and some of this depth was compensating for that.
-	   Re-judge them now the centring follows the clip. */
-	[QC_WEAPON_LAVA_NAILGUN]	= 0.80f,
-	[QC_WEAPON_LAVA_SUPER_NAILGUN]	= 0.60f,
-	[QC_WEAPON_MULTI_GRENADE]	= 0.40f,
-	[QC_WEAPON_MULTI_ROCKET]	= 0.50f,
+	/* MEASURED off the meshes, not judged by eye. Every one of rogue's
+	   weapons models its baked round the same way: a cluster of twelve
+	   vertices (sixteen on the plasma gun) sitting at the rear, separated
+	   from the gun body by a stretch of x containing no vertices at all. So
+	   the right plane is the middle of that gap, which removes the round and
+	   cannot touch the weapon.
+
+	   This is why the grips kept disappearing. Judged by eye the depths came
+	   out at 0.4 to 0.6, several times deeper than needed, because a shallow
+	   cut did not visibly do anything while the ring was still centring on
+	   the unclipped mesh. The gap is the thing to aim at, and it is only a
+	   few percent of the model. */
+	[QC_WEAPON_LAVA_NAILGUN]	= 0.75f,	/* gap  29..80  */
+	[QC_WEAPON_LAVA_SUPER_NAILGUN]	= 0.62f,	/* gap  39..116 */
+	[QC_WEAPON_MULTI_GRENADE]	= 0.61f,	/* gap  22..145 */
+	[QC_WEAPON_MULTI_ROCKET]	= 0.74f,	/* gap  55..119 */
+	[QC_WEAPON_PLASMA_GUN]		= 0.76f,	/* gap  14..102 */
 };
 
 float QR_WeaponRearKeep (int identity)
