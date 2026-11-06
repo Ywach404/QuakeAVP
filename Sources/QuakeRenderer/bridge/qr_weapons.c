@@ -179,30 +179,52 @@ float QR_WeaponRearKeep (int identity)
 
 static void QR_WheelClip_f (void)
 {
-	int	id, held;
+	int	id, target;
 
 	if (Cmd_Argc () < 2)
 	{
-		Con_Printf ("wheelclip <keep>  -- rear clip depth for the HELD weapon\n");
+		Con_Printf ("wheelclip <id> <keep>  -- ring clip depth for that weapon\n");
+		Con_Printf ("wheelclip <keep>       -- ... for the weapon in hand\n");
 		Con_Printf ("  1 = no trim, lower cuts more off the grip end.\n");
 		Con_Printf ("  0 = follow the cvar for its class.\n");
+		Con_Printf ("  ids are the `id` column of weapontable.\n");
 		for (id = 0; id < QC_WEAPON_IDENTITIES; id++)
 			if (qr_rear_keep[id] != 0.f)
-				Con_Printf ("  %-18s %.3f\n",
+				Con_Printf ("  %2d  %-18s %.3f\n", id,
 					    QR_WeaponLabel (id), qr_rear_keep[id]);
 		return;
 	}
 
-	held = QR_ActiveIdentity ();
-	if (held < 0)
+	/* Two forms, because the one-argument form cannot reach the weapon being
+	   looked at. Typing means the console is open, which closes the ring, so
+	   there is no highlighted entry to aim at, and the weapon in hand is
+	   rarely the one on the ring that looks wrong. The id column of
+	   weapontable is already on screen, so naming it is the direct route. */
+	if (Cmd_Argc () >= 3)
 	{
-		Con_Printf ("wheelclip: nothing held\n");
-		return;
+		target = atoi (Cmd_Argv (1));
+		if (target < 0 || target >= QC_WEAPON_IDENTITIES)
+		{
+			Con_Printf ("wheelclip: id %d out of range 0..%d\n",
+				    target, QC_WEAPON_IDENTITIES - 1);
+			return;
+		}
+		qr_rear_keep[target] = (float) atof (Cmd_Argv (2));
+	}
+	else
+	{
+		target = QR_ActiveIdentity ();
+		if (target < 0)
+		{
+			Con_Printf ("wheelclip: nothing held; name an id instead\n");
+			return;
+		}
+		qr_rear_keep[target] = (float) atof (Cmd_Argv (1));
 	}
 
-	qr_rear_keep[held] = (float) atof (Cmd_Argv (1));
-	Con_Printf ("wheelclip: %s = %.3f\n", QR_WeaponLabel (held),
-		    qr_rear_keep[held]);
+	Con_Printf ("wheelclip: %d %s = %.3f%s\n", target,
+		    QR_WeaponLabel (target), qr_rear_keep[target],
+		    QR_WeaponPickupModel (target) ? "   (NOTE: draws a pickup model on the ring, never clipped)" : "");
 }
 
 /* ========================================================================
