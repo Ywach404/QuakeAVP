@@ -7413,6 +7413,10 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		e.scale = (unsigned char)(highlighted ? 8 : 5);	/* /16; smaller to fit the tight ring */
 		e.lerpflags = LERP_RESETANIM | LERP_RESETMOVE;
 
+		qr_wheelclip_on = (models_isview[i] && QR_WeaponRearClip (i)) ? 1 : 0;
+		qr_wheelclip_pack = (i >= QC_WEAPON_LASER_CANNON) ? 1 : 0;
+		qr_wheelclip_keep = QR_WeaponRearKeep (i);
+
 		/* Sit the model's VISUAL CENTRE on the slot, not its origin. The view
 		   models' origin is at a rear grip with the body offset forward, so
 		   placing e.origin on the slot floated the model off its labelled
@@ -7424,7 +7428,28 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 			vec3_t		mc, ef, er, eu, rad;
 			int		a;
 
-			for (a = 0; a < 3; a++)
+			/* On the CLIPPED span, not the whole box. The clip cuts
+			   along x and the centring has to agree with it, or the
+			   model hangs off its own spoke by half of whatever was
+			   removed -- which at the depths these packs need is most
+			   of the gun. The planes are the ones QR_WeaponClipF
+			   derives, in the same frame-0 byte coordinates its
+			   bbox is stored in. */
+			float	lo = (float) mh->frames[0].bboxmin.v[0];
+			float	hi = (float) mh->frames[0].bboxmax.v[0];
+
+			if (qr_wheelclip_on)
+			{
+				float	kf = CLAMP (0.3f, vr_wheelclipfront.value, 1.f);
+				float	kr = CLAMP (0.3f, QR_WheelClipKeep (), 1.f);
+				float	span = hi - lo;
+
+				hi = lo + span * kf;
+				lo = lo + span * (1.f - kr);
+			}
+
+			mc[0] = 0.5f * (lo + hi) * mh->scale[0] + mh->scale_origin[0];
+			for (a = 1; a < 3; a++)
 				mc[a] = 0.5f * (mh->frames[0].bboxmin.v[a] + mh->frames[0].bboxmax.v[a])
 					* mh->scale[a] + mh->scale_origin[a];
 			AngleVectors (e.angles, ef, er, eu);
@@ -7453,9 +7478,6 @@ static void QR_EmitWheel (qr_frame_slot_t *slot)
 		   round out of a shotgun; at that same depth rogue's models lose
 		   their grips with it, because nothing makes two authors agree on
 		   how far back a round sits. */
-		qr_wheelclip_on = (models_isview[i] && QR_WeaponRearClip (i)) ? 1 : 0;
-		qr_wheelclip_pack = (i >= QC_WEAPON_LASER_CANNON) ? 1 : 0;
-		qr_wheelclip_keep = QR_WeaponRearKeep (i);
 		QR_EmitAliasModel (slot, &e);
 		qr_wheelclip_on = 0;
 		qr_wheelclip_pack = 0;
