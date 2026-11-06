@@ -183,15 +183,27 @@ static void QR_WheelClip_f (void)
 
 	if (Cmd_Argc () < 2)
 	{
+		const qr_weapon_entry_t	*row;
+
 		Con_Printf ("wheelclip <id> <keep>  -- ring clip depth for that weapon\n");
-		Con_Printf ("wheelclip <keep>       -- ... for the weapon in hand\n");
-		Con_Printf ("  1 = no trim, lower cuts more off the grip end.\n");
-		Con_Printf ("  0 = follow the cvar for its class.\n");
-		Con_Printf ("  ids are the `id` column of weapontable.\n");
-		for (id = 0; id < QC_WEAPON_IDENTITIES; id++)
-			if (qr_rear_keep[id] != 0.f)
+		Con_Printf ("  1 = no trim, lower cuts more off the grip end.\n\n");
+
+		/* List THIS GAME's weapons. The ids are global across all 17
+		   identities, so a game uses a sparse subset of them and the
+		   numbers are not the ring positions sitting next to them in
+		   weapontable. Printing the addressable set here is cheaper than
+		   explaining that twice. */
+		Con_Printf ("addressable in \"%s\":\n", COM_SkipPath (com_gamedir));
+		for (row = QR_WeaponRow (); row->bit; row++)
+		{
+			id = (int) row->identity;
+			if (!QR_WeaponPickupModel (id))
 				Con_Printf ("  %2d  %-18s %.3f\n", id,
-					    QR_WeaponLabel (id), qr_rear_keep[id]);
+					    QR_WeaponLabel (id),
+					    qr_rear_keep[id]);
+		}
+		Con_Printf ("(weapons drawing a pickup model are omitted: never"
+			    " clipped)\n");
 		return;
 	}
 
@@ -222,9 +234,17 @@ static void QR_WheelClip_f (void)
 		qr_rear_keep[target] = (float) atof (Cmd_Argv (1));
 	}
 
-	Con_Printf ("wheelclip: %d %s = %.3f%s\n", target,
-		    QR_WeaponLabel (target), qr_rear_keep[target],
-		    QR_WeaponPickupModel (target) ? "   (NOTE: draws a pickup model on the ring, never clipped)" : "");
+	Con_Printf ("wheelclip: %d %s = %.3f\n", target,
+		    QR_WeaponLabel (target), qr_rear_keep[target]);
+
+	/* Two ways this silently does nothing, both worth saying out loud. */
+	if (!QR_WeaponEntry (target))
+		Con_Printf ("  but %s is NOT in \"%s\" -- try `wheelclip` for"
+			    " this game's list\n", QR_WeaponLabel (target),
+			    COM_SkipPath (com_gamedir));
+	else if (QR_WeaponPickupModel (target))
+		Con_Printf ("  but it draws a pickup model on the ring, which is"
+			    " never clipped\n");
 }
 
 /* ========================================================================
