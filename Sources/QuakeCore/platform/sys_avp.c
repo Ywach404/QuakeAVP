@@ -43,6 +43,34 @@ void QC_SetCallbacks (qc_log_fn log, qc_error_fn err, void *ctx)
 	qavp_cb_ctx = ctx;
 }
 
+/* Diagnostics must never be able to stall the engine. stdout here is a pipe to
+   a console session on a development machine, and a blocking write on a pipe
+   nobody is draining stops the ENGINE THREAD dead: the immersive layer then
+   will not answer the crown or the home button, because the thread that would
+   tear it down is parked in write(). So the fd is made non-blocking once and
+   short or failed writes are dropped on the floor. Losing a log line is the
+   correct trade against wedging the app, and it only ever costs anything while
+   somebody is watching. */
+static void QAVP_MirrorToStdout (const char *text)
+{
+	static int	prepared;
+	size_t		len;
+	ssize_t		n;
+
+	if (!prepared)
+	{
+		int fl = fcntl (STDOUT_FILENO, F_GETFL, 0);
+
+		if (fl != -1)
+			fcntl (STDOUT_FILENO, F_SETFL, fl | O_NONBLOCK);
+		prepared = 1;
+	}
+
+	len = strlen (text);
+	n = write (STDOUT_FILENO, text, len);
+	(void) n;	/* a dropped diagnostic is not worth a retry loop */
+}
+
 static void QAVP_Emit (const char *text)
 {
 	/* Mirrored to stdout as well as handed to the app, because the two are
@@ -54,8 +82,7 @@ static void QAVP_Emit (const char *text)
 	   Flushed per line on purpose: stdout is not a tty here, so it is block
 	   buffered, and a buffered diagnostic arrives after the thing it was
 	   explaining. */
-	fputs (text, stdout);
-	fflush (stdout);
+	QAVP_MirrorToStdout (text);
 
 	if (qavp_log_fn)
 		qavp_log_fn (qavp_cb_ctx, text);
