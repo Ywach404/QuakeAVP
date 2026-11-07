@@ -310,9 +310,11 @@ static const qr_weapon_entry_t qr_row_mg3[] = {
 	{ 1u<<4,  QC_WEAPON_GRENADE_LAUNCHER,	6, QR_SELECT_DIRECT },
 	{ 1u<<5,  QC_WEAPON_ROCKET_LAUNCHER,	7, QR_SELECT_DIRECT },
 	{ 1u<<6,  QC_WEAPON_THUNDERBOLT,	8, QR_SELECT_DIRECT },
-	/* Same inference as hipnotic's row above, same safety net. */
-	{ 1u<<7,  QC_WEAPON_MJOLNIR,		1, QR_SELECT_TOGGLE },
-	{ 1u<<23, QC_WEAPON_LASER_CANNON,	8, QR_SELECT_TOGGLE },
+	/* Both disproved in hipnotic on 2026-11-07 and reset here too: mg3 runs
+	   the same weapon code, so an inference that failed there has no claim
+	   here either. */
+	{ 1u<<7,  QC_WEAPON_MJOLNIR,		0, QR_SELECT_TOGGLE },
+	{ 1u<<23, QC_WEAPON_LASER_CANNON,	0, QR_SELECT_TOGGLE },
 	{ 0, 0, 0, 0 }
 };
 
@@ -339,9 +341,16 @@ static const qr_weapon_entry_t qr_row_hipnotic[] = {
 	   the wrong gun. It prints "could not reach it" and the number changes
 	   here. Confirm each by holding the base weapon and pressing its number
 	   again. */
-	{ 1u<<7,  QC_WEAPON_MJOLNIR,		1, QR_SELECT_TOGGLE },
+	/* MEASURED on device 2026-11-07 with impulsescan.
+	   The proximity gun toggles off the grenade launcher's 6, which is what
+	   was inferred and is now seen. The other two were inferred wrong: the
+	   Mjolnir is NOT on 1 (pressing 1 twice gives the axe both times) and the
+	   laser cannon is NOT on 8 (thunderbolt both times). Back to 0, meaning
+	   unmeasured, until the wider scan finds them rather than letting a
+	   disproved guess sit in the table looking like a measurement. */
+	{ 1u<<7,  QC_WEAPON_MJOLNIR,		0, QR_SELECT_TOGGLE },
 	{ 1u<<16, QC_WEAPON_PROXIMITY_GUN,	6, QR_SELECT_TOGGLE },
-	{ 1u<<23, QC_WEAPON_LASER_CANNON,	8, QR_SELECT_TOGGLE },
+	{ 1u<<23, QC_WEAPON_LASER_CANNON,	0, QR_SELECT_TOGGLE },
 	{ 0, 0, 0, 0 }
 };
 

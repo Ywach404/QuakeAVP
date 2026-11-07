@@ -1123,7 +1123,7 @@ static void IN_ImpulseScan_f (void)
 		Con_Printf ("impulsescan: no map loaded\n");
 		return;
 	}
-	Con_Printf ("impulsescan: granting, then trying 1..8 twice each."
+	Con_Printf ("impulsescan: granting, then trying 1..12 twice each."
 		    " CLOSE THE CONSOLE so the world runs.\n");
 	qr_scan_impulse = 0;		/* 0 = grant phase, see the tick */
 	qr_scan_press = 1;
@@ -1159,6 +1159,11 @@ static void IN_ImpulseScanTick (void)
 		}
 		if (--qr_scan_settle > 0)
 			return;
+		/* Dump what the grant actually produced before trying anything.
+		   Without it, "impulse N did nothing" cannot be told apart from
+		   "that weapon was never owned", and the first scan wasted a
+		   round trip on exactly that ambiguity. */
+		QR_WeaponTablePrint ();
 		qr_scan_impulse = 1;
 		qr_scan_press = 1;
 		return;
@@ -1197,7 +1202,10 @@ static void IN_ImpulseScanTick (void)
 	qr_scan_impulse++;
 	qr_scan_press = 1;
 	qr_scan_settle = 12;
-	if (qr_scan_impulse > 8)
+	/* Past 8 because Scourge's Mjolnir and laser cannon are on neither 1..8
+	   nor any impulse this project had guessed. 10 and 12 are documented as
+	   cycle keys, so the pair they land on is informative either way. */
+	if (qr_scan_impulse > 12)
 	{
 		Con_Printf ("impulsescan: done\n");
 		qr_scan_impulse = 0;
