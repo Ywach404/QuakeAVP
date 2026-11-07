@@ -313,8 +313,8 @@ static const qr_weapon_entry_t qr_row_mg3[] = {
 	/* Both disproved in hipnotic on 2026-11-07 and reset here too: mg3 runs
 	   the same weapon code, so an inference that failed there has no claim
 	   here either. */
-	{ 1u<<7,  QC_WEAPON_MJOLNIR,		0, QR_SELECT_TOGGLE },
-	{ 1u<<23, QC_WEAPON_LASER_CANNON,	0, QR_SELECT_TOGGLE },
+	{ 1u<<7,  QC_WEAPON_MJOLNIR,		10, QR_SELECT_CYCLE },
+	{ 1u<<23, QC_WEAPON_LASER_CANNON,	10, QR_SELECT_CYCLE },
 	{ 0, 0, 0, 0 }
 };
 
@@ -348,9 +348,19 @@ static const qr_weapon_entry_t qr_row_hipnotic[] = {
 	   laser cannon is NOT on 8 (thunderbolt both times). Back to 0, meaning
 	   unmeasured, until the wider scan finds them rather than letting a
 	   disproved guess sit in the table looking like a measurement. */
-	{ 1u<<7,  QC_WEAPON_MJOLNIR,		0, QR_SELECT_TOGGLE },
-	{ 1u<<16, QC_WEAPON_PROXIMITY_GUN,	6, QR_SELECT_TOGGLE },
-	{ 1u<<23, QC_WEAPON_LASER_CANNON,	0, QR_SELECT_TOGGLE },
+	/* MEASURED on device 2026-11-07 with impulsescan, all eleven owned.
+	   Nothing in 1..12 selects the Mjolnir or the laser cannon: the laser
+	   cannon only ever appeared when impulse 10 CYCLED onto it from the
+	   thunderbolt, and the Mjolnir never appeared at all. They have no
+	   impulse of their own, which is exactly what mg3's own help text says
+	   ("impulse 1-8 changes weapons, impulse 10 cycles") and which two
+	   rounds of inference refused to believe.
+	   So they are CYCLE, the third kind this table has carried since the
+	   design and never used. The proximity gun is the only one of the three
+	   with a number, toggling off the grenade launcher's 6. */
+	{ 1u<<7,  QC_WEAPON_MJOLNIR,		10, QR_SELECT_CYCLE },
+	{ 1u<<16, QC_WEAPON_PROXIMITY_GUN,	 6, QR_SELECT_TOGGLE },
+	{ 1u<<23, QC_WEAPON_LASER_CANNON,	10, QR_SELECT_CYCLE },
 	{ 0, 0, 0, 0 }
 };
 
