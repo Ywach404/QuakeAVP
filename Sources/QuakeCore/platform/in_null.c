@@ -1110,7 +1110,8 @@ pauses the simulation, so a step taken then would report nothing changing and
 blame the impulse.
 ================
 */
-static int	qr_scan_impulse;	/* 0 = idle, else the impulse under test */
+static int	qr_scan_active;		/* a scan is running */
+static int	qr_scan_impulse;	/* 0 = grant phase, else the impulse under test */
 static int	qr_scan_press;		/* 1 or 2 */
 static int	qr_scan_settle;
 static int	qr_scan_first;		/* identity after press 1 */
@@ -1122,22 +1123,46 @@ static void IN_ImpulseScan_f (void)
 		Con_Printf ("impulsescan: no map loaded\n");
 		return;
 	}
-	Con_Printf ("impulsescan: trying 1..8, twice each."
+	Con_Printf ("impulsescan: granting, then trying 1..8 twice each."
 		    " CLOSE THE CONSOLE so the world runs.\n");
-	qr_scan_impulse = 1;
+	qr_scan_impulse = 0;		/* 0 = grant phase, see the tick */
 	qr_scan_press = 1;
 	qr_scan_settle = 0;
 	qr_scan_first = -1;
+	qr_scan_active = 1;
 }
 
 static void IN_ImpulseScanTick (void)
 {
 	int	held;
 
-	if (!qr_scan_impulse)
+	if (!qr_scan_active)
 		return;
 	if (!sv.active || sv.paused)
 		return;
+
+	/* Grant everything FIRST, as part of the scan rather than as a thing the
+	   player had to remember to do beforehand. The previous version depended
+	   on a separate `impulse 9` having already landed, which it could not
+	   have: that impulse needs an unpaused frame too, and the scan began the
+	   moment the console closed. The result was a clean run reporting that
+	   every impulse selects the shotgun, which is exactly what you see when
+	   nothing else is owned. A tool that silently needs a prior step is a
+	   tool that reports confident nonsense. */
+	if (qr_scan_impulse == 0)
+	{
+		if (qr_scan_settle == 0)
+		{
+			Cbuf_AddText ("impulse 9\n");
+			qr_scan_settle = 30;
+			return;
+		}
+		if (--qr_scan_settle > 0)
+			return;
+		qr_scan_impulse = 1;
+		qr_scan_press = 1;
+		return;
+	}
 
 	if (qr_scan_settle > 0)
 	{
@@ -1176,6 +1201,7 @@ static void IN_ImpulseScanTick (void)
 	{
 		Con_Printf ("impulsescan: done\n");
 		qr_scan_impulse = 0;
+		qr_scan_active = 0;
 	}
 }
 
