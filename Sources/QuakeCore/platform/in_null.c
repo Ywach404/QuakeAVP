@@ -801,7 +801,7 @@ static void IN_WheelSelect (int index)
 	   impulse 9 is `give all`. */
 	if (!ent->impulse)
 	{
-		Con_Printf ("%s: impulse not measured yet, not selected\n",
+		QR_QuietPrintf ("%s: impulse not measured yet, not selected\n",
 			    QR_WeaponLabel (identity));
 		return;
 	}
@@ -849,7 +849,7 @@ static void IN_WheelCycle (void)
 
 	if (qr_wheel_tries <= 0)
 	{
-		Con_Printf ("%s: could not reach it\n",
+		QR_QuietPrintf ("%s: could not reach it\n",
 			    QR_WeaponLabel (qr_wheel_target));
 		qr_wheel_target = -1;
 		return;

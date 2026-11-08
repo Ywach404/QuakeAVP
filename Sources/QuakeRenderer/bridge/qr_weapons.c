@@ -265,6 +265,43 @@ static void QR_WheelClip_f (void)
 			    " never clipped\n");
 }
 
+/* ---- console-only printing ---------------------------------------------- */
+
+/* Con_Printf writes to the console AND stamps con_times, which is what makes a
+   line flash over the player's view for a few seconds. That is right for "You
+   got the Rocket Launcher" and wrong for a weapon-wheel diagnostic: a message
+   that fires mid-fight because a gun is out of ammo is noise on screen, while
+   still being exactly what is wanted in the log afterwards.
+
+   There is no suppression flag in the engine, but con_times and con_current
+   are plain globals, so the stamps can be snapshotted and put back. The line
+   lands in the console and the scrollback; the overlay never learns about it.
+   This is why none of it needs a change inside engine/. */
+extern float	con_times[];
+extern int	con_current;
+
+#define QR_CON_TIMES	4	/* mirrors NUM_CON_TIMES in console.c */
+
+void QR_QuietPrintf (const char *fmt, ...)
+{
+	va_list	argptr;
+	char	text[1024];
+	float	saved[QR_CON_TIMES];
+	int	i;
+
+	va_start (argptr, fmt);
+	q_vsnprintf (text, sizeof (text), fmt, argptr);
+	va_end (argptr);
+
+	for (i = 0; i < QR_CON_TIMES; i++)
+		saved[i] = con_times[i];
+
+	Con_Printf ("%s", text);
+
+	for (i = 0; i < QR_CON_TIMES; i++)
+		con_times[i] = saved[i];
+}
+
 /* ========================================================================
  * The per-game bit maps
  * ====================================================================== */

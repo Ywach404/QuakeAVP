@@ -88,6 +88,13 @@ float QR_WeaponRearKeep (int identity);
    a script cannot grant weapons and read them back in one sitting. */
 void QR_WeaponTablePrint (void);
 
+/* Con_Printf that does NOT flash the line over the player's view. For
+   diagnostics that fire during play (a weapon that cannot be reached, an
+   unmeasured impulse): wanted in the console and the log, unwanted on screen
+   mid-fight. Deliberately invoked commands should use Con_Printf as normal,
+   since the player asked for those. */
+void QR_QuietPrintf (const char *fmt, ...) FUNC_PRINTF(1,2);
+
 /* The identity carrying `bit` in the current game, or -1. */
 int QR_WeaponIdentityForBit (uint32_t bit);
 
