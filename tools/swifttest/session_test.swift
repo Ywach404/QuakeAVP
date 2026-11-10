@@ -758,7 +758,7 @@ struct SessionTest {
               "Scourge of Armagon gets its mission pack flag")
         check(GameDirectories.command(for: "rogue") == "game rogue -rogue",
               "and so does Dissolution of Eternity")
-        check(GameDirectories.command(for: "brutalist") == "game brutalist",
+        check(GameDirectories.command(for: "custompack") == "game custompack",
               "a third party pack takes no flag")
         check(GameDirectories.command(for: "HIPNOTIC") == "game HIPNOTIC -hipnotic",
               "the flag is found whatever case the folder is in")
@@ -769,13 +769,13 @@ struct SessionTest {
         // CHRONOLOGICAL for the official games, which is the order they
         // were meant to be played; alphabetical sorting put Dawn of the
         // Machine second and Quake fourth.
-        let merged = GameDirectories.merge(base: ["mg3", "id1", "qbj3", "rogue"],
+        let merged = GameDirectories.merge(base: ["mg3", "id1", "zzpack", "rogue"],
                                            user: ["MG3", "hipnotic", "dopa"])
-        check(merged == ["id1", "hipnotic", "rogue", "dopa", "mg3", "qbj3"],
+        check(merged == ["id1", "hipnotic", "rogue", "dopa", "mg3", "zzpack"],
               "official games in release order, then packs, deduplicated")
         check(merged.firstIndex(of: "hipnotic")! < merged.firstIndex(of: "rogue")!,
               "the two 1997 mission packs keep a stable order between them")
-        check(merged.last == "qbj3",
+        check(merged.last == "zzpack",
               "a pack with no known year sorts after every official game")
 
         // Map names as `map` wants them.
