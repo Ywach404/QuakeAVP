@@ -4059,6 +4059,7 @@ extern cvar_t vr_wheelpitch, vr_wheelyaw, vr_wheelroll, vr_wheelradius;
 extern cvar_t vr_weapontrace;
 extern cvar_t vr_wheelclipfront;
 extern cvar_t vr_wheelclippack;
+extern cvar_t vr_weaponclipspike;
 extern cvar_t vr_wheelfwd, vr_wheelup, vr_wheelside;	/* ring fine-placement, body frame */
 
 static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
@@ -4067,12 +4068,21 @@ static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
 	trivertx_t	*v;
 	double		sy = 0, sz = 0;
 
+	/* Clamping the muzzle to the idle silhouette is a THIRD state, distinct
+	   from both trimming and disabling. ff == 1 has always meant "no front
+	   plane at all", which is why a shot frame's baked flash and projectile
+	   -- up to 39 units past the idle shape in every model in every game --
+	   was never cut and landed on the reticle. With the clamp on, the plane
+	   sits exactly at frame 0's own maximum: nothing is taken off the gun as
+	   it rests, and anything a firing frame throws beyond it goes. */
+	int	clamp_spike = vr_weaponclipspike.value != 0.f;
+
 	ff = CLAMP (0.3f, ff, 1.f);       /* keep from front */
 	fb = CLAMP (0.3f, fb, 1.f);       /* keep from rear */
 
 	/* disabled: front plane above every byte, rear plane below every byte */
 	out[0] = 255.f; out[1] = -1.f; out[2] = out[3] = 128.f;
-	if (ff >= 0.999f && fb >= 0.999f) return;
+	if (ff >= 0.999f && fb >= 0.999f && !clamp_spike) return;
 
 	nv = h->numverts_vbo;
 	v = (trivertx_t *)((byte *)h + h->vertexes) + h->frames[0].firstpose * nv;
@@ -4088,7 +4098,7 @@ static void QR_WeaponClipF (aliashdr_t *h, float ff, float fb, float out[4])
 	/* collapse centre = mean y,z of the body that survives both planes */
 	for (i = 0; i < nv; i++)
 		if (v[i].v[0] <= front && v[i].v[0] >= rear) { sy += v[i].v[1]; sz += v[i].v[2]; nb++; }
-	out[0] = (ff  >= 0.999f) ? 255.f : (float) front;
+	out[0] = (ff >= 0.999f && !clamp_spike) ? 255.f : (float) front;
 	out[1] = (fb  >= 0.999f) ? -1.f  : (float) rear;
 	out[2] = nb ? (float)(sy / nb) : 128.f;
 	out[3] = nb ? (float)(sz / nb) : 128.f;

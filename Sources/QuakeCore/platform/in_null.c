@@ -523,6 +523,14 @@ cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_ARCHIVE};
    lower retracts baked-in geometry -- a nail out the barrel, or a round behind
    the receiver). vr_weaponclip trims the BARREL end, vr_weaponclipback the
    ARM end. Manual, because projectile-vs-gun can't be told from geometry. */
+/* Clamp a firing frame to the weapon's own IDLE silhouette. Every view model
+   in every game bakes its muzzle flash and projectile into the shot frames,
+   sticking out up to 39 units past the idle shape, and the clip planes are
+   derived from frame 0 so nothing trims it. It lands on top of the reticle.
+   Removing it is not a loss: the engine already spawns the real missile at
+   the muzzle, so the baked one is a duplicate of something drawn properly.
+   1 to clamp, 0 for the original look. */
+cvar_t		vr_weaponclipspike = {"vr_weaponclipspike", "1", CVAR_ARCHIVE};
 cvar_t		vr_weaponclip     = {"vr_weaponclip",     "1", CVAR_ARCHIVE};
 /* 0.79 default: the view models bake a round/nail into the rear ~21% of the
    model (near the hand); clipping it there clears it on every weapon (found
@@ -2384,6 +2392,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_weaponup);
 	Cvar_RegisterVariable (&vr_weaponside);
 	Cvar_RegisterVariable (&vr_weaponclip);
+	Cvar_RegisterVariable (&vr_weaponclipspike);
 	Cvar_RegisterVariable (&vr_weaponclipback);
 	Cvar_RegisterVariable (&vr_weapontint);
 	Cvar_RegisterVariable (&vr_pathdebug);
