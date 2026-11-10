@@ -286,20 +286,25 @@ void QR_QuietPrintf (const char *fmt, ...)
 {
 	va_list	argptr;
 	char	text[1024];
-	float	saved[QR_CON_TIMES];
-	int	i;
+	int	before, l;
 
 	va_start (argptr, fmt);
 	q_vsnprintf (text, sizeof (text), fmt, argptr);
 	va_end (argptr);
 
-	for (i = 0; i < QR_CON_TIMES; i++)
-		saved[i] = con_times[i];
-
+	before = con_current;
 	Con_Printf ("%s", text);
 
-	for (i = 0; i < QR_CON_TIMES; i++)
-		con_times[i] = saved[i];
+	/* CLEAR the stamps for the lines just added, rather than restoring
+	   whatever was in those slots before. Restoring is what the first
+	   attempt did and it does nothing: the overlay walks the last few LINE
+	   INDICES and reads con_times[line % NUM_CON_TIMES], so once these lines
+	   occupy the newest indices they inherit whichever timestamps are in
+	   those slots. Putting the previous, recent values back simply handed
+	   them someone else's recency. Zeroing is the only thing that makes a
+	   line unprintable to the overlay while leaving it in the scrollback. */
+	for (l = before + 1; l <= con_current; l++)
+		con_times[((l % QR_CON_TIMES) + QR_CON_TIMES) % QR_CON_TIMES] = 0.f;
 }
 
 /* ========================================================================
