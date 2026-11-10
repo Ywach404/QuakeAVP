@@ -530,7 +530,7 @@ cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_ARCHIVE};
    Removing it is not a loss: the engine already spawns the real missile at
    the muzzle, so the baked one is a duplicate of something drawn properly.
    1 to clamp, 0 for the original look. */
-cvar_t		vr_weaponclipspike = {"vr_weaponclipspike", "1", CVAR_ARCHIVE};
+cvar_t		vr_weaponclipspike = {"vr_weaponclipspike", "0", CVAR_ARCHIVE};
 cvar_t		vr_weaponclip     = {"vr_weaponclip",     "1", CVAR_ARCHIVE};
 /* 0.79 default: the view models bake a round/nail into the rear ~21% of the
    model (near the hand); clipping it there clears it on every weapon (found

@@ -4972,11 +4972,32 @@ static qboolean QR_NearestEntityHit (const vec3_t start, const vec3_t dir,
 		   player's OWN in-flight projectiles, which fly straight down the aim
 		   line and would snatch the reticle off into the air. */
 		{
-			const char *mn = e->model->name;
-			if (strstr (mn, "gib") || !strncmp (mn, "progs/h_", 8) ||
-			    strstr (mn, "spike")   || strstr (mn, "grenade") ||
-			    strstr (mn, "missile") || strstr (mn, "lavaball") ||
-			    strstr (mn, "laser"))
+			/* id1's names only caught id1's projectiles, so every
+			   weapon the packs add put the reticle back on its own
+			   shots: the laser cannon fires lasrspik, the proximity
+			   gun proxbomb, the plasma gun plasma, and none of them
+			   contain "spike", "missile" or "laser". Read out of the
+			   paks rather than guessed, which is also why "spikmine"
+			   and "lavarock" are here: they are mines and rocks a
+			   shot passes through, not things to aim at. */
+			static const char *const passthrough[] = {
+				"gib", "spike", "grenade", "missile",
+				"lavaball", "laser",		/* id1      */
+				"lasrspik", "proxbomb",
+				"spikmine", "lavarock",		/* hipnotic */
+				"plasma", "hook",		/* rogue    */
+				NULL
+			};
+			const char	*mn = e->model->name;
+			const char *const *pt;
+			qboolean	skip = false;
+
+			if (!strncmp (mn, "progs/h_", 8))	/* gibbed heads */
+				skip = true;
+			for (pt = passthrough; !skip && *pt; pt++)
+				if (strstr (mn, *pt))
+					skip = true;
+			if (skip)
 				continue;
 		}
 
