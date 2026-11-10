@@ -8404,7 +8404,7 @@ void QR_RenderView (void)
 			traced_items = (uint32_t) cl.items;
 			traced_game = gamekey;
 			traced_valid = 1;
-			QR_WeaponTablePrint ();
+			QR_WeaponTableTrace ();
 		}
 	}
 	/* The wheel's source of truth, superseding `items` for anything that

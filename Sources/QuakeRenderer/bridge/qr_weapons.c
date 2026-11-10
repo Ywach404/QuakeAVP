@@ -623,13 +623,41 @@ static const char *QR_SelectKindName (int kind)
    counts spelled out at the end. The entry count is what confirms the right
    row was selected; the drawable count is the ring the player will see, which
    is lower whenever a bit is clear or a model is missing. */
+/* Set while vr_weapontrace is dumping the table on its own, so the dump goes
+   to the console without flashing eleven lines over the player's view. The
+   `weapontable` command leaves it clear: the player asked for that one. */
+static int	qr_table_quiet;
+
+static void QR_TablePrintf (const char *fmt, ...) FUNC_PRINTF(1,2);
+static void QR_TablePrintf (const char *fmt, ...)
+{
+	va_list	argptr;
+	char	text[1024];
+
+	va_start (argptr, fmt);
+	q_vsnprintf (text, sizeof (text), fmt, argptr);
+	va_end (argptr);
+
+	if (qr_table_quiet)
+		QR_QuietPrintf ("%s", text);
+	else
+		Con_Printf ("%s", text);
+}
+
+void QR_WeaponTableTrace (void)
+{
+	qr_table_quiet = 1;
+	QR_WeaponTablePrint ();
+	qr_table_quiet = 0;
+}
+
 void QR_WeaponTablePrint (void)
 {
 	int	id, entries = 0, drawable = 0, ring = 0;
 
-	Con_Printf ("weapontable: game \"%s\", row %s\n",
+	QR_TablePrintf ("weapontable: game \"%s\", row %s\n",
 		    COM_SkipPath (com_gamedir), qr_row_name);
-	Con_Printf ("ring  id  label                      bit  have  model  impulse\n");
+	QR_TablePrintf ("ring  id  label                      bit  have  model  impulse\n");
 
 	/* Walked in ASCENDING IDENTITY, which is how the ring is laid out and
 	   how the selection commit counts, NOT in row order. Printing the row's
@@ -665,19 +693,19 @@ void QR_WeaponTablePrint (void)
 		   direct", because a kind read aloud beside a zero is a claim
 		   nobody made. */
 		if (e->impulse)
-			Con_Printf ("%4s  %2d  %-18s %9u  %-4s  %-5s  %d %s\n",
+			QR_TablePrintf ("%4s  %2d  %-18s %9u  %-4s  %-5s  %d %s\n",
 				    slot, id, QR_WeaponLabel (id),
 				    (unsigned) e->bit, have ? "yes" : "no",
 				    model ? "yes" : "no", (int) e->impulse,
 				    QR_SelectKindName ((int) e->kind));
 		else
-			Con_Printf ("%4s  %2d  %-18s %9u  %-4s  %-5s  unmeasured\n",
+			QR_TablePrintf ("%4s  %2d  %-18s %9u  %-4s  %-5s  unmeasured\n",
 				    slot, id, QR_WeaponLabel (id),
 				    (unsigned) e->bit, have ? "yes" : "no",
 				    model ? "yes" : "no");
 	}
 
-	Con_Printf ("row %s: %d entries, %d drawable (bit set and model resolved)\n",
+	QR_TablePrintf ("row %s: %d entries, %d drawable (bit set and model resolved)\n",
 		    qr_row_name, entries, drawable);
 }
 

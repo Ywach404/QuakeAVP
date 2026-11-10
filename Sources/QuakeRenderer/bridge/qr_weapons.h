@@ -88,6 +88,11 @@ float QR_WeaponRearKeep (int identity);
    a script cannot grant weapons and read them back in one sitting. */
 void QR_WeaponTablePrint (void);
 
+/* The same dump, console-only. vr_weapontrace fires on every change to
+   cl.items, which includes an ammo type running dry mid-fight, so an eleven
+   line table was landing across the player's view unprompted. */
+void QR_WeaponTableTrace (void);
+
 /* Con_Printf that does NOT flash the line over the player's view. For
    diagnostics that fire during play (a weapon that cannot be reached, an
    unmeasured impulse): wanted in the console and the log, unwanted on screen
