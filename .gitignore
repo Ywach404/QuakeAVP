@@ -41,3 +41,11 @@ App/DevGameData/music/*
 # .git/info/exclude on this clone, which a fresh clone does not get.
 .superpowers/
 build-nosign/
+
+# The in-headset console's Save button writes Documents/console.log on device
+# (ContentView.swift), and pulling it off with devicectl lands it here under
+# that same fixed name every time. It is a point-in-time diagnostic of one
+# install -- it carries that install's container UUID and goes stale the moment
+# the app is reinstalled -- so it is never the repo's to keep. Ignored rather
+# than renamed so a saved log stays where the tooling already puts it.
+console.log
