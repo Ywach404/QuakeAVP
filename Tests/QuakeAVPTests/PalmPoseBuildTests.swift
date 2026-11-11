@@ -31,13 +31,28 @@ final class PalmPoseBuildTests: XCTestCase {
 
     /// Same pose, right hand. The winding mirrors, so without the correction
     /// this normal points at the floor and the finger axis points backwards.
+    ///
+    /// Asserted against the LEFT hand's normal, signed, rather than against a
+    /// magnitude. `abs(normal.y) == 1` is true of both hands whether the
+    /// chirality flip is there or not, so the old form pinned the plane and
+    /// not the fix it was named after: deleting the flip left it green. What
+    /// matters is that two mirrored poses land on ONE normal, and that is
+    /// checkable here without knowing which way the normal truly points --
+    /// the absolute sign is a device measurement (see PrayerPose.swift) and
+    /// deliberately stays out of this test.
     func testRightHandPalmUpAgreesWithLeft() throws {
-        let pose = try XCTUnwrap(PalmPose(wrist: .zero,
-                                          indexMetacarpal: SIMD3(-0.02, 0, -0.03),
-                                          littleMetacarpal: SIMD3(0.03, 0, -0.03),
-                                          isLeft: false))
-        XCTAssertEqual(abs(pose.normal.y), 1, accuracy: 0.01)
-        XCTAssertEqual(pose.forward.z, -1, accuracy: 0.01)
+        let left = try XCTUnwrap(PalmPose(wrist: .zero,
+                                          indexMetacarpal: SIMD3(0.02, 0, -0.03),
+                                          littleMetacarpal: SIMD3(-0.03, 0, -0.03),
+                                          isLeft: true))
+        let right = try XCTUnwrap(PalmPose(wrist: .zero,
+                                           indexMetacarpal: SIMD3(-0.02, 0, -0.03),
+                                           littleMetacarpal: SIMD3(0.03, 0, -0.03),
+                                           isLeft: false))
+        XCTAssertEqual(right.normal.x, left.normal.x, accuracy: 0.01)
+        XCTAssertEqual(right.normal.y, left.normal.y, accuracy: 0.01)
+        XCTAssertEqual(right.normal.z, left.normal.z, accuracy: 0.01)
+        XCTAssertEqual(right.forward.z, left.forward.z, accuracy: 0.01)
     }
 
     /// Left hand in the prayer sign: palm faces right (toward the other hand),
