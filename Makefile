@@ -17,7 +17,7 @@ IPA     := build/QuakeAVP.ipa
 # a case-sensitive volume if a pattern were missing. The find assertion in
 # the `ipa` recipe below is the real backstop: it is case-insensitive and is
 # what the target actually depends on to refuse a dirty payload.
-IPA_EXCLUDES := EXCLUDED_SOURCE_FILE_NAMES='pak0.pak pak1.pak pak2.pak PAK0.PAK PAK1.PAK PAK2.PAK music *.ogg *.OGG *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC'
+IPA_EXCLUDES := EXCLUDED_SOURCE_FILE_NAMES='pak0.pak pak1.pak pak2.pak PAK0.PAK PAK1.PAK PAK2.PAK music *.ogg *.OGG *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.bsp *.BSP *.wad *.WAD *.lmp *.LMP'
 
 # Case-insensitive on purpose (see the comment above IPA_EXCLUDES): this is
 # the check that cannot be taken back, so it must not depend on how a pak or
@@ -26,8 +26,13 @@ IPA_EXCLUDES := EXCLUDED_SOURCE_FILE_NAMES='pak0.pak pak1.pak pak2.pak PAK0.PAK 
 # files -- deliberately a denylist rather than an allowlist of the expected
 # six payload entries, so a legitimate new payload file Xcode adds later
 # does not start failing `make ipa` on its own.
-PAYLOAD_GUARD := \( -iname 'pak[0-9].pak' -o -iname '*.ogg' -o -iname '*.mp3' \
-	-o -iname '*.wav' -o -iname '*.flac' -o -type d -iname 'music' \)
+PAYLOAD_GUARD := \( \( -iname '*.pak' '!' -iname 'quakespasm.pak' \) \
+	-o -iname '*.ogg' -o -iname '*.mp3' -o -iname '*.wav' -o -iname '*.flac' \
+	-o -iname '*.bsp' -o -iname '*.wad' -o -iname '*.lmp' -o -iname '*.lit' \
+	-o -iname '*.mdl' -o -iname '*.spr' -o -iname '*.dem' -o -iname '*.sav' \
+	-o -iname 'progs.dat' \
+	-o -type d \( -iname 'music' -o -iname 'id1' -o -iname 'hipnotic' \
+		-o -iname 'rogue' \) \)
 
 .PHONY: help gen build compile device run check ipa clean
 
