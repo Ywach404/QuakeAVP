@@ -703,9 +703,18 @@ void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 
 /* Point-and-blink teleport. The OFF hand aims a destination in the same
    body-frame ray form as the aim above (org = fwd/right/up offset from the
-   recenter origin, yaw/pitch room-relative). `active` while the gesture is
-   held (drives the on-floor landing marker); `commit` once on release to
-   jump the player there. Any-thread. */
+   recenter origin, yaw/pitch room-relative). `commit` once on release jumps
+   the player there. Any-thread.
+
+   `active` IS NOT READ TODAY, and the landing marker does not depend on it.
+   Every caller passes 0 and the engine-side qr_tp_aiming is write-only;
+   IN_Teleport recomputes the marker unconditionally off the GUN ray, because
+   the teleport lands where the gun already points -- one reticle, not two --
+   and the marker is gated renderer-side by vr_teleportmarker. The parameter
+   stays because the blink ramp will want the held gesture, but anything
+   wired to it now reads a channel that is always zero: make a caller set it
+   first. This comment used to promise the opposite, which is the sort of
+   sentence a later change trusts. */
 void QC_InputSetTeleport (int active, int commit, float org_fwd, float org_right,
 			  float org_up, float yaw_deg, float pitch_deg);
 
