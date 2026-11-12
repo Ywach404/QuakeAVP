@@ -381,11 +381,17 @@ private enum SenseMapper {
         // hand -- see routeMenuButton.
         routeMenuButton(profile, controller: controller)
         if left {
-            // L1 (grip) is the weapon wheel: hold to open, release to commit
-            // the highlighted weapon. It never reaches the engine as a key.
-            let grip = button(profile, containing: "Grip")
-                ?? button(profile, containing: "Shoulder")
-            WheelState.shared.setHold(grip?.isPressed == true, source: .sense)
+            // L1 (grip) is the GRAPPLE: squeeze to throw, hold to swing, let
+            // go to drop. A squeeze rather than a trigger because that is the
+            // gesture the hands path will have to match, and a fist is a
+            // squeeze. grapple_avp.c owns QC_PAD_RSHOULDER and turns it into
+            // held attack with the grapple selected; the bit is a transport
+            // and its name is the old classic-gamepad meaning, not this hand.
+            //
+            // This is why the wheel moved to the other grip below. The two
+            // cannot share: opening the ring mid-swing cancels the swing, and
+            // on one button that reads as the grapple cutting itself off.
+            set(QC_PAD_RSHOULDER, ["Grip", "Shoulder"])
             // L3 (stick click) toggles slow-motion -- separate from the wheel,
             // routed straight to the engine so it never reaches a key.
             let l3 = button(profile, containing: "Thumbstick Button")
@@ -398,8 +404,20 @@ private enum SenseMapper {
             // go to routeMenuButton above, on either hand.
             set(QC_PAD_OPTIONS, ["Create", "Share"])
         } else {
-            // Cross AND R1 (grip) jump; circle uses.
-            set(QC_PAD_A, ["Button A", "Cross", "Grip", "Shoulder"])
+            // R1 (grip) is the weapon wheel now, moved off the left grip to
+            // make room for the grapple. It was a dead duplicate of Cross for
+            // jump, so nothing was lost taking it. Hold to open, release to
+            // commit the highlight; it never reaches the engine as a key.
+            //
+            // Note this puts the ring on the DOMINANT hand for Sense while
+            // the hands path still opens it with an off-hand palm. The two
+            // schemes disagree until the bindings UI settles it.
+            let wheelGrip = button(profile, containing: "Grip")
+                ?? button(profile, containing: "Shoulder")
+            WheelState.shared.setHold(wheelGrip?.isPressed == true,
+                                      source: .sense)
+            // Cross jumps; circle uses.
+            set(QC_PAD_A, ["Button A", "Cross"])
             set(QC_PAD_B, ["Button B", "Circle"])
             set(QC_PAD_RTHUMB, ["Thumbstick Button", "Thumbstick , Button"])
             // QC_PAD_MENU is deliberately not set here any more: Options goes
