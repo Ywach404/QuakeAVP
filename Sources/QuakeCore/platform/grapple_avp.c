@@ -117,6 +117,30 @@ static func_t Grapple_FuncByName (const char *name)
 	return 0;
 }
 
+/* The attack bind on our key, re-asserted whenever the progs changes.
+   IN_Init's queued defaults win at startup, but a `game` switch re-execs
+   quake.rc and config.cfg and does NOT re-run IN_Init, so the key reverts to
+   whatever the entered game's archived config says. On an upgrade that is the
+   old "impulse 10", and the measured result was the worst kind of failure:
+   the grip engaged, drew the grapple in the player's hand, and threw nothing,
+   because the key event ran a weapon cycle. Peak speed 80 instead of 1000.
+   The window's Game tab is exactly that in-session switch, so this would have
+   bitten the first switch into rogue after installing.
+
+   Asserted only when it differs, and only on a progs change, so it is not
+   fighting the config every tick. It does override a player who deliberately
+   rebound this key -- which costs nothing today, because IN_Init's block
+   already discards saved rebinds of all ten controller keys on every launch.
+   That is the real bug and it belongs with the bindings UI, not here. */
+static void Grapple_AssertBind (void)
+{
+	const char	*cur = keybindings[K_RSHOULDER];
+
+	if (cur && !strcmp (cur, "+attack"))
+		return;
+	Cbuf_AddText ("bind RSHOULDER +attack\n");
+}
+
 static void Grapple_ResolveProgs (void)
 {
 	if (grapple_resolved && progs == grapple_progs_key
@@ -142,6 +166,8 @@ static void Grapple_ResolveProgs (void)
 
 	/* W_FireGrapple is the one that proves the weapon is implemented;
 	   the rest proves we can drive and unwind it. All or nothing. */
+	Grapple_AssertBind ();
+
 	grapple_supported = Grapple_FuncByName ("W_FireGrapple") != 0
 			 && grapple_setammo != 0
 			 && grapple_reset != 0
@@ -168,7 +194,14 @@ static void Grapple_SetKey (qboolean down)
 
 static edict_t *Grapple_Player (void)
 {
-	if (!sv.active || !svs.clients || !svs.clients[0].active)
+	/* .spawned rather than .active: a client is active through a level
+	   load, while its edict is being cleared. Engaging in that window
+	   recorded prev_weapon = 0 off the cleared edict, then the clear
+	   zeroed the grapple bit and the stolen branch locked the swing, so
+	   holding the grip through a level transition left the hook locked
+	   out until the player let go. Harmless but pointless. */
+	if (!sv.active || !svs.clients || !svs.clients[0].active
+	    || !svs.clients[0].spawned)
 		return NULL;
 	return svs.clients[0].edict;
 }
@@ -268,14 +301,19 @@ void Grapple_Frame (uint32_t padbits, int wheel_open)
 	if (!usable)
 	{
 		/* No player, no hook in this progs, or the feature switched
-		   off. Unwind anything held rather than leaving a key down
-		   across a map change, then hand the button back: this layer
-		   took QC_PAD_RSHOULDER out of the generic pad table, so
-		   swallowing it here would make the button do nothing at all
-		   in every game but rogue, which is not ours to decide. */
+		   off: the button does NOTHING.
+		   It used to pass through, on the principle that a layer which
+		   claims a bit should not silently eat it. That was wrong here,
+		   and measurably so. The bit's bind is +attack, and the Sense
+		   hand that sets it is the one whose grip used to open the
+		   weapon ring, so on the shipped vr_grapple 0 default a squeeze
+		   fired the gun: 200 frames held burned seven shells. Doing
+		   nothing is the lesser surprise by a wide margin, and the
+		   input this was protecting is a classic gamepad shoulder,
+		   which is not a shipping input. */
 		if (qr_grapple_engaged)
 			Grapple_Disengage (player);
-		Grapple_SetKey (held);
+		Grapple_SetKey (false);
 		return;
 	}
 
