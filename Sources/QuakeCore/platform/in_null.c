@@ -25,6 +25,7 @@
 #include "quakedef.h"
 #include "QuakeCore.h"
 #include "admin_avp.h"
+#include "grapple_avp.h"
 #include "align_math.h"
 /* The weapon rows: the drain turns a released ring slot into a selection and
    the row is the only place the impulse and the selection kind live. */
@@ -975,7 +976,10 @@ static const qr_padkey_t qr_padkeys[] = {
 	{ QC_PAD_X,		K_XBUTTON },
 	{ QC_PAD_Y,		K_YBUTTON },
 	{ QC_PAD_LSHOULDER,	K_LSHOULDER },
-	{ QC_PAD_RSHOULDER,	K_RSHOULDER },
+	/* QC_PAD_RSHOULDER is deliberately absent: grapple_avp.c raises and
+	   retracts K_RSHOULDER itself, for the same reason IN_TriggerEdge keeps
+	   qr_rt_down -- a press this layer cannot take back would leave attack
+	   held down when the weapon ring cancels a swing. */
 	{ QC_PAD_LTHUMB,	K_LTHUMB },
 	{ QC_PAD_RTHUMB,	K_RTHUMB },
 };
@@ -1244,6 +1248,10 @@ void IN_Commands (void)
 			Key_Event (qr_padkeys[i].key,
 				   (qr_pad.buttons & qr_padkeys[i].bit) != 0);
 	}
+
+	/* After the diff above on purpose: the grapple's weapon write and the
+	   attack press it depends on have to land in one tick. */
+	Grapple_Frame (qr_pad.buttons, qr_wheel_open);
 
 	/* Menu (pause) opens the game menu; options (view) recenters. Both
 	   act directly rather than through bindings so they work even with a
@@ -2406,6 +2414,7 @@ void IN_Init (void)
 	Cmd_AddCommand ("align_room", IN_AlignRoom_f);
 	Cmd_AddCommand ("impulsescan", IN_ImpulseScan_f);
 	Admin_Init ();
+	Grapple_Init ();
 	Cmd_AddCommand ("+wheel", IN_WheelDown_f);
 	Cmd_AddCommand ("-wheel", IN_WheelUp_f);
 
@@ -2417,7 +2426,7 @@ void IN_Init (void)
 		"bind XBUTTON \"impulse 12\"\n"
 		"bind YBUTTON \"impulse 10\"\n"
 		"bind LSHOULDER \"impulse 12\"\n"
-		"bind RSHOULDER \"impulse 10\"\n"
+		"bind RSHOULDER +attack\n"	/* grapple hold; see grapple_avp.c */
 		"bind RTRIGGER +attack\n"
 		"bind LTRIGGER +speed\n"
 		"bind LTHUMB +movedown\n"	/* hands crouch (thumb+pinky) */
