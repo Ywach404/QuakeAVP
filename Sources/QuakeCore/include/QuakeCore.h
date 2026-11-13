@@ -631,7 +631,12 @@ typedef struct qc_gamepad_state_s {
 	float		rx, ry;		/* right stick, -1..1, +y up */
 	float		lt, rt;		/* triggers, 0..1 */
 	uint32_t	buttons;	/* QC_PAD_* bits */
-	uint32_t	connected;	/* 0 = no controller attached */
+	uint32_t	connected;	/* 0 = no controller attached. A real spatial
+					   controller only: bare hands publish pad
+					   state too (the wheel, the grapple) and
+					   must NOT read as connected, because this
+					   is what tells the engine an input is a
+					   held device rather than a hand. */
 } qc_gamepad_state_t;
 
 /* Latest whole-pad snapshot; the engine diffs consecutive snapshots for

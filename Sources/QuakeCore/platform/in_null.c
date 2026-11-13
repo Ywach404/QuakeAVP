@@ -2279,9 +2279,25 @@ void IN_Move (usercmd_t *cmd)
 	/* Metroid Prime Hunters edge turn: hold the gun AIM past a yaw deadzone to a
 	   side and the body follows continuously. aim_yaw_rel is room-relative, so
 	   it stays at the edge while the body sweeps under it -- continuous while
-	   held, stops when you bring the aim back to centre. Yields to an explicit
-	   stick/flick (rx), so a controller's right stick still wins. */
-	if (vr_edgeturn.value && qr_aim_active && !qr_turn_hold && fabsf (rx) < 0.2f)
+	   held, stops when you bring the aim back to centre.
+
+	   BARE HANDS ONLY, which is what the comfort panel has always claimed and
+	   what the code did not do. The aim channel carries a Sense controller's
+	   ray exactly as it carries a hand's, by design, and this gesture measures
+	   the aim against the HEAD: a controller resting at your side clears the
+	   18 degree deadzone permanently, so it turned the player continuously
+	   while they held a stick that was already the turn input. Measured on
+	   device as unintentional turning, and given that an unwanted turn source
+	   also translates the player (see IN_SnapTurn's ledger), this one is worth
+	   gating rather than tuning.
+
+	   `connected` is a real spatial controller, not merely a live pad snapshot:
+	   hands publish pad state too, for the ring and the grapple, so a check
+	   for "any pad input" would switch the gesture off for the one input it
+	   exists for. Yielding to an explicit stick/flick (rx) stays, so a
+	   deliberate flick still wins wherever the gesture does apply. */
+	if (vr_edgeturn.value && qr_aim_active && !qr_turn_hold
+	    && !qr_pad.connected && fabsf (rx) < 0.2f)
 	{
 		/* Measured from the HEAD, not from the room.
 

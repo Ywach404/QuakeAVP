@@ -226,10 +226,29 @@ final class PadAggregator: @unchecked Sendable {
         }
     }
 
+    /// Whether a real spatial controller is driving this snapshot.
+    ///
+    /// This used to be `slices.isEmpty ? 0 : 1`, which made it mean "some
+    /// input source is live" and read 1 with bare hands, because HandInput
+    /// publishes into the `.hands` slice. The field's own header in
+    /// QuakeCore.h says "0 = no controller attached", so it was simply
+    /// wrong, and nothing in C read it yet, so correcting it cost nothing.
+    ///
+    /// It asks `controllersActive` rather than `hasPhysicalController`
+    /// because that is the same question the controller AIM feed asks before
+    /// it publishes a ray (ImmersiveRenderer's activeControllerPose), so the
+    /// aim's source and anything gating on the aim's source now agree by
+    /// construction. It is also lock protected and any-thread, which
+    /// hasPhysicalController (main actor) is not, and this runs wherever the
+    /// GameController callbacks land.
+    private var physicalController: UInt32 {
+        VRSettings.shared.controllersActive ? 1 : 0
+    }
+
     private func push() {
         if _suppressed {
             var zero = qc_gamepad_state_t()
-            zero.connected = slices.isEmpty ? 0 : 1
+            zero.connected = physicalController
             QC_InputSetGamepad(&zero)
             return
         }
@@ -254,7 +273,7 @@ final class PadAggregator: @unchecked Sendable {
             lx: merged.lx, ly: merged.ly, rx: merged.rx, ry: merged.ry,
             lt: merged.lt, rt: merged.rt,
             buttons: merged.buttons,
-            connected: slices.isEmpty ? 0 : 1)
+            connected: physicalController)
         QC_InputSetGamepad(&state)
     }
 
