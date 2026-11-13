@@ -27,15 +27,24 @@
  *     W_ChangeWeapon's `items & fl` test, and setting .weapon directly
  *     bypasses that. The whole lifecycle was run with .items left clear and
  *     behaved identically.
- *   - It does no renderer work. The hook spawns at the player's HAND for
- *     free, because W_FireGrapple places it with setorigin and the pr_cmds.c
- *     hunk routes that through QR_MuzzleSpawn; and the rope STARTS at the
- *     hand for free, because the cl_tent.c hunk sits in the generic
- *     `b->entity == cl.viewentity` branch rather than a lightning-specific
- *     one, and GrappleTrail names the player as its beam entity. Both hunks
- *     were already paid for by the missile and lightning work. There is no
- *     seventh hunk here and there should never need to be one: the gate is a
- *     progs field, and platform code can write those.
+ *   - It does no renderer work, because the existing hunks already carry the
+ *     hook. W_FireGrapple places it with setorigin and the pr_cmds.c hunk
+ *     routes that through QR_MuzzleSpawn; the rope is a TE_BEAM naming the
+ *     PLAYER as its entity, so the cl_tent.c hunk moves its start, that hunk
+ *     sitting in the generic `b->entity == cl.viewentity` branch rather than
+ *     a lightning-specific one. Both were already paid for by the missile and
+ *     lightning work.
+ *
+ *     BUT NEITHER IS UNCONDITIONAL, and an earlier version of this comment
+ *     said they were. Both routes run through QR_HandOrigin, which returns 0
+ *     whenever qr_aim_active is false, and then the hook spawns at the
+ *     vanilla body offset and the rope starts at the chest. QR_MuzzleSpawn's
+ *     reach gate rejects the same way. So "it comes out of your hand" is a
+ *     property of the aim channel being live, not of this module, and it was
+ *     measured wrong on device while reading correct here.
+ *
+ *     There is still no seventh hunk here and there should never need to be
+ *     one: the gate is a progs field, and platform code can write those.
  */
 
 #include "quakedef.h"
@@ -57,6 +66,23 @@
 #define GRAPPLE_ITEM_BIT	(1 << 23)
 
 static cvar_t	vr_grapple = {"vr_grapple", "0", CVAR_ARCHIVE};
+
+/* Rogue's own numbers, and why they are the defaults rather than constants.
+   W_FireGrapple throws at 800 units/s and sets exactly one think two seconds
+   out. There is no distance test anywhere in the weapon and the hook is
+   MOVETYPE_FLYMISSILE, so no gravity: reach is speed times time and nothing
+   else, 1600 units stock. On device that read as a chain that takes forever
+   to go out and falls short of the far wall on a large map, which is one
+   number, not two.
+
+   Both knobs live on the hook edict, which this module already reaches
+   through .hook, so changing them needs no progs patch and no engine hunk.
+   They are cvars because the right values are a feel question that can only
+   be answered in the headset, and the reticle arcs already taught this
+   project what a rebuild per guess costs. The defaults are rogue's own, so
+   installing this changes nothing until someone turns it up. */
+static cvar_t	vr_grapple_speed = {"vr_grapple_speed", "800", CVAR_ARCHIVE};
+static cvar_t	vr_grapple_range = {"vr_grapple_range", "1600", CVAR_ARCHIVE};
 
 /* Resolved once per progs load. Keyed on the CRC, not on the progs pointer,
    and that distinction is a crash: SV_SpawnServer reloads progs at the SAME
@@ -92,6 +118,14 @@ static float		qr_grapple_prev_weapon;	/* what to put back         */
    back and recorded as the thing to restore. A cancelled swing should wait
    for a new press. */
 static qboolean		qr_grapple_locked;
+
+/* This swing's hook has been retuned. The throw is not visible on the tick
+   the weapon is written: the attack bind fires during the server frame that
+   follows, so hook_out rises a tick later and the edict does not exist until
+   then. One shot per swing, because GrappleAnchor rewrites the think on
+   contact and re-applying the range after that would re-arm the self-timeout
+   under an attached hook. */
+static qboolean		qr_grapple_thrown;
 
 static int Grapple_FieldOfs (const char *name)
 {
@@ -155,6 +189,7 @@ static void Grapple_ResolveProgs (void)
 	grapple_ofs_hook_out = grapple_ofs_on_hook = grapple_ofs_hook = -1;
 	qr_grapple_engaged = false;	/* the edict it referred to is gone */
 	qr_grapple_locked = false;
+	qr_grapple_thrown = false;
 	if (!progs)
 		return;
 
@@ -269,10 +304,59 @@ static void Grapple_Disengage (edict_t *player)
 	Grapple_Call (grapple_setammo, player);
 }
 
+/*
+Retune this swing's hook the tick it appears.
+
+Direction is left exactly as W_FireGrapple aimed it -- only the magnitude is
+rewritten -- so the muzzle fix's work and the shot's own aim survive. The
+throw has already flown one server frame at rogue's 800 by the time hook_out
+is visible, roughly eleven units at 90 Hz, which is inside the per-shot
+residual the hand remap already carries and not worth chasing.
+
+The think being GrappleReset is what makes nextthink the RANGE: the hook kills
+itself when the timer fires, so range over speed is the time to allow.
+GrappleAnchor overwrites both the think and nextthink on contact, so a hook
+that lands is never cut off by this, however short the range is set.
+*/
+static void Grapple_TuneHook (edict_t *player)
+{
+	edict_t	*hook;
+	int	hook_prog;
+	float	speed, range, len;
+
+	hook_prog = GRAPPLE_EDICT (player, grapple_ofs_hook);
+	hook = hook_prog ? PROG_TO_EDICT (hook_prog) : NULL;
+	if (!hook || hook->free)
+		return;
+
+	/* Clamped because these are player-facing cvars and both ends of each
+	   are a real failure: a speed near zero is a hook that never arrives,
+	   and a range past a map's own coordinate limit is a timer that cannot
+	   expire before the hook leaves the world. */
+	speed = vr_grapple_speed.value;
+	if (speed < 100.f)
+		speed = 100.f;
+	else if (speed > 8000.f)
+		speed = 8000.f;
+
+	range = vr_grapple_range.value;
+	if (range < 100.f)
+		range = 100.f;
+	else if (range > 16384.f)	/* Quake's own coordinate limit */
+		range = 16384.f;
+
+	len = VectorLength (hook->v.velocity);
+	if (len > 0.f)
+		VectorScale (hook->v.velocity, speed / len, hook->v.velocity);
+
+	hook->v.nextthink = sv.time + range / speed;
+}
+
 static void Grapple_Engage (edict_t *player)
 {
 	qr_grapple_prev_weapon = player->v.weapon;
 	qr_grapple_engaged = true;
+	qr_grapple_thrown = false;
 	player->v.weapon = GRAPPLE_ITEM_BIT;
 	/* W_SetCurrentAmmo is what makes the drawn gun v_grpple.mdl and zeroes
 	   currentammo; without it the weapon is swapped but the player is
@@ -362,6 +446,16 @@ void Grapple_Frame (uint32_t padbits, int wheel_open)
 		   must not leak a stale press into the attack bind. */
 		Grapple_SetKey (false);
 	}
+
+	/* After the chain, not inside it: the engage tick cannot see its own
+	   hook, and every branch above that gives up has already cleared
+	   qr_grapple_engaged. */
+	if (qr_grapple_engaged && !qr_grapple_thrown
+	    && GRAPPLE_FLOAT (player, grapple_ofs_hook_out))
+	{
+		qr_grapple_thrown = true;
+		Grapple_TuneHook (player);
+	}
 }
 
 int Grapple_Active (void)
@@ -372,4 +466,6 @@ int Grapple_Active (void)
 void Grapple_Init (void)
 {
 	Cvar_RegisterVariable (&vr_grapple);
+	Cvar_RegisterVariable (&vr_grapple_speed);
+	Cvar_RegisterVariable (&vr_grapple_range);
 }
