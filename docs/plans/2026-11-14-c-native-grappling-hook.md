@@ -472,6 +472,23 @@ attacker, and `G_FLOAT (OFS_PARM3) = damage`. Then run it with `self` and
 `IN_Commands` runs inside `Host_Frame`'s error frame and a QuakeC runaway in
 here must unwind as a think would.
 
+**This is the first place in `platform/` that passes arguments to a progs
+function at all.** The three existing callers pass state only through
+`pr_global_struct->self`, so there is no in-repo pattern to copy and the
+mechanism is worth stating. `PR_EnterFunction` copies arguments out of
+`OFS_PARM0 + i*3 + j` for `i < f->numparms`
+(`Sources/QuakeCore/engine/pr_exec.c:302-309`), so writing `OFS_PARM0` through
+`OFS_PARM3` is both correct and sufficient, and the **callee's own declared
+arity decides what is read**.
+
+That last fact is a guard, not a footnote. A mod whose `T_Damage` takes five
+parameters (a `deathtype`, which some do) would have its fifth read out of
+whatever `OFS_PARM4` happened to hold. So check
+`pr_functions[grapple_damage].numparms == 4` when resolving in Step 1, and treat
+any other arity exactly as a missing function: the hook still works, it just
+does no damage. Returning early on an unexpected arity costs one comparison and
+removes a whole class of mod-specific garbage.
+
 Return early when `grapple_damage` is 0, when `targ` is NULL or free, or when
 `targ->v.takedamage` is 0.
 
