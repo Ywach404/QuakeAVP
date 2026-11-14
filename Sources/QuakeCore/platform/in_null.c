@@ -976,10 +976,12 @@ static const qr_padkey_t qr_padkeys[] = {
 	{ QC_PAD_X,		K_XBUTTON },
 	{ QC_PAD_Y,		K_YBUTTON },
 	{ QC_PAD_LSHOULDER,	K_LSHOULDER },
-	/* QC_PAD_RSHOULDER is deliberately absent: grapple_avp.c raises and
-	   retracts K_RSHOULDER itself, for the same reason IN_TriggerEdge keeps
-	   qr_rt_down -- a press this layer cannot take back would leave attack
-	   held down when the weapon ring cancels a swing. */
+	/* QC_PAD_RSHOULDER is deliberately absent: it is the grapple's bit and
+	   grapple_avp.c reads it straight off the pad snapshot. It used to raise
+	   K_RSHOULDER so a +attack bind would fire rogue's hook; the hook is
+	   native C now and raises no key, and the bind is gone with it, so
+	   letting this table claim the bit would hand a grip squeeze to
+	   whatever the key happens to be bound to. */
 	{ QC_PAD_LTHUMB,	K_LTHUMB },
 	{ QC_PAD_RTHUMB,	K_RTHUMB },
 };
@@ -2442,7 +2444,13 @@ void IN_Init (void)
 		"bind XBUTTON \"impulse 12\"\n"
 		"bind YBUTTON \"impulse 10\"\n"
 		"bind LSHOULDER \"impulse 12\"\n"
-		"bind RSHOULDER +attack\n"	/* grapple hold; see grapple_avp.c */
+		/* RSHOULDER is deliberately UNBOUND. It used to be +attack,
+		   because the grapple reached rogue's weapon by raising
+		   K_RSHOULDER and letting the bind fire the attack. The hook is
+		   native C now and raises no key at all, so a bind here would
+		   be a grip squeeze that shoots: exactly the failure that
+		   burned seven shells in 200 held frames when the feature was
+		   switched off. grapple_avp.c reads the pad bit directly. */
 		"bind RTRIGGER +attack\n"
 		"bind LTRIGGER +speed\n"
 		"bind LTHUMB +movedown\n"	/* hands crouch (thumb+pinky) */

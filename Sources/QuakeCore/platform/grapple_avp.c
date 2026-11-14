@@ -2,68 +2,48 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 A. Cervantez
  *
- * grapple_avp.c -- reaching rogue's own grappling hook.
+ * grapple_avp.c -- the grappling hook.
  *
- * Dissolution of Eternity ships a complete grappling hook in its compiled
- * progs: W_FireGrapple spawns it, GrappleAnchor sticks it, GrappleService
- * pulls the player along it at 1000 units a second, GrappleTrail draws the
- * rope. None of that needed writing. It is simply UNREACHABLE, because every
- * path that hands you the weapon is gated on `deathmatch && teamplay >= 4`
- * and this engine never writes the teamplay progs global, so the condition
- * cannot become true by any cvar. Verified by sweeping impulses 1 through 50
- * with every item already granted: none of them reaches it, and `impulse 9`
- * does not either.
+ * The hook is this file's, start to finish: a position and a velocity traced
+ * forward by SV_Move each tick, an anchor latched where the world stops it,
+ * and a pendulum that writes the player's velocity. It is not an entity, it
+ * is not networked, and it asks the loaded progs for nothing.
  *
- * So the whole feature is a weapon write. Nothing downstream of
- * `weapon == IT_GRAPPLE` is gated at all -- there is not one deathmatch or
- * teamplay reference in any of the six grapple functions.
+ * It was not always. The first version was a DRIVER for rogue's compiled
+ * QuakeC, which ships a complete hook that is simply unreachable: every path
+ * that hands you the weapon is gated on `deathmatch && teamplay >= 4`, and
+ * this engine never writes the teamplay progs global, so the condition cannot
+ * become true by any cvar. Verified by sweeping impulses 1 through 50 with
+ * every item granted; none of them reaches it, and `impulse 9` does not
+ * either. Reaching it meant writing `.weapon = 1<<23` and raising a synthetic
+ * held `+attack` so rogue's W_FireGrapple would run.
  *
- * Two things this file does NOT have to do, and both were surprises:
+ * Three things were wrong with that, and all three were the same thing. The
+ * hook could not move to the off hand, because while it was out the player's
+ * .weapon WAS the grapple and there was no gun left to hold. It could not
+ * exist in id1, hipnotic, dopa, mg1 or mg3, because none of them ships
+ * W_FireGrapple or the hook fields. And `1<<23` is HIT_LASER_CANNON under
+ * hipnotic and mg3, so the write was a landmine waiting on the day its
+ * capability gate loosened.
  *
- *   - It never touches .items. sv_main.c ORs items2 << 23 into the published
- *     items word for a progs that defines items2, which rogue does, so bit 23
- *     reads as green armour on the client and the statusbar would grow a
- *     pickup that is not there. The bit is not needed: the only reader is
- *     W_ChangeWeapon's `items & fl` test, and setting .weapon directly
- *     bypasses that. The whole lifecycle was run with .items left clear and
- *     behaved identically.
- *   - It does no renderer work, because the existing hunks already carry the
- *     hook. W_FireGrapple places it with setorigin and the pr_cmds.c hunk
- *     routes that through QR_MuzzleSpawn; the rope is a TE_BEAM naming the
- *     PLAYER as its entity, so the cl_tent.c hunk moves its start, that hunk
- *     sitting in the generic `b->entity == cl.viewentity` branch rather than
- *     a lightning-specific one. Both were already paid for by the missile and
- *     lightning work.
+ * What stayed is the part that was always ours: the pendulum below, which is
+ * the 1997 swinging-hook model and not rogue's rails, and every number in it.
  *
- *     BUT NEITHER IS UNCONDITIONAL, and an earlier version of this comment
- *     said they were. Both routes run through QR_HandOrigin, which returns 0
- *     whenever qr_aim_active is false, and then the hook spawns at the
- *     vanilla body offset and the rope starts at the chest. QR_MuzzleSpawn's
- *     reach gate rejects the same way. So "it comes out of your hand" is a
- *     property of the aim channel being live, not of this module, and it was
- *     measured wrong on device while reading correct here.
- *
- *     There is still no seventh hunk here and there should never need to be
- *     one: the gate is a progs field, and platform code can write those.
+ * No seventh engine hunk, and none needed. The two existing hunks that carry
+ * a shot from the hand (cl_tent.c for the lightning beam, pr_cmds.c for
+ * missiles) are untouched by this and no longer involved: this hook does not
+ * go through setorigin and its rope is not a TE_BEAM. Both of those used to
+ * matter here, and the note they produced is worth keeping because it was
+ * measured wrong on device while reading correct in source -- neither route
+ * was unconditional, because both ran through QR_HandOrigin, which returns 0
+ * whenever qr_aim_active is false, and then the hook came out of the player's
+ * chest. The throw below still calls QR_HandOrigin and still degrades the
+ * same way, deliberately.
  */
 
 #include "quakedef.h"
 #include "QuakeCore.h"	/* QC_PAD_* bits */
 #include "grapple_avp.h"
-
-/* rogue's IT_GRAPPLE. A constant rather than a lookup because pr_globaldefs
-   is file-local to pr_edict.c and there is no public accessor for a progs
-   global by name, so this cannot be read the way the per-game weapon bits
-   were. It is safe anyway for a reason worth writing down: this pak's item
-   flags are NOT the published rogue numbers (every weapon and ammo bit is
-   shifted down one slot, so the axe is 2048 here where vanilla has 4096),
-   and the grapple survived that shift untouched because it sits at the top
-   of the word. The engine's own quakedef.h agrees at RIT_ARMOR1, which is
-   the same bit seen from the items2 side. Belt and braces: nothing below
-   runs unless this progs actually carries rogue's grapple functions AND its
-   grapple fields, so a mod with a different layout is refused rather than
-   poked into nonsense. */
-#define GRAPPLE_ITEM_BIT	(1 << 23)
 
 static cvar_t	vr_grapple = {"vr_grapple", "1", CVAR_NONE};
 
@@ -94,37 +74,18 @@ static cvar_t	vr_grapple = {"vr_grapple", "1", CVAR_NONE};
    diagonal means a thrown hook flies until it hits something rather than
    dying in mid air, which is what "it doesn't reach" actually meant.
 
-   One ceiling worth knowing about, because the cvar would otherwise lie:
-   SV_CheckVelocity clamps every entity's velocity PER COMPONENT at
-   sv_maxvelocity (2000 stock), and it runs on the hook before anything
-   reads it, so a requested 3000 measured as 2061 on an axis-aligned throw.
-   Grapple_TuneHook lifts sv_maxvelocity to match rather than silently
-   capping -- see the note there. */
+   A ceiling that used to make this cvar lie, and no longer does, kept
+   because it explains an absence. SV_CheckVelocity clamps every EDICT's
+   velocity per component at sv_maxvelocity (2000 stock) before anything reads
+   it, so a requested 3000 measured 2061 on an axis-aligned throw, and the
+   direction bent as well as the speed: clipping one axis of a vector rotates
+   it, and an aim pitch of -20 came out at -22.3. The old code answered that
+   by RAISING sv_maxvelocity, a global physics knob written from a weapon,
+   which deserved the flinch it got. A hook owned by this file is not an edict
+   and never meets SV_CheckVelocity, so that write is gone and the knob is
+   left alone. */
 static cvar_t	vr_grapple_speed = {"vr_grapple_speed", "9000", CVAR_NONE};
 static cvar_t	vr_grapple_range = {"vr_grapple_range", "24000", CVAR_NONE};
-
-/* The swing.
-   
-   Rogue's pull is rails: GrappleService runs from PlayerPreThink every frame
-   while on_hook and does `self.velocity = normalize(hook - me) * 1000`. An
-   assignment, so gravity is irrelevant, the player's own input is computed by
-   SV_RunClients and then thrown away, and any sideways motion (which is what
-   a swing IS) cannot survive a single frame. Every hook in this lineage does
-   the same one-liner, QuakeWorld's Threewave included, because rogue's hook
-   IS that code. So there is nothing to borrow and no number to tune: a
-   pendulum is a different model.
-
-   This is the 1997 swinging-hook model instead. Never assign velocity, only
-   modify it: remove the component along the rope, leave everything
-   perpendicular alone, and let gravity and air control keep running. That one
-   subtraction is the entire pendulum. The rope also only acts when taut, so a
-   slack rope is an ordinary fall, which is where falling under your own
-   control comes from.
-
-   Off by default, because the rails version works and is shipped, and because
-   having both on one install means the two can be compared in one session
-   rather than across a rebuild. */
-static cvar_t	vr_grapple_swing = {"vr_grapple_swing", "1", CVAR_NONE};
 
 /* Inward speed gained per unit of overstretch, per second. The original added
    3 per TICK at 10 Hz, which is 30 per second; copying its 3 unscaled at 90 Hz
@@ -206,6 +167,27 @@ instead of sinking because its budget no longer covers the fall.
 static cvar_t	vr_grapple_accelref = {"vr_grapple_accelref", "1536", CVAR_NONE};
 static cvar_t	vr_grapple_accelmin = {"vr_grapple_accelmin", "0.2", CVAR_NONE};
 
+/* in_null.c, file-local extern the way qr_bridge.c takes the same symbol at
+   qr_bridge.c:76. Returns 0 when the aim channel is not live. */
+extern int	QR_HandOrigin (vec3_t out);
+
+static grapple_state_t	qr_grapple_state;
+static vec3_t		qr_grapple_tip;		/* the head, in world space */
+static vec3_t		qr_grapple_fly_vel;
+static float		qr_grapple_fly_ttl;	/* seconds of flight left */
+
+/* The anchor, stored RELATIVE to what it stuck to, so a moving platform
+   carries the rope's far end with it. Entity 0 is the world, whose origin is
+   always zero, so the offset is then simply the absolute position and needs no
+   special case anywhere. */
+/* The player is holding the grip and this module owns a throw. Distinct
+   from the hook's own state: an engagement outlives a miss, which is what
+   makes the chained re-throw possible. */
+static qboolean		qr_grapple_engaged;
+
+static int		qr_grapple_anchor_num;
+static vec3_t		qr_grapple_anchor_ofs;
+
 /* Resolved once per progs load. Keyed on the CRC, not on the progs pointer,
    and that distinction is a crash: SV_SpawnServer reloads progs at the SAME
    hunk address, so a pointer key never changes across a `game` switch and the
@@ -219,25 +201,7 @@ static cvar_t	vr_grapple_accelmin = {"vr_grapple_accelmin", "0.2", CVAR_NONE};
 static dprograms_t	*grapple_progs_key;
 static unsigned short	grapple_crc_key;
 static qboolean		grapple_resolved;
-static func_t		grapple_setammo;	/* W_SetCurrentAmmo */
-static func_t		grapple_reset;		/* GrappleReset      */
-static qboolean		grapple_supported;	/* this progs has the hook */
-static int		grapple_ofs_hook_out;	/* float offsets, -1 = absent */
-static int		grapple_ofs_on_hook;
-static int		grapple_ofs_hook;
-/* Optional, and deliberately NOT part of grapple_supported: rogue's own
-   teleport release lives inside the on_hook branch of GrappleService, which
-   the swing takes out of circuit, so the swing has to notice a teleport
-   itself. A progs without the field just does not get that release rather
-   than losing the whole feature. */
-static int		grapple_ofs_tptime;
 
-/* Live state. qr_grapple_key mirrors the trigger layer's qr_rt_down idiom:
-   the press is OURS to raise and retract, so a forced release (the ring
-   opening) cannot leave attack stuck down with the bit still held. */
-static qboolean		qr_grapple_key;		/* we are holding the bind */
-static qboolean		qr_grapple_engaged;	/* we swapped the weapon    */
-static float		qr_grapple_prev_weapon;	/* what to put back         */
 
 /* Set whenever a swing ends for any reason OTHER than the player letting go,
    and cleared only when the grip actually comes up. Without it a cancel
@@ -247,13 +211,6 @@ static float		qr_grapple_prev_weapon;	/* what to put back         */
    for a new press. */
 static qboolean		qr_grapple_locked;
 
-/* This swing's hook has been retuned. The throw is not visible on the tick
-   the weapon is written: the attack bind fires during the server frame that
-   follows, so hook_out rises a tick later and the edict does not exist until
-   then. One shot per swing, because GrappleAnchor rewrites the think on
-   contact and re-applying the range after that would re-arm the self-timeout
-   under an attached hook. */
-static qboolean		qr_grapple_thrown;
 
 /* True while THIS module owns the player's velocity instead of rogue's pull.
    Latched at the anchor and held for the rest of the swing even if the cvar
@@ -317,18 +274,6 @@ static void Grapple_ReleaseFriction (void)
 	qr_grapple_friction = -1.f;
 }
 
-static int Grapple_FieldOfs (const char *name)
-{
-	edict_t	*world;
-	eval_t	*val;
-
-	world = EDICT_NUM (0);
-	val = GetEdictFieldValue (world, name);
-	if (!val)
-		return -1;
-	return (int) ((float *) val - (float *) &world->v);
-}
-
 static func_t Grapple_FuncByName (const char *name)
 {
 	int i;
@@ -341,30 +286,6 @@ static func_t Grapple_FuncByName (const char *name)
 	return 0;
 }
 
-/* The attack bind on our key, re-asserted whenever the progs changes.
-   IN_Init's queued defaults win at startup, but a `game` switch re-execs
-   quake.rc and config.cfg and does NOT re-run IN_Init, so the key reverts to
-   whatever the entered game's archived config says. On an upgrade that is the
-   old "impulse 10", and the measured result was the worst kind of failure:
-   the grip engaged, drew the grapple in the player's hand, and threw nothing,
-   because the key event ran a weapon cycle. Peak speed 80 instead of 1000.
-   The window's Game tab is exactly that in-session switch, so this would have
-   bitten the first switch into rogue after installing.
-
-   Asserted only when it differs, and only on a progs change, so it is not
-   fighting the config every tick. It does override a player who deliberately
-   rebound this key -- which costs nothing today, because IN_Init's block
-   already discards saved rebinds of all ten controller keys on every launch.
-   That is the real bug and it belongs with the bindings UI, not here. */
-static void Grapple_AssertBind (void)
-{
-	const char	*cur = keybindings[K_RSHOULDER];
-
-	if (cur && !strcmp (cur, "+attack"))
-		return;
-	Cbuf_AddText ("bind RSHOULDER +attack\n");
-}
-
 static void Grapple_ResolveProgs (void)
 {
 	if (grapple_resolved && progs == grapple_progs_key
@@ -373,67 +294,20 @@ static void Grapple_ResolveProgs (void)
 	grapple_progs_key = progs;
 	grapple_crc_key = pr_crc;
 	grapple_resolved = true;
-	grapple_supported = false;
-	grapple_setammo = 0;
-	grapple_reset = 0;
-	grapple_ofs_hook_out = grapple_ofs_on_hook = grapple_ofs_hook = -1;
-	grapple_ofs_tptime = -1;
+
+	/* A swing cannot survive the progs changing under it: the anchor it is
+	   pulling against belonged to a world that has just been replaced. This
+	   is also the only place a game switch gets to give sv_friction back,
+	   because COM_Game_f re-execs quake.rc without going anywhere near this
+	   module's disengage path. */
+	qr_grapple_state = GRAPPLE_IDLE;
+	qr_grapple_anchor_num = 0;
 	qr_grapple_swinging = false;
-	qr_grapple_engaged = false;	/* the edict it referred to is gone */
+	qr_grapple_engaged = false;
 	qr_grapple_locked = false;
-	qr_grapple_thrown = false;
-	Grapple_ReleaseFriction ();	/* a game switch skips Disengage */
+	Grapple_ReleaseFriction ();
 	if (!progs)
 		return;
-
-	grapple_setammo = Grapple_FuncByName ("W_SetCurrentAmmo");
-	grapple_reset = Grapple_FuncByName ("GrappleReset");
-	grapple_ofs_hook_out = Grapple_FieldOfs ("hook_out");
-	grapple_ofs_on_hook = Grapple_FieldOfs ("on_hook");
-	grapple_ofs_hook = Grapple_FieldOfs ("hook");
-	grapple_ofs_tptime = Grapple_FieldOfs ("teleport_time");
-
-	/* W_FireGrapple is the one that proves the weapon is implemented;
-	   the rest proves we can drive and unwind it. All or nothing. */
-	Grapple_AssertBind ();
-
-	grapple_supported = Grapple_FuncByName ("W_FireGrapple") != 0
-			 && grapple_setammo != 0
-			 && grapple_reset != 0
-			 && grapple_ofs_hook_out >= 0
-			 && grapple_ofs_on_hook >= 0
-			 && grapple_ofs_hook >= 0;
-}
-
-#define GRAPPLE_FLOAT(e,ofs)	(*((float *) &(e)->v + (ofs)))
-#define GRAPPLE_EDICT(e,ofs)	(*((int *) ((float *) &(e)->v + (ofs))))
-
-/* The hook edict this swing owns, or NULL. .hook is a progs entity field, so
-   it is an offset into the edict rather than a named member. */
-static edict_t *Grapple_Hook (edict_t *player)
-{
-	edict_t	*hook;
-	int	hook_prog;
-
-	hook_prog = GRAPPLE_EDICT (player, grapple_ofs_hook);
-	hook = hook_prog ? PROG_TO_EDICT (hook_prog) : NULL;
-	if (!hook || hook->free)
-		return NULL;
-	return hook;
-}
-
-
-/* One owner for K_RSHOULDER. The bind on it is +attack, and the engine's
-   kbutton keeps two holder slots, which is the whole reason this goes through
-   a key rather than writing in_attack directly: a player holding the fire
-   trigger at the same time must not have their attack cancelled when this
-   one lets go. */
-static void Grapple_SetKey (qboolean down)
-{
-	if (down == qr_grapple_key)
-		return;
-	qr_grapple_key = down;
-	Key_Event (K_RSHOULDER, down);
 }
 
 static edict_t *Grapple_Player (void)
@@ -467,120 +341,34 @@ static void Grapple_Call (func_t fn, edict_t *self)
 }
 
 /*
-Let go of the hook and put the player's weapon back.
+Let go of the rope.
 
-The ordering here is the whole reason this file is a state machine rather
-than two lines, and it was settled by measurement.
+This used to be the most delicate function in the file and is now four
+assignments, which is the clearest measure of what moving the hook into C
+bought. The old version had to call rogue's GrappleReset with `self` pointed at
+the hook edict and then put the player's weapon back, in that order, because
+GrappleService only released on `!button0 && weapon == IT_GRAPPLE` while
+GrappleAnchor did not check the weapon at all. Any moment with the hook out and
+attack held while the weapon was something else ended with the player pinned:
+measured at 400 frames, 13 seconds of server time, past the hook's own
+self-timeout, with `+forward` moving the player 0.0 units. Genuinely
+immobilised.
 
-GrappleService only releases when `!button0 && weapon == IT_GRAPPLE`, and
-GrappleAnchor does not check the weapon AT ALL -- the hook will stick to a
-wall perfectly happily with the axe selected. So the hazard is not "restore
-the weapon too early", it is wider than that: ANY moment with the hook out
-and attack still held, while the weapon is something other than the grapple,
-ends with the player pinned the instant attack drops. Measured: 400 frames,
-13 seconds of server time, far past the hook's own two-second self-timeout,
-with hook_out and on_hook both stuck at 1 and `+forward` moving the player
-0.0 units. Genuinely immobilised, not a stale flag.
+None of that can happen any more. There is no weapon write to undo, no
+synthetic attack to drop, and no progs state to unwind -- so there is no
+ordering to get wrong, and the weapon ring can no longer strand anybody.
 
-Which is why this calls GrappleReset directly, with `self` set to the HOOK
-edict, instead of relying on dropping attack before writing the weapon back.
-Ordering alone works today and breaks the first time anything else takes the
-weapon mid-swing -- and the weapon ring does exactly that. Resetting
-explicitly was verified to recover from the stuck state with the wrong
-weapon still selected, after which the player moved 257 units.
+Friction is the one thing that must still be given back, because it is a
+global this module borrows (see Grapple_HoldFriction), and every path that
+ends a swing comes through here.
 */
-static void Grapple_Disengage (edict_t *player)
+static void Grapple_Disengage (void)
 {
-	edict_t	*hook;
-
-	Grapple_SetKey (false);
+	qr_grapple_state = GRAPPLE_IDLE;
+	qr_grapple_anchor_num = 0;
 	qr_grapple_swinging = false;
-	Grapple_ReleaseFriction ();
-	if (!qr_grapple_engaged)
-		return;
 	qr_grapple_engaged = false;
-	if (!player)
-		return;
-
-	if (GRAPPLE_FLOAT (player, grapple_ofs_hook_out))
-	{
-		hook = Grapple_Hook (player);
-		if (hook)
-			Grapple_Call (grapple_reset, hook);
-	}
-
-	player->v.weapon = qr_grapple_prev_weapon;
-	Grapple_Call (grapple_setammo, player);
-}
-
-/*
-Retune this swing's hook the tick it appears.
-
-Direction is left exactly as W_FireGrapple aimed it -- only the magnitude is
-rewritten -- so the muzzle fix's work and the shot's own aim survive. The
-throw has already flown one server frame at rogue's 800 by the time hook_out
-is visible, roughly eleven units at 90 Hz, which is inside the per-shot
-residual the hand remap already carries and not worth chasing.
-
-The think being GrappleReset is what makes nextthink the RANGE: the hook kills
-itself when the timer fires, so range over speed is the time to allow.
-GrappleAnchor overwrites both the think and nextthink on contact, so a hook
-that lands is never cut off by this, however short the range is set.
-*/
-static void Grapple_TuneHook (edict_t *player)
-{
-	edict_t	*hook;
-	cvar_t	*mv;
-	float	speed, range, len;
-
-	hook = Grapple_Hook (player);
-	if (!hook)
-		return;
-
-	/* Clamped because these are player-facing cvars and both ends of each
-	   are a real failure: a speed near zero is a hook that never arrives,
-	   and a range past a map's own coordinate limit is a timer that cannot
-	   expire before the hook leaves the world. */
-	/* The ceilings are high because the defaults went up and a clamp that
-	   silently caps a player-facing cvar is worse than no clamp. They exist
-	   to stop a typo being a crash, not to express an opinion: the hook is
-	   MOVETYPE_FLYMISSILE, and SV_FlyMove traces the whole step, so even
-	   100 units of travel per frame cannot tunnel through a wall. */
-	speed = vr_grapple_speed.value;
-	if (speed < 100.f)
-		speed = 100.f;
-	else if (speed > 30000.f)
-		speed = 30000.f;
-
-	range = vr_grapple_range.value;
-	if (range < 100.f)
-		range = 100.f;
-	else if (range > 65536.f)
-		range = 65536.f;
-
-	/* SV_CheckVelocity clamps PER COMPONENT at sv_maxvelocity and runs on
-	   the hook before anything reads it, so without this a requested 3000
-	   arrives as 2061 on an axis-aligned throw AND the direction bends,
-	   because clipping one axis of a vector rotates it. Measured: an aim
-	   pitch of -20 came out at -22.3. Raising the ceiling instead of
-	   capping the request keeps the cvar honest about what it does.
-
-	   This is a global physics knob and it is being written from a weapon,
-	   which deserves the flinch it gets. Raised only, never lowered, and
-	   only to what was actually asked for: the only other things in Quake
-	   that approach 2000 are a long fall and a rocket jump, and both are
-	   improved by not being clipped mid-swing -- the player's OWN velocity
-	   goes through the same clamp, so a fast swing was being flattened by
-	   it too. */
-	mv = Cvar_FindVar ("sv_maxvelocity");
-	if (mv && mv->value < speed)
-		Cvar_SetValueQuick (mv, speed);
-
-	len = VectorLength (hook->v.velocity);
-	if (len > 0.f)
-		VectorScale (hook->v.velocity, speed / len, hook->v.velocity);
-
-	hook->v.nextthink = sv.time + range / speed;
+	Grapple_ReleaseFriction ();
 }
 
 /*
@@ -621,21 +409,6 @@ PF_precache_model refuses outside ss_loading, so there is no way to add one at
 fire time. The renderer draws the head and the rope from qr_grapple_tip
 instead, client side, out of models it loads for itself.
 */
-/* in_null.c, file-local extern the way qr_bridge.c takes the same symbol at
-   qr_bridge.c:76. Returns 0 when the aim channel is not live. */
-extern int	QR_HandOrigin (vec3_t out);
-
-static grapple_state_t	qr_grapple_state;
-static vec3_t		qr_grapple_tip;		/* the head, in world space */
-static vec3_t		qr_grapple_fly_vel;
-static float		qr_grapple_fly_ttl;	/* seconds of flight left */
-
-/* The anchor, stored RELATIVE to what it stuck to, so a moving platform
-   carries the rope's far end with it. Entity 0 is the world, whose origin is
-   always zero, so the offset is then simply the absolute position and needs no
-   special case anywhere. */
-static int		qr_grapple_anchor_num;
-static vec3_t		qr_grapple_anchor_ofs;
 
 /*
 Resolve the anchor to world space, and survive its entity dying.
@@ -797,53 +570,9 @@ static void Grapple_FlightFrame (edict_t *player, float dt)
 		qr_grapple_state = GRAPPLE_IDLE;
 }
 
-#ifdef QAVP_HOSTCHECK
-/* The host drivers' way in, on the QR_TestCachePic* pattern: the real
-   functions stay static and the tests get wrappers rather than the qualifier
-   moving. gymtest drives the throw and the flight directly because
-   Grapple_Frame does not own them until Task 2. */
-int Grapple_TestAnchorFromTrace (const trace_t *tr, int contents)
-{
-	return Grapple_AnchorFromTrace (tr, contents);
-}
-
-int Grapple_TestState (float tip[3])
-{
-	if (tip)
-	{
-		if (qr_grapple_state == GRAPPLE_ANCHORED)
-		{
-			Grapple_AnchorOrigin (tip);
-		}
-		else
-		{
-			VectorCopy (qr_grapple_tip, tip);
-		}
-	}
-	return (int) qr_grapple_state;
-}
-
-void Grapple_TestThrow (void)
-{
-	edict_t	*player = Grapple_Player ();
-
-	if (player)
-		Grapple_Throw (player);
-}
-
-void Grapple_TestFlight (float dt)
-{
-	edict_t	*player = Grapple_Player ();
-
-	if (player)
-		Grapple_FlightFrame (player, dt);
-}
-#endif	/* QAVP_HOSTCHECK */
 
 /* Rogue measures the rope from roughly the chest, not from the origin. */
 #define GRAPPLE_ROPE_UP		16.f
-/* Far enough out that SV_RunThink never reaches it, re-asserted every tick. */
-#define GRAPPLE_THINK_PARK	1000.f
 /* Pretension in the rope at the anchor, so the swing cannot start deadlocked
    exactly taut. See Grapple_TakeOver. */
 #define GRAPPLE_SEED_SLACK	64.f
@@ -851,32 +580,22 @@ void Grapple_TestFlight (float dt)
 #define GRAPPLE_MAX_STRETCH	256.f
 
 /*
-Take rogue's pull out of circuit and own the velocity for this swing.
+Measure the rope at the moment the hook bites, and start the swing.
 
-Three writes, each load bearing.
-
-on_hook cleared is what stops GrappleService assigning velocity every frame.
-It does NOT stop the chain being drawn: the !on_hook branch of that same
-function is precisely the draw-the-trail branch, so the rope keeps rendering
-for free. That is the one part of this that would otherwise have needed
-renderer work.
-
-The hook's own think has to be parked, because GrappleTrack opens by
-resetting the whole hook whenever its owner is not on_hook -- so clearing the
-flag alone would delete the hook a tenth of a second later. Parked rather
-than replaced: nextthink is pushed past anything SV_RunThink will reach, and
-GrappleReset still removes the hook on release, because that call does not go
-through the think.
-
-FL_ONGROUND cleared because ground friction eats a swing launched from
-standing. Every hook in the family does this, for the same reason.
+This used to be three writes into rogue's progs state: clearing `on_hook` so
+GrappleService stopped assigning velocity every frame, parking the hook edict's
+think so GrappleTrack would not delete the hook a tenth of a second later, and
+borrowing friction. The first two described a fight with code that no longer
+runs. Only the friction borrow and the rope measurement were ever about the
+swing itself, so only they are left.
 */
-static void Grapple_TakeOver (edict_t *player, edict_t *hook)
+static void Grapple_TakeOver (edict_t *player)
 {
-	vec3_t	rope;
+	vec3_t	rope, anchor;
 	float	rmin;
 
-	VectorSubtract (hook->v.origin, player->v.origin, rope);
+	Grapple_AnchorOrigin (anchor);
+	VectorSubtract (anchor, player->v.origin, rope);
 	rope[2] -= GRAPPLE_ROPE_UP;
 	qr_grapple_rope = VectorLength (rope);
 
@@ -908,8 +627,6 @@ static void Grapple_TakeOver (edict_t *player, edict_t *hook)
 	if (qr_grapple_rope < rmin)
 		qr_grapple_rope = rmin;
 
-	GRAPPLE_FLOAT (player, grapple_ofs_on_hook) = 0.f;
-	hook->v.nextthink = (float) (sv.time + GRAPPLE_THINK_PARK);
 	Grapple_HoldFriction ();
 	qr_grapple_swinging = true;
 }
@@ -944,9 +661,9 @@ recovers.
    the swing has to know what the next physics frame is about to take. */
 extern cvar_t	sv_gravity;
 
-static void Grapple_SwingFrame (edict_t *player, edict_t *hook)
+static void Grapple_SwingFrame (edict_t *player)
 {
-	vec3_t	rope, dir;
+	vec3_t	rope, dir, anchor;
 	float	dist, radial, pull, dt, rmin, reel, stiff, smax;
 	float	haul, accel, want, amax, grav, ref, frac, lo;
 	eval_t	*val;
@@ -955,8 +672,6 @@ static void Grapple_SwingFrame (edict_t *player, edict_t *hook)
 	if (dt <= 0.f)
 		return;
 
-	hook->v.nextthink = (float) (sv.time + GRAPPLE_THINK_PARK);
-
 	/* EVERY frame, because this is what a swing was losing to the floor.
 	   Measured with friction running: velocity exactly 0.0 for the first 8
 	   frames of a swing and under 100 u/s for 25, against rails' 994 on
@@ -964,7 +679,11 @@ static void Grapple_SwingFrame (edict_t *player, edict_t *hook)
 	   starting swing has less than that to give. */
 	Grapple_HoldFriction ();
 
-	VectorSubtract (hook->v.origin, player->v.origin, rope);
+	/* The anchor, not a hook edict. This one line is the whole of what the
+	   rewrite changed about the swing: everything below it is the shipped
+	   pendulum, untouched, because the feel IS this code. */
+	Grapple_AnchorOrigin (anchor);
+	VectorSubtract (anchor, player->v.origin, rope);
 	rope[2] -= GRAPPLE_ROPE_UP;
 	dist = VectorLength (rope);
 	if (dist < 1.f)
@@ -1098,22 +817,24 @@ static void Grapple_SwingFrame (edict_t *player, edict_t *hook)
 
 static void Grapple_Engage (edict_t *player)
 {
-	qr_grapple_prev_weapon = player->v.weapon;
 	qr_grapple_engaged = true;
-	qr_grapple_thrown = false;
-	player->v.weapon = GRAPPLE_ITEM_BIT;
-	/* W_SetCurrentAmmo is what makes the drawn gun v_grpple.mdl and zeroes
-	   currentammo; without it the weapon is swapped but the player is
-	   still holding the old model. */
-	Grapple_Call (grapple_setammo, player);
-
-	Grapple_SetKey (true);
+	Grapple_Throw (player);
 }
 
+/*
+One tick of the hold.
+
+Called from IN_Commands with this tick's pad snapshot. What is NOT here any
+more is the whole reason this work was done: no weapon is written, no synthetic
+attack is raised, and nothing is asked of the loaded progs. The player keeps
+the gun they were holding for the entire engagement, which is what lets the
+rope leave one hand while the other one keeps firing.
+*/
 void Grapple_Frame (uint32_t padbits, int wheel_open)
 {
 	edict_t		*player;
 	qboolean	held, want, usable;
+	eval_t		*tp;
 
 	Grapple_ResolveProgs ();
 	player = Grapple_Player ();
@@ -1124,44 +845,47 @@ void Grapple_Frame (uint32_t padbits, int wheel_open)
 	if (!held)
 		qr_grapple_locked = false;
 
-	usable = player && grapple_supported && vr_grapple.value != 0;
+	/* DEATH IS A CANCEL, and it has to be said out loud now. The old
+	   progs-driven version got this for free and by accident: dying runs
+	   PutClientInServer, which rewrites .weapon, which tripped the
+	   "something else took the weapon" branch and disengaged. That branch
+	   is gone with the weapon write, and so was the protection -- a grip
+	   held through death re-threw on the first frame of the new life, which
+	   is the player being yanked by a hook they never threw. Caught by the
+	   respawn assertion in gymtest, not by reading.
+
+	   health rather than deadflag because it is the field that is already
+	   zero on the frame the player dies, before the progs has run its own
+	   death think, and a cancel owes the player promptness. */
+	usable = player && vr_grapple.value != 0 && player->v.health > 0.f;
 
 	if (!usable)
 	{
-		/* No player, no hook in this progs, or the feature switched
-		   off: the button does NOTHING.
-		   It used to pass through, on the principle that a layer which
-		   claims a bit should not silently eat it. That was wrong here,
-		   and measurably so. The bit's bind is +attack, and the Sense
+		/* No player, dead, or the feature switched off: the button does
+		   NOTHING. It used to pass through, on the principle that a
+		   layer which claims a bit should not silently eat it. That was
+		   measurably wrong: the bit's bind was +attack, and the Sense
 		   hand that sets it is the one whose grip used to open the
 		   weapon ring, so on the shipped vr_grapple 0 default a squeeze
-		   fired the gun: 200 frames held burned seven shells. Doing
-		   nothing is the lesser surprise by a wide margin, and the
-		   input this was protecting is a classic gamepad shoulder,
-		   which is not a shipping input. */
+		   fired the gun and 200 frames held burned seven shells. The
+		   bind is gone now, but eating the bit is still the lesser
+		   surprise. */
 		if (qr_grapple_engaged)
-			Grapple_Disengage (player);
+			Grapple_Disengage ();
 		/* And make it wait for a new press. Grapple_Player returns NULL
 		   for the whole of a level load, so without this the first
 		   spawned frame sees the grip still down and `want` true again:
-		   measured, the weapon was rewritten on frame 0 of the new map,
-		   the hook was out by frame 2, and the player was dragged across
-		   a level they had just arrived in, having pressed nothing. A
-		   death and restart did the same. Every other cancel the player
-		   did not ask for already takes this lock; this path was the one
-		   that did not, and it mattered less when the hook was a winch
-		   than it does now that it hands out a swing. */
+		   measured, the hook was out by frame 2 and the player was
+		   dragged across a level they had just arrived in, having
+		   pressed nothing. A death and restart did the same. */
 		if (held)
 			qr_grapple_locked = true;
-		Grapple_SetKey (false);
 		return;
 	}
 
-	/* key_dest gates the PRESS, because the key event is what makes the
-	   attack bind fire and a menu or the console eats it. Without this the
-	   grip swapped the weapon, drew the grapple in the player's hand and
-	   never threw anything -- a dead feature wearing the right model. The
-	   press is raised on the engage transition only, so it cannot be
+	/* key_dest gates the PRESS, because a menu or the console owns the
+	   input while it is up and a throw started from there is one the player
+	   did not ask for. Gated on the transition only, so it cannot be
 	   recovered by closing the menu later either. */
 	want = held
 	    && !qr_grapple_locked
@@ -1174,105 +898,68 @@ void Grapple_Frame (uint32_t padbits, int wheel_open)
 	}
 	else if (!want && qr_grapple_engaged)
 	{
-		/* Ending a swing the player did not end: make them re-press.
-		   The ring is the case that matters, and cancelling beats
-		   fighting it for the weapon. */
+		/* Ending a swing the player did not end: make them re-press. */
 		if (held)
 			qr_grapple_locked = true;
-		Grapple_Disengage (player);
+		Grapple_Disengage ();
 	}
-	else if (qr_grapple_engaged
-		 && player->v.weapon != (float) GRAPPLE_ITEM_BIT)
+
+	if (!qr_grapple_engaged)
+		return;
+
+	/* Rogue's own teleport release lived inside the on_hook branch that
+	   this module took out of circuit, so the release has to happen here or
+	   a teleport leaves the player on the rope. Read by name rather than
+	   cached, because it is optional: a progs without the field just does
+	   not get the release. Locked like every other cancel the player did
+	   not ask for, so a held grip does not re-throw into the teleporter
+	   three times on the way through. */
+	tp = GetEdictFieldValue (player, "teleport_time");
+	if (tp && tp->_float > sv.time)
 	{
-		/* Something else wrote the weapon while we were out -- a
-		   console impulse, a pickup, a mod. That is the stranding
-		   state, so let go now rather than when the player releases
-		   and finds they cannot move. What took the weapon KEEPS it:
-		   restoring over it would be this module stealing it back,
-		   and the lock stops the next tick re-engaging and recording
-		   the stolen weapon as the thing to restore. */
-		qr_grapple_prev_weapon = player->v.weapon;
 		if (held)
 			qr_grapple_locked = true;
-		Grapple_Disengage (player);
+		Grapple_Disengage ();
+		return;
 	}
-	else if (!qr_grapple_engaged)
+
+	/* PAUSED IS NOT A SMALL CASE, and it is wider than it was. IN_Commands
+	   keeps running while SV_Physics does not, so a paused frame would both
+	   advance the flight trace and add a spring impulse that nothing
+	   integrates away and nothing clamps, on a frozen sv.time. Measured
+	   before this guard existed: 2 seconds of pause took the player from
+	   393 to 7036 units/s, and unpausing fired them across the room at the
+	   velocity ceiling. It scales with pause length, so a backgrounded app
+	   was a catapult. */
+	if (sv.paused)
+		return;
+
+	switch (qr_grapple_state)
 	{
-		/* Idle and usable: the button is still the grapple's, so it
-		   must not leak a stale press into the attack bind. */
-		Grapple_SetKey (false);
+	case GRAPPLE_FLYING:
+		Grapple_FlightFrame (player, (float) host_frametime);
+		/* A bite this frame measures its rope this frame, so the first
+		   swing frame already has a rest length to work from. */
+		if (qr_grapple_state == GRAPPLE_ANCHORED)
+			Grapple_TakeOver (player);
+		break;
+
+	case GRAPPLE_ANCHORED:
+		Grapple_SwingFrame (player);
+		break;
+
+	case GRAPPLE_IDLE:
+		/* THE CHAINED-SWING RHYTHM, and it has to be written out now.
+		   It used to happen by itself: rogue's W_FireGrapple re-fired
+		   on its own while attack stayed held, so a miss or a timeout
+		   under a still-held grip threw again with nothing in this file
+		   asking for it. With the progs path gone that behaviour would
+		   have disappeared silently, and it is part of how the weapon
+		   feels to use -- you hold the grip and keep throwing until
+		   something catches. */
+		Grapple_Throw (player);
+		break;
 	}
-
-	/* After the chain, not inside it: the engage tick cannot see its own
-	   hook, and every branch above that gives up has already cleared
-	   qr_grapple_engaged. */
-	if (qr_grapple_engaged)
-	{
-		edict_t	*hook;
-
-		hook = GRAPPLE_FLOAT (player, grapple_ofs_hook_out)
-		     ? Grapple_Hook (player) : NULL;
-
-		if (!hook)
-		{
-			/* No hook in the world: either the throw has not left
-			   yet, or it timed out or hit sky. Rogue re-fires on
-			   its own while attack stays held, which IS the
-			   chained-swing rhythm, so this does not end the
-			   engagement -- it re-arms so the next throw is tuned
-			   too, and stops simulating a rope that is gone. */
-			qr_grapple_swinging = false;
-			qr_grapple_thrown = false;
-		}
-		else if (!qr_grapple_thrown)
-		{
-			qr_grapple_thrown = true;
-			Grapple_TuneHook (player);
-		}
-		else if (qr_grapple_swinging)
-		{
-			/* Rogue's own teleport release sits inside the on_hook
-			   branch that the swing disabled, so it has to happen
-			   here or a teleport leaves the player on the rope.
-			   Locked like every other cancel the player did not
-			   ask for, so a held grip does not re-throw into the
-			   teleporter three times on the way through. */
-			if (grapple_ofs_tptime >= 0
-			    && GRAPPLE_FLOAT (player, grapple_ofs_tptime) > sv.time)
-			{
-				if (held)
-					qr_grapple_locked = true;
-				Grapple_Disengage (player);
-			}
-			else if (!sv.paused)
-			{
-				/* PAUSED IS NOT A SMALL CASE. IN_Commands keeps
-				   running while SV_Physics does not, so every
-				   paused frame would add a spring impulse that
-				   nothing integrates away and nothing clamps,
-				   on a frozen sv.time. Measured before this
-				   guard: 2 seconds of pause took the player
-				   from 393 to 7036 units/s, and unpausing fired
-				   them across the room at the velocity ceiling.
-				   It scales with pause length, so a backgrounded
-				   app was a catapult. The shipped pause happens
-				   to zero the pad and disengage first, which hid
-				   it; a `pause` from anywhere that does not is
-				   the one that would have found it. */
-				Grapple_SwingFrame (player, hook);
-			}
-		}
-		else if (vr_grapple_swing.value != 0
-			 && GRAPPLE_FLOAT (player, grapple_ofs_on_hook))
-		{
-			Grapple_TakeOver (player, hook);
-		}
-	}
-}
-
-int Grapple_Active (void)
-{
-	return qr_grapple_engaged ? 1 : 0;
 }
 
 /*
@@ -1309,7 +996,6 @@ static void Grapple_ForceDefaults (void)
 	Cbuf_AddText ("vr_grapple 1\n");
 	Cbuf_AddText ("vr_grapple_speed 9000\n");
 	Cbuf_AddText ("vr_grapple_range 24000\n");
-	Cbuf_AddText ("vr_grapple_swing 1\n");
 	Cbuf_AddText ("vr_grapple_stiff 30\n");
 	Cbuf_AddText ("vr_grapple_reel 3200\n");
 	Cbuf_AddText ("vr_grapple_ropemin 64\n");
@@ -1324,7 +1010,6 @@ void Grapple_Init (void)
 	Cvar_RegisterVariable (&vr_grapple);
 	Cvar_RegisterVariable (&vr_grapple_speed);
 	Cvar_RegisterVariable (&vr_grapple_range);
-	Cvar_RegisterVariable (&vr_grapple_swing);
 	Cvar_RegisterVariable (&vr_grapple_stiff);
 	Cvar_RegisterVariable (&vr_grapple_reel);
 	Cvar_RegisterVariable (&vr_grapple_ropemin);
@@ -1334,3 +1019,81 @@ void Grapple_Init (void)
 	Cvar_RegisterVariable (&vr_grapple_accelmin);
 	Grapple_ForceDefaults ();
 }
+
+#ifdef QAVP_HOSTCHECK
+/* The host drivers' way in, on the QR_TestCachePic* pattern: the real
+   functions stay static and the tests get wrappers rather than the qualifier
+   moving. gymtest drives the throw and the flight directly because
+   Grapple_Frame does not own them until Task 2. */
+int Grapple_TestAnchorFromTrace (const trace_t *tr, int contents)
+{
+	return Grapple_AnchorFromTrace (tr, contents);
+}
+
+int Grapple_TestState (float tip[3])
+{
+	if (tip)
+	{
+		if (qr_grapple_state == GRAPPLE_ANCHORED)
+		{
+			Grapple_AnchorOrigin (tip);
+		}
+		else
+		{
+			VectorCopy (qr_grapple_tip, tip);
+		}
+	}
+	return (int) qr_grapple_state;
+}
+
+void Grapple_TestThrow (void)
+{
+	edict_t	*player = Grapple_Player ();
+
+	if (player)
+		Grapple_Throw (player);
+}
+
+void Grapple_TestFlight (float dt)
+{
+	edict_t	*player = Grapple_Player ();
+
+	if (player)
+		Grapple_FlightFrame (player, dt);
+}
+
+/* Hang an anchor with a chosen rest length, so the pendulum's numbers can be
+   measured against a known rope instead of whatever a throw happened to find. */
+void Grapple_TestSetAnchor (const float anchor[3], float rope_len)
+{
+	VectorCopy (anchor, qr_grapple_anchor_ofs);
+	VectorCopy (anchor, qr_grapple_tip);
+	qr_grapple_anchor_num = 0;
+	qr_grapple_rope = rope_len;
+	qr_grapple_state = GRAPPLE_ANCHORED;
+	qr_grapple_swinging = true;
+}
+
+void Grapple_TestSetAnchorEnt (int entnum, const float ofs[3])
+{
+	VectorCopy (ofs, qr_grapple_anchor_ofs);
+	qr_grapple_anchor_num = entnum;
+	qr_grapple_state = GRAPPLE_ANCHORED;
+	qr_grapple_swinging = true;
+	Grapple_AnchorOrigin (qr_grapple_tip);
+	qr_grapple_rope = 256.f;
+}
+
+int Grapple_TestAnchorNum (void)
+{
+	return qr_grapple_anchor_num;
+}
+
+void Grapple_TestSwing (void)
+{
+	edict_t	*player = Grapple_Player ();
+
+	if (player)
+		Grapple_SwingFrame (player);
+}
+#endif	/* QAVP_HOSTCHECK */

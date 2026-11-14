@@ -27,6 +27,7 @@
 #include "grapple_avp.h"
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 
 /* The audio sink is Swift and is not in the host objects; hostmain.c carries
  * the same four stand-ins for `make check`, and the unit harness gets them
@@ -48,6 +49,14 @@ void QC_AudioSetRunning (int running) { (void)running; }
 int  Grapple_TestState (float tip[3]);
 void Grapple_TestThrow (void);
 void Grapple_TestFlight (float dt);
+void Grapple_TestSetAnchor (const float anchor[3], float rope_len);
+void Grapple_TestSetAnchorEnt (int entnum, const float ofs[3]);
+int  Grapple_TestAnchorNum (void);
+void Grapple_TestSwing (void);
+
+/* host.c's frame length, which Grapple_SwingFrame reads as its dt. Set
+   directly so a long frame can be tested without waiting for one. */
+extern double	host_frametime;
 
 /* gengym.py: HALF 3328, TOP 3072, SHELL 64, so the ceiling's underside. */
 #define GYM_CEIL_Z	3072.f
@@ -57,16 +66,37 @@ static int failures;
 static void on_log (void *c, const char *t) { (void)c; fputs (t, stdout); }
 static void on_error (void *c, const char *e) { (void)c; if (e) printf("FATAL: %s\n", e); }
 
-/* One tick of engine plus one tick of hook. Grapple_Frame does not drive the
-   flight yet, so the driver supplies the same dt the engine just ran. */
+/*
+One tick of engine, and one of hook where the engine does not do it.
+
+Grapple_Frame now drives the flight itself whenever an engagement is live, so
+the extra Grapple_TestFlight call would DOUBLE the hook's speed if it ran then.
+It is still needed for the seam-driven throws, which have no engagement behind
+them, so it runs only when the state machine is not already doing it.
+*/
+static int	grip_held;
+
 static void step (int n)
 {
 	int i;
 	for (i = 0; i < n; i++)
 	{
 		QC_Frame (1.0/72.0);
-		Grapple_TestFlight (1.f/72.f);
+		if (!grip_held)
+			Grapple_TestFlight (1.f/72.f);
 	}
+}
+
+/* The player's grip, through the front door. */
+static void grip (int down)
+{
+	qc_gamepad_state_t pad;
+
+	memset (&pad, 0, sizeof (pad));
+	pad.buttons = down ? QC_PAD_RSHOULDER : 0u;
+	pad.connected = 1;
+	grip_held = down;
+	QC_InputSetGamepad (&pad);
 }
 
 /* Aim the player's weapon angles without going through the input layer,
@@ -153,11 +183,58 @@ static int find_sky_spot (vec3_t out)
 	return 0;
 }
 
+/*
+One frame of rope, measured.
+
+Hangs an anchor at `off` from wherever the player is, with a rest length of
+`rope_len`, zeroes the player's velocity, runs exactly one swing frame, and
+returns the acceleration the rope applied along its own direction: the velocity
+it added, divided by the frame it had to add it in.
+
+That number is the feel. Every assertion built on it is checking that the
+rewrite moved WHERE the anchor comes from without changing what the rope then
+does with it.
+*/
+static float measure_pull (float ox, float oy, float oz, float rope_len, double dt)
+{
+	edict_t	*p = svs.clients[0].edict;
+	vec3_t	anchor, dir, before, after;
+	float	dist, dv;
+
+	anchor[0] = p->v.origin[0] + ox;
+	anchor[1] = p->v.origin[1] + oy;
+	anchor[2] = p->v.origin[2] + oz;
+
+	/* The rope is measured from roughly the chest (GRAPPLE_ROPE_UP 16), so
+	   the direction the pull lands along is the anchor minus that, not the
+	   anchor minus the origin. */
+	dir[0] = ox;
+	dir[1] = oy;
+	dir[2] = oz - 16.f;
+	dist = sqrtf (dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+	if (dist < 1.f)
+		return 0.f;
+	dir[0] /= dist; dir[1] /= dist; dir[2] /= dist;
+
+	p->v.velocity[0] = p->v.velocity[1] = p->v.velocity[2] = 0.f;
+	VectorCopy (p->v.velocity, before);
+
+	Grapple_TestSetAnchor (anchor, rope_len);
+	host_frametime = dt;
+	Grapple_TestSwing ();
+
+	VectorCopy (p->v.velocity, after);
+	dv = (after[0] - before[0]) * dir[0]
+	   + (after[1] - before[1]) * dir[1]
+	   + (after[2] - before[2]) * dir[2];
+	return dv / (float) dt;
+}
+
 int main (int argc, char **argv)
 {
 	vec3_t	tip, first_tip, hand, spot;
 	int	state;
-	float	travelled;
+	float	travelled, got, dv;
 
 	if (argc < 2) return 2;
 	QC_SetCallbacks (on_log, on_error, NULL);
@@ -214,6 +291,245 @@ int main (int argc, char **argv)
 	       tip[2], GYM_CEIL_Z);
 	CHECK (tip[2] > hand[2] + 1000.f,
 	       "and it is a long way above the hand (%.0f units)", tip[2] - hand[2]);
+
+	/* ---------------- the pendulum, on the C anchor --------------------- */
+
+	/* These are the feel, and they are the reason the rewrite is allowed to
+	   touch the anchor and nothing else. Every number is what the shipped
+	   build produces: accel 1500, accelref 1536, accelmin 0.2, haul 3200,
+	   reel 3200, stiff 30, ropemin 64, sv_gravity 800.
+	   A rest length 256 short of the distance saturates the spring, so the
+	   acceleration clamp is what is being measured rather than the spring. */
+
+	place (704.f, 704.f, 1000.f);		/* air, so nothing interferes */
+	step (2);
+
+	/* An OVERHEAD rope nets the whole accel. The frame's budget is
+	   accel + gravity, because the next physics frame will spend gravity
+	   out of the same velocity, so the measured pull is 2300 and the felt
+	   climb is 1500. This is the identity the gravity compensation exists
+	   to hold, and it is what "the rope has no pickup when I'm falling"
+	   turned out to be. */
+	got = measure_pull (0.f, 0.f, 1552.f, 1280.f, 1.0/72.0);
+	CHECK (fabsf (got - 800.f - 1500.f) < 1.f,
+	       "an overhead rope delivers the whole accel (%.2f measured, "
+	       "1500 after gravity takes 800)", got - 800.f);
+
+	/* A LEVEL rope gets no compensation, because gravity does no work
+	   along it, so the same knob reads 1500 directly. The two together are
+	   the point: one number, same meaning, whatever the angle. */
+	got = measure_pull (1536.f, 0.f, 16.f, 1280.f, 1.0/72.0);
+	CHECK (fabsf (got - 1500.f) < 1.f,
+	       "a level rope delivers the same accel with no compensation (%.2f)", got);
+
+	/* Rope-length scaling: accelref earns all of it, a third of accelref
+	   earns a third. */
+	CHECK (fabsf (measure_pull (1536.f, 0.f, 16.f, 1280.f, 1.0/72.0) - 1500.f) < 1.f,
+	       "accelref earns the whole accel");
+	got = measure_pull (512.f, 0.f, 16.f, 256.f, 1.0/72.0);
+	CHECK (fabsf (got - 500.f) < 1.f,
+	       "a third of accelref earns a third of the accel (%.2f)", got);
+
+	/* accelmin is a FLOOR, not a scale: a rope far shorter than accelref
+	   still gets 0.2 of it, so closing on an anchor eases off instead of
+	   stopping dead. Needs ropemin out of the way, since the shipped 64 is
+	   longer than the rope under test. */
+	QC_ExecuteCommand ("vr_grapple_ropemin 8\n");
+	step (1);
+	got = measure_pull (16.f, 0.f, 16.f, 8.f, 1.0/72.0);
+	CHECK (fabsf (got - 300.f) < 1.f,
+	       "accelmin floors the short-rope pull at 0.2 (%.2f)", got);
+	QC_ExecuteCommand ("vr_grapple_ropemin 64\n");
+	step (1);
+
+	/* A SLACK rope does nothing at all. This is what makes a held hook
+	   feel like a rope rather than a rail, and where falling under your own
+	   control comes from. */
+	{
+		edict_t *p = svs.clients[0].edict;
+		vec3_t	anchor;
+		anchor[0] = p->v.origin[0] + 100.f;
+		anchor[1] = p->v.origin[1];
+		anchor[2] = p->v.origin[2] + 16.f;
+		p->v.velocity[0] = p->v.velocity[1] = p->v.velocity[2] = 0.f;
+		Grapple_TestSetAnchor (anchor, 500.f);
+		host_frametime = 1.0/72.0;
+		Grapple_TestSwing ();
+		CHECK (p->v.velocity[0] == 0.f && p->v.velocity[1] == 0.f
+		       && p->v.velocity[2] == 0.f,
+		       "a slack rope is an ordinary fall (velocity untouched)");
+	}
+
+	/* A LONG FRAME cannot outrun the budget. Both QC_Frame and
+	   Host_FilterTime permit 0.1 s, and an explicit spring integrated over
+	   a frame that long is where the old impulse version became a two-frame
+	   limit cycle. The per-frame delta must still be accel * dt. */
+	dv = measure_pull (1536.f, 0.f, 16.f, 1280.f, 0.1) * 0.1f;
+	CHECK (dv < 1500.f * 0.1f + 1.f,
+	       "a 0.1 s frame still spends only accel * dt (%.1f u/s added, "
+	       "budget %.1f)", dv, 1500.f * 0.1f);
+	host_frametime = 1.0/72.0;
+
+	/* The anchor's ENTITY dying mid-swing must not take the swing with it,
+	   and must not read a freed edict. A gibbed monster is exactly this. */
+	{
+		edict_t	*victim = NULL;
+		vec3_t	ofs;
+		int	i;
+
+		for (i = 1; i < sv.num_edicts; i++)
+		{
+			edict_t *e = EDICT_NUM (i);
+			if (!e->free && e->v.classname
+			    && strstr (PR_GetString (e->v.classname), "weapon_"))
+			{
+				victim = e;
+				break;
+			}
+		}
+		if (!victim)
+		{
+			failures++;
+			printf ("FAIL: no pickup entity in the gym to anchor to\n");
+		}
+		else
+		{
+			ofs[0] = 0.f; ofs[1] = 0.f; ofs[2] = 0.f;
+			Grapple_TestSetAnchorEnt (NUM_FOR_EDICT (victim), ofs);
+			CHECK (Grapple_TestAnchorNum () > 0,
+			       "the anchor can be an entity (edict %d)",
+			       Grapple_TestAnchorNum ());
+
+			ED_Free (victim);
+			Grapple_TestSwing ();
+			CHECK (Grapple_TestAnchorNum () == 0,
+			       "a freed anchor entity falls back to a world anchor");
+			CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
+			       "and the swing survives its anchor dying");
+		}
+	}
+
+	/* ---------------- the real grip, through Grapple_Frame -------------- */
+
+	/* Everything above drove the hook through the test seam. From here the
+	   pad goes in the front door, which is what the player's grip does, so
+	   the state machine's own gates are under test and not bypassed. */
+
+	place (704.f, 704.f, 1000.f);
+	aim (-90.f, 0.f);
+	grip (1);
+	step (3);
+	CHECK (Grapple_TestState (tip) != GRAPPLE_IDLE,
+	       "a held grip throws the hook through Grapple_Frame (state=%d)",
+	       Grapple_TestState (tip));
+
+	step (40);
+	CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
+	       "and it anchors (state=%d)", Grapple_TestState (tip));
+
+	/* The headline of the whole rewrite: the gun is untouched throughout. */
+	{
+		edict_t *p = svs.clients[0].edict;
+		float	weapon_before = p->v.weapon;
+		int	i, changed = 0;
+
+		for (i = 0; i < 30; i++)
+		{
+			step (1);
+			if (p->v.weapon != weapon_before)
+				changed = 1;
+		}
+		CHECK (!changed,
+		       "the player's weapon is untouched for a whole engagement "
+		       "(%.0f throughout)", weapon_before);
+	}
+
+	grip (0);
+	step (3);
+	CHECK (Grapple_TestState (tip) == GRAPPLE_IDLE,
+	       "releasing the grip lets go (state=%d)", Grapple_TestState (tip));
+
+	/* RESPAWN. A grip still held through death must not throw on the first
+	   spawned frame. Measured historically as the player being dragged
+	   across a level they had just arrived in, having pressed nothing. */
+	place (704.f, 704.f, 1000.f);
+	grip (1);
+	step (5);
+	CHECK (Grapple_TestState (tip) != GRAPPLE_IDLE,
+	       "a hook is out before the player dies");
+	QC_ExecuteCommand ("kill\n");
+	{
+		int i, threw = 0, cancelled = 0;
+
+		/* Death must cancel the live hook. */
+		for (i = 0; i < 30 && !cancelled; i++)
+		{
+			step (1);
+			if (Grapple_TestState (tip) == GRAPPLE_IDLE)
+				cancelled = 1;
+		}
+		CHECK (cancelled, "dying cancels the hook (%d frames)", i);
+
+		/* And then the still-held grip must stay refused. Single player
+		   does not respawn in place -- PlayerDeathThink waits for a
+		   button and restarts the level -- so what is observable here is
+		   the lock holding for as long as the player is down, which is
+		   the half this fix owns. The level-restart half is the map
+		   change asserted below. */
+		for (i = 0; i < 60; i++)
+		{
+			step (1);
+			if (Grapple_TestState (tip) != GRAPPLE_IDLE)
+				threw = 1;
+		}
+		CHECK (!threw,
+		       "and a grip still held while down never throws again");
+	}
+	grip (0);
+	step (3);
+	/* Off the respawn point before pressing again: the gym's
+	   info_player_start is on column (0,0)'s corner plane, so a throw from
+	   there is refused for starting inside solid, which would make this
+	   assertion fail for a reason that has nothing to do with the lock. */
+	place (704.f, 704.f, 1000.f);
+	aim (-90.f, 0.f);
+	grip (1);
+	step (3);
+	CHECK (Grapple_TestState (tip) != GRAPPLE_IDLE,
+	       "and a fresh press after the respawn does throw (state=%d)",
+	       Grapple_TestState (tip));
+	grip (0);
+	step (2);
+
+	/* A GAME SWITCH mid-swing must give sv_friction back. Nothing else
+	   does: COM_Game_f re-execs quake.rc without going near the disengage
+	   path, which is why Grapple_ResolveProgs releases it. */
+	{
+		cvar_t	*fr = Cvar_FindVar ("sv_friction");
+		float	before = fr ? fr->value : -1.f;
+
+		place (704.f, 704.f, 1000.f);
+		aim (-90.f, 0.f);
+		grip (1);
+		step (40);
+		CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
+		       "a swing is live before the map change (state=%d)",
+		       Grapple_TestState (tip));
+		CHECK (fr && fr->value == 0.f,
+		       "and friction is borrowed while it swings (%.2f)",
+		       fr ? fr->value : -1.f);
+
+		QC_ExecuteCommand ("map gym\n");
+		step (120);
+		CHECK (fr && fr->value == before,
+		       "a map change gives sv_friction back (%.2f, was %.2f)",
+		       fr ? fr->value : -1.f, before);
+		CHECK (Grapple_TestState (tip) == GRAPPLE_IDLE,
+		       "and leaves no swing behind (state=%d)",
+		       Grapple_TestState (tip));
+		grip (0);
+		step (2);
+	}
 
 	/* ---------------- the range: a sky lid, so up must NOT anchor ------- */
 
