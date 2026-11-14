@@ -1097,6 +1097,295 @@ static void Grapple_ForceDefaults (void)
 	Cbuf_AddText ("vr_grapple_damage 10\n");
 }
 
+/*
+==============================================================================
+
+	THE HOOK'S OWN ASSETS
+
+	The head model and the throw sound ship only with Dissolution of
+	Eternity. They cannot be reached from id1 by any amount of care with
+	the search path, because COM_Game_f does not merely outrank a mission
+	pack when you switch away from it -- it CLOSES the pak's handle and
+	frees its directory (common.c:2347-2359), so by the time you are in
+	vanilla those bytes are off the list entirely.
+
+	So the player's own two files are copied into id1 once, at startup,
+	where id1's directory element sits on the search path in every gamedir.
+	Nothing ships: a player who does not own the pack gets the fallback and
+	the three sounds the hook borrows from id1, which is most of it.
+
+	This parses a file format that arrives from the player's disk, so the
+	refusals matter more than the success. A pak directory is 64 bytes per
+	entry claiming an offset and a length, and nothing but this code stops
+	a corrupt or hostile one from naming a range outside the file.
+
+==============================================================================
+*/
+
+/* Big enough that the two real files move in a handful of passes, small
+   enough to sit in the platform's BSS without thought. Deliberately not a
+   Z_Malloc: this runs inside Grapple_Init, before the game has a heap worth
+   fragmenting, and a fixed buffer cannot fail. */
+static byte	grapple_copybuf[64 * 1024];
+
+static int Grapple_LE32 (const byte *p)
+{
+	/* The pak format is little-endian on every platform that has ever
+	   written one, so this does not go through the engine's LittleLong
+	   function pointer -- which is not yet installed when a host test
+	   calls straight in here. */
+	return (int) ((unsigned int) p[0]
+		      | ((unsigned int) p[1] << 8)
+		      | ((unsigned int) p[2] << 16)
+		      | ((unsigned int) p[3] << 24));
+}
+
+/*
+ * mkdir every prefix of `path`'s directory part. Sys_mkdir is a plain
+ * mkdir that forgives EEXIST, so the levels have to be walked by hand.
+ */
+static void Grapple_MkdirP (const char *path)
+{
+	char	work[MAX_OSPATH];
+	char	*s;
+
+	if (q_strlcpy (work, path, sizeof (work)) >= sizeof (work))
+		return;
+
+	/* Walk forward, truncating at each separator in turn. Skips a leading
+	   slash so an absolute path does not try to mkdir "". */
+	for (s = work + 1; *s; s++)
+	{
+		if (*s != '/')
+			continue;
+		*s = 0;
+		Sys_mkdir (work);
+		*s = '/';
+	}
+	/* The last component is the file itself, so nothing after the loop. */
+}
+
+static long Grapple_FileLength (const char *path)
+{
+	FILE	*f = fopen (path, "rb");
+	long	len;
+
+	if (!f)
+		return -1;
+	if (fseek (f, 0, SEEK_END) != 0)
+	{
+		fclose (f);
+		return -1;
+	}
+	len = ftell (f);
+	fclose (f);
+	return len;
+}
+
+/*
+ * Copy one archived file out of `pakpath` to `outpath`.
+ *
+ *   1  extracted
+ *   0  already there at the right size, nothing written
+ *  -1  the pak is missing, is not a pak, or the entry's claimed range does
+ *      not fit inside it
+ *  -2  the pak is fine and has no such entry
+ *  -3  the destination could not be written (and no partial file is left)
+ */
+static int Grapple_PakExtract (const char *pakpath, const char *inpak,
+			       const char *outpath)
+{
+	byte	hdr[12];
+	byte	ent[64];
+	FILE	*in, *out;
+	long	paklen;
+	int	dirofs, dirlen, count, i;
+	int	filepos = 0, filelen = 0;
+	int	found = 0;
+	int	remaining;
+
+	paklen = Grapple_FileLength (pakpath);
+	if (paklen < (long) sizeof (hdr))
+		return -1;
+
+	in = fopen (pakpath, "rb");
+	if (!in)
+		return -1;
+
+	if (fread (hdr, 1, sizeof (hdr), in) != sizeof (hdr)
+	    || memcmp (hdr, "PACK", 4) != 0)
+	{
+		fclose (in);
+		return -1;
+	}
+
+	dirofs = Grapple_LE32 (hdr + 4);
+	dirlen = Grapple_LE32 (hdr + 8);
+
+	/* The directory itself has to fit, and has to be a whole number of
+	   entries. Checked before the offset arithmetic below so a negative
+	   dirlen cannot become a huge count. */
+	if (dirofs < 0 || dirlen < 0 || (dirlen % 64) != 0
+	    || (long) dirofs + (long) dirlen > paklen)
+	{
+		fclose (in);
+		return -1;
+	}
+
+	count = dirlen / 64;
+	if (fseek (in, dirofs, SEEK_SET) != 0)
+	{
+		fclose (in);
+		return -1;
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		char	name[57];
+
+		if (fread (ent, 1, sizeof (ent), in) != sizeof (ent))
+		{
+			fclose (in);
+			return -1;
+		}
+		memcpy (name, ent, 56);
+		name[56] = 0;
+		/* Case-insensitive on purpose. COM_FindFile is exact because it
+		   must match what a map precached; this is our own lookup for
+		   two known names, and a pack written on a case-preserving
+		   filesystem is the player's problem to not have. */
+		if (q_strcasecmp (name, inpak) != 0)
+			continue;
+		filepos = Grapple_LE32 (ent + 56);
+		filelen = Grapple_LE32 (ent + 60);
+		found = 1;
+		break;
+	}
+
+	if (!found)
+	{
+		fclose (in);
+		return -2;
+	}
+
+	/* The entry is in the directory. Whether it is in the FILE is a
+	   separate question, and the only one that can hurt us. */
+	if (filepos < 0 || filelen < 0
+	    || (long) filepos + (long) filelen > paklen)
+	{
+		fclose (in);
+		return -1;
+	}
+
+	if (Grapple_FileLength (outpath) == (long) filelen)
+	{
+		fclose (in);
+		return 0;		/* already seeded */
+	}
+
+	if (fseek (in, filepos, SEEK_SET) != 0)
+	{
+		fclose (in);
+		return -1;
+	}
+
+	Grapple_MkdirP (outpath);
+	out = fopen (outpath, "wb");
+	if (!out)
+	{
+		fclose (in);
+		return -3;
+	}
+
+	remaining = filelen;
+	while (remaining > 0)
+	{
+		int	chunk = remaining;
+		size_t	got;
+
+		if (chunk > (int) sizeof (grapple_copybuf))
+			chunk = (int) sizeof (grapple_copybuf);
+		got = fread (grapple_copybuf, 1, (size_t) chunk, in);
+		if (got != (size_t) chunk
+		    || fwrite (grapple_copybuf, 1, got, out) != got)
+		{
+			fclose (out);
+			fclose (in);
+			remove (outpath);	/* never leave a partial */
+			return -3;
+		}
+		remaining -= chunk;
+	}
+
+	fclose (out);
+	fclose (in);
+	return 1;
+}
+
+/* What the hook wants, and where it has to land to be reachable from every
+   gamedir. The in-pak path and the id1 path are the same string because
+   nothing is being renamed: hook.mdl stays hook.mdl, so a player who later
+   installs the pack properly sees one file, not two. */
+static const char * const grapple_assets[] = {
+	"progs/hook.mdl",
+	"sound/weapons/chain1.wav"
+};
+
+/*
+ * Lift the hook's assets out of the player's own mission pack, once.
+ *
+ * Silent when the pack is not installed, which is the common case and not an
+ * error: QR_GrappleHeadModel falls back and the throw simply has no sound.
+ */
+static void Grapple_SeedAssets (void)
+{
+	const char	*roots[2];
+	int		nroots = 1;
+	size_t		i;
+	int		r;
+
+	roots[0] = com_basedir;
+	/* On a platform where the two differ, a pack dropped in through the
+	   Files app can be under either, exactly as COM_AddGameDirectory
+	   treats them (common.c:2263-2269). */
+	if (host_parms->userdir && *host_parms->userdir
+	    && strcmp (host_parms->userdir, com_basedir) != 0)
+		roots[nroots++] = host_parms->userdir;
+
+	for (i = 0; i < sizeof (grapple_assets) / sizeof (grapple_assets[0]); i++)
+	{
+		char	dst[MAX_OSPATH];
+		int	root;
+
+		q_snprintf (dst, sizeof (dst), "%s/%s/%s",
+			    com_basedir, GAMENAME, grapple_assets[i]);
+
+		for (root = 0; root < nroots; root++)
+		{
+			char	pak[MAX_OSPATH];
+
+			q_snprintf (pak, sizeof (pak), "%s/rogue/pak0.pak",
+				    roots[root]);
+			r = Grapple_PakExtract (pak, grapple_assets[i], dst);
+			if (r == 1)
+			{
+				Con_Printf ("[grapple] seeded %s from rogue\n",
+					    grapple_assets[i]);
+				break;
+			}
+			if (r == 0)
+				break;		/* already there */
+			if (r == -3)
+			{
+				Con_Printf ("[grapple] could not write %s\n", dst);
+				break;
+			}
+			/* -1 and -2 fall through to the next root, then out:
+			   not owning the pack is the normal case. */
+		}
+	}
+}
+
 void Grapple_Init (void)
 {
 	Cvar_RegisterVariable (&vr_grapple);
@@ -1111,6 +1400,10 @@ void Grapple_Init (void)
 	Cvar_RegisterVariable (&vr_grapple_accelmin);
 	Cvar_RegisterVariable (&vr_grapple_damage);
 	Grapple_ForceDefaults ();
+	/* After COM_InitFilesystem (host.c:66) and before S_Init
+	   (host.c:100), which is why this copies files and precaches
+	   nothing: there is no sound system yet to precache into. */
+	Grapple_SeedAssets ();
 }
 
 #ifdef QAVP_HOSTCHECK
@@ -1188,5 +1481,10 @@ void Grapple_TestSwing (void)
 
 	if (player)
 		Grapple_SwingFrame (player);
+}
+int Grapple_TestPakExtract (const char *pakpath, const char *inpak,
+			    const char *outpath)
+{
+	return Grapple_PakExtract (pakpath, inpak, outpath);
 }
 #endif	/* QAVP_HOSTCHECK */
