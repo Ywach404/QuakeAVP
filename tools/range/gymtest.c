@@ -87,6 +87,23 @@ static void step (int n)
 	}
 }
 
+/* Point v_angle at a world position. Quake's pitch is negative upward, which
+   is why the vertical term is negated. */
+static void aim_at (const vec3_t target)
+{
+	edict_t	*p = svs.clients[0].edict;
+	float	dx, dy, dz, horiz;
+
+	dx = target[0] - p->v.origin[0];
+	dy = target[1] - p->v.origin[1];
+	dz = target[2] - (p->v.origin[2] + 16.f);
+	horiz = sqrtf (dx*dx + dy*dy);
+
+	p->v.v_angle[YAW] = (float) (atan2 (dy, dx) * 180.0 / M_PI);
+	p->v.v_angle[PITCH] = (float) (-atan2 (dz, horiz) * 180.0 / M_PI);
+	p->v.v_angle[ROLL] = 0.f;
+}
+
 /* The player's grip, through the front door. */
 static void grip (int down)
 {
@@ -577,6 +594,98 @@ int main (int argc, char **argv)
 		}
 		CHECK (state == GRAPPLE_IDLE,
 		       "and the sky refuses that one too (state=%d)", state);
+	}
+
+	/* ---------------- hooking a monster hurts it ------------------------ */
+
+	/* The range has a firing line of monsters, which is why this half lives
+	   here and not in the gym. Nothing is hardcoded about where they are:
+	   the driver finds one, then tries a few directions until a throw
+	   actually anchors ON it, and says so if none does. */
+	{
+		edict_t	*mob = NULL;
+		int	i, anchored_on_mob = 0;
+		float	health_before = 0.f;
+		static const float dirs[4][2] = {
+			{ -400.f, 0.f }, { 400.f, 0.f }, { 0.f, -400.f }, { 0.f, 400.f }
+		};
+
+		QC_ExecuteCommand ("notarget\n");
+		step (10);
+
+		/* Skipping the player matters: edict 1 IS the player, and a
+		   player is damageable and SOLID_SLIDEBOX like any monster, so
+		   a search on those two facts alone finds the thrower. It did,
+		   and the throws then anchored on the world behind it. */
+		for (i = 1; i < sv.num_edicts; i++)
+		{
+			edict_t *e = EDICT_NUM (i);
+			if (e->free || e == svs.clients[0].edict)
+				continue;
+			if (e->v.takedamage != 0.f && e->v.health > 0.f
+			    && e->v.solid == SOLID_SLIDEBOX
+			    && e->v.classname
+			    && strstr (PR_GetString (e->v.classname), "monster"))
+			{
+				/* And it must be a monster whose health is
+				   ALREADY stable. The first candidate was
+				   losing 8 health over 30 frames to something
+				   in the map, which would have made "hurt once,
+				   not every frame" fail for a reason that has
+				   nothing to do with the hook. */
+				float h = e->v.health;
+				step (20);
+				if (e->free || e->v.health != h)
+					continue;
+				mob = e;
+				break;
+			}
+		}
+		CHECK (mob != NULL, "the range has a damageable monster to hook");
+
+		for (i = 0; mob && i < 4 && !anchored_on_mob; i++)
+		{
+			vec3_t	target;
+
+			target[0] = mob->v.origin[0];
+			target[1] = mob->v.origin[1];
+			target[2] = mob->v.origin[2] + 16.f;
+
+			place (mob->v.origin[0] + dirs[i][0],
+			       mob->v.origin[1] + dirs[i][1],
+			       mob->v.origin[2] + 24.f);
+			step (2);
+			aim_at (target);
+			health_before = mob->v.health;
+
+			state = throw_and_settle (60, tip);
+			printf ("      (try %d from %+.0f %+.0f: state=%d anchor=%d "
+				"want=%d tip %.0f %.0f %.0f)\n",
+				i, dirs[i][0], dirs[i][1], state,
+				Grapple_TestAnchorNum (), NUM_FOR_EDICT (mob),
+				tip[0], tip[1], tip[2]);
+			if (state == GRAPPLE_ANCHORED
+			    && Grapple_TestAnchorNum () == NUM_FOR_EDICT (mob))
+				anchored_on_mob = 1;
+		}
+
+		CHECK (anchored_on_mob,
+		       "a throw at a monster anchors on the monster itself");
+		if (anchored_on_mob)
+		{
+			CHECK (mob->v.health == health_before - 10.f,
+			       "and hooking it costs it vr_grapple_damage "
+			       "(%.0f -> %.0f, expected %.0f)",
+			       health_before, mob->v.health, health_before - 10.f);
+
+			/* Once per throw, not per frame. A rope that keeps
+			   hurting what it is tied to is a different weapon. */
+			health_before = mob->v.health;
+			step (30);
+			CHECK (mob->v.health == health_before,
+			       "and it is hurt once, not every frame (%.0f)",
+			       mob->v.health);
+		}
 	}
 
 	printf (failures ? "\n%d FAILURES\n" : "\nall passed\n", failures);

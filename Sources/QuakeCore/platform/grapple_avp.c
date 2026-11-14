@@ -167,6 +167,12 @@ instead of sinking because its budget no longer covers the fall.
 static cvar_t	vr_grapple_accelref = {"vr_grapple_accelref", "1536", CVAR_NONE};
 static cvar_t	vr_grapple_accelmin = {"vr_grapple_accelmin", "0.2", CVAR_NONE};
 
+/* What a hooked monster loses. 10 is rogue's own hook damage per hit, so this
+   is the value that changes nothing for a player who already knows the
+   weapon. Applied once per throw, not per frame: a rope that keeps hurting
+   what it is tied to is a different weapon and nobody asked for one. */
+static cvar_t	vr_grapple_damage = {"vr_grapple_damage", "10", CVAR_NONE};
+
 /* in_null.c, file-local extern the way qr_bridge.c takes the same symbol at
    qr_bridge.c:76. Returns 0 when the aim channel is not live. */
 extern int	QR_HandOrigin (vec3_t out);
@@ -201,6 +207,15 @@ static vec3_t		qr_grapple_anchor_ofs;
 static dprograms_t	*grapple_progs_key;
 static unsigned short	grapple_crc_key;
 static qboolean		grapple_resolved;
+
+/* T_Damage, or 0. The ONE thing this module asks of a game's progs, and it is
+   optional in the strongest sense: a progs without it gets a hook that
+   anchors and swings and simply does not hurt what it catches. It can never
+   gate whether the hook works.
+   It is affordable where rogue's six symbols were not, because T_Damage is
+   defined in id1's own combat.qc and every game here is id1-derived, so
+   unlike W_FireGrapple it is expected everywhere rather than in one pack. */
+static func_t		grapple_damage;
 
 
 /* Set whenever a swing ends for any reason OTHER than the player letting go,
@@ -306,8 +321,19 @@ static void Grapple_ResolveProgs (void)
 	qr_grapple_engaged = false;
 	qr_grapple_locked = false;
 	Grapple_ReleaseFriction ();
+	grapple_damage = 0;
 	if (!progs)
 		return;
+
+	/* The arity check is the guard, not a formality. PR_EnterFunction copies
+	   arguments out of OFS_PARM0 + i*3 + j for i < f->numparms, so it is the
+	   CALLEE's declared arity that decides what gets read: a mod whose
+	   T_Damage takes a fifth deathtype parameter would have it read out of
+	   whatever OFS_PARM4 happened to hold. An unexpected arity is therefore
+	   treated exactly as a missing function. */
+	grapple_damage = Grapple_FuncByName ("T_Damage");
+	if (grapple_damage && pr_functions[grapple_damage].numparms != 4)
+		grapple_damage = 0;
 }
 
 static edict_t *Grapple_Player (void)
@@ -409,6 +435,49 @@ PF_precache_model refuses outside ss_loading, so there is no way to add one at
 fire time. The renderer draws the head and the rope from qr_grapple_tip
 instead, client side, out of models it loads for itself.
 */
+
+/*
+Hurt what the hook caught.
+
+T_Damage (entity targ, entity inflictor, entity attacker, float damage), so
+four parameters, and this is the first place in platform/ that passes any. The
+three existing callers of PR_ExecuteProgram pass state only through
+pr_global_struct->self, so there was no pattern to copy: arguments go in
+OFS_PARM0 upward, three floats apart, and PR_EnterFunction copies them into the
+callee's locals on entry.
+
+self and other are both saved and restored, on the model of admin_avp.c's
+FoundTarget call, because IN_Commands runs inside Host_Frame's error frame and
+a QuakeC runaway in here has to unwind exactly as a think would.
+
+The player is both inflictor and attacker: the rope is not a separate entity
+any more, so there is nothing else it could honestly be, and it means a hooked
+monster blames the player, which is what you want.
+*/
+static void Grapple_Damage (edict_t *player, edict_t *targ, float damage)
+{
+	int	saved_self, saved_other;
+
+	if (!grapple_damage || !player || !targ || targ->free)
+		return;
+	if (targ->v.takedamage == 0.f || damage <= 0.f)
+		return;
+
+	saved_self = pr_global_struct->self;
+	saved_other = pr_global_struct->other;
+
+	G_INT (OFS_PARM0) = EDICT_TO_PROG (targ);
+	G_INT (OFS_PARM1) = EDICT_TO_PROG (player);
+	G_INT (OFS_PARM2) = EDICT_TO_PROG (player);
+	G_FLOAT (OFS_PARM3) = damage;
+
+	pr_global_struct->self = EDICT_TO_PROG (targ);
+	pr_global_struct->other = EDICT_TO_PROG (player);
+	PR_ExecuteProgram (grapple_damage);
+
+	pr_global_struct->self = saved_self;
+	pr_global_struct->other = saved_other;
+}
 
 /*
 Resolve the anchor to world space, and survive its entity dying.
@@ -560,6 +629,11 @@ static void Grapple_FlightFrame (edict_t *player, float dt)
 			VectorCopy (tr.endpos, qr_grapple_anchor_ofs);
 		}
 		qr_grapple_state = GRAPPLE_ANCHORED;
+
+		/* Once, here, on the bite. Not in the swing frame, which runs
+		   every tick. */
+		if (qr_grapple_anchor_num > 0)
+			Grapple_Damage (player, tr.ent, vr_grapple_damage.value);
 		return;
 	}
 
@@ -1003,6 +1077,7 @@ static void Grapple_ForceDefaults (void)
 	Cbuf_AddText ("vr_grapple_accel 1500\n");
 	Cbuf_AddText ("vr_grapple_accelref 1536\n");
 	Cbuf_AddText ("vr_grapple_accelmin 0.2\n");
+	Cbuf_AddText ("vr_grapple_damage 10\n");
 }
 
 void Grapple_Init (void)
@@ -1017,6 +1092,7 @@ void Grapple_Init (void)
 	Cvar_RegisterVariable (&vr_grapple_accel);
 	Cvar_RegisterVariable (&vr_grapple_accelref);
 	Cvar_RegisterVariable (&vr_grapple_accelmin);
+	Cvar_RegisterVariable (&vr_grapple_damage);
 	Grapple_ForceDefaults ();
 }
 
