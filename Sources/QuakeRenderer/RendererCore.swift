@@ -1630,8 +1630,17 @@ final class RendererCore {
     /// under the device's foveation rate map, and the hook head is three
     /// crossed ribbons rather than a billboard because a nub that reads solid
     /// from any angle is cheaper than getting a billboard's basis right.
+    /// Draw the rope, and the head only when the engine did not.
+    ///
+    /// `engineDrewHead` is `qc_frame_t.grapple_head`. When the hook's own
+    /// model resolved, the head is already in the packet's entity list as a
+    /// lit, depth-tested alias model, and the crossing below would sit inside
+    /// it. The crossing is the fallback for a player with no copy of the
+    /// mission pack the model ships in. The rope is always ours, because its
+    /// near end is welded to a hand pose newer than this packet.
     func drawGrappleRope(from hand: SIMD3<Float>, to tip: SIMD3<Float>,
                          facing eye: SIMD3<Float>, anchored: Bool,
+                         engineDrewHead: Bool,
                          viewproj0: simd_float4x4, viewproj1: simd_float4x4,
                          pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
         let span = tip - hand
@@ -1661,15 +1670,17 @@ final class RendererCore {
         var v: [Float] = []
         v.reserveCapacity(4 * 6 * 7)
         Self.addRibbon(hand, tip, perp: perp, t: halfThick, color: rope, into: &v)
-        // Three crossed ribbons at the tip. The rope's own direction is one
-        // axis so the head always reads as attached to it.
-        let ax = dir, ay = perp, az = simd_normalize(simd_cross(dir, perp))
-        Self.addRibbon(tip - ax * nub, tip + ax * nub, perp: ay, t: nub * 0.45,
-                       color: head, into: &v)
-        Self.addRibbon(tip - ay * nub, tip + ay * nub, perp: az, t: nub * 0.45,
-                       color: head, into: &v)
-        Self.addRibbon(tip - az * nub, tip + az * nub, perp: ax, t: nub * 0.45,
-                       color: head, into: &v)
+        if !engineDrewHead {
+            // Three crossed ribbons at the tip. The rope's own direction is
+            // one axis so the head always reads as attached to it.
+            let ax = dir, ay = perp, az = simd_normalize(simd_cross(dir, perp))
+            Self.addRibbon(tip - ax * nub, tip + ax * nub, perp: ay, t: nub * 0.45,
+                           color: head, into: &v)
+            Self.addRibbon(tip - ay * nub, tip + ay * nub, perp: az, t: nub * 0.45,
+                           color: head, into: &v)
+            Self.addRibbon(tip - az * nub, tip + az * nub, perp: ax, t: nub * 0.45,
+                           color: head, into: &v)
+        }
 
         guard let buf = device.makeBuffer(bytes: v,
                                           length: v.count * MemoryLayout<Float>.size,

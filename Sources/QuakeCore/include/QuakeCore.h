@@ -523,6 +523,20 @@ typedef struct qc_frame_s {
 	int32_t		grapple_state;
 	float		grapple_tip[3];
 
+	/* Whether the ENGINE drew the hook head this frame, as a real alias
+	   entity in the entity list above.
+
+	   The head is a world object -- it flies, then it sits on a wall --
+	   and is never welded to the hand the way the rope's near end is, so
+	   it belongs in the ordinary alias path and gets that path's lighting,
+	   depth and culling. Its model is Dissolution of Eternity's own
+	   progs/hook.mdl, which a player who does not own that pack will not
+	   have; when it cannot be resolved this is 0 and the consumer draws
+	   its own crossing at grapple_tip instead. Separate from
+	   grapple_state because the two answer different questions: whether
+	   there is a hook, and whether the engine already drew its head. */
+	int32_t		grapple_head;
+
 	/* Sprite models as 3D billboarded TEXTURED quads (explosions, bubbles).
 	   Five floats per vertex: xyz position (Quake units) and st; six vertices
 	   per quad, batched by texture. Depth-tested against the world, no write,

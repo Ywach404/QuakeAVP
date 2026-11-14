@@ -1130,6 +1130,7 @@ final class ImmersiveRenderer {
                                           head: originFromDevice.columns.3) {
                     core.drawGrappleRope(from: rope.hand, to: rope.tip, facing: rope.head,
                                          anchored: rope.anchored,
+                                         engineDrewHead: rope.engineDrewHead,
                                          viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                          pipelines: pipelines, encoder: encoder)
                 }
@@ -1202,6 +1203,7 @@ final class ImmersiveRenderer {
                                               head: originFromDevice.columns.3) {
                         core.drawGrappleRope(from: rope.hand, to: rope.tip, facing: rope.head,
                                              anchored: rope.anchored,
+                                             engineDrewHead: rope.engineDrewHead,
                                              viewproj0: handViewproj[index],
                                              viewproj1: handViewproj[index],
                                              pipelines: pipelines, encoder: encoder)
@@ -1429,7 +1431,8 @@ final class ImmersiveRenderer {
     /// the hand itself.
     private func grappleRope(packet: qc_frame_t, originFromQuake: simd_float4x4,
                              head: SIMD4<Float>)
-        -> (hand: SIMD3<Float>, tip: SIMD3<Float>, head: SIMD3<Float>, anchored: Bool)? {
+        -> (hand: SIMD3<Float>, tip: SIMD3<Float>, head: SIMD3<Float>,
+            anchored: Bool, engineDrewHead: Bool)? {
         guard packet.grapple_state != 0, let hand = offHandWristPosition() else { return nil }
 
         let q = SIMD4<Float>(packet.grapple_tip.0, packet.grapple_tip.1,
@@ -1438,7 +1441,8 @@ final class ImmersiveRenderer {
         return (hand: hand,
                 tip: SIMD3(t.x, t.y, t.z),
                 head: SIMD3(head.x, head.y, head.z),
-                anchored: packet.grapple_state == 2)
+                anchored: packet.grapple_state == 2,
+                engineDrewHead: packet.grapple_head != 0)
     }
 
     // MARK: - Modular HUD tile placement (vr_hud 3)

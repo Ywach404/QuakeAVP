@@ -53,6 +53,11 @@ void Grapple_TestSetAnchor (const float anchor[3], float rope_len);
 void Grapple_TestSetAnchorEnt (int entnum, const float ofs[3]);
 int  Grapple_TestAnchorNum (void);
 void Grapple_TestSwing (void);
+void Grapple_TestDisengage (void);
+
+/* The head's drawn pose: 1 when there is a head, with the origin, the
+   angles and rogue's own frame choice (1 flying, 2 stuck). */
+int  QR_GrappleHeadPose (float origin[3], float angles[3], int *frame);
 
 /* host.c's frame length, which Grapple_SwingFrame reads as its dt. Set
    directly so a long frame can be tested without waiting for one. */
@@ -339,6 +344,152 @@ int main (int argc, char **argv)
 			       f->grapple_tip[2]);
 			QC_RendererReleaseFrame ();
 		}
+	}
+
+	/* ---------------- the hook head: pose, frame and model ------------- */
+
+	/* A. asked for Dissolution of Eternity's own hook poly on the end of
+	   the rope. The head is a WORLD object -- it flies, then it sits on a
+	   wall -- and never welded to the hand the way the rope's near end is,
+	   so it goes through the engine's ordinary alias path and gets real
+	   lighting, depth and culling rather than being drawn Swift-side.
+	   What is checkable here is the pose it is drawn with and whether the
+	   model resolved; what it LOOKS like is device-only.
+
+	   rogue's own QuakeC picks frame 1 in flight and frame 2 once stuck
+	   (W_FireGrapple sets .frame 1, GrappleAnchor sets 2), so the hook
+	   visibly changes pose when it bites. That is worth keeping. */
+	{
+		vec3_t	horigin, hangles, frozen;
+		int	hframe = -1, drawn, i;
+
+		place (704.f, 704.f, 40.f);
+		step (2);
+		aim (-90.f, 0.f);			/* straight up */
+		Grapple_TestThrow ();
+
+		drawn = QR_GrappleHeadPose (horigin, hangles, &hframe);
+		Grapple_TestState (tip);
+		CHECK (drawn == 1, "a hook in flight has a head to draw (%d)", drawn);
+		CHECK (hframe == 1, "and it is on the flight frame (%d, want 1)", hframe);
+		CHECK (fabsf (horigin[0] - tip[0]) < 0.01f
+		       && fabsf (horigin[1] - tip[1]) < 0.01f
+		       && fabsf (horigin[2] - tip[2]) < 0.01f,
+		       "the head sits exactly on the rope's far end");
+		/* VectorAngles puts straight up at pitch -90 (mathlib.c:193),
+		   which is what orients an engine missile along its velocity. */
+		CHECK (fabsf (hangles[0] + 90.f) < 1.f,
+		       "a hook thrown straight up points straight up (pitch %.1f, want -90)",
+		       hangles[0]);
+
+		for (i = 0; i < 60 && Grapple_TestState (tip) == GRAPPLE_FLYING; i++)
+			step (1);
+		drawn = QR_GrappleHeadPose (horigin, hangles, &hframe);
+		CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED && drawn == 1,
+		       "an anchored hook still has a head to draw (%d)", drawn);
+		CHECK (hframe == 2, "and it is on the stuck frame (%d, want 2)", hframe);
+
+		/* Frozen, not recomputed: once it is in the wall the velocity
+		   that put it there is gone, so a pose derived from the live
+		   velocity would snap to zero on the bite. */
+		VectorCopy (hangles, frozen);
+		step (5);
+		QR_GrappleHeadPose (horigin, hangles, &hframe);
+		CHECK (fabsf (hangles[0] - frozen[0]) < 0.01f
+		       && fabsf (hangles[1] - frozen[1]) < 0.01f,
+		       "the stuck hook's angles are frozen, not recomputed "
+		       "(%.2f %.2f vs %.2f %.2f)",
+		       hangles[0], hangles[1], frozen[0], frozen[1]);
+
+		/* An idle hook has no head at all. */
+		Grapple_TestDisengage ();
+		drawn = QR_GrappleHeadPose (horigin, hangles, &hframe);
+		CHECK (drawn == 0, "an idle hook has no head to draw (%d)", drawn);
+	}
+
+	/* ---------------- the head model resolves, or honestly does not ---- */
+
+	/* The gym's basedir has no rogue pak, so hook.mdl is absent here and
+	   only the FALLBACK branch would ever run. vr_grapple_headmodel is
+	   what makes both branches testable on the host, and it doubles as
+	   A.'s console knob. progs/spike.mdl is in id1's pak0 on every
+	   install, so it stands in for the real head.
+
+	   The anchor is PARKED rather than thrown: this is about the model and
+	   the packet, and a parked anchor holds still across the frames the
+	   comparison needs. */
+	{
+		const qc_frame_t	*f;
+		uint32_t		with_model = 0, without_model = 0;
+		int			head_with = -1, head_without = -1;
+		vec3_t			park;
+
+		place (704.f, 704.f, 40.f);
+		step (2);
+		/* IN VIEW, along the render forward. The head is a world
+		   entity and is frustum culled like any other, so a point
+		   straight up over a level view is not a place a drawn-entity
+		   count can be measured: that is exactly how the first version
+		   of this read as "the model did not resolve". */
+		{
+			vec3_t	fwd, rt, up;
+
+			/* All three out-params, because AngleVectors writes
+			   every one of them unconditionally and a NULL is a
+			   segfault, not an opt-out (mathlib.c:198). */
+			AngleVectors (r_refdef.viewangles, fwd, rt, up);
+			VectorMA (r_refdef.vieworg, 256.f, fwd, park);
+		}
+
+		Cvar_Set ("vr_grapple_headmodel", "progs/spike.mdl");
+		Grapple_TestSetAnchor (park, 512.f);
+		step (1);
+		f = QC_RendererAcquireFrame ();
+		if (f)
+		{
+			with_model = f->num_entities;
+			head_with = f->grapple_head;
+			QC_RendererReleaseFrame ();
+		}
+		CHECK (head_with == 1,
+		       "a resolvable head model is reported drawn (%d)", head_with);
+
+		/* Same anchor, a model that cannot exist. The cache key has to
+		   include the cvar or this keeps the old pointer and the check
+		   passes for the wrong reason. */
+		Cvar_Set ("vr_grapple_headmodel", "progs/qavp_no_such_model.mdl");
+		Grapple_TestSetAnchor (park, 512.f);
+		step (1);
+		f = QC_RendererAcquireFrame ();
+		if (f)
+		{
+			without_model = f->num_entities;
+			head_without = f->grapple_head;
+			QC_RendererReleaseFrame ();
+		}
+		CHECK (head_without == 0,
+		       "an absent head model is reported NOT drawn (%d)", head_without);
+		CHECK (with_model == without_model + 1,
+		       "the head is exactly one alias entity (%u with, %u without)",
+		       with_model, without_model);
+
+		/* And an idle hook draws no head even with a good model. */
+		Cvar_Set ("vr_grapple_headmodel", "progs/spike.mdl");
+		Grapple_TestDisengage ();
+		step (1);
+		f = QC_RendererAcquireFrame ();
+		if (f)
+		{
+			head_without = f->grapple_head;
+			CHECK (f->num_entities == without_model,
+			       "an idle hook adds no entity (%u, want %u)",
+			       f->num_entities, without_model);
+			QC_RendererReleaseFrame ();
+		}
+		CHECK (head_without == 0,
+		       "an idle hook reports no head (%d)", head_without);
+
+		Cvar_Set ("vr_grapple_headmodel", "progs/hook.mdl");
 	}
 
 	/* ---------------- the pendulum, on the C anchor --------------------- */

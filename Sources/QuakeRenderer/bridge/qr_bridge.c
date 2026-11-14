@@ -7760,6 +7760,142 @@ static void QR_EmitPhaseGround (qr_frame_slot_t *slot)
 	}
 }
 
+/*
+==============================================================================
+
+	THE GRAPPLING HOOK'S HEAD
+
+	The rope is drawn Swift-side, because its near end is welded to a hand
+	whose pose is late-latched and so newer than this packet. The HEAD is
+	the opposite case: it flies through the world and then sits on a wall,
+	never attached to the hand at all, so it belongs here and gets this
+	path's lighting, depth testing and frustum culling for nothing.
+
+	Its model is Dissolution of Eternity's own progs/hook.mdl. A player who
+	does not own that pack has no such file, and that is not an error: the
+	publish reports a head of 0 and the consumer draws its own crossing at
+	the tip instead.
+
+==============================================================================
+*/
+
+/*
+ * Emit the hook head, and record in the packet whether the engine owns it.
+ *
+ * slot->frame.grapple_head is written HERE rather than beside grapple_state,
+ * because grapple_state is published from QR_RenderView and this runs later,
+ * in QR_BuildFramePacket. A file static read from the earlier function
+ * carried the PREVIOUS frame's answer, which measured as the flag being
+ * exactly inverted while the entity count was right.
+ */
+static void QR_EmitGrappleHead (qr_frame_slot_t *slot)
+{
+	/* Keyed on the world, the game AND the model name. The world alone
+	   cannot see a `game` change: COM_Game_f calls Mod_ResetAll, which
+	   memsets every qmodel_t and resets mod_numknown to 0, so the next
+	   world lands back at mod_known[0] and the pointer compares EQUAL
+	   across exactly the switch that must invalidate. Reusing it there
+	   runs Mod_Extradata on a zeroed model, which is a Sys_Error at DRAW
+	   time. The name is in the key because it is a cvar, and a player who
+	   retargets it mid-session must not keep the old pointer. */
+	static qmodel_t		*cachekey;
+	static unsigned int	cachegame;
+	static char		cachename[MAX_QPATH];
+	static qmodel_t		*head;
+
+	entity_t	e;
+	vec3_t		origin, angles;
+	int		frame = 1;
+	uint32_t	before;
+
+	if (cls.signon != SIGNONS || !cl.worldmodel)
+		return;			/* QR_SetupAliasLighting needs a world */
+
+	if (cachekey != cl.worldmodel
+	    || cachegame != (unsigned int) QR_WeaponGameKey ()
+	    || strcmp (cachename, vr_grapple_headmodel.string) != 0)
+	{
+		int	m;
+
+		cachekey = cl.worldmodel;
+		cachegame = (unsigned int) QR_WeaponGameKey ();
+		q_strlcpy (cachename, vr_grapple_headmodel.string, sizeof (cachename));
+		head = NULL;
+
+		if (*cachename)
+		{
+			/* Already precached by the map costs nothing to reuse,
+			   and rogue precaches the hook for its own weapon. */
+			for (m = 1; m < MAX_MODELS && cl.model_precache[m]; m++)
+				if (!strcmp (cl.model_precache[m]->name, cachename))
+				{
+					head = cl.model_precache[m];
+					break;
+				}
+			/* Otherwise on demand, crash=FALSE. With crash=true a
+			   player without the pack would be dropped to the
+			   console the first time they threw, which is the
+			   beam.mdl landmine over again (cl_tent.c:224).
+			   Resolved once per key and never per frame: a miss is
+			   not cached engine-side, so a per-frame call re-walks
+			   every pak in the path every frame. */
+			if (!head)
+				head = Mod_ForName (cachename, false);
+		}
+	}
+
+	if (!head)
+		return;
+	if (!QR_GrappleHeadPose (origin, angles, &frame))
+		return;
+
+	/* From here the engine owns the head, whatever the frustum then
+	   decides, so the consumer must not draw its fallback. */
+	slot->frame.grapple_head = 1;
+
+	memset (&e, 0, sizeof (e));
+	e.model = head;
+	VectorCopy (origin, e.origin);
+	VectorCopy (angles, e.angles);
+	e.frame = frame;
+	e.skinnum = 0;
+	/* True size. A memset-zero scale decodes to 0 through
+	   ENTSCALE_DECODE and the model is simply invisible. */
+	e.scale = ENTSCALE_DEFAULT;
+	/* A fresh stack entity each frame carries no lerp history, so ask for
+	   none rather than interpolating from zeros. The hook moves its head
+	   every host frame and wants the origin used verbatim. */
+	e.lerpflags = LERP_RESETANIM | LERP_RESETMOVE;
+
+	before = slot->frame.num_entities;
+	QR_EmitAliasModel (slot, &e);
+	if (slot->frame.num_entities == before)
+	{
+		/* Frustum culled (R_CullModelForEntity, qr_bridge.c), or the
+		   mesh carried no indexes. Still 1: the return value answers
+		   "does the engine own this head", not "did an entity go out
+		   this frame". Answering the narrower question would make the
+		   consumer draw its fallback crossing on every frame the head
+		   happened to be off screen, which is both pointless and a
+		   flicker at the edge of view, since the consumer's stereo
+		   frustum is not this one. Measured: a head parked 490 units
+		   above a level view culls, and the first version of this
+		   reported no head at all. */
+		return;
+	}
+
+	/* Floor the light the way the wheel does. World lighting is right in
+	   spirit, but a hook stuck in an unlit ceiling is the one thing the
+	   player is looking for, and black is not an answer. */
+	{
+		qc_entity_t	*rec = &slot->entities[slot->frame.num_entities - 1];
+		int		c;
+
+		for (c = 0; c < 3; c++)
+			rec->light[c] = q_max (rec->light[c], 0.40f);
+	}
+}
+
 static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 {
 	int i;
@@ -8039,6 +8175,10 @@ static void QR_BuildFramePacket (qr_frame_slot_t *slot)
 	QR_EmitPathDebug (slot);
 	QR_ProjDebug ();
 	QR_EmitWheel (slot);
+	/* After the wheel: qr_handweapon and qr_wheelclip_on are file statics
+	   that modify ANY entity emitted while they are set, and the wheel is
+	   what resets them on its way out. */
+	QR_EmitGrappleHead (slot);
 	QR_EmitCenterPrint (slot);
 	QR_EmitHud (slot);
 	QR_EmitModularHud (slot);
@@ -8083,6 +8223,7 @@ void QR_BeginFrame (void)
 	   hook out cannot inherit the last one's tip and leave a rope hanging
 	   in the air. */
 	slot->frame.grapple_state = 0;
+	slot->frame.grapple_head = 0;
 	slot->frame.grapple_tip[0] = 0.f;
 	slot->frame.grapple_tip[1] = 0.f;
 	slot->frame.grapple_tip[2] = 0.f;

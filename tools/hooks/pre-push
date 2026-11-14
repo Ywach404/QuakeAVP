@@ -21,6 +21,32 @@
 # Install: tools/hooks/install.sh, or copy to .git/hooks/pre-push.
 # Override once, deliberately:  QAVP_ALLOW_PUBLIC_DOCS=1 git push github main
 #
+# Two further rules were added 2026-10-22, because git pushes commits and not
+# files, so a repo with a private and a public remote is one history at two
+# addresses:
+#
+#   B. Private notebook paths never reach the public remote. The notebook
+#      lives outside every repository, so this should never fire; it costs one
+#      confusing message if it misfires and a permanent public commit if it is
+#      absent.
+#   C. The names of my other projects never reach the public remote. Which
+#      mechanic came out of which port is not something the public history
+#      says. Added lines only, so removing a mention is never blocked, and the
+#      name list lives in ~/.config/git/sibling-projects and never in this
+#      file, because this file is tracked and published and a list here would
+#      disclose exactly what it exists to protect. No list, no rule: a
+#      stranger's clone just skips it.
+#
+# QAVP_ALLOW_PUBLIC_DOCS clears rule A only. It means "publish these working
+# documents on purpose", which says nothing about the notebook or the other
+# projects.
+#
+# To retire any of this, delete the rule from this file and from
+# .git/hooks/pre-push. Scope is stated so it can be found and removed later
+# without having to defeat it first.
+#
+# Note: `git push --no-verify` skips this hook entirely. That is git.
+#
 # $1 = remote name, $2 = remote URL. Ref lines arrive on stdin as
 # "<local ref> <local sha> <remote ref> <remote sha>".
 
@@ -30,6 +56,7 @@ REMOTE_NAME="${1:-}"
 REMOTE_URL="${2:-}"
 ZERO='0000000000000000000000000000000000000000'
 GUARDED='docs/designs docs/plans'
+SIBLINGS="$HOME/.config/git/sibling-projects"
 
 # Only the public remote. A GitLab push is the normal case and must stay quiet.
 case "$REMOTE_NAME$REMOTE_URL" in
@@ -37,47 +64,184 @@ case "$REMOTE_NAME$REMOTE_URL" in
 	*) exit 0 ;;
 esac
 
-if [ "${QAVP_ALLOW_PUBLIC_DOCS:-0}" = "1" ]; then
-	echo "pre-push: QAVP_ALLOW_PUBLIC_DOCS=1 -- publishing working documents on purpose." >&2
-	exit 0
+# stdin is read once, here, because three rules need the same ref lines and a
+# pipe can only be consumed once.
+REFS=$(mktemp) || exit 0
+PATHS=$(mktemp) || exit 0
+ADDED=$(mktemp) || exit 0
+ADDED_DOCS=$(mktemp) || exit 0
+trap 'rm -f "$REFS" "$PATHS" "$ADDED" "$ADDED_DOCS"' EXIT INT TERM
+
+cat >"$REFS"
+
+# The hook is also invoked with no ref lines, on an up to date push and on
+# --dry-run. Nothing to inspect is not a reason to refuse.
+[ -s "$REFS" ] || exit 0
+
+# A push to a bare URL sets $1 to the URL, which --remotes=<name> cannot use.
+if [ "$REMOTE_NAME" = "$REMOTE_URL" ]; then
+	NOTREF='--remotes'
+else
+	NOTREF="--remotes=$REMOTE_NAME"
 fi
 
-hits=''
+saw_a_ref=0
+
 while read -r local_ref local_sha remote_ref remote_sha; do
+	[ -z "${local_sha:-}" ] && continue
 	# A branch deletion pushes a zero local sha and carries no tree.
 	[ "$local_sha" = "$ZERO" ] && continue
+	saw_a_ref=1
 
-	if [ "$remote_sha" = "$ZERO" ]; then
-		# New branch there: everything not already on that remote is new.
-		range="$local_sha --not --remotes=$REMOTE_NAME"
+	# The remote sha is what the remote advertises and may not exist here if
+	# I pushed from another machine, so probe it before using it as a base.
+	if [ "$remote_sha" != "$ZERO" ] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+		base_ok=1
 	else
-		range="$remote_sha..$local_sha"
+		base_ok=0
 	fi
 
-	# shellcheck disable=SC2086
-	found=$(git log --name-only --pretty=format: --no-renames $range \
-			-- $GUARDED 2>/dev/null | sed '/^$/d' | sort -u)
-	[ -n "$found" ] && hits="$hits$found
-"
-done
+	if [ "$base_ok" = 1 ]; then
+		paths=$(git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null)
+		git diff "$remote_sha" "$local_sha" 2>/dev/null \
+			| grep '^+' | grep -v '^+++' >>"$ADDED"
+	else
+		# New branch there: everything not already on that remote is new.
+		# shellcheck disable=SC2086
+		paths=$(git log --name-only --pretty=format: --no-renames "$local_sha" --not $NOTREF 2>/dev/null)
+		# shellcheck disable=SC2086
+		git log -p --pretty=format: "$local_sha" --not $NOTREF 2>/dev/null \
+			| grep '^+' | grep -v '^+++' >>"$ADDED"
+	fi
 
-hits=$(printf '%s' "$hits" | sed '/^$/d' | sort -u)
-[ -z "$hits" ] && exit 0
+	printf '%s\n' "$paths" | sed '/^$/d' >>"$PATHS"
 
-echo "" >&2
-echo "BLOCKED: this push would publish private working documents." >&2
-echo "" >&2
-echo "$hits" | sed 's/^/    /' >&2
-echo "" >&2
-echo "docs/designs/ and docs/plans/ are GitLab-only. They carry unbuilt" >&2
-echo "ideas, open questions and reasoning that the public history should" >&2
-echo "show only as outcomes." >&2
-echo "" >&2
-echo "To push the code without them, take them out of the range -- e.g." >&2
-echo "build the public branch from a tree that has no docs/designs or" >&2
-echo "docs/plans, rather than reverting them on main." >&2
-echo "" >&2
-echo "If publishing them IS the intent:" >&2
-echo "    QAVP_ALLOW_PUBLIC_DOCS=1 git push $REMOTE_NAME ..." >&2
-echo "" >&2
-exit 1
+	# Rule C's spoken forms are checked in documentation only. A bare word
+	# like "halo" in a shader means a glow; the same word carrying a port
+	# suffix, in a sentence, means a different project of mine. Only prose
+	# can tell those apart, so only prose is searched for them.
+	docpaths=$(printf '%s\n' "$paths" | grep -Ei '\.md$|(^|/)docs/' | sort -u)
+	if [ -n "$docpaths" ]; then
+		if [ "$base_ok" = 1 ]; then
+			printf '%s\n' "$docpaths" | tr '\n' '\0' \
+				| xargs -0 git diff "$remote_sha" "$local_sha" -- 2>/dev/null \
+				| grep '^+' | grep -v '^+++' >>"$ADDED_DOCS"
+		else
+			# shellcheck disable=SC2086
+			printf '%s\n' "$docpaths" | tr '\n' '\0' \
+				| xargs -0 git log -p --pretty=format: "$local_sha" --not $NOTREF -- 2>/dev/null \
+				| grep '^+' | grep -v '^+++' >>"$ADDED_DOCS"
+		fi
+	fi
+done <"$REFS"
+
+[ "$saw_a_ref" = 0 ] && exit 0
+
+refuse_head() {
+	echo "" >&2
+	echo "BLOCKED: $1" >&2
+	echo "" >&2
+}
+
+refuse_tail() {
+	echo "" >&2
+	echo "Nothing has been pushed." >&2
+	echo "" >&2
+}
+
+# --- Rule A: working documents (original) ----------------------------------
+
+if [ "${QAVP_ALLOW_PUBLIC_DOCS:-0}" = "1" ]; then
+	echo "pre-push: QAVP_ALLOW_PUBLIC_DOCS=1 -- publishing working documents on purpose." >&2
+else
+	pat=$(printf '%s' "$GUARDED" | tr ' ' '|')
+	hits=$(grep -E "^($pat)/" "$PATHS" | sort -u)
+	if [ -n "$hits" ]; then
+		refuse_head "this push would publish private working documents."
+		echo "$hits" | sed 's/^/    /' >&2
+		echo "" >&2
+		echo "docs/designs/ and docs/plans/ are GitLab-only. They carry unbuilt" >&2
+		echo "ideas, open questions and reasoning that the public history should" >&2
+		echo "show only as outcomes." >&2
+		echo "" >&2
+		echo "To push the code without them, take them out of the range -- e.g." >&2
+		echo "build the public branch from a tree that has no docs/designs or" >&2
+		echo "docs/plans, rather than reverting them on main." >&2
+		echo "" >&2
+		echo "If publishing them IS the intent:" >&2
+		echo "    QAVP_ALLOW_PUBLIC_DOCS=1 git push $REMOTE_NAME ..." >&2
+		refuse_tail
+		exit 1
+	fi
+fi
+
+# --- Rule B: private notebook paths ----------------------------------------
+
+hits=$(grep -Ei '(^|/)notebook/|(^|/)LEARNED\.md$|(^|/)pocket/' "$PATHS" | sort -u)
+if [ -n "$hits" ]; then
+	refuse_head "this push would publish private notebook paths."
+	echo "$hits" | sed 's/^/    /' >&2
+	echo "" >&2
+	echo "The notebook is not supposed to be inside a repository at all. If" >&2
+	echo "these are tracked here, untrack them rather than overriding this." >&2
+	refuse_tail
+	exit 1
+fi
+
+# --- Rule C: the other projects by name ------------------------------------
+# The list has one definition, outside every repository, and is never written
+# into this file. Absent list, rule skipped.
+
+if [ -f "$SIBLINGS" ] && [ -s "$ADDED" ]; then
+	self=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+
+	names=$(awk '
+		/^\[.*\]$/       { sec = substr($0, 2, length($0) - 2); next }
+		/^[[:space:]]*#/ { next }
+		/^[[:space:]]*$/ { next }
+		sec == "names"   { print }
+	' "$SIBLINGS")
+
+	pattern=''
+	for n in $names; do
+		[ "$n" = "$self" ] && continue
+		if [ -z "$pattern" ]; then pattern="$n"; else pattern="$pattern|$n"; fi
+	done
+
+	if [ -n "$pattern" ]; then
+		hits=$(grep -Ein "($pattern)" "$ADDED" | head -20)
+		if [ -n "$hits" ]; then
+			refuse_head "these added lines name another of my projects."
+			echo "$hits" | sed 's/^/    /' >&2
+			echo "" >&2
+			echo "Which mechanic came out of which port is not something the" >&2
+			echo "public history says. Reword the line and push again." >&2
+			refuse_tail
+			exit 1
+		fi
+	fi
+
+	if [ -s "$ADDED_DOCS" ]; then
+		prose=$(awk '
+			/^\[.*\]$/       { sec = substr($0, 2, length($0) - 2); next }
+			/^[[:space:]]*#/ { next }
+			/^[[:space:]]*$/ { next }
+			sec == "prose"   { print }
+		' "$SIBLINGS" | tr '\n' '|' | sed 's/|$//')
+
+		if [ -n "$prose" ]; then
+			hits=$(grep -Ein "($prose)" "$ADDED_DOCS" | head -20)
+			if [ -n "$hits" ]; then
+				refuse_head "these added documentation lines name another of my projects."
+				echo "$hits" | sed 's/^/    /' >&2
+				echo "" >&2
+				echo "Naming another port in a sentence is the same disclosure" >&2
+				echo "as naming its directory. Reword it and push again." >&2
+				refuse_tail
+				exit 1
+			fi
+		fi
+	fi
+fi
+
+exit 0

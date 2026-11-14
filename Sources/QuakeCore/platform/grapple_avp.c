@@ -173,6 +173,14 @@ static cvar_t	vr_grapple_accelmin = {"vr_grapple_accelmin", "0.2", CVAR_NONE};
    what it is tied to is a different weapon and nobody asked for one. */
 static cvar_t	vr_grapple_damage = {"vr_grapple_damage", "10", CVAR_NONE};
 
+/* The head's model. A cvar rather than a literal for two reasons: it is the
+   only way to point the hook at something else from the console without a
+   rebuild, and it is what makes BOTH branches of the bridge's resolve
+   testable on the host, where no basedir has rogue's pak and only the
+   fallback would ever run. Not static: the bridge reads it to draw, the way
+   it reads vr_worldscale out of r_null.c. */
+cvar_t	vr_grapple_headmodel = {"vr_grapple_headmodel", "progs/hook.mdl", CVAR_NONE};
+
 /* in_null.c, file-local extern the way qr_bridge.c takes the same symbol at
    qr_bridge.c:76. Returns 0 when the aim channel is not live. */
 extern int	QR_HandOrigin (vec3_t out);
@@ -180,6 +188,12 @@ extern int	QR_HandOrigin (vec3_t out);
 static grapple_state_t	qr_grapple_state;
 static vec3_t		qr_grapple_tip;		/* the head, in world space */
 static vec3_t		qr_grapple_fly_vel;
+/* The head's drawn orientation. Tracked from the velocity each flight frame
+   and then LEFT ALONE once the hook bites: at the bite the velocity that put
+   it in the wall is gone, so a pose recomputed from the live velocity would
+   snap the head flat on the frame it lands. Frozen is also what rogue does,
+   by accident of the hook being an edict that simply stops. */
+static vec3_t		qr_grapple_head_angles;
 static float		qr_grapple_fly_ttl;	/* seconds of flight left */
 
 /* The anchor, stored RELATIVE to what it stuck to, so a moving platform
@@ -567,6 +581,7 @@ static void Grapple_Throw (edict_t *player)
 		range = 65536.f;
 
 	VectorScale (fwd, speed, qr_grapple_fly_vel);
+	VectorAngles (qr_grapple_fly_vel, qr_grapple_head_angles);
 
 	/* Range over speed is the time to allow, which is the same arithmetic
 	   that used to go into the hook edict's nextthink, so vr_grapple_range
@@ -600,6 +615,7 @@ static void Grapple_FlightFrame (edict_t *player, float dt)
 	if (qr_grapple_state != GRAPPLE_FLYING || dt <= 0.f)
 		return;
 
+	VectorAngles (qr_grapple_fly_vel, qr_grapple_head_angles);
 	VectorMA (qr_grapple_tip, dt, qr_grapple_fly_vel, end);
 	tr = SV_Move (qr_grapple_tip, vec3_origin, vec3_origin, end,
 		      MOVE_MISSILE, player);
@@ -1054,6 +1070,33 @@ int QR_GrappleState (float tip[3])
 }
 
 /*
+ * The head's drawn pose, for the renderer bridge to hang an alias model on.
+ *
+ * Returns 1 when there is a head to draw, 0 when the hook is idle. The frame
+ * numbers are rogue's own: W_FireGrapple sets .frame 1 for the flight and
+ * GrappleAnchor sets 2 once it is stuck, so hook.mdl visibly changes pose on
+ * the bite. hook01 is never selected by rogue either.
+ */
+int QR_GrappleHeadPose (float origin[3], float angles[3], int *frame)
+{
+	if (qr_grapple_state == GRAPPLE_IDLE)
+		return 0;
+
+	if (origin)
+	{
+		if (qr_grapple_state == GRAPPLE_ANCHORED)
+			Grapple_AnchorOrigin (origin);
+		else
+			VectorCopy (qr_grapple_tip, origin);
+	}
+	if (angles)
+		VectorCopy (qr_grapple_head_angles, angles);
+	if (frame)
+		*frame = (qr_grapple_state == GRAPPLE_ANCHORED) ? 2 : 1;
+	return 1;
+}
+
+/*
 Force this module's defaults past any config.cfg that already names them.
 
 NOT ARCHIVED, and then forced on top, which is two belts for one pair of
@@ -1344,11 +1387,21 @@ static void Grapple_SeedAssets (void)
 	size_t		i;
 	int		r;
 
+	/* NOT every caller of Grapple_Init has booted the engine. The host unit
+	   drivers register cvars and then poke one subsystem, so com_basedir
+	   can be empty and host_parms can be NULL -- and the first version of
+	   this dereferenced host_parms unconditionally and turned
+	   turn_pivot_test from a documented FAIL into a SIGSEGV, which the
+	   gate read as the failure having been fixed. There is nothing to seed
+	   without a basedir anyway. */
+	if (!com_basedir[0])
+		return;
+
 	roots[0] = com_basedir;
 	/* On a platform where the two differ, a pack dropped in through the
 	   Files app can be under either, exactly as COM_AddGameDirectory
 	   treats them (common.c:2263-2269). */
-	if (host_parms->userdir && *host_parms->userdir
+	if (host_parms && host_parms->userdir && *host_parms->userdir
 	    && strcmp (host_parms->userdir, com_basedir) != 0)
 		roots[nroots++] = host_parms->userdir;
 
@@ -1399,6 +1452,7 @@ void Grapple_Init (void)
 	Cvar_RegisterVariable (&vr_grapple_accelref);
 	Cvar_RegisterVariable (&vr_grapple_accelmin);
 	Cvar_RegisterVariable (&vr_grapple_damage);
+	Cvar_RegisterVariable (&vr_grapple_headmodel);
 	Grapple_ForceDefaults ();
 	/* After COM_InitFilesystem (host.c:66) and before S_Init
 	   (host.c:100), which is why this copies files and precaches
@@ -1486,5 +1540,12 @@ int Grapple_TestPakExtract (const char *pakpath, const char *inpak,
 			    const char *outpath)
 {
 	return Grapple_PakExtract (pakpath, inpak, outpath);
+}
+/* Put the hook away without going through a grip release: Grapple_Frame is
+   inert while nothing engaged it, so a driver that threw directly has no
+   other way back to idle. */
+void Grapple_TestDisengage (void)
+{
+	Grapple_Disengage ();
 }
 #endif	/* QAVP_HOSTCHECK */
