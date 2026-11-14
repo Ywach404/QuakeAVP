@@ -583,6 +583,263 @@ static void Grapple_TuneHook (edict_t *player)
 	hook->v.nextthink = sv.time + range / speed;
 }
 
+/*
+May the rope be tied where this trace stopped?
+
+Separated from the flight step and kept pure over the trace, because a stop is
+not an anchor and the three ways it is not are each worth refusing by name.
+
+A trace that began inside solid reports fraction 0, which is indistinguishable
+from a legitimate point-blank hit, so the degenerate cases are refused before
+the distance is looked at. An all-solid trace has no valid plane to hang from.
+And sky is a surface the hook must fall through rather than stick to: a rope
+tied to the sky is a rope tied to the edge of the map, and the hook's own range
+timer is what ends such a throw.
+
+`contents` is what the world holds just past the impact, which the caller reads
+with SV_PointContents. It is passed in rather than read here so that this stays
+a decision over its arguments and can be tested without a world.
+*/
+static int Grapple_AnchorFromTrace (const trace_t *tr, int contents)
+{
+	if (tr->allsolid || tr->startsolid)
+		return -1;
+	if (tr->fraction >= 1.f)
+		return 0;		/* nothing in the way: keep flying */
+	if (contents == CONTENTS_SKY)
+		return -1;
+	return 1;
+}
+
+/*
+The hook's own state, which used to be an edict and is now five statics.
+
+Nothing here is networked and nothing is precached. That is the whole reason
+this works in every game rather than only in rogue: a hook that asks the map
+for a model cannot exist in a map that never precached one, and
+PF_precache_model refuses outside ss_loading, so there is no way to add one at
+fire time. The renderer draws the head and the rope from qr_grapple_tip
+instead, client side, out of models it loads for itself.
+*/
+/* in_null.c, file-local extern the way qr_bridge.c takes the same symbol at
+   qr_bridge.c:76. Returns 0 when the aim channel is not live. */
+extern int	QR_HandOrigin (vec3_t out);
+
+static grapple_state_t	qr_grapple_state;
+static vec3_t		qr_grapple_tip;		/* the head, in world space */
+static vec3_t		qr_grapple_fly_vel;
+static float		qr_grapple_fly_ttl;	/* seconds of flight left */
+
+/* The anchor, stored RELATIVE to what it stuck to, so a moving platform
+   carries the rope's far end with it. Entity 0 is the world, whose origin is
+   always zero, so the offset is then simply the absolute position and needs no
+   special case anywhere. */
+static int		qr_grapple_anchor_num;
+static vec3_t		qr_grapple_anchor_ofs;
+
+/*
+Resolve the anchor to world space, and survive its entity dying.
+
+A hooked monster can be gibbed, and a gib is a freed edict whose origin is
+whatever the next spawn writes there. Reading it would move the rope's far end
+to an unrelated place, or to garbage. So a freed anchor is converted, once, to
+a static anchor at the last position it was actually seen in, and the swing
+carries on from there -- the rope goes slack-ish and behaves, rather than the
+player being snapped across the map or the engine reading a dead edict.
+
+The residual risk is named rather than hidden: an edict number freed AND reused
+inside one swing would move the anchor onto the new occupant. That is a rope
+following the wrong thing for a few seconds, not a crash, and every cheaper
+guard than a per-edict serial costs a field in a struct this module does not
+own.
+*/
+static void Grapple_AnchorOrigin (vec3_t out)
+{
+	edict_t	*ed;
+
+	if (qr_grapple_anchor_num <= 0)
+	{
+		VectorCopy (qr_grapple_anchor_ofs, out);
+		return;
+	}
+
+	ed = EDICT_NUM (qr_grapple_anchor_num);
+	if (!ed || ed->free)
+	{
+		/* Freeze it where it was last seen and stop asking. */
+		VectorCopy (qr_grapple_tip, qr_grapple_anchor_ofs);
+		qr_grapple_anchor_num = 0;
+		VectorCopy (qr_grapple_anchor_ofs, out);
+		return;
+	}
+
+	VectorAdd (ed->v.origin, qr_grapple_anchor_ofs, out);
+}
+
+/*
+Throw the hook from the hand, along the aim.
+
+Origin from QR_HandOrigin, which is the same function the missile and lightning
+hunks already go through, so the hook leaves the same place every other shot
+does. It returns 0 whenever the aim channel is not live, and then this falls
+back to the vanilla eye-height spawn rather than throwing from the floor: the
+chest is the wrong place for it but it is the place everything else degrades to,
+and a hook that comes from the chest is better than one that does not come at
+all.
+
+Direction from v_angle, which is what rogue's W_FireGrapple used, so the aim is
+unchanged by this rewrite.
+
+Speed is clamped for the same reason it always was: both ends of the cvar are a
+real failure, and a clamp that stops a typo being a crash is worth more than a
+clamp that expresses an opinion. sv_maxvelocity is deliberately NOT touched any
+more. That write existed only because SV_CheckVelocity clamps an EDICT's
+velocity per component, which bent the throw's direction as well as its speed
+(a requested 3000 measured 2061, an aim pitch of -20 came out at -22.3). A hook
+owned by this file never goes through SV_CheckVelocity, so the global physics
+knob it used to reach into can be left alone.
+*/
+static void Grapple_Throw (edict_t *player)
+{
+	vec3_t	fwd, right, up;
+	float	speed, range;
+
+	if (!QR_HandOrigin (qr_grapple_tip))
+	{
+		VectorCopy (player->v.origin, qr_grapple_tip);
+		qr_grapple_tip[2] += player->v.view_ofs[2];
+	}
+
+	AngleVectors (player->v.v_angle, fwd, right, up);
+
+	speed = vr_grapple_speed.value;
+	if (speed < 100.f)
+		speed = 100.f;
+	else if (speed > 30000.f)
+		speed = 30000.f;
+
+	range = vr_grapple_range.value;
+	if (range < 100.f)
+		range = 100.f;
+	else if (range > 65536.f)
+		range = 65536.f;
+
+	VectorScale (fwd, speed, qr_grapple_fly_vel);
+
+	/* Range over speed is the time to allow, which is the same arithmetic
+	   that used to go into the hook edict's nextthink, so vr_grapple_range
+	   still means exactly what its comment block says it means. */
+	qr_grapple_fly_ttl = range / speed;
+	qr_grapple_anchor_num = 0;
+	qr_grapple_state = GRAPPLE_FLYING;
+}
+
+/*
+One tick of flight.
+
+The WHOLE step is traced, start to end, which is why no frame length can
+tunnel the hook through a wall however long the frame got -- and both QC_Frame
+and Host_FilterTime permit 0.1 s, so frames do get long. That is the same
+property SV_FlyMove gave the old hook edict for free, kept deliberately rather
+than inherited.
+
+MOVE_MISSILE, not MOVE_NORMAL: SV_PushEntity uses MOVE_MISSILE for a
+MOVETYPE_FLYMISSILE entity, so this is the trace the rogue hook actually flew
+with, and it is the type that clips against monsters, which is what makes a
+hook you can stick in a shambler possible at all. A point hull matches the
+hook's own zero-size bbox.
+*/
+static void Grapple_FlightFrame (edict_t *player, float dt)
+{
+	vec3_t	end;
+	trace_t	tr;
+	int	verdict;
+
+	if (qr_grapple_state != GRAPPLE_FLYING || dt <= 0.f)
+		return;
+
+	VectorMA (qr_grapple_tip, dt, qr_grapple_fly_vel, end);
+	tr = SV_Move (qr_grapple_tip, vec3_origin, vec3_origin, end,
+		      MOVE_MISSILE, player);
+
+	verdict = Grapple_AnchorFromTrace (&tr, SV_PointContents (tr.endpos));
+
+	if (verdict < 0)
+	{
+		qr_grapple_state = GRAPPLE_IDLE;
+		return;
+	}
+
+	VectorCopy (tr.endpos, qr_grapple_tip);
+
+	if (verdict > 0)
+	{
+		/* Braces on both arms: VectorSubtract and VectorCopy are
+		   brace macros, so an unbraced if/else orphans the else. */
+		qr_grapple_anchor_num = tr.ent ? NUM_FOR_EDICT (tr.ent) : 0;
+		if (qr_grapple_anchor_num > 0)
+		{
+			VectorSubtract (tr.endpos, tr.ent->v.origin,
+					qr_grapple_anchor_ofs);
+		}
+		else
+		{
+			VectorCopy (tr.endpos, qr_grapple_anchor_ofs);
+		}
+		qr_grapple_state = GRAPPLE_ANCHORED;
+		return;
+	}
+
+	/* Still flying. The timer is what ends a throw that hits nothing, and
+	   it is the only thing vr_grapple_range controls. */
+	qr_grapple_fly_ttl -= dt;
+	if (qr_grapple_fly_ttl <= 0.f)
+		qr_grapple_state = GRAPPLE_IDLE;
+}
+
+#ifdef QAVP_HOSTCHECK
+/* The host drivers' way in, on the QR_TestCachePic* pattern: the real
+   functions stay static and the tests get wrappers rather than the qualifier
+   moving. gymtest drives the throw and the flight directly because
+   Grapple_Frame does not own them until Task 2. */
+int Grapple_TestAnchorFromTrace (const trace_t *tr, int contents)
+{
+	return Grapple_AnchorFromTrace (tr, contents);
+}
+
+int Grapple_TestState (float tip[3])
+{
+	if (tip)
+	{
+		if (qr_grapple_state == GRAPPLE_ANCHORED)
+		{
+			Grapple_AnchorOrigin (tip);
+		}
+		else
+		{
+			VectorCopy (qr_grapple_tip, tip);
+		}
+	}
+	return (int) qr_grapple_state;
+}
+
+void Grapple_TestThrow (void)
+{
+	edict_t	*player = Grapple_Player ();
+
+	if (player)
+		Grapple_Throw (player);
+}
+
+void Grapple_TestFlight (float dt)
+{
+	edict_t	*player = Grapple_Player ();
+
+	if (player)
+		Grapple_FlightFrame (player, dt);
+}
+#endif	/* QAVP_HOSTCHECK */
+
 /* Rogue measures the rope from roughly the chest, not from the origin. */
 #define GRAPPLE_ROPE_UP		16.f
 /* Far enough out that SV_RunThink never reaches it, re-asserted every tick. */

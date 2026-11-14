@@ -13,6 +13,16 @@
 
 #include <stdint.h>
 
+/* Where this swing's hook is. Public rather than file-local because the frame
+   packet carries exactly these three values to the renderer, and one enum with
+   two definitions is the restatement this project keeps paying for. */
+typedef enum
+{
+	GRAPPLE_IDLE = 0,		/* no hook in the world */
+	GRAPPLE_FLYING = 1,		/* thrown, still travelling */
+	GRAPPLE_ANCHORED = 2		/* stuck, and the rope is live */
+} grapple_state_t;
+
 void Grapple_Init (void);		/* register the cvar; after Cvar_Init */
 
 /* Drive the hold from this tick's pad snapshot. Called from IN_Commands
