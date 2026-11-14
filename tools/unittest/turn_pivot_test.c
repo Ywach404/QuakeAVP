@@ -21,6 +21,10 @@ void		IN_RotateBodyVec (float v[2], float degrees);
 extern float	qr_head_absorbed[2];
 extern float	qr_body_yaw;
 extern uint32_t	qr_recenter_count;
+
+/* host.c's time lever. Registered by Host_InitLocal, which a unit test does
+   not run, so the slow-motion assertions set .value directly. */
+extern cvar_t	host_timescale;
 /* The vr_* cvars are static in in_null.c; reach them through the cvar system
    the way the console does, which is also what IN_Init has just registered. */
 
@@ -282,6 +286,98 @@ int main (void)
 		    && fabsf (qr_head_absorbed[1] - expect[1]) < 1e-3f,
 		       "the edge turn carried the ledger too: (%.3f, %.3f), expected (%.3f, %.3f)",
 		       qr_head_absorbed[0], qr_head_absorbed[1], expect[0], expect[1]);
+
+		/* --- SLOW MOTION MUST NOT SLOW THE TURN.
+		       A. ruled this after the weapon ring's bullet time shipped:
+		       the world crawling is the point, his ability to reorient
+		       crawling with it is not. host_timescale multiplies
+		       host_frametime (host.c:592-593) and every turn path
+		       integrated that, so a 0.2 timescale turned at a fifth
+		       speed.
+
+		       Simulated exactly as host.c produces it: the same real
+		       frame, with host_frametime already scaled by the cvar.
+		       The turn must come out the same as at full speed. */
+		{
+			const double	real_dt = 0.011;	/* ~90 Hz */
+			float		full, slowed;
+
+			Cvar_Set ("vr_smoothturn", "1");
+			Cvar_Set ("vr_edgeturn", "0");
+			Cvar_Set ("vr_handaim", "0");
+			pad.rx = 0.5f;
+			QC_InputSetGamepad (&pad);
+
+			host_timescale.value = 0.f;		/* registered by Host_InitLocal,
+						   which a unit test never runs --
+						   same as cl_yawspeed above */
+			host_frametime = real_dt;
+			yaw_before = qr_body_yaw;
+			memset (&cmd, 0, sizeof (cmd));
+			IN_Move (&cmd);
+			full = qr_body_yaw - yaw_before;
+
+			host_timescale.value = 0.2f;
+			host_frametime = real_dt * 0.2;		/* what host.c leaves */
+			QC_InputSetGamepad (&pad);
+			yaw_before = qr_body_yaw;
+			memset (&cmd, 0, sizeof (cmd));
+			IN_Move (&cmd);
+			slowed = qr_body_yaw - yaw_before;
+
+			CHECK (fabsf (full) > 0.01f,
+			       "the full-speed stick turn moved the body (%.4f deg)",
+			       full);
+			CHECK (fabsf (slowed - full) < 1e-4f,
+			       "a 0.2 timescale does NOT slow the stick turn "
+			       "(%.4f deg slowed vs %.4f full)", slowed, full);
+
+			/* And the edge turn, the other continuous path. */
+			Cvar_Set ("vr_smoothturn", "0");
+			Cvar_Set ("vr_edgeturn", "1");
+			Cvar_Set ("vr_handaim", "1");
+			Cvar_Set ("vr_aimyaw", "0");
+			pad.rx = 0.f;
+			QC_InputSetGamepad (&pad);
+			QC_InputSetAim (1, 10.f, 6.f, -4.f, 40.f, 0.f);
+
+			host_timescale.value = 0.f;		/* registered by Host_InitLocal,
+						   which a unit test never runs --
+						   same as cl_yawspeed above */
+			host_frametime = real_dt;
+			yaw_before = qr_body_yaw;
+			memset (&cmd, 0, sizeof (cmd));
+			IN_Move (&cmd);
+			full = qr_body_yaw - yaw_before;
+
+			host_timescale.value = 0.2f;
+			host_frametime = real_dt * 0.2;
+			QC_InputSetAim (1, 10.f, 6.f, -4.f, 40.f, 0.f);
+			yaw_before = qr_body_yaw;
+			memset (&cmd, 0, sizeof (cmd));
+			IN_Move (&cmd);
+			slowed = qr_body_yaw - yaw_before;
+
+			/* Reported honestly rather than asserted. The edge turn
+			   produces 0 degrees in this harness at FULL speed --
+			   that is the failure above, open and unruled -- so a
+			   "slow motion did not change it" check here would
+			   compare 0 against 0 and bank a green it never
+			   earned. It becomes a real assertion the day the
+			   edge turn moves the body again. */
+			if (fabsf (full) > 0.01f)
+				CHECK (fabsf (slowed - full) < 1e-4f,
+				       "a 0.2 timescale does NOT slow the edge turn "
+				       "(%.4f deg slowed vs %.4f full)",
+				       slowed, full);
+			else
+				printf ("skip: the edge turn slow-motion check, "
+					"because the edge turn moves the body "
+					"0.0000 deg at FULL speed here -- see the "
+					"failure above\n");
+
+			host_timescale.value = 0.f;
+		}
 	}
 
 	printf ("%s\n", failures ? "UNIT FAIL" : "UNIT PASS");

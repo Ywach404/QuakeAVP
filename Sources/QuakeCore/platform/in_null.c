@@ -667,6 +667,41 @@ static void IN_SnapshotInputs (void)
 
 /*
 ================
+IN_TurnFrametime -- the dt a TURN integrates, which is real time even while
+the world is in slow motion.
+
+Turning is a CONTROL, not part of the scene. host_timescale multiplies
+host_frametime (host.c:592-593) so the simulation crawls, and every
+continuous turn path integrated that same number, so bullet time turned the
+player at a fifth speed along with the monsters. A. ruled that the world
+slowing down is the point and his ability to reorient slowing with it is not.
+
+The scale is divided back out rather than switching to `realtime`, for two
+reasons. It recovers exactly the `realtime - oldrealtime` that host.c
+multiplied, so at timescale 0 this returns host_frametime unchanged and the
+feel at full speed is bit-identical. And host_frametime stays the single
+input, so a unit test can still drive a turn by setting it; keying off
+`realtime` would have made every existing turn assertion unreachable without
+advancing a clock the harness does not own.
+
+Clamped at 0.1 s because the timescale branch in Host_FilterTime SKIPS the
+clamp the ordinary path applies, and an unclamped long frame recovered after
+a hitch is a whip of the whole view.
+================
+*/
+static double IN_TurnFrametime (void)
+{
+	double	dt = host_frametime;
+
+	if (host_timescale.value > 0.f)
+		dt /= host_timescale.value;
+	if (dt > 0.1)
+		dt = 0.1;
+	return dt;
+}
+
+/*
+================
 IN_WheelRamp -- ease the open fraction on REAL time and drive
 host_timescale from it.
 
@@ -2244,7 +2279,11 @@ void IN_Move (usercmd_t *cmd)
 	else if (ry != 0.f)
 	{
 		V_StopPitchDrift ();
-		cl.viewangles[PITCH] -= ry * cl_pitchspeed.value * host_frametime;
+		/* Real time, like the two yaw paths below. A. named left and right;
+		   stick pitch is the same control surface and slowing one axis but
+		   not the other is a bug someone finds later. */
+		cl.viewangles[PITCH] -= ry * cl_pitchspeed.value
+					 * (float) IN_TurnFrametime ();
 		cl.viewangles[PITCH] = CLAMP (cl_minpitch.value,
 					      cl.viewangles[PITCH],
 					      cl_maxpitch.value);
@@ -2264,7 +2303,7 @@ void IN_Move (usercmd_t *cmd)
 	/* Right stick X turns the BODY (snap, or smooth for those who opt in). */
 	if (vr_smoothturn.value)
 	{
-		turn -= rx * cl_yawspeed.value * host_frametime;
+		turn -= rx * cl_yawspeed.value * (float) IN_TurnFrametime ();
 	}
 	else
 	{
@@ -2337,7 +2376,8 @@ void IN_Move (usercmd_t *cmd)
 			float frac = (fabsf (a) - dz) / 40.f;	/* ramp to full over 40 deg */
 			if (frac > 1.f) frac = 1.f;
 			turn += (a > 0.f ? 1.f : -1.f)
-			      * vr_edgeturn_speed.value * frac * (float) host_frametime;
+			      * vr_edgeturn_speed.value * frac
+			      * (float) IN_TurnFrametime ();
 		}
 	}
 
