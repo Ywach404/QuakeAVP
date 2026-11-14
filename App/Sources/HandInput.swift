@@ -201,6 +201,7 @@ final class HandInput: @unchecked Sendable {
                 continue
             }
             let anchor = update.anchor
+            noteHandRate (isLeft: anchor.chirality == .left)
             if anchor.chirality == .left {
                 left.ingest(anchor, isLeft: true)
             } else {
@@ -955,6 +956,33 @@ final class HandInput: @unchecked Sendable {
         let commit = !pinched && tpRingWas
         tpRingWas = pinched
         QC_InputSetTeleport(0, commit ? 1 : 0, 0, 0, 0, 0, 0)
+    }
+
+    /// How often hand tracking actually delivers, per hand.
+    ///
+    /// The comparison number for `[rate] accessory` in
+    /// SpatialControllerTracker: the gun is not late-latched, so it moves at
+    /// its pose source's rate, and the whole question about the Sense
+    /// controllers' judder is how this figure compares with theirs. Keyed by
+    /// chirality rather than summed, because two interleaved hands would
+    /// otherwise read as one stream at twice the rate.
+    private var handRateCount: [Bool: Int] = [:]
+    private var handRateStart: [Bool: Double] = [:]
+
+    private func noteHandRate(isLeft: Bool) {
+        guard VRSettings.shared.inputLog else { return }
+        let now = CACurrentMediaTime()
+        let start = handRateStart[isLeft] ?? now
+        let n = (handRateCount[isLeft] ?? 0) + 1
+        if now - start >= 1.0 {
+            print(String(format: "[rate] hand %@ %.1f Hz over %d update(s)",
+                         isLeft ? "left" : "right", Double(n) / (now - start), n))
+            handRateCount[isLeft] = 0
+            handRateStart[isLeft] = now
+        } else {
+            handRateCount[isLeft] = n
+            handRateStart[isLeft] = start
+        }
     }
 
     private func feedAim(_ hand: HandState) {

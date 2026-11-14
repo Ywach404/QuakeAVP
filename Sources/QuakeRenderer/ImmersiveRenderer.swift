@@ -30,6 +30,7 @@
 import CompositorServices
 import ARKit
 import Metal
+import QuartzCore
 import simd
 
 final class ImmersiveRenderer {
@@ -737,6 +738,7 @@ final class ImmersiveRenderer {
             // body-anchored aim. Controller forward is -Z.
             let rightHanded = VRSettings.shared.rightHanded
             if let domPose = activeControllerPose(left: !rightHanded) {
+                Self.noteControllerPoseRepeat (domPose)
                 let c = recenterCorrection * domPose
                 let o = c.columns.3
                 let fwd0 = -c.columns.2          // controller forward, corrected
@@ -745,6 +747,17 @@ final class ImmersiveRenderer {
                 let aimPitch = -atan2(fwd0.y, aimHoriz) * 180 / .pi
                 TrackRecorder.shared.feedAim(valid: true, origin: SIMD3(-o.z / s, o.x / s, o.y / s),
                                              yaw: aimYaw, pitch: aimPitch)
+            } else if VRSettings.shared.controllersActive {
+                // RELEASE THE AIM when the controller's pose is gone.
+                //
+                // There was no else here, so a tracking dropout fed nothing
+                // and the engine held the last aim indefinitely: the gun
+                // stuck, then snapped when tracking returned, which reads as
+                // judder and is not. The hand path has always said so out
+                // loud (HandInput.feedAim's guard feeds valid: false), and
+                // the two should not disagree about what a lost ray means.
+                TrackRecorder.shared.feedAim(valid: false, origin: .zero,
+                                             yaw: 0, pitch: 0)
             }
 
             // Off-hand presence model, CONTROLLER mode only. The ARKit hand
@@ -1429,6 +1442,42 @@ final class ImmersiveRenderer {
     /// is a different staleness from the packet's. Either way the hand is not
     /// where the packet thinks it is, so the rope's near end has to come from
     /// the hand itself.
+    /// Count render frames that saw the SAME controller pose as the frame
+    /// before, which is what separates "the accessory stream is slow" from
+    /// "the consumer is sampling a stale cache".
+    ///
+    /// The controller aim does not come from a callback the way the hand aim
+    /// does. The accessory stream writes a cache, this render thread polls it
+    /// once a frame, and the engine then resamples that again: three clocks,
+    /// none synchronised. If this reports a repeat count near zero the stream
+    /// is keeping up and the judder is elsewhere; a large count is direct
+    /// proof the source is slower than the 90 Hz consumer reading it, and no
+    /// amount of smoothing here invents the missing poses.
+    private static var poseRepeatLast: simd_float4x4?
+    private static var poseRepeatSame = 0
+    private static var poseRepeatTotal = 0
+    private static var poseRepeatStart: Double = 0
+
+    private static func noteControllerPoseRepeat(_ pose: simd_float4x4) {
+        guard VRSettings.shared.inputLog else { return }
+        let now = CACurrentMediaTime()
+        if poseRepeatStart == 0 { poseRepeatStart = now }
+        if let last = poseRepeatLast, last == pose { poseRepeatSame += 1 }
+        poseRepeatLast = pose
+        poseRepeatTotal += 1
+        let span = now - poseRepeatStart
+        if span >= 1.0 {
+            print(String(format:
+                "[rate] controller pose polled %.1f Hz, %d of %d frame(s) repeated "
+                + "-> %.1f Hz of actual movement",
+                Double(poseRepeatTotal) / span, poseRepeatSame, poseRepeatTotal,
+                Double(poseRepeatTotal - poseRepeatSame) / span))
+            poseRepeatSame = 0
+            poseRepeatTotal = 0
+            poseRepeatStart = now
+        }
+    }
+
     private func grappleRope(packet: qc_frame_t, originFromQuake: simd_float4x4,
                              head: SIMD4<Float>)
         -> (hand: SIMD3<Float>, tip: SIMD3<Float>, head: SIMD3<Float>,

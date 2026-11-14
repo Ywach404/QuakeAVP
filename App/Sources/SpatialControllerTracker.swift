@@ -17,6 +17,7 @@
 
 import ARKit
 import GameController
+import QuartzCore
 import simd
 
 final class SpatialControllerTracker: @unchecked Sendable {
@@ -122,7 +123,41 @@ final class SpatialControllerTracker: @unchecked Sendable {
         }
     }
 
+    /// How often the accessory stream actually delivers, per accessory.
+    ///
+    /// This number is the one thing that decides what the Sense controllers'
+    /// judder actually is. The gun is deliberately not late-latched, so it
+    /// moves at whatever rate its pose source updates: a stream near 90 Hz
+    /// means the stream is fine and the consumer is resampling a stale cache,
+    /// a stream at 30 or 60 means only prediction or interpolation can help,
+    /// and the two have completely different fixes. Nothing in the app
+    /// measured it, and the SDK does not document it.
+    ///
+    /// Counted here rather than at the aim feed, because the aim feed is
+    /// called by the render thread and would read ~90 Hz no matter how slow
+    /// this stream is: it would measure the poll, not the pose.
+    private var rateCount: [Accessory.ID: Int] = [:]
+    private var rateStart: [Accessory.ID: Double] = [:]
+
+    private func noteRate(_ anchor: AccessoryAnchor) {
+        guard VRSettings.shared.inputLog else { return }
+        let id = anchor.accessory.id
+        let now = CACurrentMediaTime()
+        let start = rateStart[id] ?? now
+        let n = (rateCount[id] ?? 0) + 1
+        if now - start >= 1.0 {
+            print(String(format: "[rate] accessory %@ %.1f Hz over %d update(s)",
+                         String(describing: id), Double(n) / (now - start), n))
+            rateCount[id] = 0
+            rateStart[id] = now
+        } else {
+            rateCount[id] = n
+            rateStart[id] = start
+        }
+    }
+
     private func store(_ anchor: AccessoryAnchor) {
+        noteRate (anchor)
         let xform = anchor.originFromAnchorTransform
         lock.lock()
         // Store pose + X per controller; pose(left:) resolves handedness by X.
