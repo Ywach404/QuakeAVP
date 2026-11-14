@@ -309,6 +309,38 @@ int main (int argc, char **argv)
 	CHECK (tip[2] > hand[2] + 1000.f,
 	       "and it is a long way above the hand (%.0f units)", tip[2] - hand[2]);
 
+	/* ---------------- the hook reaches the frame packet ----------------- */
+
+	/* The renderer draws the rope and the head from these two fields, so
+	   the plumbing is worth a numeric check even though what it looks like
+	   is device-only. The tip must be the RESOLVED anchor, not the latch
+	   position, or a rope tied to a moving platform would stay behind. */
+	{
+		const qc_frame_t *f;
+
+		/* One more frame first. The loop above advanced the flight
+		   through the test seam AFTER each QC_Frame, so the packet the
+		   engine built on the frame the hook bit still held the frame
+		   before it: FLYING, ten units short of the ceiling. Nothing is
+		   wrong with the publish -- the shipped path runs the hook from
+		   IN_Commands inside the frame, so it is in phase -- but the
+		   driver has to let one more frame be built to see it. */
+		step (1);
+		f = QC_RendererAcquireFrame ();
+		CHECK (f != NULL, "a frame packet is available");
+		if (f)
+		{
+			CHECK (f->grapple_state == GRAPPLE_ANCHORED,
+			       "the packet carries the anchored state (%d)",
+			       f->grapple_state);
+			CHECK (fabsf (f->grapple_tip[2] - GYM_CEIL_Z) < 8.f,
+			       "and the hook tip (%.1f %.1f %.1f)",
+			       f->grapple_tip[0], f->grapple_tip[1],
+			       f->grapple_tip[2]);
+			QC_RendererReleaseFrame ();
+		}
+	}
+
 	/* ---------------- the pendulum, on the C anchor --------------------- */
 
 	/* These are the feel, and they are the reason the rewrite is allowed to

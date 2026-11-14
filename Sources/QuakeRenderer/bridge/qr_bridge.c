@@ -30,6 +30,7 @@
 #include "QuakeCore.h"
 #include "qr_bridge.h"
 #include "qr_weapons.h"
+#include "grapple_avp.h"
 #include "image.h"
 
 #include <pthread.h>
@@ -8078,6 +8079,13 @@ void QR_BeginFrame (void)
 	slot->frame.reticle_vert_count = 0;
 	slot->frame.laser_first_vert = 0;
 	slot->frame.laser_vert_count = 0;
+	/* Cleared here with every other per-frame range, so a frame with no
+	   hook out cannot inherit the last one's tip and leave a rope hanging
+	   in the air. */
+	slot->frame.grapple_state = 0;
+	slot->frame.grapple_tip[0] = 0.f;
+	slot->frame.grapple_tip[1] = 0.f;
+	slot->frame.grapple_tip[2] = 0.f;
 	slot->frame.ground_first_vert = 0;
 	slot->frame.ground_vert_count = 0;
 	slot->frame.num_sprite_verts = 0;
@@ -8274,6 +8282,12 @@ void QR_RenderView (void)
 	   immersive camera and head-follow frame by this so pointing the gun
 	   never steers the eye. See qc_frame_t.body_yaw. */
 	slot->frame.body_yaw = qr_body_yaw;
+
+	/* The hook's far end. Two numbers, not geometry: the rope and the head
+	   are drawn Swift-side so they stay welded to the late-latched fist.
+	   See qc_frame_t.grapple_state. */
+	slot->frame.grapple_state = QR_GrappleState (slot->frame.grapple_tip);
+
 	slot->frame.world_scale = CLAMP (QR_WORLDSCALE_MIN, vr_worldscale.value,
 					 QR_WORLDSCALE_MAX);
 

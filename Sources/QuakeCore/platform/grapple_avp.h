@@ -30,4 +30,11 @@ void Grapple_Init (void);		/* register the cvar; after Cvar_Init */
    `wheel_open` cancels an in-progress swing. */
 void Grapple_Frame (uint32_t padbits, int wheel_open);
 
+/* Where the hook is, for the frame packet. Returns the grapple_state_t and
+   fills `tip` with the hook head's world position, which in GRAPPLE_ANCHORED
+   is the anchor RESOLVED through its entity, so a rope tied to a moving
+   platform follows it. `tip` is untouched and meaningless when the result is
+   GRAPPLE_IDLE. Engine thread, called from the packet builder. */
+int QR_GrappleState (float tip[3]);
+
 #endif	/* GRAPPLE_AVP_H */

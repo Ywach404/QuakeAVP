@@ -499,6 +499,28 @@ typedef struct qc_frame_s {
 	uint32_t	laser_first_vert;
 	uint32_t	laser_vert_count;
 
+	/* THE GRAPPLING HOOK, as two numbers rather than as geometry, and that
+	   is the whole design decision.
+
+	   The hook head and its rope are drawn by the SWIFT renderer, not
+	   emitted here as particle verts like the laser is, because the rope has
+	   to stay welded to the drawn fist. The laser can live engine-side only
+	   because the view weapon is deliberately NOT late-latched, so the gun
+	   and its beam share one stale pose and agree with each other. The off
+	   hand is the opposite: its model is drawn from the live render-time
+	   pose, so a rope placed from the pose this packet was built with would
+	   visibly detach from the hand it comes out of every time that hand
+	   moved.
+
+	   So only the FAR end crosses here. The near end is taken render-side,
+	   from the same pose that draws the fist in the same frame.
+
+	   grapple_state is grapple_state_t: 0 idle, 1 flying, 2 anchored. The
+	   tip is a world position in Quake units, the same space as an entity
+	   origin in this packet, and is meaningless when the state is 0. */
+	int32_t		grapple_state;
+	float		grapple_tip[3];
+
 	/* Sprite models as 3D billboarded TEXTURED quads (explosions, bubbles).
 	   Five floats per vertex: xyz position (Quake units) and st; six vertices
 	   per quad, batched by texture. Depth-tested against the world, no write,

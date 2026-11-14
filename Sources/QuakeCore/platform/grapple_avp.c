@@ -1037,6 +1037,23 @@ void Grapple_Frame (uint32_t padbits, int wheel_open)
 }
 
 /*
+Where the hook is, for the renderer.
+
+The anchored case must resolve the anchor rather than hand back the latch
+position, or a rope tied to a rising platform would stay pinned to where that
+platform used to be. Grapple_AnchorOrigin is also what notices a freed anchor
+entity, so asking it here keeps that one piece of bookkeeping in one place.
+*/
+int QR_GrappleState (float tip[3])
+{
+	if (tip && qr_grapple_state == GRAPPLE_ANCHORED)
+		Grapple_AnchorOrigin (tip);
+	else if (tip && qr_grapple_state == GRAPPLE_FLYING)
+		VectorCopy (qr_grapple_tip, tip);
+	return (int) qr_grapple_state;
+}
+
+/*
 Force this module's defaults past any config.cfg that already names them.
 
 NOT ARCHIVED, and then forced on top, which is two belts for one pair of
