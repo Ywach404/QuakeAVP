@@ -54,6 +54,12 @@ void Grapple_TestSetAnchorEnt (int entnum, const float ofs[3]);
 int  Grapple_TestAnchorNum (void);
 void Grapple_TestSwing (void);
 void Grapple_TestDisengage (void);
+float Grapple_TestRope (void);
+
+/* in_null.c's merged wheel intent for this frame, which is the second
+   argument Grapple_Frame is handed. Read so the wheel assertions below
+   can prove the ring actually opened rather than assuming it. */
+extern int	qr_wheel_open;
 
 /* The head's drawn pose: 1 when there is a head, with the origin, the
    angles and rogue's own frame choice (1 flying, 2 stuck). */
@@ -648,6 +654,82 @@ int main (int argc, char **argv)
 	step (3);
 	CHECK (Grapple_TestState (tip) == GRAPPLE_IDLE,
 	       "releasing the grip lets go (state=%d)", Grapple_TestState (tip));
+
+	/* ---------------- the weapon wheel holds the rope, not cancels ----- */
+
+	/* A. hit this on device: opening the ring mid-swing killed the hook
+	   outright. The gate has always read `!wheel_open`, at c42711a too, so
+	   this is not new code -- what changed is that the hook is now OURS.
+	   The old cancel went through rogue's progs and only reset the hook
+	   when its hook_out field was set, and rogue's pull is not weapon
+	   gated, so a swing could survive the ring by accident. A. ruled the
+	   ring opens and the rope holds.
+
+	   HOLD, not scale. The ring's time dilation eases host_frametime and
+	   every number in the pendulum was tuned at full rate, so a spring
+	   impulse on a slowed frame is the near neighbour of the measured
+	   pause catapult (two seconds of pause took the player from 393 to
+	   7036 u/s). Bullet-time swinging is a separate tuning problem and was
+	   rejected here deliberately, not missed. */
+	{
+		vec3_t	before_v;
+		float	rope_before;
+		int	i, moved;
+
+		place (704.f, 704.f, 40.f);
+		grip (0);
+		step (2);
+		aim (-90.f, 0.f);
+		grip (1);
+		for (i = 0; i < 80 && Grapple_TestState (tip) != GRAPPLE_ANCHORED; i++)
+			step (1);
+		CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
+		       "a swing is live before the ring opens (state=%d)",
+		       Grapple_TestState (tip));
+
+		QC_ExecuteCommand ("+wheel\n");
+		step (2);
+		CHECK (qr_wheel_open != 0,
+		       "the ring really is open (qr_wheel_open=%d)", qr_wheel_open);
+
+		/* Measured AFTER the ring is confirmed open. The command takes a
+		   frame to reach qr_wheel_open (in_null.c merges it in IN_Move),
+		   and reading the rope before that measured two frames of
+		   ordinary reeling and blamed them on the hold. */
+		rope_before = Grapple_TestRope ();
+		VectorCopy (svs.clients[0].edict->v.velocity, before_v);
+		for (i = 0; i < 60; i++)
+			step (1);
+		CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
+		       "the ring does not cancel an anchored swing (state=%d)",
+		       Grapple_TestState (tip));
+		CHECK (fabsf (Grapple_TestRope () - rope_before) < 0.01f,
+		       "the rope does not advance under time dilation "
+		       "(%.3f -> %.3f)", rope_before, Grapple_TestRope ());
+
+		/* And the pendulum picks up again on close. Asserted on the
+		   rope's rest length rather than on velocity: the player keeps
+		   falling under gravity during the hold, because the hold stops
+		   the HOOK and not SV_Physics, so velocity changes either way
+		   and proves nothing. The rest length only moves when
+		   Grapple_SwingFrame runs, which is exactly the question. */
+		QC_ExecuteCommand ("-wheel\n");
+		step (2);
+		CHECK (qr_wheel_open == 0, "the ring closed (qr_wheel_open=%d)",
+		       qr_wheel_open);
+		rope_before = Grapple_TestRope ();
+		moved = 0;
+		for (i = 0; i < 20 && !moved; i++)
+		{
+			step (1);
+			if (fabsf (Grapple_TestRope () - rope_before) > 0.001f)
+				moved = 1;
+		}
+		CHECK (moved, "the pendulum resumes when the ring closes (%d frames)", i);
+
+		grip (0);
+		step (3);
+	}
 
 	/* RESPAWN. A grip still held through death must not throw on the first
 	   spawned frame. Measured historically as the player being dragged

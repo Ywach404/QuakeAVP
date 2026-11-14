@@ -979,8 +979,39 @@ void Grapple_Frame (uint32_t padbits, int wheel_open)
 	   recovered by closing the menu later either. */
 	want = held
 	    && !qr_grapple_locked
-	    && !wheel_open
 	    && key_dest == key_game;
+
+	/* THE RING OPENS AND THE ROPE HOLDS. `wheel_open` used to sit in the
+	   expression above, which made opening the ring mid-swing a CANCEL:
+	   A. hit that on device and ruled it the wrong way round. The gate read
+	   that way at c42711a too, so this is not a regression in the C hook --
+	   what changed is that the hook is now ours. The old cancel went
+	   through rogue's progs and only reset the hook when its hook_out field
+	   was set, and rogue's pull is not weapon gated, so a swing could
+	   survive the ring by accident rather than by design.
+
+	   HOLD, NOT SCALE, and the reason is the same one the sv.paused guard
+	   below gives. The ring's time dilation eases host_frametime, every
+	   number in the pendulum was tuned at full rate, and a spring impulse
+	   on a slowed frame is the near neighbour of the measured pause
+	   catapult. Bullet-time swinging was considered and rejected as a
+	   separate tuning problem; it was not missed. */
+	if (wheel_open)
+	{
+		/* A press made while the ring is up is the player choosing a
+		   weapon, not throwing a hook. Locked so it cannot fire the
+		   instant the ring closes, which is the rule every other edge
+		   the player did not ask for already gets. */
+		if (held && !qr_grapple_engaged)
+			qr_grapple_locked = true;
+
+		/* Returning here is the whole hold: the anchor, the rope's rest
+		   length and the player's velocity are all left exactly as they
+		   were, and no throw, flight step or swing step runs. A release
+		   made while the ring is up lets go on the frame it closes,
+		   where `want` is false and the branch below sees it. */
+		return;
+	}
 
 	if (want && !qr_grapple_engaged)
 	{
@@ -1547,5 +1578,11 @@ int Grapple_TestPakExtract (const char *pakpath, const char *inpak,
 void Grapple_TestDisengage (void)
 {
 	Grapple_Disengage ();
+}
+/* The rope's rest length, so a test can prove the ring froze it rather than
+   merely that the hook survived. */
+float Grapple_TestRope (void)
+{
+	return qr_grapple_rope;
 }
 #endif	/* QAVP_HOSTCHECK */
