@@ -133,11 +133,144 @@ START_W = 8                   # the start/finish line is twice a lane line
 # every other coordinate here, which leaves ~270 units of apron outside lane
 # 8 -- enough to walk, not a field. The outermost brush face is at
 # XW + 32 = 2336, well inside the +-4096 BSP29 limit.
-XW, YW, ZC = 2304, 1408, 1024
+# Grown for the swing towers, which need air far more than floor: ZC was
+# 1024, which is a room, and a hook that reaches 1600 units turns a 1024
+# ceiling into a winch with nowhere to go.
+#
+# The footprint is trimmed to 3136 rather than the 3328 it wants, and the
+# reason is LIGHTDATA, not space: at 3328 the lit bsp came to 1,052,788 bytes
+# against the format's documented MAX_MAP_LIGHTING of 1,048,576. Lightdata
+# scales with surface AREA, so no amount of subdividing moves it and only
+# less hall does. Height was kept and width given up, because a swing needs
+# air far more than it needs floor. If this map grows again, measure that
+# lump before anything else: the engine hunk-allocates it and does not
+# enforce the bound, so going over would probably work, and would still be
+# going over.
+#
+# ZC is now at the CEILING OF THE PROTOCOL rather than of the budget, which
+# is a nicer place to stop. The device verdict was that swinging under the
+# crossbeam and up over it was the best thing in the map and that the lid cut
+# it short, which it did: the beam top was 2944 and the lid 3072, so an arc
+# over the walkway had 128 units to play in. The 24 ceiling plates that used
+# to hang here were deleted in the same pass (they were obstacles on the
+# walkway, which is the one place in the map that wants none), and the 87,524
+# bytes of lightdata they cost paid for every one of these 960 new units of
+# height with 13,568 to spare -- 1,035,008 measured at ZC 4032.
+#
+# 4032 and not more: the highest brush in the map is the sky lid's TOP at
+# ZC + 16, MSG_WriteCoord16 is a signed short at 1/8 unit, so a coordinate
+# reaches 4095.875 and 4096 wraps to -4096 silently (the range check in
+# MSG_WriteShort is #ifdef PARANOID). 4032 + 16 = 4048 clears it on the 64
+# grid the rest of this file uses.
+XW, YW, ZC = 3136, 3136, 4032
 
 # The bottom straight (y < 0) runs +X, so the bends are left turns, as on a
 # real track, and the start/finish line is at the start of that straight.
 START_X = -HALF_STRAIGHT
+
+# ------------------------------------------------------------ swing towers
+#
+# A brutalist column field in the apron OUTSIDE the oval, which is the only
+# part of this map with room for it, and which was dead space before. The
+# track, the arena and every M4/M5 fixture are untouched: this is added
+# around them, so one `map range` is still the one map that exercises
+# everything, and now the hook as well.
+#
+# Spacing is set by the WEAPON, not by the plan. vr_grapple_range ships at
+# 1600 units, so the centre-to-centre pitch sits under it and every
+# neighbour is reachable at the shipped default; turning the range up only
+# adds options. Nothing is closer than vr_grapple_ropemin (64).
+#
+# Few and big, for two reasons that happen to agree. The immersive renderer
+# has neither a frustum nor a PVS while the immersive space is open (it draws
+# the whole level every frame on purpose, so the world does not pop as your
+# head turns), and a tall open field is the exact shape that gives that
+# choice nothing to lean on. Fewer, larger brushes is the cheaper map, and it
+# is also the more brutalist one.
+TOWER_PITCH = 1408
+TOWER_HALF = 128                # 256 square: wide enough to land on
+TOWER_SPAN = 2                  # grid runs -TOWER_SPAN..+TOWER_SPAN
+
+# Heights by grid cell, deliberately uneven so no two swings are the same
+# and there is always a higher one to aim for. Fixed table rather than a
+# random seed: the same command writes the same bytes, so a swing tuned
+# yesterday is the same swing today. 0 means no tower, and the holes are
+# what make routes.
+TOWER_H = [
+    [1536, 2560,  896, 2048, 1280],
+    [2816, 1024, 1792,  640, 2560],
+    [ 896, 2304,    0, 2816, 1024],
+    [2048,  768, 1536, 1280, 2816],
+    [1280, 2560, 2048,  896, 1792],
+]
+
+# (grid x, grid y, side, height). A slab jutting sideways is the anchor that
+# makes you SWING; something straight overhead just winches you up.
+TOWER_LEDGES = [
+    (0, 0, "+x", 1024), (1, 0, "+y", 2048), (3, 0, "-x", 1536),
+    (0, 1, "+y", 2304), (2, 1, "+x", 1280), (4, 1, "-y", 2048),
+    (1, 2, "-y", 1792), (3, 2, "+y", 2304), (4, 2, "-x",  768),
+    (0, 3, "+x", 1536), (2, 3, "+y", 1024), (4, 3, "-x", 2304),
+    (1, 4, "-x", 2048), (2, 4, "+y", 1536), (3, 4, "+x",  640),
+]
+LEDGE_OUT, LEDGE_HALF, LEDGE_THICK = 448, 224, 48
+
+# A second ring, offset half a pitch, so the apron reads as a FIELD you pick
+# a route through rather than a fence around the track. On its own the
+# aligned grid leaves 1408-unit corridors that all run the same two
+# directions; interleaving breaks that up and roughly doubles the number of
+# live anchors without moving anything closer than the hook's own minimum.
+TOWER_H2 = [
+    [2048, 1280, 2560,  896],
+    [1024, 2816, 1536, 2304],
+    [2560,  768, 2048, 1280],
+    [ 896, 2304, 1024, 2816],
+]
+TOWER2_OFF = TOWER_PITCH // 2
+
+# High crossbeams. The sky lid is NOT a hook anchor -- GrappleAnchor resets
+# the hook the moment it touches a sky surface -- so without these there is
+# nothing throwable above the tallest tower, and a missed catch at height is
+# a fall to the floor with no recovery. Spider-Man's webs take buildings, not
+# clouds, so this is the right shape anyway.
+#
+# PINNED ABSOLUTE, and it must stay that way. This was ZC - 320, which looks
+# tidier and quietly defeats the entire point of raising the ceiling: the
+# walkway would ride up with the lid and keep exactly the 320 units of
+# headroom that were the complaint. The height the player has learned is this
+# one, so the lid moves and the walkway does not.
+BEAM_Z = 2752
+BEAM_HALF = 96
+
+COFFER_HALF = 256
+COFFER_THICK = 96
+COFFER_Z = 3200
+# On the tower pitch rather than a coarser step, so a coffer sits above every
+# gap in the tower grid: the device verdict on the 3x3 version was that there
+# was no way up without a wall right next to you, and a ceiling you cannot
+# throw at is most of why.
+COFFER_STEP = 1408
+COFFER_SPAN = 2
+
+# Coffers: a grid of plates hung in open air. The lid is SKY, and
+# GrappleAnchor resets the hook the moment it touches a sky surface, so
+# without these a throw straight up fails silently everywhere except the two
+# crossbeams -- 192 units wide in a hall 6272 across, so up was not a
+# direction. The device verdict is that these are the most fun thing in the
+# map to throw at, so they are not negotiable.
+#
+# PINNED ABSOLUTE at 3200, and the number is the whole point. They used to be
+# ZC - 192, which put them at 2880..2976 while the beams ran 2752..2944: every
+# plate on either axis shared 64 units of Z with the beam it crossed, so eight
+# of the twenty-four stuck up through the walkway deck as a kerb you tripped
+# over at a run. The generator's skip test only ever dropped the centre plate,
+# because it tests XY and the clash is in Z.
+#
+# 3200 clears the deck at 2944 by 256, which is four times the player's
+# standing height, so the walkway runs clean underneath. It also stops them
+# riding the lid: with ZC at 4032 there are 736 units of empty air above the
+# highest anchor in the map, which is the hang at the top of a swing that a
+# ceiling 96 units up was cutting short.
 
 FACE_TAIL = "0 0 0 1 1"
 
@@ -198,6 +331,95 @@ def face(p0, p1, p2, tex, inside):
 
 def brush(faces):
     return "{\n" + "\n".join(faces) + "\n}\n"
+
+
+# ------------------------------------------------------------ tower helpers
+
+def tower_centre(ix, iy):
+    return (ix - TOWER_SPAN) * TOWER_PITCH, (iy - TOWER_SPAN) * TOWER_PITCH
+
+
+def tower_blocked(cx, cy):
+    """True where a tower would stand on the track, the arena or their
+    immediate surround. The oval's own footprint is the straights' half
+    length plus a bend radius in X, and lane 8's outer edge in Y; the margin
+    is the tower's half width plus a body's width of clearance, so you can
+    still run a lap without clipping a column."""
+    margin = TOWER_HALF + 192
+    return (abs(cx) < HALF_STRAIGHT + R_OUT + margin
+            and abs(cy) < R_OUT + margin)
+
+
+def towers():
+    """The column field, the ledges hanging off it, and the high crossbeams,
+    all as func_detail brushes. Floor top out here is the shell slab at
+    z = -16, not 0: the track and infield tiles sit on top of the slab and
+    the apron does not, which was already true before the towers arrived."""
+    out = []
+    z0 = -16
+    for iy in range(2 * TOWER_SPAN + 1):
+        for ix in range(2 * TOWER_SPAN + 1):
+            h = TOWER_H[iy][ix]
+            if h == 0:
+                continue
+            cx, cy = tower_centre(ix, iy)
+            if tower_blocked(cx, cy):
+                continue
+            out.append(box(cx - TOWER_HALF, cy - TOWER_HALF, z0,
+                           cx + TOWER_HALF, cy + TOWER_HALF, z0 + h,
+                           PILLAR, top=PLAT))
+
+    for ix, iy, side, h in TOWER_LEDGES:
+        cx, cy = tower_centre(ix, iy)
+        if TOWER_H[iy][ix] == 0 or tower_blocked(cx, cy):
+            continue                    # its tower was skipped; so is it
+        if h > TOWER_H[iy][ix]:
+            sys.exit(f"ledge at ({ix},{iy}) h={h} is above its own tower")
+        top = z0 + h
+        if side == "+x":
+            x1, x2 = cx + TOWER_HALF, cx + TOWER_HALF + LEDGE_OUT
+            y1, y2 = cy - LEDGE_HALF, cy + LEDGE_HALF
+        elif side == "-x":
+            x1, x2 = cx - TOWER_HALF - LEDGE_OUT, cx - TOWER_HALF
+            y1, y2 = cy - LEDGE_HALF, cy + LEDGE_HALF
+        elif side == "+y":
+            x1, x2 = cx - LEDGE_HALF, cx + LEDGE_HALF
+            y1, y2 = cy + TOWER_HALF, cy + TOWER_HALF + LEDGE_OUT
+        else:
+            x1, x2 = cx - LEDGE_HALF, cx + LEDGE_HALF
+            y1, y2 = cy - TOWER_HALF - LEDGE_OUT, cy - TOWER_HALF
+        out.append(box(x1, y1, top - LEDGE_THICK, x2, y2, top, PLAT, top=PLAT))
+
+    for iy in range(len (TOWER_H2)):
+        for ix in range(len (TOWER_H2[iy])):
+            h = TOWER_H2[iy][ix]
+            cx = (ix - 2) * TOWER_PITCH + TOWER2_OFF
+            cy = (iy - 2) * TOWER_PITCH + TOWER2_OFF
+            if h == 0 or tower_blocked (cx, cy):
+                continue
+            out.append(box(cx - TOWER_HALF, cy - TOWER_HALF, z0,
+                           cx + TOWER_HALF, cy + TOWER_HALF, z0 + h,
+                           PILLAR, top=PLAT))
+
+    # Two beams spanning the hall under the lid, clear of the oval in Y so
+    # they are not a roof over the running track. One beam each way, not two:
+    # a full-span beam measures 29,826 bytes of lightdata, which is 284 units
+    # of ceiling height, and the second pair added nothing a swing could use
+    # that the first pair did not.
+    out.append(box(-XW, -BEAM_HALF, BEAM_Z, XW, BEAM_HALF,
+                   BEAM_Z + 2 * BEAM_HALF, PILLAR, top=PLAT))
+    out.append(box(-BEAM_HALF, -YW, BEAM_Z, BEAM_HALF, YW,
+                   BEAM_Z + 2 * BEAM_HALF, PILLAR, top=PLAT))
+
+    # The coffer grid, a clear 256 above the walkway deck. No skip test: at
+    # this height nothing crosses anything, which is the point of the height.
+    for iy in range(-COFFER_SPAN, COFFER_SPAN + 1):
+        for ix in range(-COFFER_SPAN, COFFER_SPAN + 1):
+            cx, cy = ix * COFFER_STEP, iy * COFFER_STEP
+            out.append(box(cx - COFFER_HALF, cy - COFFER_HALF, COFFER_Z,
+                           cx + COFFER_HALF, cy + COFFER_HALF,
+                           COFFER_Z + COFFER_THICK, PLAT, top=PLAT))
+    return out
 
 
 class Bend:
@@ -382,6 +604,8 @@ def build_map():
     for x in (-hx, hx):
         for y in (R_OUT + 20, -(R_OUT + 20)):
             detail.append(box(x - 8, y - 8, 0, x + 8, y + 8, 48, MARKER))
+
+    detail.extend (towers())
 
     world = ['"classname" "worldspawn"', '"wad" "range.wad"',
              '"message" "quake-avp input range"',

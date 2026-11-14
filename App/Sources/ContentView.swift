@@ -201,7 +201,9 @@ struct ContentView: View {
         }
         var strips = Self.episodes
         if engine.paths?.hasBundledRangePak == true {
-            strips.append(("Test range", ["range"]))
+            // Both dev maps ride in the same pak: the seeder's loop is a
+            // hardcoded pak0/pak1/pak2, so a pak3 would never be copied.
+            strips.append(("Test range", ["range", "gym"]))
         }
         return strips
     }
