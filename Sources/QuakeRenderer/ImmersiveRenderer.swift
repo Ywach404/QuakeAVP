@@ -1126,6 +1126,13 @@ final class ImmersiveRenderer {
                 core.encode(frame: packet, with: encoder, pipelines: pipelines,
                             uniforms: uniforms, phase: phaseParams,
                             amplificationCount: 2, drawsViewmodel: false)
+                if let rope = grappleRope(packet: packet, originFromQuake: originFromQuake,
+                                          head: originFromDevice.columns.3) {
+                    core.drawGrappleRope(from: rope.hand, to: rope.tip, facing: rope.head,
+                                         anchored: rope.anchored,
+                                         viewproj0: handViewproj[0], viewproj1: handViewproj[1],
+                                         pipelines: pipelines, encoder: encoder)
+                }
                 core.drawVirtualHand(virtualHand, opacity: handOpacity,
                                      viewproj0: handViewproj[0], viewproj1: handViewproj[1],
                                      pipelines: pipelines, encoder: encoder)
@@ -1191,6 +1198,14 @@ final class ImmersiveRenderer {
                     core.encode(frame: packet, with: encoder, pipelines: pipelines,
                                 uniforms: uniforms, phase: phaseParams,
                                 amplificationCount: 1, drawsViewmodel: false)
+                    if let rope = grappleRope(packet: packet, originFromQuake: originFromQuake,
+                                              head: originFromDevice.columns.3) {
+                        core.drawGrappleRope(from: rope.hand, to: rope.tip, facing: rope.head,
+                                             anchored: rope.anchored,
+                                             viewproj0: handViewproj[index],
+                                             viewproj1: handViewproj[index],
+                                             pipelines: pipelines, encoder: encoder)
+                    }
                     core.drawVirtualHand(virtualHand, opacity: handOpacity,
                                          viewproj0: handViewproj[index], viewproj1: handViewproj[index],
                                          pipelines: pipelines, encoder: encoder)
@@ -1390,6 +1405,40 @@ final class ImmersiveRenderer {
         }
         let snap = OffHandWrist.shared.snapshot()
         return snap.valid ? snap.position : nil
+    }
+
+    // MARK: - The grappling hook's rope
+
+    /// Both ends of the rope, in corrected-tracking metres, or nil when there
+    /// is no hook out or no off hand to hang it from.
+    ///
+    /// This is the one place in the renderer where the two spaces meet. The
+    /// engine owns the hook and publishes its far end in Quake units; the hand
+    /// is only known here, in tracking metres, from the pose that draws it this
+    /// frame. `originFromQuake` carries the one across to the other, and the
+    /// scale is already inside it, so there is no separate metres-per-unit to
+    /// apply.
+    ///
+    /// Why not do this engine-side, where the laser lives: the laser is welded
+    /// to the view weapon, which is deliberately not late-latched, so the gun
+    /// and its beam share one stale pose and agree. The off hand does not
+    /// agree with the packet. In controller mode its pose is resolved on this
+    /// thread, this frame; in hands mode it is the latest ARKit update, which
+    /// is a different staleness from the packet's. Either way the hand is not
+    /// where the packet thinks it is, so the rope's near end has to come from
+    /// the hand itself.
+    private func grappleRope(packet: qc_frame_t, originFromQuake: simd_float4x4,
+                             head: SIMD4<Float>)
+        -> (hand: SIMD3<Float>, tip: SIMD3<Float>, head: SIMD3<Float>, anchored: Bool)? {
+        guard packet.grapple_state != 0, let hand = offHandWristPosition() else { return nil }
+
+        let q = SIMD4<Float>(packet.grapple_tip.0, packet.grapple_tip.1,
+                             packet.grapple_tip.2, 1)
+        let t = originFromQuake * q
+        return (hand: hand,
+                tip: SIMD3(t.x, t.y, t.z),
+                head: SIMD3(head.x, head.y, head.z),
+                anchored: packet.grapple_state == 2)
     }
 
     // MARK: - Modular HUD tile placement (vr_hud 3)

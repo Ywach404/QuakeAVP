@@ -506,11 +506,13 @@ typedef struct qc_frame_s {
 	   emitted here as particle verts like the laser is, because the rope has
 	   to stay welded to the drawn fist. The laser can live engine-side only
 	   because the view weapon is deliberately NOT late-latched, so the gun
-	   and its beam share one stale pose and agree with each other. The off
-	   hand is the opposite: its model is drawn from the live render-time
-	   pose, so a rope placed from the pose this packet was built with would
-	   visibly detach from the hand it comes out of every time that hand
-	   moved.
+	   and its beam share one stale pose and AGREE WITH EACH OTHER. The off
+	   hand does not agree with this packet, by either route: in controller
+	   mode its pose is resolved on the render thread in the frame being
+	   drawn, and in hands mode it is the latest ARKit update, which is a
+	   different staleness from the packet's rather than the same one. So a
+	   rope placed from the pose this packet was built with would visibly
+	   detach from the hand it comes out of whenever that hand moved.
 
 	   So only the FAR end crosses here. The near end is taken render-side,
 	   from the same pose that draws the fist in the same frame.

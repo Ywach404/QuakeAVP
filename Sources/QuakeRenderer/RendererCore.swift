@@ -1614,6 +1614,80 @@ final class RendererCore {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: scaled.count / 7)
     }
 
+    /// The grappling hook: a rope from the hand to the hook head, and the head
+    /// itself. Both ends arrive ALREADY in corrected-tracking metres, which is
+    /// the whole reason this is a renderer call and not engine geometry.
+    ///
+    /// The rope has to stay welded to the drawn fist, and the fist is drawn
+    /// here, from a pose the frame packet does not carry. So the near end is
+    /// the hand as this frame draws it and the caller converts the far end out
+    /// of Quake units with `originFromQuake` -- one matrix it already has,
+    /// and the identity `eyeViewproj == handViewproj * originFromQuake` is what
+    /// makes the two spaces agree on depth, so a wall still occludes the rope.
+    ///
+    /// `facing` is a point to turn the ribbons towards, in the same space: the
+    /// head. A ribbon rather than a line because line primitives are illegal
+    /// under the device's foveation rate map, and the hook head is three
+    /// crossed ribbons rather than a billboard because a nub that reads solid
+    /// from any angle is cheaper than getting a billboard's basis right.
+    func drawGrappleRope(from hand: SIMD3<Float>, to tip: SIMD3<Float>,
+                         facing eye: SIMD3<Float>, anchored: Bool,
+                         viewproj0: simd_float4x4, viewproj1: simd_float4x4,
+                         pipelines: RenderPipelines, encoder: MTLRenderCommandEncoder) {
+        let span = tip - hand
+        let len = simd_length(span)
+        guard len > 0.02 else { return }
+        let dir = span / len
+
+        // Face the eye from the HAND, not the rope's midpoint, so a rope
+        // pointing near enough straight at the viewer still has a stable
+        // perpendicular. Same construction the engine's laser uses.
+        var look = eye - hand
+        if simd_length(look) < 1e-4 { look = SIMD3(0, 1, 0) }
+        var perp = simd_cross(dir, look)
+        if simd_length(perp) < 1e-4 { perp = simd_cross(dir, SIMD3(0, 1, 0)) }
+        if simd_length(perp) < 1e-4 { return }
+        perp = simd_normalize(perp)
+
+        // A taut rope reads brighter than one still flying out, which is the
+        // cheapest possible signal of "it caught" and costs no extra geometry.
+        let rope: SIMD4<Float> = anchored ? SIMD4(0.78, 0.76, 0.71, 1)
+                                          : SIMD4(0.55, 0.53, 0.50, 1)
+        let head: SIMD4<Float> = anchored ? SIMD4(0.92, 0.90, 0.84, 1)
+                                          : SIMD4(0.80, 0.78, 0.73, 1)
+        let halfThick: Float = 0.009        // metres, so an 18 mm chain
+        let nub: Float = 0.030              // metres, the head's half extent
+
+        var v: [Float] = []
+        v.reserveCapacity(4 * 6 * 7)
+        Self.addRibbon(hand, tip, perp: perp, t: halfThick, color: rope, into: &v)
+        // Three crossed ribbons at the tip. The rope's own direction is one
+        // axis so the head always reads as attached to it.
+        let ax = dir, ay = perp, az = simd_normalize(simd_cross(dir, perp))
+        Self.addRibbon(tip - ax * nub, tip + ax * nub, perp: ay, t: nub * 0.45,
+                       color: head, into: &v)
+        Self.addRibbon(tip - ay * nub, tip + ay * nub, perp: az, t: nub * 0.45,
+                       color: head, into: &v)
+        Self.addRibbon(tip - az * nub, tip + az * nub, perp: ax, t: nub * 0.45,
+                       color: head, into: &v)
+
+        guard let buf = device.makeBuffer(bytes: v,
+                                          length: v.count * MemoryLayout<Float>.size,
+                                          options: .storageModeShared)
+        else { return }
+        encoder.setRenderPipelineState(pipelines.wheelGuide)
+        // depthNoWrite, matching the virtual hand: tested against the world so
+        // geometry in front occludes the rope, but writing nothing, so the
+        // rope cannot occlude the hand drawn after it.
+        encoder.setDepthStencilState(pipelines.depthNoWrite)
+        var u = GuideUniforms(viewproj0: viewproj0, viewproj1: viewproj1)
+        encoder.setVertexBuffer(buf, offset: 0, index: 0)
+        withUnsafeBytes(of: &u) { raw in
+            encoder.setVertexBytes(raw.baseAddress!, length: raw.count, index: 1)
+        }
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: v.count / 7)
+    }
+
     /// Append a thin quad (two triangles) between A and B into a 7-float
     /// vertex list, so a "line" survives foveation. `perp` is a unit vector
     /// off the segment; `t` its half-thickness.
