@@ -174,10 +174,44 @@ final class QuakeEngineHost: @unchecked Sendable {
     private var thread: Thread?
     private let shouldStop = ManagedAtomicFlag()
 
-    /// Frame pacing for M0. At M3 this disappears: CompositorServices'
-    /// `LayerRenderer.queryNextFrame()` becomes the clock and the engine ticks
-    /// once per drawable instead of on a fixed timer.
-    private let targetFrameInterval: Double = 1.0 / 90.0
+    /// The display's period, and the floor on how often the engine is paced.
+    /// Producing packets faster than they can be presented buys nothing: the
+    /// renderer re-presents the newest READY slot when it ticks faster than
+    /// the engine, which is what `QC_RendererReleaseFrame` is for.
+    private static let displayFrameInterval: Double = 1.0 / 90.0
+
+    /// Frame pacing. Read from `host_maxfps` on every iteration rather than
+    /// fixed, because the pacer's period and `Host_FilterTime`'s threshold are
+    /// two numbers set in two files, and for three milestones they disagreed.
+    ///
+    /// This was a hard `1.0 / 90.0` against a gate that rejects any frame
+    /// arriving less than `1 / host_maxfps` after the last admitted one, and
+    /// `host_maxfps` defaults to 72. 11.1 ms against a 13.9 ms threshold means
+    /// every SECOND `QC_Frame` was thrown away whole: measured 45.0 Hz of
+    /// simulation on a 90 Hz display, in a clean `.#.#.#` alternation, with a
+    /// one-degree-per-tick aim sweep arriving in the frame packet as
+    /// two-degree jumps.
+    ///
+    /// Nothing announced it, and the one instrument pointed the wrong way: the
+    /// HUD's fps tile is fed the COMPOSITOR's presented rate, so it read 90
+    /// throughout. What showed it was the view weapon, which is the only thing
+    /// in the scene rigidly parented to a packet-rate transform rather than to
+    /// the late-latched head pose, so it was the only part that juddered. The
+    /// lighter the frame the worse the halving, too, since the gate is only
+    /// cleared when a frame's own work pushes it past 13.9 ms.
+    ///
+    /// Sleeping LONGER than the gate is harmless and sleeping shorter is not:
+    /// a period under the threshold aliases down to about half of it, so 1/120
+    /// measures 60 Hz and not 72. Any future attempt to smooth this by running
+    /// the loop hotter lands straight back here. Hence `max`, and hence asking
+    /// the gate rather than restating its number.
+    private var targetFrameInterval: Double {
+        let maxfps = Double(QC_CvarValue("host_maxfps"))
+        // Before the cvar exists, and against a nonsense value, fall back to
+        // upstream's own default rather than spinning.
+        guard maxfps >= 10 else { return 1.0 / 72.0 }
+        return max(1.0 / maxfps, Self.displayFrameInterval)
+    }
 
     init(
         onLog: @escaping @MainActor @Sendable (String) -> Void,
