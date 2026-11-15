@@ -69,6 +69,8 @@ int  QR_GrappleHeadPose (float origin[3], float angles[3], int *frame);
    the two body-frame terms the assertions below predict it from. */
 int  QR_HandOrigin (vec3_t out);
 int  QR_OffHandOrigin (vec3_t out);
+/* The RENDERED eye, which is what the head-in-solid fade measures from. */
+int  QR_EyeOrigin (vec3_t out);
 extern float	qr_body_yaw;
 extern float	qr_height_trim;
 
@@ -78,6 +80,8 @@ extern double	host_frametime;
 
 /* gengym.py: HALF 3328, TOP 3072, SHELL 64, so the ceiling's underside. */
 #define GYM_CEIL_Z	3072.f
+/* genrange.py:165: XW, YW, ZC = 3136, 3136, 4032 -- the sky lid underside. */
+#define RANGE_SKY_Z	4032.f
 
 static int failures;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL: " __VA_ARGS__); printf("\n"); } else { printf("ok:   " __VA_ARGS__); printf("\n"); } } while (0)
@@ -1078,11 +1082,11 @@ int main (int argc, char **argv)
 	 * modulate it the way a thumbstick can. At the shared top speed that
 	 * reads as uncontrollable, so bare hands get their own ceiling.
 	 *
-	 * The number is not invented. A. played a session at cl_forwardspeed
-	 * 200 by accident (a left controller set down on its own trigger
-	 * latched +speed, which this port inverts into a WALK modifier) and
-	 * preferred it, so vr_movescale defaults to exactly that: 200 out of
-	 * the 400 a run requests.
+	 * The number is not invented. A. found 0.5 by accident (a left
+	 * controller set down on its own trigger latched +speed, which this
+	 * port inverts into a WALK modifier), asked for it, then played it and
+	 * called it a little slow -- so the default is 0.75, which asks for
+	 * 300 of the 400 a run requests.
 	 *
 	 * Driven through the real IN_Move rather than a helper, and read back
 	 * off cl.cmd, because the thing worth proving is that the scale reaches
@@ -1127,9 +1131,9 @@ int main (int argc, char **argv)
 		QC_InputSetGamepad (&pad);
 		step (4);
 		walk = cl.cmd.forwardmove;
-		CHECK (fabsf (walk - 200.f) < 1.f,
-		       "bare hands ask for the walk A. tuned by accident "
-		       "(%.1f, want 200)", walk);
+		CHECK (fabsf (walk - 300.f) < 1.f,
+		       "bare hands ask for the speed A. tuned by playing "
+		       "(%.1f, want 300)", walk);
 		CHECK (walk < run,
 		       "and hands are slower than the stick (%.1f against %.1f)",
 		       walk, run);
@@ -1175,7 +1179,7 @@ int main (int argc, char **argv)
 		CHECK (cl.cmd.forwardmove > 0.f,
 		       "and never reverses the walk");
 
-		QC_ExecuteCommand ("vr_movescale_hands 0.5\n");
+		QC_ExecuteCommand ("vr_movescale_hands 0.75\n");
 		memset (&pad, 0, sizeof (pad));
 		QC_InputSetGamepad (&pad);
 		step (2);
@@ -1313,6 +1317,78 @@ int main (int argc, char **argv)
 		}
 		CHECK (state == GRAPPLE_IDLE,
 		       "and the sky refuses that one too (state=%d)", state);
+	}
+
+	/* ---------------- and the SKY fades too ----------------------------- */
+
+	/*
+	 * A. hit the skybox on device and got no fade at all. The reason is a
+	 * two-hull asymmetry worth stating, because it will catch the next
+	 * person as well:
+	 *
+	 *   SV_RecursiveHullCheck blocks only on CONTENTS_SOLID (world.c), so
+	 *   in hull 0 -- the POINT hull, which TraceLine uses -- a sky brush is
+	 *   walked straight through and a probe reports nothing hit. Player
+	 *   boxes clip against the larger hulls, where sky IS solid, so the
+	 *   BODY stops at the lid. Net effect: his eye sat a few units under a
+	 *   surface that the body had already been stopped by, inside the
+	 *   fade's onset distance, and every probe said open air.
+	 *
+	 * So the probe reads point CONTENTS instead, which reports
+	 * CONTENTS_SKY honestly. This is the range and not the gym because the
+	 * range is the map with a sky lid (genrange.py: ZC 4032).
+	 */
+	{
+		const qc_frame_t	*f;
+		float			near_sky, through;
+		vec3_t			eye;
+		float			eyez, room;
+
+		QC_ExecuteCommand ("vr_clipfade 12\n");
+		place (0.f, 0.f, 3938.f);		/* clear air under the lid */
+		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		QC_InputSetHeightTrim (0.f);
+		step (3);
+		/* Measure the eye the ENGINE's way, through the same function
+		   the fade reads. Deriving it from origin + view_ofs is off by
+		   six units here (view_ofs says 22, r_refdef.vieworg lands at
+		   +16), and the first version of this test did exactly that --
+		   which parked the eye at precisely the onset distance, where
+		   a fade of 0 is the correct answer, and read as a failure of
+		   the probe rather than of the arithmetic. */
+		QR_EyeOrigin (eye);
+		eyez = eye[2];
+		room = RANGE_SKY_Z - eyez;
+		printf ("      (eye z %.0f, sky lid %.0f, room %.0f)\n",
+			eyez, RANGE_SKY_Z, room);
+		CHECK (room > 20.f,
+		       "the driver starts with clear air under the lid (%.0f)",
+		       room);
+
+		/* Six units under a sky surface: inside the onset, so this must
+		   darken. It read exactly 0 before the probe was rewritten. */
+		QC_InputSetHeightTrim (room - 6.f);
+		step (3);
+		f = QC_RendererAcquireFrame ();
+		near_sky = f ? f->eye_fade : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (near_sky > 0.f,
+		       "an eye just under the SKY fades (%.3f)", near_sky);
+		CHECK (near_sky > 0.4f,
+		       "and six units out of twelve is most of the way (%.3f)",
+		       near_sky);
+
+		/* Through it: out of the world, nothing behind it to draw. */
+		QC_InputSetHeightTrim (room + 32.f);
+		step (3);
+		f = QC_RendererAcquireFrame ();
+		through = f ? f->eye_fade : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (through == 1.f,
+		       "an eye through the sky is full black (%.3f)", through);
+
+		QC_InputSetHeightTrim (0.f);
+		step (3);
 	}
 
 	/* ---------------- hooking a monster hurts it ------------------------ */

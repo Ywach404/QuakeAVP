@@ -124,7 +124,7 @@ struct ContentView: View {
     /// Movement speed per input. Defaults mirror vr_movescale_hands and
     /// vr_movescale_pad; the cvars are archived, so the engine is the store
     /// and these are the dial positions.
-    @State private var moveScaleHandsUI: Float = 0.5
+    @State private var moveScaleHandsUI: Float = 0.75
     @State private var moveScalePadUI: Float = 1
     /// vr_clipfade, in Quake units. 0 is off.
     @State private var clipFadeUI: Float = 12
@@ -1288,10 +1288,10 @@ struct ContentView: View {
                     // Someone who finds a 0.50 next to a 1.00 and no
                     // explanation reads it as a bug and "fixes" it.
                     Text(moveScaleHandsUI < moveScalePadUI
-                         ? "Bare hands are set to \(Int(moveScaleHandsUI * 100))% on purpose, lower than the controllers. Pinches are all-or-nothing, so a thumbstick can ease into a walk and fingers cannot, and a lower top speed is what gives the hands fine control back. 50% is the measured default."
-                         : "Bare hands are at \(Int(moveScaleHandsUI * 100))%, the same as or above the controllers. The measured default is 50%, deliberately lower, because pinches are all-or-nothing and cannot ease into a walk the way a thumbstick does.")
+                         ? "Bare hands are set to \(Int(moveScaleHandsUI * 100))% on purpose, lower than the controllers. Pinches are all-or-nothing, so a thumbstick can ease into a walk and fingers cannot, and a lower top speed is what gives the hands fine control back. 75% is the tuned default."
+                         : "Bare hands are at \(Int(moveScaleHandsUI * 100))%, the same as or above the controllers. The tuned default is 75%, deliberately lower, because pinches are all-or-nothing and cannot ease into a walk the way a thumbstick does.")
                         .font(.caption2).foregroundStyle(.secondary)
-                    Text("1.00 is the ceiling for both: full input already asks for more speed than the server allows, so a higher number would do nothing.")
+                    Text("1.00 is the ceiling for both: full input already asks for more speed than the server allows, so the top of the knob delivers the same speed as about 0.80. The lower half is where the range really lives.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Divider()

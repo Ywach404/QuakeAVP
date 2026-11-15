@@ -52,6 +52,73 @@ extern cvar_t vr_clipfade;
 /* in_null.c: the RENDERED eye, reconstructed the way the consumer draws it. */
 extern int	QR_EyeOrigin (vec3_t out);
 
+/*
+ * Is this point outside the playable world?
+ *
+ * Point CONTENTS, deliberately, and NOT a hull trace. SV_RecursiveHullCheck
+ * blocks only on CONTENTS_SOLID (world.c), so in hull 0 -- the point hull,
+ * which TraceLine uses -- a SKY brush is walked straight through and a probe
+ * reports open air. Player boxes clip against the larger hulls, where sky is
+ * solid, so the BODY stops at a sky lid while a hull-0 probe says there is
+ * nothing there. That asymmetry is exactly why hitting the skybox produced no
+ * fade at all: the eye sat a few units under a surface the body had already
+ * been stopped by, and every probe disagreed.
+ *
+ * SKY counts as outside for the same reason SOLID does, and more so: there is
+ * nothing behind it to draw.
+ */
+static qboolean QR_EyePointBlocked (const vec3_t p)
+{
+	vec3_t	q;
+	mleaf_t	*leaf;
+
+	VectorCopy (p, q);		/* Mod_PointInLeaf takes a mutable vec3_t */
+	leaf = Mod_PointInLeaf (q, cl.worldmodel);
+	return leaf && (leaf->contents == CONTENTS_SOLID
+			|| leaf->contents == CONTENTS_SKY);
+}
+
+/*
+ * How far the world stays open from `eye` along `dir`, up to `onset`.
+ *
+ * Marched coarsely and then refined by bisection, which costs four extra
+ * point tests for about a tenth of a unit of precision. Without the refine
+ * the fade would band at the step size, and banding in a darkening screen
+ * reads as a glitch rather than as a warning.
+ */
+static float QR_EyeOpenDistance (const vec3_t eye, const float dir[3],
+				 float onset)
+{
+	const float	step = 2.f;
+	float		d, lo, hi;
+	vec3_t		probe, p;
+	int		i;
+
+	VectorCopy (dir, probe);
+	for (d = step; d <= onset; d += step)
+	{
+		VectorMA (eye, d, probe, p);
+		if (QR_EyePointBlocked (p))
+			break;
+	}
+	if (d > onset)
+		return onset;		/* open all the way out */
+
+	lo = d - step;			/* known open */
+	hi = d;				/* known blocked */
+	for (i = 0; i < 4; i++)
+	{
+		float	mid = (lo + hi) * 0.5f;
+
+		VectorMA (eye, mid, probe, p);
+		if (QR_EyePointBlocked (p))
+			hi = mid;
+		else
+			lo = mid;
+	}
+	return hi;
+}
+
 /* head-follow ledger, owned by in_null.c on the engine thread */
 extern float qr_head_absorbed[2];
 extern uint32_t qr_recenter_count;
@@ -8531,39 +8598,35 @@ void QR_RenderView (void)
 	   safety fade, and an ease lags exactly when it must not. The head
 	   moves continuously, so the distance already ramps.
 
-	   Client-side probes (TraceLine, Mod_PointInLeaf) rather than the
-	   SV_* family, so this still works with no server up -- a demo or a
-	   disconnected console has a worldmodel and a view, and the eye can
-	   be in a wall there too. SV_PointContents would dereference
-	   sv.worldmodel and crash in exactly those cases.
+	   Client-side point CONTENTS rather than the SV_* family, so this
+	   still works with no server up -- a demo or a disconnected console
+	   has a worldmodel and a view, and the eye can be in a wall there
+	   too, while SV_PointContents would dereference sv.worldmodel and
+	   crash in exactly those cases. And contents rather than a hull
+	   trace because a hull-0 trace walks straight through SKY; see
+	   QR_EyePointBlocked, which is the bug A. hit on the skybox.
 
 	   Six axis probes and not a swept box: what matters is the distance
 	   from a POINT to the nearest surface, in any direction, because a
 	   head leans sideways and rises as readily as it walks forward. The
-	   leaf test comes first and short-circuits, since a trace that starts
-	   inside solid reports nothing useful. */
+	   eye's own position is tested first and short-circuits. */
 	{
 		vec3_t	eye;
 		float	onset = vr_clipfade.value;
 		float	fade = 0.f;
 
-		if (onset > 0.f && cl.worldmodel && QR_EyeOrigin (eye))
+		if (onset > 0.f && cl.worldmodel && cl.worldmodel->nodes
+		    && QR_EyeOrigin (eye))
 		{
 			static const float probe[6][3] = {
 				{  1.f,  0.f,  0.f }, { -1.f,  0.f,  0.f },
 				{  0.f,  1.f,  0.f }, {  0.f, -1.f,  0.f },
 				{  0.f,  0.f,  1.f }, {  0.f,  0.f, -1.f }
 			};
-			mleaf_t	*leaf = Mod_PointInLeaf (eye, cl.worldmodel);
 			float	nearest = onset;
 			int	i;
 
-			/* SKY counts as solid here. A. named the skybox
-			   ceiling specifically, and an eye through a sky brush
-			   is out of the world just as surely as one in rock --
-			   more so, since there is nothing behind it to draw. */
-			if (leaf && (leaf->contents == CONTENTS_SOLID
-				     || leaf->contents == CONTENTS_SKY))
+			if (QR_EyePointBlocked (eye))
 			{
 				nearest = 0.f;
 			}
@@ -8571,19 +8634,8 @@ void QR_RenderView (void)
 			{
 				for (i = 0; i < 6; i++)
 				{
-					vec3_t	dir, end, impact, hit;
-					float	d;
-
-					VectorCopy (probe[i], dir);
-					VectorMA (eye, onset, dir, end);
-					TraceLine (eye, end, impact);
-					/* TraceLine leaves a zeroed endpos when
-					   it did not run; chase.c and the
-					   export camera read it the same way. */
-					if (VectorLength (impact) == 0.f)
-						continue;
-					VectorSubtract (impact, eye, hit);
-					d = VectorLength (hit);
+					float	d = QR_EyeOpenDistance (eye,
+								probe[i], onset);
 					if (d < nearest)
 						nearest = d;
 				}

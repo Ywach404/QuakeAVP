@@ -487,13 +487,18 @@ static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
    control rather than as being fast, and the only way to give that control
    back is to lower what full deflection asks for.
 
-   The hands default is measured, not chosen. A. played a session at
-   cl_forwardspeed 200 by accident (a controller set down on its trigger
-   latched +speed, the walk modifier, through the detach bug fixed in 5ee1506)
-   and preferred it, so 0.5 reproduces exactly that: 200 out of the 400 a run
-   requests. It reads as 0.625 of the speed actually REACHED, because
-   sv_maxspeed caps the 400 at 320 and this scales the request, not the cap --
-   which is why the settings UI shows the speed and not this number.
+   The hands default started measured and was then tuned by play. A. found
+   0.5 by accident (a controller set down on its trigger latched +speed, the
+   walk modifier, through the detach bug fixed in 5ee1506), liked it enough to
+   ask for it, then played it and called it a little slow, so it is 0.75: 300
+   out of the 400 a run requests. Both numbers are his, and the second one
+   wins because it came from playing rather than from noticing.
+
+   Note the ratio is not what the slider says. sv_maxspeed caps the request at
+   320, so 0.75 asks for 300 and 1.0 asks for 400 but delivers 320: the felt
+   difference between the ends of the knob is 300 against 320, not 300
+   against 400. Anything below about 0.8 is the only part of the range that
+   does much, which is worth knowing before tuning it again.
 
    The stick defaults to 1, untouched: A. calls its tuning perfect. It gets a
    knob anyway so the two are adjustable independently, and so nothing about
@@ -504,7 +509,7 @@ static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
    Which knob applies is decided by qr_pad.connected, this file's idiom for "a
    real spatial controller, not bare hands publishing pad state"
    (QuakeCore.h), and the field the edge turn already gates on. */
-static cvar_t	vr_movescale_hands = {"vr_movescale_hands", "0.5", CVAR_ARCHIVE};
+static cvar_t	vr_movescale_hands = {"vr_movescale_hands", "0.75", CVAR_ARCHIVE};
 static cvar_t	vr_movescale_pad = {"vr_movescale_pad", "1", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 /* M6: aim from the dominant hand/controller ray. 1 = the gun lives in your
