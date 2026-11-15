@@ -121,6 +121,13 @@ struct ContentView: View {
     @State private var turnHoldEnabled = true
     @State private var turnHoldSpeedUI: Float = 90
     @State private var turnHoldDzUI: Float = 18
+    /// Movement speed per input. Defaults mirror vr_movescale_hands and
+    /// vr_movescale_pad; the cvars are archived, so the engine is the store
+    /// and these are the dial positions.
+    @State private var moveScaleHandsUI: Float = 0.5
+    @State private var moveScalePadUI: Float = 1
+    /// vr_clipfade, in Quake units. 0 is off.
+    @State private var clipFadeUI: Float = 12
     // Sound mixer (Debug tab). Defaults match Quake's volume/bgmvolume defaults;
     // the engine's archived values win in-game until a slider is touched.
     // Sound effects start very quiet (3%), music moderate (70%), rather than
@@ -1267,6 +1274,36 @@ struct ContentView: View {
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     .tuningLocked()
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Movement speed").font(.caption).foregroundStyle(.secondary)
+                    tuneRow("Bare hands", $moveScaleHandsUI, 0.1...1.0, fmt: "%.2f") {
+                        engine.send("vr_movescale_hands \($0)")
+                    }
+                    tuneRow("Controllers", $moveScalePadUI, 0.1...1.0, fmt: "%.2f") {
+                        engine.send("vr_movescale_pad \($0)")
+                    }
+                    // Say out loud that the hands number is lower ON PURPOSE.
+                    // Someone who finds a 0.50 next to a 1.00 and no
+                    // explanation reads it as a bug and "fixes" it.
+                    Text(moveScaleHandsUI < moveScalePadUI
+                         ? "Bare hands are set to \(Int(moveScaleHandsUI * 100))% on purpose, lower than the controllers. Pinches are all-or-nothing, so a thumbstick can ease into a walk and fingers cannot, and a lower top speed is what gives the hands fine control back. 50% is the measured default."
+                         : "Bare hands are at \(Int(moveScaleHandsUI * 100))%, the same as or above the controllers. The measured default is 50%, deliberately lower, because pinches are all-or-nothing and cannot ease into a walk the way a thumbstick does.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text("1.00 is the ceiling for both: full input already asks for more speed than the server allows, so a higher number would do nothing.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Head in walls").font(.caption).foregroundStyle(.secondary)
+                    tuneRow("Fade from", $clipFadeUI, 0...24, fmt: "%.0f") {
+                        engine.send("vr_clipfade \($0)")
+                    }
+                    Text(clipFadeUI < 1
+                         ? "Off: leaning or standing into solid geometry will show the void and the room behind it."
+                         : "The view darkens from \(Int(clipFadeUI)) units out as your head nears a wall or ceiling, and goes black before the eye leaves the level. Your body is stopped by walls; your head is not, so without this you see straight through the map into passthrough.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 // Fire is pinch in quake-avp. The curl gesture stays in code
                 // (HandState.indexCurled, the .curl fire path) for a future
