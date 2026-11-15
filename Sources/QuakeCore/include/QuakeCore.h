@@ -744,6 +744,20 @@ void QC_InputSetHeadPitch (float pitch_deg);
 void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 		     float yaw_deg, float pitch_deg);
 
+/* The OFF hand's ray, same form and same conventions as the aim above: org in
+   the BODY frame (fwd/right/up from the recenter origin, Quake units), yaw and
+   pitch room-relative in Quake degrees with the engine adding the body yaw.
+   `valid` 0 releases it.
+
+   This does NOT aim the shot. It is where the grappling hook leaves from and
+   the direction it flies, which is what lets the gun stay drawn and firing
+   through a swing; with the channel released the hook falls back to the gun
+   hand and then to the body. A non-finite value is treated as released rather
+   than latched, so a tracking fault degrades instead of freezing the rope.
+   Callable from any thread. */
+void QC_InputSetOffAim (int valid, float org_fwd, float org_right, float org_up,
+			float yaw_deg, float pitch_deg);
+
 /* Point-and-blink teleport. The OFF hand aims a destination in the same
    body-frame ray form as the aim above (org = fwd/right/up offset from the
    recenter origin, yaw/pitch room-relative). `commit` once on release jumps

@@ -65,6 +65,13 @@ extern int	qr_wheel_open;
    angles and rogue's own frame choice (1 flying, 2 stuck). */
 int  QR_GrappleHeadPose (float origin[3], float angles[3], int *frame);
 
+/* in_null.c. The off hand's world origin, the twin of QR_HandOrigin, and
+   the two body-frame terms the assertions below predict it from. */
+int  QR_HandOrigin (vec3_t out);
+int  QR_OffHandOrigin (vec3_t out);
+extern float	qr_body_yaw;
+extern float	qr_height_trim;
+
 /* host.c's frame length, which Grapple_SwingFrame reads as its dt. Set
    directly so a long frame can be tested without waiting for one. */
 extern double	host_frametime;
@@ -811,6 +818,256 @@ int main (int argc, char **argv)
 		       Grapple_TestState (tip));
 		grip (0);
 		step (2);
+	}
+
+	/* ---------------- the rope leaves the OFF hand ---------------------- */
+
+	/*
+	 * Task 5. The throw used to come from QR_HandOrigin, which is the GUN
+	 * hand, so the rope and the muzzle shared one point. It now comes from
+	 * the off hand and flies along the off hand's own ray, which is what
+	 * lets the gun stay drawn and firing through a swing.
+	 *
+	 * Both channels are fed DIFFERENT offsets on purpose. A test that fed
+	 * only the off hand would pass just as well against the old code, since
+	 * with one pose live the two origins coincide; feeding both is what
+	 * makes "which hand did it leave from" an answerable question.
+	 *
+	 * The head is fed as zero so the body-frame offset and the distance
+	 * from the eye are the same number, and the arithmetic below does not
+	 * have to re-derive IN_YawVectors to know what to expect.
+	 */
+	{
+		vec3_t	off_org, dom_org, first;
+		float	dist, want;
+		int	i;
+
+		place (704.f, 704.f, 1000.f);
+		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		/* fwd, right, up. The off hand out to one side, the gun hand
+		   out to the other, so no assertion below can be satisfied by
+		   the wrong one. */
+		QC_InputSetOffAim (1, 0.f, 24.f, -8.f, 0.f, 0.f);
+		QC_InputSetAim (1, 0.f, -24.f, 0.f, 0.f, 0.f);
+		step (2);
+
+		CHECK (QR_OffHandOrigin (off_org) == 1,
+		       "a fed off-hand pose gives an off-hand origin");
+		CHECK (QR_HandOrigin (dom_org) == 1,
+		       "and the gun hand still has its own");
+		CHECK (fabsf (off_org[0] - dom_org[0]) > 1.f
+		       || fabsf (off_org[1] - dom_org[1]) > 1.f
+		       || fabsf (off_org[2] - dom_org[2]) > 1.f,
+		       "and the two are not the same point "
+		       "(off %.1f %.1f %.1f, gun %.1f %.1f %.1f)",
+		       off_org[0], off_org[1], off_org[2],
+		       dom_org[0], dom_org[1], dom_org[2]);
+
+		/* The body-frame math, independent of whatever yaw the body
+		   happens to hold: 24 out to the side and 8 down from the eye
+		   is sqrt(24^2 + 8^2) away from it, whichever way it faces. */
+		dist = sqrtf ((off_org[0] - r_refdef.vieworg[0])
+			      * (off_org[0] - r_refdef.vieworg[0])
+			    + (off_org[1] - r_refdef.vieworg[1])
+			      * (off_org[1] - r_refdef.vieworg[1])
+			    + (off_org[2] - qr_height_trim - r_refdef.vieworg[2])
+			      * (off_org[2] - qr_height_trim - r_refdef.vieworg[2]));
+		want = sqrtf (24.f * 24.f + 8.f * 8.f);
+		CHECK (fabsf (dist - want) < 0.5f,
+		       "the off-hand origin sits where the offset puts it "
+		       "(%.2f from the eye, want %.2f)", dist, want);
+
+		/* The wiring: a throw starts AT the off hand, not the gun. */
+		aim (0.f, 0.f);
+		Grapple_TestThrow ();
+		Grapple_TestState (first);
+		CHECK (fabsf (first[0] - off_org[0]) < 0.01f
+		       && fabsf (first[1] - off_org[1]) < 0.01f
+		       && fabsf (first[2] - off_org[2]) < 0.01f,
+		       "a throw leaves the off hand (%.2f %.2f %.2f, "
+		       "off hand %.2f %.2f %.2f)",
+		       first[0], first[1], first[2],
+		       off_org[0], off_org[1], off_org[2]);
+		CHECK (fabsf (first[1] - dom_org[1]) > 1.f
+		       || fabsf (first[0] - dom_org[0]) > 1.f,
+		       "and not the gun hand (%.2f %.2f %.2f)",
+		       first[0], first[1], first[2]);
+		Grapple_TestDisengage ();
+		step (2);
+	}
+
+	/*
+	 * The DIRECTION comes from the off hand too, and this is the assertion
+	 * that cannot be satisfied by accident: v_angle is pointed the opposite
+	 * way from the off-hand ray, so a hook that still reads v_angle flies
+	 * backwards. Stated physically (which way did the tip actually move)
+	 * rather than in degrees, so no sign convention has to be agreed on
+	 * for it to mean something.
+	 */
+	{
+		vec3_t	start, tip2;
+		float	dx, dy, dz;
+
+		place (704.f, 704.f, 1000.f);
+		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		step (2);
+
+		/* World yaw 0 is +x. The fed yaw is room-relative and the
+		   engine adds the body yaw, so cancel the body out. */
+		QC_InputSetOffAim (1, 0.f, 0.f, 0.f, -qr_body_yaw, 0.f);
+		step (2);
+		aim (0.f, 180.f);		/* the gun points the other way */
+
+		Grapple_TestThrow ();
+		Grapple_TestState (start);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestState (tip2);
+		dx = tip2[0] - start[0];
+		dy = tip2[1] - start[1];
+		CHECK (dx > 10.f,
+		       "the hook flies along the OFF hand's ray (+x %.1f) and "
+		       "not along v_angle (which would be -x)", dx);
+		CHECK (fabsf (dy) < fabsf (dx) * 0.2f,
+		       "and it goes where it was pointed, not off to one side "
+		       "(%.1f sideways against %.1f forward)", dy, dx);
+		Grapple_TestDisengage ();
+		step (2);
+
+		/* Pitch, same treatment: positive is DOWN in Quake, so a hook
+		   thrown at +25 must lose height. */
+		QC_InputSetOffAim (1, 0.f, 0.f, 0.f, -qr_body_yaw, 25.f);
+		step (2);
+		aim (-90.f, 0.f);		/* the gun points straight up */
+		Grapple_TestThrow ();
+		Grapple_TestState (start);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestState (tip2);
+		dz = tip2[2] - start[2];
+		CHECK (dz < -5.f,
+		       "a downward off-hand ray throws the hook down "
+		       "(%.1f) even with the gun aimed up", dz);
+		Grapple_TestDisengage ();
+		step (2);
+	}
+
+	/*
+	 * The fallback chain, which is the part a session with no off-hand pose
+	 * depends on: off hand, then gun hand, then the body. A silent nothing
+	 * here would read on device as a hook that sometimes does not fire.
+	 */
+	{
+		vec3_t	dom_org, first;
+		edict_t	*p = svs.clients[0].edict;
+
+		place (704.f, 704.f, 1000.f);
+		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		QC_InputSetOffAim (0, 0.f, 0.f, 0.f, 0.f, 0.f);
+		QC_InputSetAim (1, 0.f, -24.f, 0.f, 0.f, 0.f);
+		step (2);
+		aim (0.f, 0.f);
+
+		CHECK (QR_OffHandOrigin (first) == 0,
+		       "a released off-hand pose reports no origin");
+		QR_HandOrigin (dom_org);
+		Grapple_TestThrow ();
+		Grapple_TestState (first);
+		CHECK (fabsf (first[0] - dom_org[0]) < 0.01f
+		       && fabsf (first[1] - dom_org[1]) < 0.01f,
+		       "and the throw falls back to the gun hand "
+		       "(%.2f %.2f, gun %.2f %.2f)",
+		       first[0], first[1], dom_org[0], dom_org[1]);
+		Grapple_TestDisengage ();
+		step (2);
+
+		/* Neither hand: the body, at eye height. Still a throw. */
+		QC_InputSetAim (0, 0.f, 0.f, 0.f, 0.f, 0.f);
+		step (2);
+		Grapple_TestThrow ();
+		Grapple_TestState (first);
+		CHECK (fabsf (first[0] - p->v.origin[0]) < 0.01f
+		       && fabsf (first[2] - (p->v.origin[2] + p->v.view_ofs[2])) < 0.01f,
+		       "with no hands at all it still throws, from the body "
+		       "(%.2f %.2f %.2f)", first[0], first[1], first[2]);
+		CHECK (Grapple_TestState (first) == GRAPPLE_FLYING,
+		       "and that throw is a real one, not a no-op");
+		Grapple_TestDisengage ();
+		step (2);
+	}
+
+	/* ---------------- and the gun is untouched by all of it ------------- */
+
+	/*
+	 * THIS is the assertion the milestone exists for. Rogue's hook swapped
+	 * the view model to v_grpple and took the gun away for the whole swing;
+	 * the rope is in the other hand now, so the gun must survive a complete
+	 * engagement and still fire.
+	 */
+	{
+		edict_t	*p = svs.clients[0].edict;
+		char	gun[64];
+		float	weapon_before, ammo_before;
+		int	i, drifted = 0;
+
+		place (704.f, 704.f, 1000.f);
+		QC_InputSetOffAim (1, 0.f, 24.f, 0.f, -qr_body_yaw, -89.f);
+		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		/* impulse 9 twice: the first after signon is dropped
+		   (docs/working-notes.md). Then the shotgun, which spends
+		   ammo when it fires and so can be seen to have fired. */
+		QC_ExecuteCommand ("impulse 9\n");
+		step (2);
+		QC_ExecuteCommand ("impulse 9\n");
+		step (2);
+		QC_ExecuteCommand ("impulse 2\n");
+		step (4);
+
+		weapon_before = p->v.weapon;
+		q_strlcpy (gun, cl.viewent.model ? cl.viewent.model->name : "",
+			   sizeof (gun));
+		CHECK (cl.viewent.model != NULL && gun[0] != '\0',
+		       "the gun is drawn before the throw (%s)", gun);
+
+		aim (0.f, 0.f);
+		grip (1);
+		for (i = 0; i < 60; i++)
+		{
+			step (1);
+			if (p->v.weapon != weapon_before)
+				drifted++;
+		}
+		CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
+		       "the off-hand throw anchors on the gym ceiling (state=%d)",
+		       Grapple_TestState (tip));
+		CHECK (drifted == 0,
+		       "the weapon is unchanged across a whole engagement "
+		       "(%d frame(s) disagreed, %.0f -> %.0f)",
+		       drifted, weapon_before, p->v.weapon);
+		CHECK (cl.viewent.model != NULL
+		       && !strcmp (cl.viewent.model->name, gun),
+		       "and the view model is still the gun's, not the hook's "
+		       "(%s, want %s)",
+		       cl.viewent.model ? cl.viewent.model->name : "(none)", gun);
+		CHECK (cl.viewent.model == NULL
+		       || !strstr (cl.viewent.model->name, "grpple"),
+		       "and nothing swapped in v_grpple.mdl");
+
+		ammo_before = p->v.currentammo;
+		QC_ExecuteCommand ("+attack\n");
+		step (8);
+		QC_ExecuteCommand ("-attack\n");
+		step (2);
+		CHECK (p->v.currentammo < ammo_before,
+		       "firing while anchored still fires (ammo %.0f -> %.0f)",
+		       ammo_before, p->v.currentammo);
+		CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
+		       "and firing did not drop the rope (state=%d)",
+		       Grapple_TestState (tip));
+
+		grip (0);
+		QC_InputSetOffAim (0, 0.f, 0.f, 0.f, 0.f, 0.f);
+		step (4);
 	}
 
 	/* ---------------- the range: a sky lid, so up must NOT anchor ------- */

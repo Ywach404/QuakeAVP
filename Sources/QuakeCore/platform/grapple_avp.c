@@ -184,6 +184,11 @@ cvar_t	vr_grapple_headmodel = {"vr_grapple_headmodel", "progs/hook.mdl", CVAR_NO
 /* in_null.c, file-local extern the way qr_bridge.c takes the same symbol at
    qr_bridge.c:76. Returns 0 when the aim channel is not live. */
 extern int	QR_HandOrigin (vec3_t out);
+/* The OFF hand: where the rope leaves from, and the ray it flies along. Both
+   return 0 when that channel is not live, which is what drives the fallback
+   chain in Grapple_Throw. */
+extern int	QR_OffHandOrigin (vec3_t out);
+extern int	QR_OffHandAngles (vec3_t out);
 
 static grapple_state_t	qr_grapple_state;
 static vec3_t		qr_grapple_tip;		/* the head, in world space */
@@ -533,18 +538,23 @@ static void Grapple_AnchorOrigin (vec3_t out)
 }
 
 /*
-Throw the hook from the hand, along the aim.
+Throw the hook from the OFF hand, along the off hand's own ray.
 
-Origin from QR_HandOrigin, which is the same function the missile and lightning
-hunks already go through, so the hook leaves the same place every other shot
-does. It returns 0 whenever the aim channel is not live, and then this falls
-back to the vanilla eye-height spawn rather than throwing from the floor: the
-chest is the wrong place for it but it is the place everything else degrades to,
-and a hook that comes from the chest is better than one that does not come at
-all.
+Origin and direction both prefer the off hand, and that is the whole point of
+the milestone: the gun hand keeps the gun, which stays drawn and keeps firing
+for the length of a swing, and the rope comes out of the other fist.
 
-Direction from v_angle, which is what rogue's W_FireGrapple used, so the aim is
-unchanged by this rewrite.
+The fallback chain is off hand, then gun hand, then the body at eye height.
+Each step is a real session: the off hand is missing whenever the bare-hands
+fist is not tracked or the off controller drops, the gun hand is missing when
+vr_handaim is off, and the body is what everything else in this engine degrades
+to. A throw that did nothing instead would read on device as a hook that
+sometimes just does not fire, which is a far worse bug than one that comes from
+the wrong place.
+
+Direction from QR_OffHandAngles, falling back to v_angle -- which is what
+rogue's W_FireGrapple used, and what the gun is aimed along -- so a session
+with no off-hand ray throws exactly where it used to.
 
 Speed is clamped for the same reason it always was: both ends of the cvar are a
 real failure, and a clamp that stops a typo being a crash is worth more than a
@@ -557,16 +567,23 @@ knob it used to reach into can be left alone.
 */
 static void Grapple_Throw (edict_t *player)
 {
-	vec3_t	fwd, right, up;
+	vec3_t	fwd, right, up, angles;
 	float	speed, range;
 
-	if (!QR_HandOrigin (qr_grapple_tip))
+	if (!QR_OffHandOrigin (qr_grapple_tip)
+	    && !QR_HandOrigin (qr_grapple_tip))
 	{
 		VectorCopy (player->v.origin, qr_grapple_tip);
 		qr_grapple_tip[2] += player->v.view_ofs[2];
 	}
 
-	AngleVectors (player->v.v_angle, fwd, right, up);
+	/* All three outputs are passed because AngleVectors writes all three
+	   unconditionally (mathlib.c:198); a NULL there is a segfault, not an
+	   opt-out. right and up are unused. */
+	if (QR_OffHandAngles (angles))
+		AngleVectors (angles, fwd, right, up);
+	else
+		AngleVectors (player->v.v_angle, fwd, right, up);
 
 	speed = vr_grapple_speed.value;
 	if (speed < 100.f)
