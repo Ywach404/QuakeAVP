@@ -398,7 +398,16 @@ final class HandInput: @unchecked Sendable {
         // the dominant hand stopped "confusing it": open the wheel and the
         // only live gestures are point (highlight) and release (commit).
         if WheelState.shared.isOpen {
-            aggregator.update(.hands, slice)   // zeroed
+            // The rope is the one exception, and it has to be. The C side
+            // HOLDS a swing through an open ring rather than cancelling it
+            // (grapple_avp.c's wheel_open branch, which A. ruled this way
+            // round on device), and that hold still reads `held` to tell a
+            // swing being kept from one being let go of on the frame the ring
+            // closes. Drop the bit here and closing the ring would drop the
+            // rope. A Sense player's off-hand squeeze keeps publishing
+            // through the ring for exactly the same reason.
+            if move.fistClosed { slice.buttons |= UInt32(QC_PAD_RSHOULDER) }
+            aggregator.update(.hands, slice)   // zeroed but for the rope
             turnGaugeVerts = []                // no turning while choosing a weapon
             return
         }
@@ -407,15 +416,42 @@ final class HandInput: @unchecked Sendable {
         // the renderer composes under the head pose.
         let basis = TrackingSpace.rotation
 
+        // THE GRAPPLE GRIP, bare hands: a closed off-hand fist throws the
+        // hook. grapple_avp.c owns QC_PAD_RSHOULDER and reads it straight off
+        // the merged pad snapshot, so the bit is the whole of what the C side
+        // needs; a Sense player sets the same bit with an off-hand squeeze,
+        // which is why that gesture was picked as a squeeze rather than a
+        // trigger in the first place.
+        //
+        // A PARTIAL gate, unlike the three whole-hand gestures above, which
+        // zero the slice and return. The gun hand has to keep firing for the
+        // whole of a swing -- that is the entire point of taking the hook into
+        // C -- so nothing below this line that reads `aim` may be suppressed.
+        // The pattern followed is the turn-hold gate further down, which
+        // switches off one thing and lets the rest through.
+        //
+        // What IS suppressed is the off hand's own four pinches, because they
+        // are all spent (index forward, middle back, pinky crouch, ring
+        // teleport) and because a fist folds the thumb over the fingers, which
+        // the pinch state machine reads as several of them at once. Walking
+        // and crouching go here; the teleport commit is in teleport(), which
+        // has a latch to clear as well as a bit to drop.
+        //
+        // Losing movement for the duration is deliberate and is not a missing
+        // remap: during a swing the rope IS the movement. A reader hunting for
+        // where the walk bindings went should stop here.
+        let fist = move.fistClosed
+        if fist { slice.buttons |= UInt32(QC_PAD_RSHOULDER) }
+
         // Movement, VRChat-style holds on the move hand (not drags -- a
         // drag reset whenever the pinch flickered): thumb+INDEX walks
         // FORWARD where you look, thumb+MIDDLE walks BACKWARD. Steer with
         // your head (vr_moverelative).
-        if move.indexPinched { slice.ly += 1 }    // forward
-        if move.middlePinched { slice.ly -= 1 }   // backward
+        if move.indexPinched, !fist { slice.ly += 1 }    // forward
+        if move.middlePinched, !fist { slice.ly -= 1 }   // backward
 
         // Crouch: off-hand thumb+pinky (held).
-        if move.pinkyPinched { slice.buttons |= UInt32(QC_PAD_LTHUMB) }  // +movedown
+        if move.pinkyPinched, !fist { slice.buttons |= UInt32(QC_PAD_LTHUMB) }  // +movedown
         // TEST remap: JUMP is now the GUN-hand ring pinch (thumb+ring), and the
         // OFF-hand ring pinch drives teleport (see teleport()). Ring is free on
         // the gun hand -- fire is index pinch/curl/hammer, not ring.
@@ -613,6 +649,8 @@ final class HandInput: @unchecked Sendable {
                 + " curl=\(aim.indexCurled ? 1 : 0) ext=\(aim.indexExtended ? 1 : 0)"
                 + " thumb=\(Int(aim.thumbBarrelDeg))° ham=\(aim.thumbHammerDown ? 1 : 0)"
                 + " aim=\(aim.aimDir != nil ? 1 : 0) shot=\(slice.rt == 1 ? 1 : 0)"
+                + " | fist=\(move.fistClosed ? 1 : 0)"
+                + " open=\(String(format: "%.2f", move.fistStraightness))"
                 + " | turn=\(tstyle) snap=\(String(format: "%.2f", slice.rx))"
                 + " spd=\(String(format: "%.2f", aim.wristVel.map { (basis * $0).x } ?? 0))")
         }
@@ -930,6 +968,14 @@ final class HandInput: @unchecked Sendable {
     /// the wrist isn't tracked, so the shot falls back to the body aim.
     private var tpRingWas = false
 
+    /// The fist's half of the teleport channel: whether the off hand was
+    /// fisted on the previous update, and when it stopped being. Kept here
+    /// beside `tpRingWas` rather than on HandState because, like that latch,
+    /// it belongs to the channel and not to a hand -- `teleport()` is handed
+    /// its HandStates by value and could not write into them anyway.
+    private var tpFistWas = false
+    private var tpFistOpenedAt: Double?
+
     /// Point-and-blink teleport off the OFF hand (non-gun): hold a RING pinch
     /// to line the spot up, release to blink. The GUN reticle picks the spot --
     /// IN_Teleport traces and validates that ray engine-side -- so all this
@@ -955,6 +1001,38 @@ final class HandInput: @unchecked Sendable {
         // whenever the off forearm wasn't cleanly tracked. That ray goes to
         // the grapple through feedOffHand now, not through this channel.
         let off = VRSettings.shared.rightHanded ? left : right
+
+        // THE FIST OWNS THE RING FINGER FOR AS LONG AS IT IS CLOSED, and for a
+        // moment afterwards. A fist folds the thumb over the fingers, which
+        // reads as a ring pinch; this channel commits a blink on that pinch's
+        // RELEASE; so without this, opening your hand at the end of every
+        // swing would teleport you across the room.
+        //
+        // CLEARED, not masked, and the distinction is the whole bug. The mask
+        // further down (`!WheelState.shared.isOpen && ...`) only changes
+        // `pinched`, and `tpRingWas = pinched` below is rewritten on every
+        // update, so a masked fist would satisfy `!pinched && tpRingWas` and
+        // fire a commit on the very first update it was masked. Returning
+        // early with the latch forced false is the form the HUD-editor gate
+        // above uses, and it is the one that holds.
+        //
+        // The lockout OUTLIVES the fist by FistMath.settle because the two
+        // gestures measure different things and do not cross their thresholds
+        // together: the fist releases on finger straightness, while the thumb
+        // is still inside the ring pinch's release radius. See FistMath.settle.
+        if off.fistClosed {
+            tpFistOpenedAt = nil
+        } else if tpFistWas {
+            tpFistOpenedAt = CACurrentMediaTime()
+        }
+        tpFistWas = off.fistClosed
+        if off.fistClosed || FistMath.blinkLocked(openedAt: tpFistOpenedAt,
+                                                  now: CACurrentMediaTime()) {
+            if tpRingWas { QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0) }
+            tpRingWas = false
+            return
+        }
+
         let pinched = !WheelState.shared.isOpen && off.ringPinched
         // Commit on the RELEASE of the ring pinch (tap, then let go to blink),
         // so you can hold and line up the gun reticle, then release to go.
@@ -1130,8 +1208,18 @@ final class HandInput: @unchecked Sendable {
         // keeps the forearm clear for grabbing. renderSnapshot() is a
         // lock-protected any-thread read.
         let editing = HudEditor.Session.renderSnapshot().active
-        WheelState.shared.setHold(offHand.palmUp && !editing, source: .hands)
-        guard offHand.palmUp, !editing else { return }
+        // A CLOSED FIST DOES NOT OPEN THE RING. Knuckles down with the palm
+        // toward the floor is the natural way to hold a rope, and it is also
+        // precisely the palm-up gesture, so without this a swing would open
+        // the weapon ring inside its own 0.25 s ramp. It would also end badly
+        // rather than merely look wrong: the ring holds a swing while it is up
+        // and the rope lets go on the frame it closes. So with bare hands the
+        // ring cannot be opened mid-swing at all, which is the trade -- one
+        // wrist cannot grip and present its palm independently.
+        let gripping = offHand.fistClosed
+        WheelState.shared.setHold(offHand.palmUp && !editing && !gripping,
+                                  source: .hands)
+        guard offHand.palmUp, !editing, !gripping else { return }
 
         let correction = TrackingSpace.correction
         // The ring is ALWAYS anchored to the off hand -- it stays locked to that
@@ -1224,6 +1312,8 @@ private struct HandState {
     var middlePinched = false
     var ringPinched = false
     var pinkyPinched = false
+    var fistClosed = false             // all four fingers folded: the rope grip
+    var fistStraightness: Float = 1    // log: the straightest of the four (1 = open)
     var indexDrag: SIMD3<Float>?       // metres from pinch start, room frame
     var middleDrag: SIMD3<Float>?
     var stickyUntil: [Pulse: Double] = [:]
@@ -1469,6 +1559,47 @@ private struct HandState {
         // Ring and pinky pinches: discrete holds (jump, crouch).
         ringPinched = pinch(tip(.ringFingerTip), ringPinched)
         pinkyPinched = pinch(tip(.littleFingerTip), pinkyPinched)
+
+        // THE FIST: all four fingers folded into the palm, which is how the
+        // grappling hook is thrown with no controllers in the room. Measured
+        // exactly the way the trigger curl above is -- straightness, the
+        // tip->knuckle chord over the summed bone length -- finger by finger,
+        // and handed to FistMath, which owns the thresholds, the hysteresis
+        // and the reasons for both.
+        //
+        // INFERRED joints (vtip), against this file's standing rule that
+        // gestures read the strict `tip`. The rule is right for the poses it
+        // was written for, which keep their joints in view, and it is exactly
+        // wrong here: a fist is the one pose that hides its own fingertips
+        // from the cameras, so strict joints would go blind at the moment the
+        // gesture begins. What still gates it is skeleton PRESENCE, the guard
+        // at the top of this function -- lose the hand outright, let
+        // trackingLost's grace expire, and HandState resets with fistClosed
+        // false, which releases the rope. That is the same contract the
+        // controller's aim ray has when its tracking drops.
+        func straightness(_ knuckle: HandSkeleton.JointName,
+                          _ base: HandSkeleton.JointName,
+                          _ inter: HandSkeleton.JointName,
+                          _ fingertip: HandSkeleton.JointName) -> Float {
+            guard let k = vtip(knuckle), let b = vtip(base),
+                  let i = vtip(inter), let t = vtip(fingertip)
+            else { return FistMath.unknown }
+            let boneLen = simd_distance(k, b) + simd_distance(b, i)
+                + simd_distance(i, t)
+            return boneLen > 1e-4 ? simd_distance(t, k) / boneLen
+                                  : FistMath.unknown
+        }
+        let fingers = SIMD4<Float>(
+            straightness(.indexFingerKnuckle, .indexFingerIntermediateBase,
+                         .indexFingerIntermediateTip, .indexFingerTip),
+            straightness(.middleFingerKnuckle, .middleFingerIntermediateBase,
+                         .middleFingerIntermediateTip, .middleFingerTip),
+            straightness(.ringFingerKnuckle, .ringFingerIntermediateBase,
+                         .ringFingerIntermediateTip, .ringFingerTip),
+            straightness(.littleFingerKnuckle, .littleFingerIntermediateBase,
+                         .littleFingerIntermediateTip, .littleFingerTip))
+        fistClosed = FistMath.closed(fingers, wasClosed: fistClosed)
+        fistStraightness = fingers.max()
 
         // Wheel facts: the wrist, the palm's facing, the index ray.
         wrist = tip(.wrist)
