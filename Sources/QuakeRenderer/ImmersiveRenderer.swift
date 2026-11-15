@@ -109,6 +109,14 @@ final class ImmersiveRenderer {
     /// is echoed back through QC_InputSetHeadOffset so the engine knows
     /// which generation the feed belongs to.
     private var recenterCorrection = matrix_identity_float4x4
+    /// The last head-in-solid fade the engine published.
+    ///
+    /// Held rather than read straight off the packet because the draw happens
+    /// outside the `if let packet` block: a frame that arrives without a
+    /// packet must not drop a blackout that is still true, and the eye can be
+    /// inside a wall in exactly those frames (a menu, a map load). It decays
+    /// to 0 the moment a packet says so.
+    private var lastEyeFade: Float = 0
     /// A Sense controller's pose, but only while the controllers are the
     /// INPUT the player chose.
     ///
@@ -713,6 +721,7 @@ final class ImmersiveRenderer {
         var quakeFromOrigin = matrix_identity_float4x4
         if let packet {
             let s = packet.world_scale > 0 ? packet.world_scale : 0.0254
+            lastEyeFade = packet.eye_fade
 
             // Body-frame head offset in Quake units: the tracking origin's
             // axes are the body's (yaw is baked into the basis below). Only
@@ -1235,6 +1244,13 @@ final class ImmersiveRenderer {
                                       pipelines: pipelines, encoder: encoder)
                 }
             }
+            // Head-in-solid blackout, after EVERYTHING including the console
+            // panel: the eye being outside the world is the one condition
+            // that outranks whatever was being read. Outside the `if let
+            // packet` on purpose, so a frame with no packet still fades if
+            // the last one said to -- that is the menu case, where the eye
+            // can be in a wall just as easily.
+            core.drawEyeFade(lastEyeFade, pipelines: pipelines, encoder: encoder)
             encoder.endEncoding()
         } else {
             // One pass per view: the dedicated layout (separate textures)
@@ -1299,6 +1315,8 @@ final class ImmersiveRenderer {
                                           pipelines: pipelines, encoder: encoder)
                     }
                 }
+                // Last, as in the single-pass branch above.
+                core.drawEyeFade(lastEyeFade, pipelines: pipelines, encoder: encoder)
                 encoder.endEncoding()
             }
         }

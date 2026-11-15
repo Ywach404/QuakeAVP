@@ -399,6 +399,24 @@ typedef struct qc_frame_s {
 	   this strength; 0 draws nothing. */
 	float		vignette;
 
+	/* Head-in-solid fade, 0..1, where 1 is opaque black over the whole
+	   stereo view. The player's BODY is collision-checked -- the
+	   head-follow absorb traces the player box, so a wall refuses it --
+	   but the rendered eye is late-latched straight off the real head
+	   pose and nothing refuses that, so standing into a ceiling or
+	   leaning into a wall puts the eye outside the world and shows the
+	   void and the passthrough behind it. Vertically nothing even tries:
+	   the absorb's trace is horizontal by construction.
+
+	   This is the distance from the reconstructed eye to the nearest
+	   solid, mapped through vr_clipfade, and it is NOT eased on the
+	   engine clock the way `vignette` is. An ease would lag precisely
+	   when it must not and let a frame or two of void through; the
+	   player's head already moves continuously, so the distance does the
+	   smoothing. The consumer draws flat black at this alpha over
+	   everything, last. 0 draws nothing. */
+	float		eye_fade;
+
 	/* Output channel for controller haptics and (when visionOS exposes
 	   them) adaptive triggers. damage_flash is the engine's damage cshift
 	   percent, rising on hits and decaying through V_UpdateBlend -- the

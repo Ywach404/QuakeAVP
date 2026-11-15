@@ -480,24 +480,32 @@ static cvar_t	vr_edgeturn_head = {"vr_edgeturn_head", "1", CVAR_ARCHIVE};
    open. */
 static cvar_t	vr_turn_while_paused = {"vr_turn_while_paused", "0", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
-/* BARE HANDS ONLY: scales the movement they ask for. Hands drive the move
-   with pinches, so their stick value is binary -- full deflection or nothing,
-   with none of the modulation a thumbstick gives -- and at the shared top
-   speed that reads as having no control rather than as being fast. A lower
-   ceiling buys back authority the input cannot otherwise express.
+/* Movement speed, ONE KNOB PER INPUT, because the two inputs do not express
+   the same thing. A thumbstick is proportional, so a player modulates speed
+   with their thumb; hands drive the move with pinches, which are binary, full
+   deflection or nothing. At a shared top speed the hands read as having no
+   control rather than as being fast, and the only way to give that control
+   back is to lower what full deflection asks for.
 
-   0.5 is not a guess. A. played a session at cl_forwardspeed 200 by accident
-   (a controller set down on its trigger latched +speed, the walk modifier,
-   through the detach bug fixed in 5ee1506) and preferred it, so the default
-   reproduces exactly that: 200 out of the 400 a run requests. It reads as
-   0.625 of the speed actually reached, because sv_maxspeed caps the 400 at
-   320 and this scales the request, not the cap.
+   The hands default is measured, not chosen. A. played a session at
+   cl_forwardspeed 200 by accident (a controller set down on its trigger
+   latched +speed, the walk modifier, through the detach bug fixed in 5ee1506)
+   and preferred it, so 0.5 reproduces exactly that: 200 out of the 400 a run
+   requests. It reads as 0.625 of the speed actually REACHED, because
+   sv_maxspeed caps the 400 at 320 and this scales the request, not the cap --
+   which is why the settings UI shows the speed and not this number.
 
-   The stick is deliberately untouched -- A. calls its tuning perfect -- so
-   this hangs off qr_pad.connected, which is this file's idiom for "a real
-   spatial controller, not bare hands publishing pad state" (QuakeCore.h) and
-   is what the edge turn already gates on. Set it to 1 for parity. */
-static cvar_t	vr_movescale = {"vr_movescale", "0.5", CVAR_ARCHIVE};
+   The stick defaults to 1, untouched: A. calls its tuning perfect. It gets a
+   knob anyway so the two are adjustable independently, and so nothing about
+   this split is special-cased for one input. 1 is the ceiling for both,
+   because full deflection already asks for more than sv_maxspeed allows and a
+   value above 1 would silently do nothing.
+
+   Which knob applies is decided by qr_pad.connected, this file's idiom for "a
+   real spatial controller, not bare hands publishing pad state"
+   (QuakeCore.h), and the field the edge turn already gates on. */
+static cvar_t	vr_movescale_hands = {"vr_movescale_hands", "0.5", CVAR_ARCHIVE};
+static cvar_t	vr_movescale_pad = {"vr_movescale_pad", "1", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 /* M6: aim from the dominant hand/controller ray. 1 = the gun lives in your
    hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
@@ -1519,6 +1527,50 @@ int QR_OffHandOrigin (vec3_t out)
 
 /*
 ================
+QR_EyeOrigin -- where the RENDERED eye actually is, in world space.
+
+Reconstructs what the immersive consumer draws from, and has to match it or
+the fade that reads this would darken at the wrong moment. The consumer
+anchors its camera at vieworg minus what the absorb already walked, then the
+head offset is applied by the view matrix and the leftover lean is clamped to
+lean_limit (ImmersiveRenderer.swift). Net: vieworg plus the clamped lean,
+with the vertical taken from the height trim, which is the only channel that
+carries where the eye sits above vieworg.
+
+This is one frame stale, like every other engine-side eye reconstruction here
+(see IN_HandOriginFrom): a unit or two of head motion. That is immaterial to a
+fade whose onset is a dozen units, and it is the reason the fade ramps rather
+than switching.
+
+Engine thread.
+================
+*/
+int QR_EyeOrigin (vec3_t out)
+{
+	float	offset[2], lean[2], limit, len;
+
+	IN_HeadOffsetWorld (offset);
+	lean[0] = offset[0] - qr_head_absorbed[0];
+	lean[1] = offset[1] - qr_head_absorbed[1];
+
+	/* The same clamp the consumer applies, for the same reason: the box
+	   refused this much, so the eye is not allowed all of it. */
+	limit = q_max (vr_lean_limit.value, 0.f);
+	len = sqrtf (lean[0] * lean[0] + lean[1] * lean[1]);
+	if (len > limit && len > 0.f)
+	{
+		lean[0] *= limit / len;
+		lean[1] *= limit / len;
+	}
+
+	out[0] = r_refdef.vieworg[0] + lean[0];
+	out[1] = r_refdef.vieworg[1] + lean[1];
+	out[2] = r_refdef.vieworg[2] + qr_height_trim;
+	return 1;
+}
+
+/*
+================
 QR_OffHandAngles -- the off hand's ray as world angles, for the throw.
 
 The body yaw is added here for the same reason IN_Move adds it to the shot:
@@ -2380,15 +2432,15 @@ void IN_Move (usercmd_t *cmd)
 	else
 		speed = cl_movespeedkey.value;
 
-	/* Bare hands take their own ceiling (see vr_movescale). Applied to
-	   `speed` rather than to lx/ly so it stays DOWNSTREAM of the radial
-	   deadzone: the rescale at the top of this block is nonlinear below
-	   full deflection, so scaling the stick would make the knob mean
-	   something other than what it says. Clamped because this is archived
-	   and reachable from the console, and both ends of a typo are a real
+	/* Each input's own ceiling (see vr_movescale_hands). Applied to `speed`
+	   rather than to lx/ly so it stays DOWNSTREAM of the radial deadzone:
+	   the rescale at the top of this block is nonlinear below full
+	   deflection, so scaling the stick would make the knob mean something
+	   other than what it says. Clamped because these are archived and
+	   reachable from the console, and both ends of a typo are a real
 	   failure -- a crawl, or a negative that walks you backwards. */
-	if (!qr_pad.connected)
-		speed *= CLAMP (0.1f, vr_movescale.value, 1.f);
+	speed *= CLAMP (0.1f, qr_pad.connected ? vr_movescale_pad.value
+						: vr_movescale_hands.value, 1.f);
 
 	/* Look-relative locomotion: rotate the stick by the head's yaw so
 	   "forward" is where you look, not where the body last snapped to.
@@ -2576,7 +2628,8 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_edgeturn_head);
 	Cvar_RegisterVariable (&vr_turn_while_paused);
 	Cvar_RegisterVariable (&vr_moverelative);
-	Cvar_RegisterVariable (&vr_movescale);
+	Cvar_RegisterVariable (&vr_movescale_hands);
+	Cvar_RegisterVariable (&vr_movescale_pad);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
 	Cvar_RegisterVariable (&vr_aimpitch);

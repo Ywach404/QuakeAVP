@@ -128,6 +128,13 @@ cvar_t	phase_grid = {"phase_grid", "1", CVAR_ARCHIVE};
    exceeds the threshold (Quake units/sec; walking is ~200). Zero disables. */
 cvar_t	vr_vignette = {"vr_vignette", "0.6", CVAR_ARCHIVE};
 cvar_t	vr_vignette_threshold = {"vr_vignette_threshold", "30", CVAR_ARCHIVE};
+/* Head-in-solid fade: the distance in Quake units at which the view starts
+   darkening as the rendered eye approaches a solid surface, reaching opaque
+   black when the eye is inside one. 12 units is about 30 cm, far enough to
+   warn before the view is lost and close enough not to dim an ordinary
+   doorway. Zero disables it, because a comfort aid that cannot be switched
+   off is a bug of its own. */
+cvar_t	vr_clipfade = {"vr_clipfade", "12", CVAR_ARCHIVE};
 
 /* gl_rmisc.c */
 cvar_t	r_lightmapwide = {"r_lightmapwide","0",CVAR_ROM};
@@ -204,6 +211,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&phase_grid);
 	Cvar_RegisterVariable (&vr_vignette);
 	Cvar_RegisterVariable (&vr_vignette_threshold);
+	Cvar_RegisterVariable (&vr_clipfade);
 
 	/* upstream Sky_Init (gl_sky.c) */
 	Cvar_RegisterVariable (&r_fastsky);

@@ -1614,6 +1614,45 @@ final class RendererCore {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: scaled.count / 7)
     }
 
+    /// Flat black over the whole view at the packet's head-in-solid strength.
+    ///
+    /// Drawn LAST by the immersive renderer, after the hands, the wrist HUD,
+    /// the communicator and the console panel. Every one of those is
+    /// depth-always, so paint order is the only thing that decides, and a
+    /// safety fade that the HUD punches a hole in is not a safety fade.
+    ///
+    /// Reuses the polyblend fragment, which already emits premultiplied flat
+    /// black. The comfort vignette cannot do this job: its alpha is
+    /// smoothstep(0.55, 1.05, |ndc|), so the middle of the screen stays clear
+    /// at any strength, which is precisely where the wall would be.
+    ///
+    /// Not inside `encode`, for two reasons: the vignette's slot there sits
+    /// under all of the above, and `encode` returns early on a packet with no
+    /// geometry, which is one of the cases where the eye can be in a wall.
+    func drawEyeFade(_ strength: Float, pipelines: RenderPipelines,
+                     encoder: MTLRenderCommandEncoder) {
+        guard strength > 0.001 else { return }
+        let a = min(strength, 1)
+        encoder.setDepthStencilState(pipelines.depthAlways)
+        // polyblend's pipeline is optional and can fail to build; the
+        // vignette's cannot. Peripheral darkening is a poor substitute for a
+        // blackout, and still better than a fade that silently is not there.
+        if let polyblend = pipelines.polyblend {
+            encoder.setRenderPipelineState(polyblend)
+            var u = PolyblendUniforms(blend: SIMD4<Float>(0, 0, 0, a))
+            withUnsafeBytes(of: &u) { raw in
+                encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+            }
+        } else {
+            encoder.setRenderPipelineState(pipelines.vignette)
+            var u = VignetteUniforms(strength: a)
+            withUnsafeBytes(of: &u) { raw in
+                encoder.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 0)
+            }
+        }
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
     /// The grappling hook: a rope from the hand to the hook head, and the head
     /// itself. Both ends arrive ALREADY in corrected-tracking metres, which is
     /// the whole reason this is a renderer call and not engine geometry.

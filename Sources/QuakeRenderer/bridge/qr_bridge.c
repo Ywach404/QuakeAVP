@@ -48,6 +48,9 @@ extern cvar_t r_dynamic, r_flatlightstyles;	/* registered in r_null.c */
 extern cvar_t phase, phase_time, phase_color, phase_floor, phase_grid;
 extern cvar_t cl_bob;			/* view.c; held at zero while immersive, see QR_BobGate */
 extern cvar_t vr_vignette, vr_vignette_threshold;
+extern cvar_t vr_clipfade;
+/* in_null.c: the RENDERED eye, reconstructed the way the consumer draws it. */
+extern int	QR_EyeOrigin (vec3_t out);
 
 /* head-follow ledger, owned by in_null.c on the engine thread */
 extern float qr_head_absorbed[2];
@@ -8259,6 +8262,7 @@ void QR_BeginFrame (void)
 	slot->frame.head_absorbed[1] = 0;
 	slot->frame.lean_limit = 12;
 	slot->frame.vignette = 0;
+	slot->frame.eye_fade = 0;
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
 	slot->frame.items = 0;
@@ -8515,6 +8519,80 @@ void QR_RenderView (void)
 		else if (qr_vignette_value > target)
 			qr_vignette_value = q_max (qr_vignette_value - (float)dt / 0.12f, target);
 		slot->frame.vignette = qr_vignette_value;
+	}
+
+	/* Head-in-solid fade. The body is collision-checked and the rendered
+	   eye is not, so standing into a ceiling or leaning into a wall puts
+	   the eye outside the world and shows the void, and the passthrough
+	   behind it. Measure how close the eye is to solid and let the
+	   consumer paint black over everything at that strength.
+
+	   Deliberately NOT eased, unlike the vignette above: this one is a
+	   safety fade, and an ease lags exactly when it must not. The head
+	   moves continuously, so the distance already ramps.
+
+	   Client-side probes (TraceLine, Mod_PointInLeaf) rather than the
+	   SV_* family, so this still works with no server up -- a demo or a
+	   disconnected console has a worldmodel and a view, and the eye can
+	   be in a wall there too. SV_PointContents would dereference
+	   sv.worldmodel and crash in exactly those cases.
+
+	   Six axis probes and not a swept box: what matters is the distance
+	   from a POINT to the nearest surface, in any direction, because a
+	   head leans sideways and rises as readily as it walks forward. The
+	   leaf test comes first and short-circuits, since a trace that starts
+	   inside solid reports nothing useful. */
+	{
+		vec3_t	eye;
+		float	onset = vr_clipfade.value;
+		float	fade = 0.f;
+
+		if (onset > 0.f && cl.worldmodel && QR_EyeOrigin (eye))
+		{
+			static const float probe[6][3] = {
+				{  1.f,  0.f,  0.f }, { -1.f,  0.f,  0.f },
+				{  0.f,  1.f,  0.f }, {  0.f, -1.f,  0.f },
+				{  0.f,  0.f,  1.f }, {  0.f,  0.f, -1.f }
+			};
+			mleaf_t	*leaf = Mod_PointInLeaf (eye, cl.worldmodel);
+			float	nearest = onset;
+			int	i;
+
+			/* SKY counts as solid here. A. named the skybox
+			   ceiling specifically, and an eye through a sky brush
+			   is out of the world just as surely as one in rock --
+			   more so, since there is nothing behind it to draw. */
+			if (leaf && (leaf->contents == CONTENTS_SOLID
+				     || leaf->contents == CONTENTS_SKY))
+			{
+				nearest = 0.f;
+			}
+			else
+			{
+				for (i = 0; i < 6; i++)
+				{
+					vec3_t	dir, end, impact, hit;
+					float	d;
+
+					VectorCopy (probe[i], dir);
+					VectorMA (eye, onset, dir, end);
+					TraceLine (eye, end, impact);
+					/* TraceLine leaves a zeroed endpos when
+					   it did not run; chase.c and the
+					   export camera read it the same way. */
+					if (VectorLength (impact) == 0.f)
+						continue;
+					VectorSubtract (impact, eye, hit);
+					d = VectorLength (hit);
+					if (d < nearest)
+						nearest = d;
+				}
+			}
+
+			fade = (onset - nearest) / onset;
+			fade = CLAMP (0.f, fade, 1.f);
+		}
+		slot->frame.eye_fade = fade;
 	}
 
 	/* output channel: the damage cshift percent (V_ParseDamage raises it,

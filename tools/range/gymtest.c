@@ -1101,7 +1101,8 @@ int main (int argc, char **argv)
 		memset (&pad, 0, sizeof (pad));
 		pad.ly = 1.f;			/* full forward, as a pinch gives */
 
-		/* A stick: unscaled, so the tuning A. likes is untouched. */
+		/* A stick: unscaled by DEFAULT, so the tuning A. likes is
+		   untouched, but adjustable on its own knob. */
 		pad.connected = 1;
 		QC_InputSetGamepad (&pad);
 		step (4);
@@ -1109,6 +1110,17 @@ int main (int argc, char **argv)
 		CHECK (fabsf (run - 400.f) < 1.f,
 		       "a controller still asks for the full run (%.1f, want 400)",
 		       run);
+
+		/* The two modes have INDEPENDENT knobs, which is the whole point
+		   of splitting them: turning one down must not touch the other.
+		   Checked in both directions below. */
+		QC_ExecuteCommand ("vr_movescale_pad 0.25\n");
+		step (4);
+		CHECK (fabsf (cl.cmd.forwardmove - 100.f) < 1.f,
+		       "the stick has a knob of its own (%.1f, want 100)",
+		       cl.cmd.forwardmove);
+		QC_ExecuteCommand ("vr_movescale_pad 1\n");
+		step (4);
 
 		/* Bare hands: the same full deflection, scaled. */
 		pad.connected = 0;
@@ -1123,34 +1135,136 @@ int main (int argc, char **argv)
 		       walk, run);
 
 		/* The knob means what it says at both ends. */
-		QC_ExecuteCommand ("vr_movescale 1\n");
+		QC_ExecuteCommand ("vr_movescale_hands 1\n");
 		step (4);
 		parity = cl.cmd.forwardmove;
 		CHECK (fabsf (parity - run) < 1.f,
-		       "vr_movescale 1 restores parity with the stick (%.1f)",
+		       "vr_movescale_hands 1 restores parity with the stick (%.1f)",
 		       parity);
+		/* And the hands knob does not reach the stick. */
+		pad.connected = 1;
+		QC_InputSetGamepad (&pad);
+		step (4);
+		CHECK (fabsf (cl.cmd.forwardmove - run) < 1.f,
+		       "and the hands knob leaves the stick alone (%.1f)",
+		       cl.cmd.forwardmove);
+		QC_ExecuteCommand ("vr_movescale_hands 0.5\n");
+		step (4);
+		CHECK (fabsf (cl.cmd.forwardmove - run) < 1.f,
+		       "even turned down (%.1f, stick still %.1f)",
+		       cl.cmd.forwardmove, run);
+		pad.connected = 0;
+		QC_InputSetGamepad (&pad);
+		QC_ExecuteCommand ("vr_movescale_hands 1\n");
+		step (4);
 
 		/* Clamped, so a typo is not a crawl or a reverse. The floor is
 		   0.1 and the ceiling 1: faster than the stick is not on offer,
 		   because sv_maxspeed caps it anyway and a cvar that silently
 		   does nothing above 1 is worse than one that refuses. */
-		QC_ExecuteCommand ("vr_movescale 50\n");
+		QC_ExecuteCommand ("vr_movescale_hands 50\n");
 		step (4);
 		CHECK (fabsf (cl.cmd.forwardmove - run) < 1.f,
-		       "an absurd vr_movescale clamps at parity (%.1f)",
+		       "an absurd scale clamps at parity (%.1f)",
 		       cl.cmd.forwardmove);
-		QC_ExecuteCommand ("vr_movescale -3\n");
+		QC_ExecuteCommand ("vr_movescale_hands -3\n");
 		step (4);
 		CHECK (fabsf (cl.cmd.forwardmove - run * 0.1f) < 1.f,
-		       "a negative vr_movescale clamps at the 0.1 floor (%.1f, "
+		       "a negative scale clamps at the 0.1 floor (%.1f, "
 		       "want %.1f)", cl.cmd.forwardmove, run * 0.1f);
 		CHECK (cl.cmd.forwardmove > 0.f,
 		       "and never reverses the walk");
 
-		QC_ExecuteCommand ("vr_movescale 0.5\n");
+		QC_ExecuteCommand ("vr_movescale_hands 0.5\n");
 		memset (&pad, 0, sizeof (pad));
 		QC_InputSetGamepad (&pad);
 		step (2);
+	}
+
+	/* ---------------- a head in solid fades to black -------------------- */
+
+	/*
+	 * Out of plan, from A. on device: standing into the ceiling, or leaning
+	 * into a wall, puts the RENDERED eye outside the world, and he sees the
+	 * void and the passthrough behind it. His body cannot do this -- the
+	 * head-follow absorb traces the player box, so walls refuse it -- but
+	 * the eye is late-latched straight off his real head pose, and nothing
+	 * refuses that. Vertically nothing even tries: IN_AbsorbHeadOffset
+	 * forces end[2] = start[2], so it only ever sweeps horizontally.
+	 *
+	 * The fade is a pure function of how close the eye is to solid, with NO
+	 * temporal easing, so these assertions need no settling frames. That is
+	 * deliberate (see the ruling in the ledger): an ease would lag exactly
+	 * when it must not, and let a frame or two of void through.
+	 *
+	 * The gym is the right map for it because its ceiling is concrete and
+	 * at a known height, so "push the eye through the ceiling" is a
+	 * one-line setup rather than a hunt for geometry.
+	 */
+	{
+		const qc_frame_t	*f;
+		float			open, near_ceil, inside, disabled;
+		edict_t			*p = svs.clients[0].edict;
+		float			eyez;
+
+		/* Well clear of everything: vieworg ~72 units under the ceiling. */
+		place (704.f, 704.f, GYM_CEIL_Z - 94.f);
+		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		QC_InputSetHeightTrim (0.f);
+		step (3);
+		eyez = p->v.origin[2] + p->v.view_ofs[2];
+		printf ("      (eye z %.0f, ceiling %.0f, clear %.0f)\n",
+			eyez, GYM_CEIL_Z, GYM_CEIL_Z - eyez);
+
+		f = QC_RendererAcquireFrame ();
+		open = f ? f->eye_fade : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (open == 0.f,
+		       "an eye in open air draws no fade (%.3f)", open);
+
+		/* Raised to ~10 units under the ceiling: inside the onset
+		   distance, so partly faded but not black. The height trim is
+		   how the renderer tells the engine where the eye sits above
+		   vieworg, which is the only vertical channel there is. */
+		QC_InputSetHeightTrim (GYM_CEIL_Z - eyez - 10.f);
+		step (3);
+		f = QC_RendererAcquireFrame ();
+		near_ceil = f ? f->eye_fade : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (near_ceil > 0.f && near_ceil < 1.f,
+		       "an eye near the ceiling fades part way (%.3f)",
+		       near_ceil);
+		CHECK (near_ceil > open,
+		       "and closer is darker than clear (%.3f over %.3f)",
+		       near_ceil, open);
+
+		/* Pushed straight through the ceiling: fully black, which is
+		   the frame A. must never see the passthrough in. */
+		QC_InputSetHeightTrim (GYM_CEIL_Z - eyez + 24.f);
+		step (3);
+		f = QC_RendererAcquireFrame ();
+		inside = f ? f->eye_fade : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (inside == 1.f,
+		       "an eye inside solid draws full black (%.3f)", inside);
+		CHECK (inside > near_ceil,
+		       "and inside is darker than merely close (%.3f over %.3f)",
+		       inside, near_ceil);
+
+		/* The escape hatch. Somebody will want it off, and a comfort
+		   aid that cannot be switched off is a bug of its own. */
+		QC_ExecuteCommand ("vr_clipfade 0\n");
+		step (3);
+		f = QC_RendererAcquireFrame ();
+		disabled = f ? f->eye_fade : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (disabled == 0.f,
+		       "vr_clipfade 0 draws nothing even inside solid (%.3f)",
+		       disabled);
+
+		QC_ExecuteCommand ("vr_clipfade 12\n");
+		QC_InputSetHeightTrim (0.f);
+		step (3);
 	}
 
 	/* ---------------- the range: a sky lid, so up must NOT anchor ------- */
