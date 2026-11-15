@@ -762,19 +762,25 @@ void QC_InputSetHeadPitch (float pitch_deg);
 void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 		     float yaw_deg, float pitch_deg);
 
-/* The OFF hand's ray, same form and same conventions as the aim above: org in
-   the BODY frame (fwd/right/up from the recenter origin, Quake units), yaw and
-   pitch room-relative in Quake degrees with the engine adding the body yaw.
-   `valid` 0 releases it.
+/* The OFF hand's POSITION in the BODY frame (fwd/right/up from the recenter
+   origin, Quake units), the same convention as the aim's org above. `valid` 0
+   releases it.
 
-   This does NOT aim the shot. It is where the grappling hook leaves from and
-   the direction it flies, which is what lets the gun stay drawn and firing
-   through a swing; with the channel released the hook falls back to the gun
-   hand and then to the body. A non-finite value is treated as released rather
-   than latched, so a tracking fault degrades instead of freezing the rope.
-   Callable from any thread. */
-void QC_InputSetOffAim (int valid, float org_fwd, float org_right, float org_up,
-			float yaw_deg, float pitch_deg);
+   This is where the grappling hook leaves from, which is what lets the gun
+   stay drawn and firing through a swing. It does NOT aim anything: the rope
+   is pointed by the reticle, like every other shot. There is deliberately no
+   yaw or pitch here -- an earlier version took the rope's direction from this
+   hand too, and in the headset a Sense controller held in a natural grip
+   points its forward axis roughly upward, so the rope fired at the sky and
+   could not be aimed at the floor. The hand that holds the rope is not the
+   hand that points it.
+
+   With the channel released the hook falls back to the gun hand and then to
+   the body. A non-finite value is treated as released rather than latched, so
+   a tracking fault degrades instead of freezing the rope's origin at a point
+   the hand has left. Callable from any thread. */
+void QC_InputSetOffHand (int valid, float org_fwd, float org_right,
+			 float org_up);
 
 /* Point-and-blink teleport. The OFF hand aims a destination in the same
    body-frame ray form as the aim above (org = fwd/right/up offset from the

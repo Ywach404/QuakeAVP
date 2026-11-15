@@ -795,33 +795,27 @@ final class ImmersiveRenderer {
             // the rigid controller hand and overwrote the real one every
             // frame. Input was correct and the hand was wrong, which is a
             // hard thing to attribute from inside the headset.
-            // The OFF hand's ray into the engine: where the grapple leaves
-            // from and the direction it flies (QC_InputSetOffAim), in the same
-            // body-frame form as the aim above, off the non-dominant
-            // controller's own pose. Fed every frame with an explicit release
-            // when the pose is gone -- a latched off-hand pose would hold the
-            // rope's origin at a point the hand has already left, which is
-            // the stuck-then-snap the dominant path had until the lost-ray
-            // release landed.
+            // The OFF hand's POSITION into the engine: where the grapple
+            // leaves from. Position only -- the rope is aimed by the reticle,
+            // and the controller's own forward axis points roughly upward in
+            // a natural grip, which is why taking the direction from here
+            // fired the rope at the sky.
+            //
+            // Fed every frame with an explicit release when the pose is gone.
+            // A latched off-hand position would hold the rope's origin at a
+            // point the hand has already left, which is the stuck-then-snap
+            // the dominant path had until the lost-ray release landed.
             //
             // NOT routed through TrackRecorder.feedAim, which is the single
             // documented road into QC_InputSetAim: the .vrtrack sidecar
             // carries exactly ONE ray and export replay of a two-handed pose
-            // is out of scope, so a second ray through the recorder would
-            // either be dropped or quietly overwrite the first. The asymmetry
-            // is deliberate, not an oversight.
+            // is out of scope. The asymmetry is deliberate, not an oversight.
             let offHandPose = activeControllerPose(left: rightHanded)
             if let op = offHandPose {
-                let oc = recenterCorrection * op
-                let oo = oc.columns.3
-                let offFwd = -oc.columns.2
-                let offYaw = atan2(-offFwd.x, -offFwd.z) * 180 / .pi
-                let offHoriz = (offFwd.x * offFwd.x + offFwd.z * offFwd.z).squareRoot()
-                let offPitch = -atan2(offFwd.y, offHoriz) * 180 / .pi
-                QC_InputSetOffAim(1, -oo.z / s, oo.x / s, oo.y / s,
-                                  offYaw, offPitch)
+                let oo = (recenterCorrection * op).columns.3
+                QC_InputSetOffHand(1, -oo.z / s, oo.x / s, oo.y / s)
             } else if VRSettings.shared.controllersActive {
-                QC_InputSetOffAim(0, 0, 0, 0, 0, 0)
+                QC_InputSetOffHand(0, 0, 0, 0)
             }
             // In hands-only play neither branch above runs (no controller
             // pose, controllersActive false) and HandInput owns the channel,

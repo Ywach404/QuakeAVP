@@ -184,11 +184,9 @@ cvar_t	vr_grapple_headmodel = {"vr_grapple_headmodel", "progs/hook.mdl", CVAR_NO
 /* in_null.c, file-local extern the way qr_bridge.c takes the same symbol at
    qr_bridge.c:76. Returns 0 when the aim channel is not live. */
 extern int	QR_HandOrigin (vec3_t out);
-/* The OFF hand: where the rope leaves from, and the ray it flies along. Both
-   return 0 when that channel is not live, which is what drives the fallback
-   chain in Grapple_Throw. */
+/* The OFF hand: where the rope leaves from. Returns 0 when that channel is
+   not live, which is what drives the fallback chain in Grapple_Throw. */
 extern int	QR_OffHandOrigin (vec3_t out);
-extern int	QR_OffHandAngles (vec3_t out);
 
 static grapple_state_t	qr_grapple_state;
 static vec3_t		qr_grapple_tip;		/* the head, in world space */
@@ -552,9 +550,15 @@ to. A throw that did nothing instead would read on device as a hook that
 sometimes just does not fire, which is a far worse bug than one that comes from
 the wrong place.
 
-Direction from QR_OffHandAngles, falling back to v_angle -- which is what
-rogue's W_FireGrapple used, and what the gun is aimed along -- so a session
-with no off-hand ray throws exactly where it used to.
+Direction from v_angle, which is the AIM -- the reticle, the same ray the gun
+fires along -- exactly as rogue's W_FireGrapple used it.
+
+It is worth saying why this is not the off hand, because taking it from there
+is the obvious symmetry and it was tried: a Sense controller held in a natural
+grip points its forward axis roughly UP, so a rope aimed by the hand holding
+it fired at the sky and could not be pointed at the floor at all. The hand
+that holds the rope is not the hand that points it. Origin and direction come
+from different places on purpose.
 
 Speed is clamped for the same reason it always was: both ends of the cvar are a
 real failure, and a clamp that stops a typo being a crash is worth more than a
@@ -567,7 +571,7 @@ knob it used to reach into can be left alone.
 */
 static void Grapple_Throw (edict_t *player)
 {
-	vec3_t	fwd, right, up, angles;
+	vec3_t	fwd, right, up;
 	float	speed, range;
 
 	if (!QR_OffHandOrigin (qr_grapple_tip)
@@ -580,10 +584,7 @@ static void Grapple_Throw (edict_t *player)
 	/* All three outputs are passed because AngleVectors writes all three
 	   unconditionally (mathlib.c:198); a NULL there is a segfault, not an
 	   opt-out. right and up are unused. */
-	if (QR_OffHandAngles (angles))
-		AngleVectors (angles, fwd, right, up);
-	else
-		AngleVectors (player->v.v_angle, fwd, right, up);
+	AngleVectors (player->v.v_angle, fwd, right, up);
 
 	speed = vr_grapple_speed.value;
 	if (speed < 100.f)

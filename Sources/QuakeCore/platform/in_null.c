@@ -86,17 +86,25 @@ static int			qc_aim_valid_shared;	/* dominant-hand aim live? */
 static float			qc_aim_org_shared[3];	/* body frame fwd,right,up */
 static float			qc_aim_yaw_shared;	/* room-relative, Quake deg */
 static float			qc_aim_pitch_shared;
-/* The OFF hand, same form and same lock. Task 5: the grapple leaves this hand
-   and flies along this ray, so the gun can stay drawn and firing through a
-   swing. A channel of its own rather than the teleport org/yaw/pitch fields
-   below, which were named for exactly this and are the obvious place to put
-   it: those are live plumbing for the teleport commit, and a feature that
-   reads half of a struct another feature writes is a coupling this file has
-   already paid for once. */
-static int			qc_offaim_valid_shared;	/* off-hand ray live? */
-static float			qc_offaim_org_shared[3];/* body frame fwd,right,up */
-static float			qc_offaim_yaw_shared;	/* room-relative, Quake deg */
-static float			qc_offaim_pitch_shared;
+/* The OFF hand's POSITION, same form and same lock. The grapple leaves this
+   hand, which is what lets the gun stay drawn and firing through a swing.
+
+   Position only, and no ray: the rope is AIMED by the reticle, like every
+   other shot. Taking the direction from this hand as well was the first
+   version of the feature and it was wrong in the headset -- a Sense
+   controller held in a natural grip points its forward axis roughly upward,
+   so the rope fired at the sky and could not be aimed at the floor. The hand
+   that holds the rope is not the hand that points it. A yaw and pitch were
+   dropped from this channel rather than left unread, because this file has
+   three comments elsewhere promising a ray that nothing consumes and that is
+   exactly the sentence a later change trusts.
+
+   A channel of its own rather than the teleport org/yaw/pitch fields below,
+   which were named for this: those are live plumbing for the teleport commit,
+   and a feature that reads half of a struct another feature writes is a
+   coupling this file has already paid for once. */
+static int			qc_offhand_valid_shared;
+static float			qc_offhand_org_shared[3];/* body frame fwd,right,up */
 /* Teleport: the OFF hand arms a destination (same body-frame ray form as the
    aim). `commit` is latched here and drained engine-side so a release edge
    between ticks is never lost. */
@@ -307,8 +315,8 @@ void QC_InputSetAim (int valid, float org_fwd, float org_right, float org_up,
 	pthread_mutex_unlock (&qc_input_lock);
 }
 
-void QC_InputSetOffAim (int valid, float org_fwd, float org_right, float org_up,
-			float yaw_deg, float pitch_deg)
+void QC_InputSetOffHand (int valid, float org_fwd, float org_right,
+			 float org_up)
 {
 	/* Non-finite in, nothing out. This origin becomes the hook's spawn
 	   point and the rope's near end, and a NaN there reaches a trace and
@@ -322,19 +330,16 @@ void QC_InputSetOffAim (int valid, float org_fwd, float org_right, float org_up,
 	   until the lost-ray release landed. Dropping to invalid degrades to
 	   the documented fallback (the gun hand, then the body) instead. */
 	if (valid && (!isfinite (org_fwd) || !isfinite (org_right)
-		      || !isfinite (org_up) || !isfinite (yaw_deg)
-		      || !isfinite (pitch_deg)))
+		      || !isfinite (org_up)))
 		valid = 0;
 
 	pthread_mutex_lock (&qc_input_lock);
-	qc_offaim_valid_shared = valid ? 1 : 0;
+	qc_offhand_valid_shared = valid ? 1 : 0;
 	if (valid)
 	{
-		qc_offaim_org_shared[0] = org_fwd;
-		qc_offaim_org_shared[1] = org_right;
-		qc_offaim_org_shared[2] = org_up;
-		qc_offaim_yaw_shared = yaw_deg;
-		qc_offaim_pitch_shared = pitch_deg;
+		qc_offhand_org_shared[0] = org_fwd;
+		qc_offhand_org_shared[1] = org_right;
+		qc_offhand_org_shared[2] = org_up;
 	}
 	pthread_mutex_unlock (&qc_input_lock);
 }
@@ -431,14 +436,12 @@ int				qr_aim_active;		/* hand aim live (vr_handaim &&
 static int			qr_aim_valid;
 static float			qr_aim_yaw;		/* room-relative, Quake deg */
 static float			qr_aim_pitch;
-/* The off hand, engine-thread. qr_offaim_org and qr_offaim_active are read
-   outside this file (grapple_avp.c throws from them), so they are not static,
-   exactly as qr_aim_org and qr_aim_active are not. */
-float				qr_offaim_org[3];	/* off hand, body frame */
-int				qr_offaim_active;	/* off ray live (vr_handaim && valid) */
-static int			qr_offaim_valid;
-static float			qr_offaim_yaw;		/* room-relative, Quake deg */
-static float			qr_offaim_pitch;
+/* The off hand, engine-thread. Read outside this file (grapple_avp.c throws
+   from there), so not static, exactly as qr_aim_org and qr_aim_active are
+   not. */
+float				qr_offhand_org[3];	/* off hand, body frame */
+int				qr_offhand_active;	/* live (vr_handaim && valid) */
+static int			qr_offhand_valid;
 /* Drained from qc_turn_hold_shared; gates the edge-turn block only (see
    QC_InputSetTurnHold). */
 static int			qr_turn_hold;
@@ -723,12 +726,10 @@ static void IN_SnapshotInputs (void)
 	qr_aim_org[2] = qc_aim_org_shared[2];
 	qr_aim_yaw = qc_aim_yaw_shared;
 	qr_aim_pitch = qc_aim_pitch_shared;
-	qr_offaim_valid = qc_offaim_valid_shared;
-	qr_offaim_org[0] = qc_offaim_org_shared[0];
-	qr_offaim_org[1] = qc_offaim_org_shared[1];
-	qr_offaim_org[2] = qc_offaim_org_shared[2];
-	qr_offaim_yaw = qc_offaim_yaw_shared;
-	qr_offaim_pitch = qc_offaim_pitch_shared;
+	qr_offhand_valid = qc_offhand_valid_shared;
+	qr_offhand_org[0] = qc_offhand_org_shared[0];
+	qr_offhand_org[1] = qc_offhand_org_shared[1];
+	qr_offhand_org[2] = qc_offhand_org_shared[2];
 	qr_tp_aiming = qc_tp_active_shared;
 	/* NOTE: the one-shot commit latch (qc_tp_commit_shared) is drained in
 	   IN_Teleport, NOT here -- SnapshotInputs runs from BOTH IN_Commands and
@@ -1527,7 +1528,7 @@ gun hand and finally to the body. Engine thread.
 */
 int QR_OffHandOrigin (vec3_t out)
 {
-	return IN_HandOriginFrom (qr_offaim_org, qr_offaim_active, out);
+	return IN_HandOriginFrom (qr_offhand_org, qr_offhand_active, out);
 }
 
 /*
@@ -1574,43 +1575,6 @@ int QR_EyeOrigin (vec3_t out)
 	return 1;
 }
 
-/*
-================
-QR_OffHandAngles -- the off hand's ray as world angles, for the throw.
-
-The body yaw is added here for the same reason IN_Move adds it to the shot:
-the feeder's yaw is room-relative, so a snap turn has to carry the ray with
-the body.
-
-Two deliberate departures from the aim path:
-
-vr_aimpitch IS applied. It corrects a resting-forearm bias (the elbow-to-wrist
-line sits above the sightline), and that bias is anatomical, so the off
-forearm has it too. Without it the hook flies ~8 degrees high and misses what
-the player is plainly pointing at.
-
-vr_aimyaw is NOT applied. That is the LATERAL half of the same trim, and
-laterally the two forearms are mirror images: a value sighted in on the right
-arm pushes the left arm's ray the wrong way. It defaults to 0, so this is
-invisible until someone tunes it, which is exactly when a mirrored sign would
-be hardest to attribute.
-
-The pitch is NOT clamped to cl_minpitch/cl_maxpitch either. Those bounds stop
-the VIEW flipping over, and this ray is not a view -- it is a trace this file
-owns. Clamping it would quietly refuse a hook thrown straight up, which is the
-throw the gym map exists to test.
-================
-*/
-int QR_OffHandAngles (vec3_t out)
-{
-	if (!qr_offaim_active)
-		return 0;
-
-	out[PITCH] = qr_offaim_pitch + vr_aimpitch.value;
-	out[YAW] = qr_body_yaw + qr_offaim_yaw;
-	out[ROLL] = 0.f;
-	return 1;
-}
 
 /*
 ================
@@ -1835,7 +1799,7 @@ static void IN_Teleport (void)
 	   here; its org/yaw/pitch fields are always zero and nothing reads them.
 	   They used to be described as kept in the pipe for a future dual-wield,
 	   which is no longer where the off hand lives: the off-hand ray has its
-	   own channel now (QC_InputSetOffAim), with a real consumer in the
+	   own channel now (QC_InputSetOffHand), with a real consumer in the
 	   grapple. The landing marker is gated renderer-side by vr_teleportmarker
 	   so it can be hidden; the gun reticle alone then shows the spot. */
 	if (can)
@@ -2376,7 +2340,7 @@ void IN_Move (usercmd_t *cmd)
 	   hand and not the other: the hook then falls back to the gun hand and
 	   then to the chest, which is the degradation every other shot in this
 	   file already takes. */
-	qr_offaim_active = (vr_handaim.value && qr_offaim_valid);
+	qr_offhand_active = (vr_handaim.value && qr_offhand_valid);
 	/* vr_aimyaw is the lateral half of the resting-forearm trim, symmetric
 	   with vr_aimpitch: the elbow->wrist line sits a little across the body
 	   as well as above the sightline. Applied HERE, on the room-relative

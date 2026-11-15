@@ -347,10 +347,9 @@ final class HandInput: @unchecked Sendable {
         // M6: feed the dominant hand's aim ray to the engine every update,
         // even while the wheel is open, so the gun keeps tracking the hand.
         feedAim(aim)
-        // Task 5: the OFF hand's ray too, which is where the grapple leaves
-        // from and the direction it flies. Both hands carry a forearm ray out
-        // of ingest; until now only the dominant one had a consumer.
-        feedOffAim(move)
+        // The OFF hand's position too, which is where the grapple leaves
+        // from. Its position only: the rope is aimed by the reticle.
+        feedOffHand(move)
         aimRayVerts = buildAimRays(aim)
 
         // Console summon. Runs before the wheel gate so it works regardless of
@@ -937,7 +936,7 @@ final class HandInput: @unchecked Sendable {
     /// needs to detect is the pinch's release edge. Only `commit` is read on
     /// this channel; its org/yaw/pitch fields are passed as zeros and nothing
     /// reads them. The off-hand ray has its own channel now
-    /// (`feedOffAim` -> `QC_InputSetOffAim`), with the grapple as its
+    /// (`feedOffHand` -> `QC_InputSetOffHand`), with the grapple as its
     /// consumer, so it is no longer waiting here for a use.
     private func teleport(left: HandState, right: HandState) {
         // No locomotion while the HUD editor is open: an off-hand ring pinch is
@@ -954,7 +953,7 @@ final class HandInput: @unchecked Sendable {
         // gate on the off-hand forearm ray -- that gate (a leftover from when
         // the off hand aimed) was returning early and swallowing the commit
         // whenever the off forearm wasn't cleanly tracked. That ray goes to
-        // the grapple through feedOffAim now, not through this channel.
+        // the grapple through feedOffHand now, not through this channel.
         let off = VRSettings.shared.rightHanded ? left : right
         let pinched = !WheelState.shared.isOpen && off.ringPinched
         // Commit on the RELEASE of the ring pinch (tap, then let go to blink),
@@ -1011,36 +1010,29 @@ final class HandInput: @unchecked Sendable {
                                      yaw: aimYaw, pitch: aimPitch)
     }
 
-    /// The OFF hand's forearm ray, straight into the engine: where the
-    /// grappling hook leaves from and the direction it flies. The same
-    /// body-frame form as `feedAim`, off the other arm.
+    /// The OFF hand's wrist POSITION, straight into the engine: where the
+    /// grappling hook leaves from. Position only -- the rope is aimed by the
+    /// reticle, like every other shot, so this hand's own ray is not wanted
+    /// and is no longer sent.
     ///
     /// NOT routed through `TrackRecorder.feedAim`, which is documented as the
-    /// single road into `QC_InputSetAim`. The `.vrtrack` sidecar carries
-    /// exactly ONE ray and export replay of a two-handed pose is out of
-    /// scope, so a second ray through the recorder would either be dropped or
-    /// quietly overwrite the first. It also skips `AimCalibration`, which
-    /// sights in the GUN and has nothing to say about the rope hand. The
-    /// asymmetry is deliberate.
+    /// single road into `QC_InputSetAim`. That road tees into the `.vrtrack`
+    /// sidecar, which carries exactly one ray, and into `AimCalibration`,
+    /// which sights in the GUN and has nothing to say about the rope hand.
+    /// The asymmetry is deliberate.
     ///
-    /// Releases the channel when the forearm is not tracked, rather than
-    /// holding the last pose: a latched origin would leave the rope hanging
-    /// off a point the hand has moved away from, and the engine's fallback
-    /// (the gun hand, then the body) is the honest answer instead.
-    private func feedOffAim(_ hand: HandState) {
-        guard let o = hand.aimOrigin, let d = hand.aimDir else {
-            QC_InputSetOffAim(0, 0, 0, 0, 0, 0)
+    /// Releases the channel when the wrist is not tracked, rather than
+    /// holding the last position: a latched origin would leave the rope
+    /// hanging off a point the hand has moved away from, and the engine's
+    /// fallback (the gun hand, then the body) is the honest answer instead.
+    private func feedOffHand(_ hand: HandState) {
+        guard let o = hand.aimOrigin else {
+            QC_InputSetOffHand(0, 0, 0, 0)
             return
         }
-        let corr = TrackingSpace.correction
-        let op = corr * SIMD4(o, 1)
-        let dp = corr * SIMD4(d, 0)          // direction: rotation only (w = 0)
-        let dir = simd_normalize(SIMD3(dp.x, dp.y, dp.z))
-        let offYaw = atan2(-dir.x, -dir.z) * 180 / .pi
-        let horiz = (dir.x * dir.x + dir.z * dir.z).squareRoot()
-        let offPitch = -atan2(dir.y, horiz) * 180 / .pi
+        let op = TrackingSpace.correction * SIMD4(o, 1)
         let s = WheelState.shared.currentWorldScale
-        QC_InputSetOffAim(1, -op.z / s, op.x / s, op.y / s, offYaw, offPitch)
+        QC_InputSetOffHand(1, -op.z / s, op.x / s, op.y / s)
     }
 
     /// Every threshold the prayer sign tests, against its limit, so the sign can

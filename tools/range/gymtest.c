@@ -851,7 +851,7 @@ int main (int argc, char **argv)
 		/* fwd, right, up. The off hand out to one side, the gun hand
 		   out to the other, so no assertion below can be satisfied by
 		   the wrong one. */
-		QC_InputSetOffAim (1, 0.f, 24.f, -8.f, 0.f, 0.f);
+		QC_InputSetOffHand (1, 0.f, 24.f, -8.f);
 		QC_InputSetAim (1, 0.f, -24.f, 0.f, 0.f, 0.f);
 		step (2);
 
@@ -901,48 +901,65 @@ int main (int argc, char **argv)
 	}
 
 	/*
-	 * The DIRECTION comes from the off hand too, and this is the assertion
-	 * that cannot be satisfied by accident: v_angle is pointed the opposite
-	 * way from the off-hand ray, so a hook that still reads v_angle flies
-	 * backwards. Stated physically (which way did the tip actually move)
-	 * rather than in degrees, so no sign convention has to be agreed on
-	 * for it to mean something.
+	 * The DIRECTION comes from the AIM -- the reticle -- not from the off
+	 * hand. The off hand supplies only the origin.
+	 *
+	 * This is a correction. The first version of this task took the
+	 * direction from the off hand's own ray as well, which reads fine
+	 * written down and is wrong in the headset: a Sense controller held in
+	 * a natural grip has its forward axis pointing roughly UP, so the rope
+	 * shot at the sky and could not be aimed at the floor at all. The hand
+	 * that holds the rope is not the hand that points it.
+	 *
+	 * Stated physically -- which way did the tip actually move -- so no
+	 * angle sign convention has to be agreed on for it to mean anything.
 	 */
 	{
-		vec3_t	start, tip2;
+		vec3_t	start, tip2, off_org;
 		float	dx, dy, dz;
 
 		place (704.f, 704.f, 1000.f);
 		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		/* The off hand is way out to one side, so if the direction
+		   were taken from it in any form, these would not hold. */
+		QC_InputSetOffHand (1, 0.f, 24.f, -8.f);
 		step (2);
-
-		/* World yaw 0 is +x. The fed yaw is room-relative and the
-		   engine adds the body yaw, so cancel the body out. */
-		QC_InputSetOffAim (1, 0.f, 0.f, 0.f, -qr_body_yaw, 0.f);
-		step (2);
-		aim (0.f, 180.f);		/* the gun points the other way */
+		aim (0.f, 0.f);			/* the reticle: world yaw 0, +x */
 
 		Grapple_TestThrow ();
 		Grapple_TestState (start);
+		QR_OffHandOrigin (off_org);
+		CHECK (fabsf (start[1] - off_org[1]) < 0.01f,
+		       "the throw still LEAVES the off hand (%.2f)", start[1]);
 		Grapple_TestFlight (1.f / 72.f);
 		Grapple_TestFlight (1.f / 72.f);
 		Grapple_TestState (tip2);
 		dx = tip2[0] - start[0];
 		dy = tip2[1] - start[1];
 		CHECK (dx > 10.f,
-		       "the hook flies along the OFF hand's ray (+x %.1f) and "
-		       "not along v_angle (which would be -x)", dx);
+		       "and flies along the RETICLE (+x %.1f)", dx);
 		CHECK (fabsf (dy) < fabsf (dx) * 0.2f,
-		       "and it goes where it was pointed, not off to one side "
-		       "(%.1f sideways against %.1f forward)", dy, dx);
+		       "straight, not off to one side (%.1f against %.1f)",
+		       dy, dx);
 		Grapple_TestDisengage ();
 		step (2);
 
-		/* Pitch, same treatment: positive is DOWN in Quake, so a hook
-		   thrown at +25 must lose height. */
-		QC_InputSetOffAim (1, 0.f, 0.f, 0.f, -qr_body_yaw, 25.f);
+		/* Turn the reticle around and the rope follows it. */
+		aim (0.f, 180.f);
+		Grapple_TestThrow ();
+		Grapple_TestState (start);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestState (tip2);
+		dx = tip2[0] - start[0];
+		CHECK (dx < -10.f,
+		       "aim behind you and it goes behind you (%.1f)", dx);
+		Grapple_TestDisengage ();
 		step (2);
-		aim (-90.f, 0.f);		/* the gun points straight up */
+
+		/* AT THE GROUND, which is the one A. could not do: positive
+		   pitch is down in Quake. */
+		aim (25.f, 0.f);
 		Grapple_TestThrow ();
 		Grapple_TestState (start);
 		Grapple_TestFlight (1.f / 72.f);
@@ -950,8 +967,20 @@ int main (int argc, char **argv)
 		Grapple_TestState (tip2);
 		dz = tip2[2] - start[2];
 		CHECK (dz < -5.f,
-		       "a downward off-hand ray throws the hook down "
-		       "(%.1f) even with the gun aimed up", dz);
+		       "aim at the ground and the rope goes down (%.1f)", dz);
+		Grapple_TestDisengage ();
+		step (2);
+
+		/* And up, so "down works" is not just gravity on a dead hook. */
+		aim (-25.f, 0.f);
+		Grapple_TestThrow ();
+		Grapple_TestState (start);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestFlight (1.f / 72.f);
+		Grapple_TestState (tip2);
+		dz = tip2[2] - start[2];
+		CHECK (dz > 5.f,
+		       "aim up and it goes up (%.1f)", dz);
 		Grapple_TestDisengage ();
 		step (2);
 	}
@@ -967,7 +996,7 @@ int main (int argc, char **argv)
 
 		place (704.f, 704.f, 1000.f);
 		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
-		QC_InputSetOffAim (0, 0.f, 0.f, 0.f, 0.f, 0.f);
+		QC_InputSetOffHand (0, 0.f, 0.f, 0.f);
 		QC_InputSetAim (1, 0.f, -24.f, 0.f, 0.f, 0.f);
 		step (2);
 		aim (0.f, 0.f);
@@ -1015,7 +1044,7 @@ int main (int argc, char **argv)
 		int	i, drifted = 0;
 
 		place (704.f, 704.f, 1000.f);
-		QC_InputSetOffAim (1, 0.f, 24.f, 0.f, -qr_body_yaw, -89.f);
+		QC_InputSetOffHand (1, 0.f, 24.f, 0.f);
 		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
 		/* impulse 9 twice: the first after signon is dropped
 		   (docs/working-notes.md). Then the shotgun, which spends
@@ -1033,7 +1062,12 @@ int main (int argc, char **argv)
 		CHECK (cl.viewent.model != NULL && gun[0] != '\0',
 		       "the gun is drawn before the throw (%s)", gun);
 
-		aim (0.f, 0.f);
+		/* Straight up at the gym's concrete ceiling, which is a throw
+		   the map guarantees will anchor. The direction is the RETICLE
+		   now, so this is where it has to be set -- an earlier version
+		   put the pitch on the off-hand channel instead, which is the
+		   bug this task corrects. */
+		aim (-90.f, 0.f);
 		grip (1);
 		for (i = 0; i < 60; i++)
 		{
@@ -1070,7 +1104,7 @@ int main (int argc, char **argv)
 		       Grapple_TestState (tip));
 
 		grip (0);
-		QC_InputSetOffAim (0, 0.f, 0.f, 0.f, 0.f, 0.f);
+		QC_InputSetOffHand (0, 0.f, 0.f, 0.f);
 		step (4);
 	}
 
