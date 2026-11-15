@@ -480,6 +480,24 @@ static cvar_t	vr_edgeturn_head = {"vr_edgeturn_head", "1", CVAR_ARCHIVE};
    open. */
 static cvar_t	vr_turn_while_paused = {"vr_turn_while_paused", "0", CVAR_ARCHIVE};
 static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
+/* BARE HANDS ONLY: scales the movement they ask for. Hands drive the move
+   with pinches, so their stick value is binary -- full deflection or nothing,
+   with none of the modulation a thumbstick gives -- and at the shared top
+   speed that reads as having no control rather than as being fast. A lower
+   ceiling buys back authority the input cannot otherwise express.
+
+   0.5 is not a guess. A. played a session at cl_forwardspeed 200 by accident
+   (a controller set down on its trigger latched +speed, the walk modifier,
+   through the detach bug fixed in 5ee1506) and preferred it, so the default
+   reproduces exactly that: 200 out of the 400 a run requests. It reads as
+   0.625 of the speed actually reached, because sv_maxspeed caps the 400 at
+   320 and this scales the request, not the cap.
+
+   The stick is deliberately untouched -- A. calls its tuning perfect -- so
+   this hangs off qr_pad.connected, which is this file's idiom for "a real
+   spatial controller, not bare hands publishing pad state" (QuakeCore.h) and
+   is what the edge turn already gates on. Set it to 1 for parity. */
+static cvar_t	vr_movescale = {"vr_movescale", "0.5", CVAR_ARCHIVE};
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 /* M6: aim from the dominant hand/controller ray. 1 = the gun lives in your
    hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
@@ -2362,6 +2380,16 @@ void IN_Move (usercmd_t *cmd)
 	else
 		speed = cl_movespeedkey.value;
 
+	/* Bare hands take their own ceiling (see vr_movescale). Applied to
+	   `speed` rather than to lx/ly so it stays DOWNSTREAM of the radial
+	   deadzone: the rescale at the top of this block is nonlinear below
+	   full deflection, so scaling the stick would make the knob mean
+	   something other than what it says. Clamped because this is archived
+	   and reachable from the console, and both ends of a typo are a real
+	   failure -- a crawl, or a negative that walks you backwards. */
+	if (!qr_pad.connected)
+		speed *= CLAMP (0.1f, vr_movescale.value, 1.f);
+
 	/* Look-relative locomotion: rotate the stick by the head's yaw so
 	   "forward" is where you look, not where the body last snapped to.
 	   The server applies the usercmd along cl.viewangles[YAW], which is now
@@ -2548,6 +2576,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_edgeturn_head);
 	Cvar_RegisterVariable (&vr_turn_while_paused);
 	Cvar_RegisterVariable (&vr_moverelative);
+	Cvar_RegisterVariable (&vr_movescale);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
 	Cvar_RegisterVariable (&vr_aimpitch);

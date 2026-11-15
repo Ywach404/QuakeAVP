@@ -1070,6 +1070,89 @@ int main (int argc, char **argv)
 		step (4);
 	}
 
+	/* ---------------- bare hands walk slower than a stick ---------------- */
+
+	/*
+	 * Out of plan, from A. on device. Hands drive movement with pinches, so
+	 * the hands path is binary: full deflection or nothing, with no way to
+	 * modulate it the way a thumbstick can. At the shared top speed that
+	 * reads as uncontrollable, so bare hands get their own ceiling.
+	 *
+	 * The number is not invented. A. played a session at cl_forwardspeed
+	 * 200 by accident (a left controller set down on its own trigger
+	 * latched +speed, which this port inverts into a WALK modifier) and
+	 * preferred it, so vr_movescale defaults to exactly that: 200 out of
+	 * the 400 a run requests.
+	 *
+	 * Driven through the real IN_Move rather than a helper, and read back
+	 * off cl.cmd, because the thing worth proving is that the scale reaches
+	 * forwardmove and that it reaches it ONLY for hands. qc_gamepad_state_t
+	 * carries `connected`, which is the file's own idiom for "a real
+	 * spatial controller, not bare hands publishing pad state"
+	 * (QuakeCore.h:670-676), so both modes are reachable from here.
+	 */
+	{
+		qc_gamepad_state_t	pad;
+		float			run, walk, parity;
+
+		place (704.f, 704.f, 1000.f);
+		step (2);
+
+		memset (&pad, 0, sizeof (pad));
+		pad.ly = 1.f;			/* full forward, as a pinch gives */
+
+		/* A stick: unscaled, so the tuning A. likes is untouched. */
+		pad.connected = 1;
+		QC_InputSetGamepad (&pad);
+		step (4);
+		run = cl.cmd.forwardmove;
+		CHECK (fabsf (run - 400.f) < 1.f,
+		       "a controller still asks for the full run (%.1f, want 400)",
+		       run);
+
+		/* Bare hands: the same full deflection, scaled. */
+		pad.connected = 0;
+		QC_InputSetGamepad (&pad);
+		step (4);
+		walk = cl.cmd.forwardmove;
+		CHECK (fabsf (walk - 200.f) < 1.f,
+		       "bare hands ask for the walk A. tuned by accident "
+		       "(%.1f, want 200)", walk);
+		CHECK (walk < run,
+		       "and hands are slower than the stick (%.1f against %.1f)",
+		       walk, run);
+
+		/* The knob means what it says at both ends. */
+		QC_ExecuteCommand ("vr_movescale 1\n");
+		step (4);
+		parity = cl.cmd.forwardmove;
+		CHECK (fabsf (parity - run) < 1.f,
+		       "vr_movescale 1 restores parity with the stick (%.1f)",
+		       parity);
+
+		/* Clamped, so a typo is not a crawl or a reverse. The floor is
+		   0.1 and the ceiling 1: faster than the stick is not on offer,
+		   because sv_maxspeed caps it anyway and a cvar that silently
+		   does nothing above 1 is worse than one that refuses. */
+		QC_ExecuteCommand ("vr_movescale 50\n");
+		step (4);
+		CHECK (fabsf (cl.cmd.forwardmove - run) < 1.f,
+		       "an absurd vr_movescale clamps at parity (%.1f)",
+		       cl.cmd.forwardmove);
+		QC_ExecuteCommand ("vr_movescale -3\n");
+		step (4);
+		CHECK (fabsf (cl.cmd.forwardmove - run * 0.1f) < 1.f,
+		       "a negative vr_movescale clamps at the 0.1 floor (%.1f, "
+		       "want %.1f)", cl.cmd.forwardmove, run * 0.1f);
+		CHECK (cl.cmd.forwardmove > 0.f,
+		       "and never reverses the walk");
+
+		QC_ExecuteCommand ("vr_movescale 0.5\n");
+		memset (&pad, 0, sizeof (pad));
+		QC_InputSetGamepad (&pad);
+		step (2);
+	}
+
 	/* ---------------- the range: a sky lid, so up must NOT anchor ------- */
 
 	QC_ExecuteCommand ("map range\n");
