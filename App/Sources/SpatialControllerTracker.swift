@@ -44,6 +44,11 @@ final class SpatialControllerTracker: @unchecked Sendable {
 
     private var session: ARKitSession?
     private var task: Task<Void, Never>?
+    /// The provider itself, which used to be a local inside the tracking Task
+    /// and so unreachable from the render thread. Both halves of the fast path
+    /// hang off it: `latestAnchors` and `predictAnchor(for:at:)` are instance
+    /// methods, so neither was callable while this was a local.
+    private var _provider: AccessoryTrackingProvider?
 
     var isTracking: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -110,10 +115,22 @@ final class SpatialControllerTracker: @unchecked Sendable {
                 let provider = AccessoryTrackingProvider(accessories: accessories)
                 let session = ARKitSession()
                 self.session = session
+                self.lock.lock()
+                self._provider = provider
+                self.lock.unlock()
                 try await session.run([provider])
                 self.setTracking(true)
                 for await update in provider.anchorUpdates {
                     if Task.isCancelled { break }
+                    // Gate on the event and on tracking, the way the hand
+                    // loop does. Without this a .removed event still wrote a
+                    // pose and an untracked anchor's transform was stored as
+                    // though it were valid, so a controller that had stopped
+                    // reporting kept answering pose(left:) with whatever it
+                    // last managed.
+                    guard update.event == .added || update.event == .updated,
+                          update.anchor.isTracked
+                    else { continue }
                     self.store(update.anchor)
                 }
             } catch {
@@ -153,6 +170,42 @@ final class SpatialControllerTracker: @unchecked Sendable {
         } else {
             rateCount[id] = n
             rateStart[id] = start
+        }
+    }
+
+    /// Pull the freshest poses Apple will give, once per rendered frame.
+    ///
+    /// THE JUDDER FIX. This class subscribed only to `anchorUpdates`, which is
+    /// by Apple's own description the slow stream: `latestAnchors` is
+    /// documented as "higher frequency, lower latency and slightly lower
+    /// accuracy than anchorUpdates". The controller-driven weapon model and
+    /// the rigid controller hand both looked stepped next to bare hands on
+    /// otherwise identical consumer code, and that is the reason -- the hand
+    /// stream simply runs faster. So the first half of the fix is not
+    /// prediction at all, it is reading the fast accessor that was always
+    /// there.
+    ///
+    /// `at` is the frame's TRACKABLE ANCHOR time, not its presentation time.
+    /// They are different fields with a variable offset, and
+    /// CompositorServices' own frame_timing.h says to query it per frame and
+    /// that the device anchor is the one that uses presentation time. Passing
+    /// nil takes the fresher pose without predicting.
+    ///
+    /// Render thread only. `predictAnchor` carries no documented thread-safety
+    /// guarantee (its sibling `handAnchors(at:)` is explicitly not
+    /// thread-safe), so it is called from exactly one thread; the shared
+    /// dictionaries it feeds are written under the same lock `store` takes.
+    func refresh(at timestamp: TimeInterval?) {
+        lock.lock()
+        let provider = _provider
+        lock.unlock()
+        guard let provider, provider.state == .running else { return }
+
+        for anchor in provider.latestAnchors where anchor.isTracked {
+            let fresh = timestamp.flatMap {
+                provider.predictAnchor(for: anchor, at: $0)
+            } ?? anchor
+            store(fresh)
         }
     }
 

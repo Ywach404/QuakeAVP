@@ -400,6 +400,18 @@ final class ImmersiveRenderer {
         // new swim on a fast head turn rather than asserted here.
         let anchorTime = seconds(from: timing.presentationTime)
         let deviceAnchor = anchors.anchor(at: anchorTime)
+        // Bring the Sense controller poses up to THIS frame before anything
+        // reads them: off the fast accessory accessor, predicted to the
+        // frame's own trackable-anchor time. Deliberately NOT anchorTime
+        // above -- that is the presentation time, which is the head's clock;
+        // trackable anchors have their own, with a variable offset that
+        // CompositorServices says to re-query per frame.
+        //
+        // Once per FRAME rather than per drawable, and ahead of encode, so
+        // the three places that poll the pose cache (the dominant aim, the
+        // off-hand aim and hand model, the wrist anchor) all read one
+        // consistent pose instead of racing a mid-frame stream update.
+        SpatialControllerTracker.shared.refresh(at: seconds(from: timing.trackableAnchorTime))
         if deviceAnchor == nil {
             skippedFrames += 1
             if hadAnchor {
