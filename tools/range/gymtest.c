@@ -1305,6 +1305,91 @@ int main (int argc, char **argv)
 		step (3);
 	}
 
+	/* ---------------- and the eye is CAPPED, not just faded ------------- */
+
+	/*
+	 * A. on device, after the fade shipped: "even with the blackout, I can
+	 * see that my head clips through the level, the top skybox if I hit it,
+	 * and I can briefly still see my room."
+	 *
+	 * He is right and the fade cannot fix it. The fade is computed from an
+	 * engine-side reconstruction of the eye that is ONE FRAME BEHIND the
+	 * pose the frame is drawn with, so the frame on which he crosses the
+	 * surface is painted with the previous frame's strength -- which was
+	 * not yet 1. Hence a flash of the room on a fast rise. I called that
+	 * staleness immaterial when the fade landed; it is not.
+	 *
+	 * So the engine now publishes an upward HEADROOM and the consumer caps
+	 * the eye against it: the world slides down with the head rather than
+	 * the head leaving the world. The fade stays as the backstop for the
+	 * lateral case and for anything the cap cannot see.
+	 *
+	 * Probed from vieworg, NOT from the eye: if the eye is already inside
+	 * solid every open distance reads 0, and a cap derived from that would
+	 * snap the view to the floor.
+	 */
+	{
+		const qc_frame_t	*f;
+		float			room, headroom, disabled;
+		edict_t			*p = svs.clients[0].edict;
+
+		/* Close enough that the ceiling is actually in reach of a head
+		   rise. The engine only probes 96 units up, because no eye can
+		   rise further above vieworg than that, so a ceiling 178 units
+		   away is correctly reported as no cap at all -- which is what
+		   the first version of this test placed and then read as a
+		   failure. */
+		QC_ExecuteCommand ("vr_headclamp 1\n");
+		place (704.f, 704.f, GYM_CEIL_Z - 60.f);
+		QC_InputSetHeadOffset (0.f, 0.f, 0.f, 0u);
+		QC_InputSetHeightTrim (0.f);
+		step (3);
+
+		f = QC_RendererAcquireFrame ();
+		headroom = f ? f->eye_headroom : -1.f;
+		room = f ? (GYM_CEIL_Z - f->vieworg[2]) : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		printf ("      (vieworg to ceiling %.0f, headroom %.1f)\n",
+			room, headroom);
+
+		CHECK (headroom > 0.f,
+		       "the engine publishes an upward headroom (%.1f)", headroom);
+		/* It must stop the eye SHORT of the surface, never at it: the two
+		   eyes sit a few millimetres either side of the device anchor the
+		   cap is computed from, so a cap flush with the plane would let
+		   one eye through. */
+		CHECK (headroom < room,
+		       "and it stops short of the ceiling (%.1f under %.0f)",
+		       headroom, room);
+		CHECK (room - headroom < 12.f,
+		       "but not by much, so the room is still usable "
+		       "(%.1f of margin)", room - headroom);
+
+		/* Out in the open the cap must not bite at all, or standing up
+		   in a tall room would pin the view. A free sentinel, not 0:
+		   zero is a legitimate clamp when jammed against something. */
+		place (704.f, 704.f, 1000.f);
+		step (3);
+		f = QC_RendererAcquireFrame ();
+		headroom = f ? f->eye_headroom : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (headroom > 1000.f,
+		       "a tall room publishes no useful cap (%.1f)", headroom);
+
+		/* And it can be switched off, like the fade. */
+		QC_ExecuteCommand ("vr_headclamp 0\n");
+		place (704.f, 704.f, GYM_CEIL_Z - 60.f);
+		step (3);
+		f = QC_RendererAcquireFrame ();
+		disabled = f ? f->eye_headroom : -1.f;
+		if (f) QC_RendererReleaseFrame ();
+		CHECK (disabled > 1000.f,
+		       "vr_headclamp 0 publishes no cap at all (%.1f)", disabled);
+
+		QC_ExecuteCommand ("vr_headclamp 1\n");
+		step (2);
+	}
+
 	/* ---------------- the range: a sky lid, so up must NOT anchor ------- */
 
 	QC_ExecuteCommand ("map range\n");

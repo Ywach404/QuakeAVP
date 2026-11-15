@@ -135,6 +135,12 @@ cvar_t	vr_vignette_threshold = {"vr_vignette_threshold", "30", CVAR_ARCHIVE};
    doorway. Zero disables it, because a comfort aid that cannot be switched
    off is a bug of its own. */
 cvar_t	vr_clipfade = {"vr_clipfade", "12", CVAR_ARCHIVE};
+/* Cap the rendered eye so it cannot rise into a ceiling or a sky brush: the
+   world slides down with the head instead of the head leaving the world. The
+   fade above is a backstop and cannot replace this, because it is computed
+   from an eye reconstruction that lags the drawn pose by a frame, so a fast
+   rise flashes the room before the fade catches up. Zero disables. */
+cvar_t	vr_headclamp = {"vr_headclamp", "1", CVAR_ARCHIVE};
 
 /* gl_rmisc.c */
 cvar_t	r_lightmapwide = {"r_lightmapwide","0",CVAR_ROM};
@@ -212,6 +218,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&vr_vignette);
 	Cvar_RegisterVariable (&vr_vignette_threshold);
 	Cvar_RegisterVariable (&vr_clipfade);
+	Cvar_RegisterVariable (&vr_headclamp);
 
 	/* upstream Sky_Init (gl_sky.c) */
 	Cvar_RegisterVariable (&r_fastsky);

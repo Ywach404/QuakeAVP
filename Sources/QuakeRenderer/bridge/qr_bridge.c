@@ -49,6 +49,7 @@ extern cvar_t phase, phase_time, phase_color, phase_floor, phase_grid;
 extern cvar_t cl_bob;			/* view.c; held at zero while immersive, see QR_BobGate */
 extern cvar_t vr_vignette, vr_vignette_threshold;
 extern cvar_t vr_clipfade;
+extern cvar_t vr_headclamp;
 /* in_null.c: the RENDERED eye, reconstructed the way the consumer draws it. */
 extern int	QR_EyeOrigin (vec3_t out);
 
@@ -8330,6 +8331,7 @@ void QR_BeginFrame (void)
 	slot->frame.lean_limit = 12;
 	slot->frame.vignette = 0;
 	slot->frame.eye_fade = 0;
+	slot->frame.eye_headroom = QC_EYE_HEADROOM_FREE;
 	slot->frame.damage_flash = 0;
 	slot->frame.active_weapon = 0;
 	slot->frame.items = 0;
@@ -8645,6 +8647,52 @@ void QR_RenderView (void)
 			fade = CLAMP (0.f, fade, 1.f);
 		}
 		slot->frame.eye_fade = fade;
+	}
+
+	/* Upward headroom for the consumer's eye cap. The fade above warns;
+	   this is what actually prevents it, because the fade is computed from
+	   an eye that lags the drawn pose by a frame and a fast rise crosses
+	   the surface before the strength catches up.
+
+	   Probed from VIEWORG, not from the eye. Two reasons, both load
+	   bearing: once the eye is inside solid every open distance reads zero
+	   and a cap from that would snap the view to the player's feet; and
+	   vieworg is in the same packet as this number, so the consumer's cap
+	   is expressed against a value it already has rather than against the
+	   fast-moving head, which is precisely why the lag stops mattering.
+
+	   The margin is what keeps the two EYES inside as well. They sit a few
+	   millimetres either side of the device anchor the cap is computed
+	   from, so a cap flush with the plane would let one of them through. */
+	{
+		static const float	up[3] = { 0.f, 0.f, 1.f };
+		const float		margin = 4.f;
+		const float		reach = 96.f;	/* no head rises further */
+		float			headroom = QC_EYE_HEADROOM_FREE;
+
+		if (vr_headclamp.value && cl.worldmodel && cl.worldmodel->nodes)
+		{
+			vec3_t	base;
+			float	open;
+
+			VectorCopy (r_refdef.vieworg, base);
+			if (QR_EyePointBlocked (base))
+			{
+				/* vieworg itself is in solid, which means the
+				   player is somewhere no cap can help (a
+				   telefrag, a spawn inside geometry). Clamping
+				   to 0 here would pin the view to their feet
+				   for as long as it lasted, so decline. */
+				headroom = QC_EYE_HEADROOM_FREE;
+			}
+			else
+			{
+				open = QR_EyeOpenDistance (base, up, reach);
+				if (open < reach)
+					headroom = q_max (open - margin, 0.f);
+			}
+		}
+		slot->frame.eye_headroom = headroom;
 	}
 
 	/* output channel: the damage cshift percent (V_ParseDamage raises it,

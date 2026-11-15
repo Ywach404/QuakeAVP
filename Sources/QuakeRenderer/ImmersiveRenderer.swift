@@ -928,19 +928,43 @@ final class ImmersiveRenderer {
             }
             lastAnchorZ = anchorZ
 
+            // THE EYE CAP. The engine says how far the eye may rise above
+            // vieworg before it would enter solid or sky; lower the anchor by
+            // any excess, so the world slides down with the head instead of
+            // the head leaving the world.
+            //
+            // Placed exactly here, between the ease and the trim, and the
+            // window is narrow for two reasons. Earlier, inside the FloorMath
+            // anchor calls, the cap would be the ease's TARGET and arrive up
+            // to a second late, which is the same lag that makes the fade
+            // insufficient. Later, after the trim is published, the engine
+            // would still believe the un-capped eye and black the screen over
+            // a view the cap was already protecting.
+            //
+            // And the capped value deliberately does NOT go back into
+            // `lastAnchorZ` above: that is the ease's seed, so a ceiling bump
+            // landing on the same frame as a floor re-measure would otherwise
+            // seed the ease with the cap's magnitude and slide the world for a
+            // second afterwards.
+            let cappedZ = FloorMath.cappedAnchorZ(
+                anchorZ: anchorZ,
+                cameraYRoom: originFromDevice.columns.3.y,
+                vieworgZ: packet.vieworg.2, worldScale: s,
+                maxRise: packet.eye_headroom)
+
             // The engine is told how far the rendered eye sits above
             // vieworg: the anchor's offset plus the head's height above the
             // tracking origin. Every engine-side reconstruction of the eye
             // adds this to vieworg; the head offset's `up` fed above only
             // ever enters as hand-minus-head, so the head's height is not
             // counted anywhere else.
-            let heightTrim = FloorMath.effectiveTrim(anchorZ: anchorZ,
+            let heightTrim = FloorMath.effectiveTrim(anchorZ: cappedZ,
                                                      cameraYRoom: originFromDevice.columns.3.y,
                                                      vieworgZ: packet.vieworg.2, worldScale: s)
             QC_InputSetHeightTrim(heightTrim)
             let anchor = SIMD3(packet.vieworg.0 - absorbed.x - overLimit.x,
                                packet.vieworg.1 - absorbed.y - overLimit.y,
-                               anchorZ)
+                               cappedZ)
             let quakeView = RendererCore.quakeViewMatrix(
                 origin: anchor,
                 angles: SIMD3(0, packet.body_yaw, 0))

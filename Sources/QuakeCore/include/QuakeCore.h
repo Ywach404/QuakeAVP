@@ -280,6 +280,11 @@ typedef struct qc_hud_tile_s {
 	float		scale;		/* panel scale multiplier */
 } qc_hud_tile_t;
 
+/* eye_headroom's "no ceiling in reach" value. Large rather than zero,
+   because zero is a legitimate cap: it is what a head jammed against a
+   surface should get. */
+#define QC_EYE_HEADROOM_FREE	1.0e9f
+
 typedef struct qc_frame_s {
 	uint32_t	generation;	/* must match AcquireGeometry's result */
 	float		viewproj[16];	/* column-major, Metal depth range */
@@ -416,6 +421,26 @@ typedef struct qc_frame_s {
 	   smoothing. The consumer draws flat black at this alpha over
 	   everything, last. 0 draws nothing. */
 	float		eye_fade;
+
+	/* How far the rendered eye may rise above vieworg before it would
+	   enter solid or sky, Quake units, already reduced by a safety margin.
+	   The consumer caps its camera against this; QC_EYE_HEADROOM_FREE (or
+	   anything near it) means no ceiling is in reach and nothing should be
+	   clamped.
+
+	   This exists because eye_fade above CANNOT do the job alone. The fade
+	   is computed from an engine-side reconstruction of the eye that is one
+	   frame behind the pose the frame is drawn with, so the frame on which
+	   the head crosses a surface is painted with the previous frame's
+	   strength, and a fast rise still flashes the room. A cap does not care
+	   about that lag, because it is expressed against vieworg -- which the
+	   consumer also has, in the same packet -- rather than against the
+	   fast-moving head.
+
+	   Probed upward from VIEWORG and not from the eye: once the eye is
+	   inside solid every open distance reads zero, and a cap derived from
+	   that would snap the view down to the player's feet. */
+	float		eye_headroom;
 
 	/* Output channel for controller haptics and (when visionOS exposes
 	   them) adaptive triggers. damage_flash is the engine's damage cshift

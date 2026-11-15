@@ -327,5 +327,69 @@ struct FloorTest {
         // Nothing detected is an empty table, not a zero-direction one.
         check(FloorMath.wallDirections([], rotation: r, limit: 16).isEmpty,
               "walls: no planes publishes nothing")
+
+        // ---- the eye may not rise into a ceiling -------------------------
+        //
+        // The rendered eye is late-latched off the real head pose, so
+        // standing (or being hauled by a grappling hook) into a ceiling put
+        // the camera outside the world. The blackout that shipped first is
+        // one frame stale and a fast rise still flashed the room, so the eye
+        // is now CAPPED: the world slides down with the head instead.
+        //
+        // The assertion that matters is the last one. `effectiveTrim` is what
+        // the engine is told the eye sits above vieworg, and the engine
+        // reconstructs the eye as exactly vieworg + that. So checking the cap
+        // THROUGH effectiveTrim is checking the only thing the player can
+        // feel: that the eye lands at the promised height and that the
+        // engine's idea of it agrees.
+        do {
+            let s: Float = 0.0254        // metres per Quake unit
+            let vieworgZ: Float = 1000
+            let cameraY: Float = 1.6     // a standing head, metres
+            let uncapped = FloorMath.fallbackAnchorZ(vieworgZ: vieworgZ,
+                                                     worldScale: s, trimMetres: 0)
+
+            // Plenty of room: the cap must not touch anything.
+            var capped = FloorMath.cappedAnchorZ(
+                anchorZ: uncapped, cameraYRoom: cameraY, vieworgZ: vieworgZ,
+                worldScale: s, maxRise: 10_000)
+            check(near(capped, uncapped),
+                  "cap: generous headroom leaves the anchor alone")
+
+            // A low ceiling: 20 units of headroom above vieworg.
+            let rise: Float = 20
+            capped = FloorMath.cappedAnchorZ(
+                anchorZ: uncapped, cameraYRoom: cameraY, vieworgZ: vieworgZ,
+                worldScale: s, maxRise: rise)
+            check(capped < uncapped,
+                  "cap: a low ceiling lowers the anchor")
+
+            // It may only ever LOWER. Raising it would push the eye up into
+            // the very surface this exists to stop, and would also move the
+            // floor out from under the player.
+            let high = FloorMath.cappedAnchorZ(
+                anchorZ: uncapped, cameraYRoom: 0.1, vieworgZ: vieworgZ,
+                worldScale: s, maxRise: 10_000)
+            check(high <= uncapped + 1e-3,
+                  "cap: it never raises the anchor")
+
+            // THE PROPERTY: through effectiveTrim, the eye lands exactly at
+            // the headroom it was given, so the engine's reconstruction
+            // (vieworg + trim) agrees with what is drawn.
+            let trim = FloorMath.effectiveTrim(anchorZ: capped, cameraYRoom: cameraY,
+                                               vieworgZ: vieworgZ, worldScale: s)
+            check(near(trim, rise, 1e-2),
+                  "cap: the eye lands exactly at the headroom (\(trim) vs \(rise))")
+
+            // And uncapped, the trim is whatever the head's height says --
+            // proof the clamp is the only thing that changed it.
+            let freeTrim = FloorMath.effectiveTrim(
+                anchorZ: FloorMath.cappedAnchorZ(
+                    anchorZ: uncapped, cameraYRoom: cameraY, vieworgZ: vieworgZ,
+                    worldScale: s, maxRise: 10_000),
+                cameraYRoom: cameraY, vieworgZ: vieworgZ, worldScale: s)
+            check(freeTrim > rise,
+                  "cap: without a ceiling the eye is higher than the cap (\(freeTrim))")
+        }
     }
 }

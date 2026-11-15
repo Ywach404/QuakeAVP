@@ -128,6 +128,35 @@ enum FloorMath {
         vieworgZ + (fallbackEyeHeight + trimMetres) / worldScale
     }
 
+    /// The anchor lowered, if need be, so the rendered eye cannot rise more
+    /// than `maxRise` Quake units above vieworg.
+    ///
+    /// The eye's Quake height is `anchorZ + cameraYRoom / worldScale` -- the
+    /// view matrix leaves the Quake z axis unmixed, so that is an exact
+    /// identity rather than an approximation -- and `effectiveTrim` below is
+    /// the same quantity minus vieworg. So lowering the anchor by the excess
+    /// caps the eye AND the trim the engine is told about, in lockstep, with
+    /// nothing to keep in sync by hand.
+    ///
+    /// Why a cap at all, when a fade already exists: the fade is computed
+    /// engine-side from an eye reconstruction that lags the drawn pose by a
+    /// frame, so the frame on which the head crosses a ceiling is painted
+    /// with the previous frame's strength and the room flashes through. This
+    /// does not care about that lag, because `maxRise` is expressed against
+    /// vieworg, which arrives in the same packet.
+    ///
+    /// It can only ever LOWER the anchor. Raising it would push the eye up
+    /// into the surface this exists to stop, and take the floor with it.
+    ///
+    /// Caller's note: apply this AFTER the floor ease and BEFORE
+    /// `effectiveTrim`, and do not feed the result back into the ease's
+    /// seed -- a ceiling bump that coincided with a floor re-measure would
+    /// otherwise slide the whole world for a second afterwards.
+    static func cappedAnchorZ(anchorZ: Float, cameraYRoom: Float, vieworgZ: Float,
+                              worldScale: Float, maxRise: Float) -> Float {
+        min(anchorZ, vieworgZ + maxRise - cameraYRoom / worldScale)
+    }
+
     /// What QC_InputSetHeightTrim is fed: how far the rendered eye is above
     /// vieworg, in Quake units. Every engine-side reconstruction of the eye
     /// adds this to vieworg.
