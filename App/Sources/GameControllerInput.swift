@@ -39,6 +39,23 @@ final class GameControllerInput {
     private(set) var hasPhysicalController = false
     /// The spatial (Sense) controllers currently attached, for the tracker.
     private(set) var spatialControllers: [GCController] = []
+    /// The slice side each spatial controller was actually INSTALLED as.
+    ///
+    /// Detach used to re-derive handedness from `vendorName` alone while
+    /// install matched "(l)"/"left" across three name strings, so a PSVR2
+    /// Sense reporting itself as "... Sense Controller (L)" installed as
+    /// .senseLeft and detached as .senseRight: the left slice, which carries
+    /// the MOVEMENT stick and the walk trigger, was never removed and kept
+    /// merging forever. Because the aggregator maxes trigger values, a
+    /// controller set down resting on its own trigger then latched +speed --
+    /// a walk modifier in this port -- and bare-hands walking ran at
+    /// cl_forwardspeed 200 against a 320 cap until the app restarted.
+    ///
+    /// Re-deriving it cannot be made correct, either: install falls back to
+    /// connection order when the name is sideless, and that fallback reads
+    /// differently at detach time. The side has to be remembered, not
+    /// recomputed.
+    private var spatialSide: [ObjectIdentifier: Bool] = [:]
 
     /// Shared with HandInput so hands and hardware merge through one gate.
     let aggregator = PadAggregator()
@@ -95,6 +112,9 @@ final class GameControllerInput {
             let guessLeft = nameLeft ?? spatialControllers.isEmpty
             print("[input] -> \(guessLeft ? "LEFT" : "RIGHT") hand (fromName=\(nameLeft != nil))")
             spatialControllers.append(controller)
+            // The same expression SenseMapper.install resolves its slice
+            // from, kept so detach removes the slice that was added.
+            spatialSide[ObjectIdentifier(controller)] = nameLeft ?? guessLeft
             SenseMapper.install(on: controller, nameLeft: nameLeft,
                                 guessLeft: guessLeft, into: aggregator)
             SenseMapper.logElements(of: controller)
@@ -115,8 +135,22 @@ final class GameControllerInput {
         if isSpatial(controller) {
             spatialControllers.removeAll { $0 === controller }
             SenseMapper.forgetMenuLatch(controller)
-            aggregator.remove(SenseMapper.slice(forLeft:
-                (controller.vendorName ?? "").localizedCaseInsensitiveContains("left")))
+            let id = ObjectIdentifier(controller)
+            // The remembered side, never a fresh guess. The fallback match is
+            // only for a controller that somehow has no record, and it is the
+            // full install test rather than vendorName alone.
+            let wasLeft = spatialSide.removeValue(forKey: id)
+                ?? [controller.vendorName ?? "", controller.productCategory,
+                    String(describing: controller)].contains {
+                        $0.localizedCaseInsensitiveContains("(l)")
+                            || $0.localizedCaseInsensitiveContains("left")
+                    }
+            aggregator.remove(SenseMapper.slice(forLeft: wasLeft))
+            // Bullet time's raw bit has exactly one producer, this pair's left
+            // L3. A controller that leaves with the bit still set leaves it
+            // set forever, and the engine toggles on the RISING edge, so the
+            // next press after a reconnect is eaten. Release it here.
+            if wasLeft { QC_InputSetSlowmo(0) }
         } else {
             aggregator.remove(.classic)
         }
