@@ -85,7 +85,34 @@ extern double	host_frametime;
 
 static int failures;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL: " __VA_ARGS__); printf("\n"); } else { printf("ok:   " __VA_ARGS__); printf("\n"); } } while (0)
-static void on_log (void *c, const char *t) { (void)c; fputs (t, stdout); }
+
+/* The capability line: the [grapple] print that names the game directory and
+   what became of its T_Damage. Counted here because on_log is where every
+   Con_Printf in this driver lands, which makes the print's CADENCE testable
+   rather than only its wording. The wording is not what can regress; how
+   often it speaks is. */
+static int cap_lines;
+static void on_log (void *c, const char *t)
+{
+	const char *p;
+
+	(void)c;
+	/* COUNT THE CALLBACK, NOT THE LOG. Every line of this driver's output
+	   appears on stdout TWICE: sys_avp.c's QAVP_Emit mirrors it with a
+	   raw write(2) so a device run can be read over devicectl, and then
+	   hands it here, where the fputs below prints it again. So grepping a
+	   gym log for an announcement counts two per print and tells you
+	   nothing about cadence. This counter increments once per callback,
+	   which is once per Con_Printf, which is the number the assertions
+	   below actually mean.
+	   Scanned with strstr over the whole chunk rather than matched at its
+	   start, because a chunk carries whatever Con_Printf formatted and is
+	   not promised to begin at a line boundary. "T_Damage" is the marker
+	   because nothing else this driver prints says it. */
+	for (p = t; (p = strstr (p, "T_Damage")) != NULL; p++)
+		cap_lines++;
+	fputs (t, stdout);
+}
 static void on_error (void *c, const char *e) { (void)c; if (e) printf("FATAL: %s\n", e); }
 
 /*
@@ -643,6 +670,14 @@ int main (int argc, char **argv)
 	step (40);
 	CHECK (Grapple_TestState (tip) == GRAPPLE_ANCHORED,
 	       "and it anchors (state=%d)", Grapple_TestState (tip));
+
+	/* The capability print. Everything above this point drove the hook
+	   through the test seam, which never sets qr_grapple_engaged, so the
+	   grip three lines up is the FIRST engage of the run and the one the
+	   announcement hangs off. */
+	CHECK (cap_lines == 1,
+	       "the first engage announces this game's T_Damage (%d lines)",
+	       cap_lines);
 
 	/* The headline of the whole rewrite: the gun is untouched throughout. */
 	{
@@ -1601,6 +1636,15 @@ int main (int argc, char **argv)
 			       mob->v.health);
 		}
 	}
+
+	/* Once for the run, not once per engage. This driver throws the hook
+	   dozens of times across two maps, and `map range` reloads progs, so a
+	   latch that re-armed on a progs LOAD rather than on a progs CHANGE
+	   would read here as two lines, and one that never latched at all as
+	   dozens. Both are the same comment spamming the console mid-swing. */
+	CHECK (cap_lines == 1,
+	       "and says it once for the whole run, not once per engage (%d)",
+	       cap_lines);
 
 	printf (failures ? "\n%d FAILURES\n" : "\nall passed\n", failures);
 	return failures ? 1 : 0;

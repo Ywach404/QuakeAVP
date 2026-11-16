@@ -234,6 +234,23 @@ static qboolean		grapple_resolved;
    unlike W_FireGrapple it is expected everywhere rather than in one pack. */
 static func_t		grapple_damage;
 
+/* T_Damage's declared arity as the lookup found it, or -1 for absent. Kept
+   alongside grapple_damage because that one cannot tell its two failures
+   apart: it is 0 both for "this progs has no T_Damage" and for "it has one
+   whose arguments are not the four we would pass", and those are a game
+   without the feature and a mod to be suspicious of. The announcement below
+   exists to separate exactly those two, so collapsing them here would defeat
+   it before it was written. */
+static int		grapple_damage_parms = -1;
+
+/* Armed by a resolve that actually saw a progs, consumed by the next engage.
+   The two have nothing in common today: the resolver is the only code that
+   knows the progs changed, and the engage is the first moment a player could
+   care. Keyed on the RESOLVE and not on the load, which is what makes the
+   cadence right -- walking e1m1 to e1m2 reloads progs with the same CRC and
+   stays quiet, while a `game` switch speaks once. */
+static qboolean		grapple_announce;
+
 
 /* Set whenever a swing ends for any reason OTHER than the player letting go,
    and cleared only when the grip actually comes up. Without it a cancel
@@ -339,6 +356,7 @@ static void Grapple_ResolveProgs (void)
 	qr_grapple_locked = false;
 	Grapple_ReleaseFriction ();
 	grapple_damage = 0;
+	grapple_damage_parms = -1;
 	if (!progs)
 		return;
 
@@ -349,8 +367,66 @@ static void Grapple_ResolveProgs (void)
 	   whatever OFS_PARM4 happened to hold. An unexpected arity is therefore
 	   treated exactly as a missing function. */
 	grapple_damage = Grapple_FuncByName ("T_Damage");
+	if (grapple_damage)
+		grapple_damage_parms = pr_functions[grapple_damage].numparms;
 	if (grapple_damage && pr_functions[grapple_damage].numparms != 4)
 		grapple_damage = 0;
+
+	/* Armed here, below the progs guard rather than above it: a resolve
+	   with no progs loaded is every frame of the menu and has nothing to
+	   announce. Nothing is lost by arming late, because the pointer key
+	   flips from NULL when a map finally arrives and the resolve runs
+	   again. */
+	grapple_announce = true;
+}
+
+/* Which of the three states the lookup landed in. Split out and handed its
+   argument instead of reading the static, so the classification is one
+   expression a host test can drive through every branch without a progs --
+   which matters because only the resolved branch is reachable from any game
+   data this project has to test against. */
+typedef enum
+{
+	GRAPPLE_DAMAGE_OK = 0,
+	GRAPPLE_DAMAGE_ABSENT,
+	GRAPPLE_DAMAGE_ARITY
+} grapple_damage_state_t;
+
+static grapple_damage_state_t Grapple_DamageState (int parms)
+{
+	if (parms < 0)
+		return GRAPPLE_DAMAGE_ABSENT;
+	if (parms != 4)
+		return GRAPPLE_DAMAGE_ARITY;
+	return GRAPPLE_DAMAGE_OK;
+}
+
+/* Say once per progs what this game's hook can do, naming the game so a pass
+   over six of them reads back as six lines. Each line states the CONSEQUENCE
+   rather than the symbol's fate, because the question being answered in the
+   headset is never "did a lookup succeed", it is "is this hook doing no
+   damage because this game cannot, or because I have broken it". */
+static void Grapple_Announce (void)
+{
+	const char *game = COM_SkipPath (com_gamedir);
+
+	switch (Grapple_DamageState (grapple_damage_parms))
+	{
+	case GRAPPLE_DAMAGE_OK:
+		Con_Printf ("[grapple] %s: T_Damage resolved, the hook hurts "
+			    "what it catches\n", game);
+		break;
+	case GRAPPLE_DAMAGE_ABSENT:
+		Con_Printf ("[grapple] %s: no T_Damage in this progs, so the "
+			    "hook anchors and swings but does no damage\n",
+			    game);
+		break;
+	case GRAPPLE_DAMAGE_ARITY:
+		Con_Printf ("[grapple] %s: T_Damage takes %d arguments, not 4, "
+			    "so it is left alone and the hook does no "
+			    "damage\n", game, grapple_damage_parms);
+		break;
+	}
 }
 
 static edict_t *Grapple_Player (void)
@@ -925,6 +1001,11 @@ static void Grapple_SwingFrame (edict_t *player)
 
 static void Grapple_Engage (edict_t *player)
 {
+	if (grapple_announce)
+	{
+		grapple_announce = false;
+		Grapple_Announce ();
+	}
 	qr_grapple_engaged = true;
 	Grapple_Throw (player);
 }
@@ -1517,6 +1598,11 @@ void Grapple_Init (void)
 int Grapple_TestAnchorFromTrace (const trace_t *tr, int contents)
 {
 	return Grapple_AnchorFromTrace (tr, contents);
+}
+
+int Grapple_TestDamageState (int parms)
+{
+	return (int) Grapple_DamageState (parms);
 }
 
 int Grapple_TestState (float tip[3])
