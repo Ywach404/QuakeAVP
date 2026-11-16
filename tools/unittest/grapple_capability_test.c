@@ -14,10 +14,12 @@
  * feature and a mod that would be dangerous to call, and in the headset they
  * are told apart by exactly one thing: this classification.
  *
- * Only the resolved branch is reachable from any game data this project can
- * test against -- every pack here is id1-derived and every one of them
- * defines T_Damage with four parameters -- so the other two branches have no
- * coverage anywhere except here. That is the reason this file exists.
+ * Only the resolved branch is reachable from the game data this project tests
+ * against, which is id1, so the other two branches have no coverage anywhere
+ * except here. That is the reason this file exists. Every pack here is
+ * id1-derived and so every one of them is EXPECTED to define T_Damage with
+ * four parameters, but that is the prediction the capability print was added
+ * to check rather than something this file may assume.
  *
  * Pure: an int in, a state out. No progs, no world, no cvars.
  */
