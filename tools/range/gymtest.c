@@ -1166,10 +1166,31 @@ int main (int argc, char **argv)
 	 */
 	{
 		qc_gamepad_state_t	pad;
-		float			run, walk, parity;
+		float			run, walk, parity, air;
+		int			landed;
 
+		/* ON THE GROUND, deliberately, and asserted rather than assumed.
+		   The hands knob is the GROUND ceiling now: vr_movescale_air
+		   replaces it the moment both feet leave the floor, so every
+		   number below depends on cl.onground and a silently falling
+		   player would measure the other branch and read as a
+		   regression. place() parks MOVETYPE_NOCLIP, which never
+		   touches the floor, so this walks him down instead and waits
+		   for the server to say he landed. FL_GODMODE is set on the
+		   edict rather than through the `god` command, because that
+		   command TOGGLES and this block must not depend on, or leave
+		   behind, a state it did not set. The drop is long enough to
+		   hurt and a dead player stops moving. */
+		svs.clients[0].edict->v.flags = (float)
+			((int) svs.clients[0].edict->v.flags | FL_GODMODE);
 		place (704.f, 704.f, 1000.f);
-		step (2);
+		svs.clients[0].edict->v.movetype = MOVETYPE_WALK;
+		for (landed = 0; landed < 600 && !cl.onground; landed++)
+			step (1);
+		CHECK (cl.onground,
+		       "the walker reached the floor before the move-scale "
+		       "checks (%d frames, z=%.1f)", landed,
+		       svs.clients[0].edict->v.origin[2]);
 
 		memset (&pad, 0, sizeof (pad));
 		pad.ly = 1.f;			/* full forward, as a pinch gives */
@@ -1248,7 +1269,51 @@ int main (int argc, char **argv)
 		CHECK (cl.cmd.forwardmove > 0.f,
 		       "and never reverses the walk");
 
+		/* OFF THE GROUND, where the hands ceiling stops applying.
+		   The ceiling exists to buy control authority back from a
+		   binary pinch, and in the air there is no authority left to
+		   buy: a jump cannot be modulated and the only thing anyone
+		   does with the move input while falling is steer. So the air
+		   knob replaces the hands one rather than multiplying it. */
 		QC_ExecuteCommand ("vr_movescale_hands 0.75\n");
+		QC_ExecuteCommand ("vr_movescale_air 1\n");
+		place (704.f, 704.f, 1000.f);
+		svs.clients[0].edict->v.movetype = MOVETYPE_WALK;
+		step (4);
+		CHECK (!cl.onground,
+		       "a player dropped from height is airborne (z=%.1f)",
+		       svs.clients[0].edict->v.origin[2]);
+		air = cl.cmd.forwardmove;
+		CHECK (fabsf (air - run) < 1.f,
+		       "falling, bare hands ask for the full run (%.1f, "
+		       "want %.1f)", air, run);
+		CHECK (air > walk,
+		       "which is faster than the same hands on the floor "
+		       "(%.1f against %.1f)", air, walk);
+
+		/* Its own knob, and only its own. */
+		QC_ExecuteCommand ("vr_movescale_air 0.5\n");
+		step (4);
+		CHECK (fabsf (cl.cmd.forwardmove - 200.f) < 1.f,
+		       "the air knob means what it says (%.1f, want 200)",
+		       cl.cmd.forwardmove);
+		pad.connected = 1;
+		QC_InputSetGamepad (&pad);
+		step (4);
+		CHECK (fabsf (cl.cmd.forwardmove - run) < 1.f,
+		       "and never reaches a controller, which is proportional "
+		       "already (%.1f, want %.1f)", cl.cmd.forwardmove, run);
+		pad.connected = 0;
+		QC_InputSetGamepad (&pad);
+
+		/* Back the way the rest of the gym expects to find him: the
+		   knobs at their defaults, no god mode this block granted, and
+		   parked NOCLIP as place() leaves everyone else. */
+		QC_ExecuteCommand ("vr_movescale_air 1\n");
+		QC_ExecuteCommand ("vr_movescale_hands 0.75\n");
+		svs.clients[0].edict->v.flags = (float)
+			((int) svs.clients[0].edict->v.flags & ~FL_GODMODE);
+		svs.clients[0].edict->v.movetype = MOVETYPE_NOCLIP;
 		memset (&pad, 0, sizeof (pad));
 		QC_InputSetGamepad (&pad);
 		step (2);
