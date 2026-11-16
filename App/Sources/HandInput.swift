@@ -292,7 +292,35 @@ final class HandInput: @unchecked Sendable {
         // while they're dragging tiles, whatever that toggle is set to.
         let turnHold = editorActive
             || (VRSettings.shared.wristCommNoTurn && Self.wristCommInUse())
-        QC_InputSetTurnHold(turnHold ? 1 : 0)
+
+        // What the ENGINE is told is wider than the local gate above: it also
+        // stands the edge turn down for as long as the whip is disarmed.
+        //
+        // Both read one hand on one axis and neither knows about the other.
+        // The whip is a VELOCITY trigger worth a fixed cl_yawspeed x
+        // flickPulse, about 12.6 degrees, once. The edge turn is a POSITION
+        // trigger with no arming, no cooldown and no memory, worth up to
+        // vr_edgeturn_speed 90 deg/s for as long as the arm is past the
+        // deadzone. in_null.c already yields to a live `rx`, so the pulse
+        // itself was covered; what was not is everything AFTER it. A hand
+        // does not whip out and stop at centre on the way back, it swings
+        // through and parks, and anything past the deadzone on the far side
+        // of the gaze turns the body the OTHER way. Measured on the host
+        // (tools/range/turntest.c): a 30 degree overshoot parked 0.3 s hands
+        // back 36 percent of the turn you asked for, and one reaching 45
+        // degrees reverses it outright without pausing at all.
+        //
+        // Released on `flickArmed`, which is the whip's OWN re-arm test
+        // (below flickReset for flickDwell), and deliberately not on the arm
+        // re-entering the deadzone. Releasing at re-entry measured WORSE than
+        // no fix: it suppresses the inbound stroke, which helps the turn, and
+        // lets go just before the overshoot, which hurts it.
+        //
+        // Not folded into `turnHold` itself, which would deadlock: that one
+        // `break turning`s below, and the re-arm that clears this condition
+        // lives after the break, so the hold would latch on the first whip
+        // and never lift.
+        QC_InputSetTurnHold((turnHold || !flickArmed) ? 1 : 0)
 
         // HUD live editor grab input (Task 5): published every update,
         // ahead of every gate/suppression below -- the editor's own grab
