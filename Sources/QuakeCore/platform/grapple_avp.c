@@ -612,13 +612,23 @@ static void Grapple_AnchorOrigin (vec3_t out)
 }
 
 /*
-Throw the hook from the OFF hand, along the off hand's own ray.
+Throw the hook from the OFF hand, along the AIM.
 
-Origin and direction both prefer the off hand, and that is the whole point of
-the milestone: the gun hand keeps the gun, which stays drawn and keeps firing
-for the length of a swing, and the rope comes out of the other fist.
+Origin and direction come from different hands on purpose, and the v_angle
+paragraph below is the one that governs: the off hand is where the rope leaves
+from, the reticle is where it goes. What the off hand buys is the gun, which
+stays drawn and keeps firing for the length of a swing while the rope comes
+out of the other fist.
 
-The fallback chain is off hand, then gun hand, then the body at eye height.
+This header used to say direction came from the off hand too, which is what
+the plan ordered and what shipped for eight commits before device evidence
+overruled it. The sentence is called out rather than merely deleted because
+anyone arriving here to give the rope its own aim will arrive at this comment
+first, and a stale comment promising a ray that nothing reads is the exact
+defect this file was audited for once already.
+
+The fallback chain, for the ORIGIN only, is off hand, then gun hand, then the
+body at eye height.
 Each step is a real session: the off hand is missing whenever the bare-hands
 fist is not tracked or the off controller drops, the gun hand is missing when
 vr_handaim is off, and the body is what everything else in this engine degrades
