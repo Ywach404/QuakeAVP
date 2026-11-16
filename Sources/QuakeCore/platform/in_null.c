@@ -514,6 +514,35 @@ static cvar_t	vr_moverelative = {"vr_moverelative", "1", CVAR_ARCHIVE};
    (QuakeCore.h), and the field the edge turn already gates on. */
 static cvar_t	vr_movescale_hands = {"vr_movescale_hands", "0.75", CVAR_ARCHIVE};
 static cvar_t	vr_movescale_pad = {"vr_movescale_pad", "1", CVAR_ARCHIVE};
+/* The hands' ceiling does not apply in the air, so this is the third knob.
+
+   The reason vr_movescale_hands exists at all is control authority: a pinch is
+   binary, full deflection or nothing, so at a shared top speed the hands read
+   as having no control rather than as being fast. On the ground that argument
+   is right. Off it there is nothing left to have authority over -- you cannot
+   modulate a jump, you cannot stop, and the only thing a player is doing with
+   the stick while falling is steering. Capping that is the one place the
+   trade gives up something and buys nothing, and it is worst exactly where
+   steering matters most, which is on the end of a rope.
+
+   Defaults to 1, i.e. no ceiling, so off the ground the hands ask for what a
+   controller asks for. Separate from vr_movescale_pad rather than reusing it,
+   because a controller is proportional and already perfect at 1 and should
+   not inherit a number tuned for a different problem. */
+static cvar_t	vr_movescale_air = {"vr_movescale_air", "1", CVAR_ARCHIVE};
+
+/* Both feet off the floor, and not swimming.
+
+   cl.onground alone would be wrong: it is false while you swim, so a plain
+   reading would hand full speed to someone underwater, which is a separate
+   feel change nobody asked for. cl.inwater is the server's own view-in-liquid
+   flag, so the pair together mean genuinely airborne -- jumping, falling, or
+   hanging off the hook. Both ride the clientdata message (cl_parse.c), so
+   this is the server's opinion and not a guess made here. */
+static qboolean IN_Airborne (void)
+{
+	return !cl.onground && !cl.inwater;
+}
 static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
 /* M6: aim from the dominant hand/controller ray. 1 = the gun lives in your
    hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
@@ -2437,9 +2466,18 @@ void IN_Move (usercmd_t *cmd)
 	   deflection, so scaling the stick would make the knob mean something
 	   other than what it says. Clamped because these are archived and
 	   reachable from the console, and both ends of a typo are a real
-	   failure -- a crawl, or a negative that walks you backwards. */
+	   failure -- a crawl, or a negative that walks you backwards.
+
+	   Three-way, not two: a controller keeps its own knob, and bare hands
+	   get the airborne ceiling instead of the ground one the moment both
+	   feet leave the floor (see vr_movescale_air and IN_Airborne). Note
+	   this multiplies the `speed` chosen just above rather than replacing
+	   it, so holding the walk modifier in mid-air still walks. That is
+	   deliberate: this lifts the ceiling the INPUT imposes, never a limit
+	   the player asked for. */
 	speed *= CLAMP (0.1f, qr_pad.connected ? vr_movescale_pad.value
-						: vr_movescale_hands.value, 1.f);
+			      : (IN_Airborne () ? vr_movescale_air.value
+						: vr_movescale_hands.value), 1.f);
 
 	/* Look-relative locomotion: rotate the stick by the head's yaw so
 	   "forward" is where you look, not where the body last snapped to.
@@ -2629,6 +2667,7 @@ void IN_Init (void)
 	Cvar_RegisterVariable (&vr_moverelative);
 	Cvar_RegisterVariable (&vr_movescale_hands);
 	Cvar_RegisterVariable (&vr_movescale_pad);
+	Cvar_RegisterVariable (&vr_movescale_air);
 	Cvar_RegisterVariable (&vr_headaim);
 	Cvar_RegisterVariable (&vr_handaim);
 	Cvar_RegisterVariable (&vr_aimpitch);
