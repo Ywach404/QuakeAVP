@@ -519,17 +519,47 @@ static cvar_t	vr_headaim = {"vr_headaim", "1", CVAR_ARCHIVE};
    hand and shots go where you point; 0 = body-anchored aim (the M5 feel,
    head-pitch elevation) -- the A/B for judging feel, one cvar to flip. */
 static cvar_t	vr_handaim = {"vr_handaim", "1", CVAR_ARCHIVE};
+/* THE RIG CVARS BELOW ARE CVAR_NONE ON PURPOSE, AND IT IS NOT AN OVERSIGHT.
+   Everything from here to vr_weaponclipback describes the PLAYER -- where his
+   forearm points, where he wants the ring, how his gun sits in his hand -- and
+   the persistent store for all of it is the input profile on the Swift side,
+   which keeps one set per input (hands, controllers) and pushes the whole rig
+   through ProfileStore.applyRig once the engine reports running.
+
+   CVAR_ARCHIVE would give each of them a SECOND store, and not one store per
+   player but one per GAME: Host_WriteConfiguration writes config.cfg into
+   com_gamedir, so every installed pack keeps its own frozen copy, and a `game`
+   switch re-execs that pack's chain and overwrites the profile with whatever
+   was live the last time that directory happened to be archived. It cannot be
+   papered over by re-pushing after the switch, either: COM_Game_f appends
+   `exec quake.rc` while Cmd_Exec_f INSERTS the file at the front of the
+   buffer, so a push queued beside the `game` command runs BEFORE the config
+   and loses. Queued first means run last here (the same ordering that makes
+   this file's bind block outrank a player's rebinds).
+
+   It is not hypothetical. Six packs on one headset held eleven of these at two
+   different values: id1 and rogue carried the CONTROLLER profile's numbers and
+   the other four the hands profile's, so playing bare hands in those two games
+   aimed the gun 26 degrees high, swung it 29 degrees across, and tilted the
+   weapon ring onto a plane the Swift-side selection math no longer agreed
+   with. Nobody saw it for a year because the file is only re-read on a `game`
+   switch, and a normal session never switches.
+
+   What this costs: a value typed at the console is now session-only. That is
+   the right trade, because the console is the TUNING path and the Weapon,
+   Laser and Comfort tabs are the one that persists -- and because a knob that
+   survived a restart but not a game switch was never really persistent. */
 /* M6: THE pitch trim for the hand aim, degrees, positive = aim LOWER. Corrects
    a systematic high/low bias from how the forearm rests when pointing; applies
    to the shot and the gun model together. Tune live against the laser.
    The default carries the 8 degrees that used to be a second, hidden constant
    in HandInput.feedAim -- one visible number rather than two stacked knobs. */
-static cvar_t	vr_aimpitch = {"vr_aimpitch", "8", CVAR_ARCHIVE};
+static cvar_t	vr_aimpitch = {"vr_aimpitch", "8", CVAR_NONE};
 /* The lateral half of the same trim, degrees, positive = aim further RIGHT.
    Pitch alone could correct "shoots high" but not "shoots left", which a
    forearm-only aim needs: the elbow->wrist line points slightly across the
    body. Default 0 -- the bias is per-person, unlike the vertical one. */
-static cvar_t	vr_aimyaw = {"vr_aimyaw", "0", CVAR_ARCHIVE};
+static cvar_t	vr_aimyaw = {"vr_aimyaw", "0", CVAR_NONE};
 /* M6: a laser line from the muzzle down the aim, an aiming aid. Read by
    qr_bridge; non-static so it externs cleanly like the other vr_ cvars. */
 /* Weapon-wheel ring plane, degrees off the body basis, and a scale on its
@@ -538,10 +568,10 @@ static cvar_t	vr_aimyaw = {"vr_aimyaw", "0", CVAR_ARCHIVE};
    these three numbers are a shared contract -- change the meaning here and the
    highlight points at a different weapon than the one under your hand. The
    radius scale is safe to change alone: selection is angle-only. */
-cvar_t		vr_wheelpitch  = {"vr_wheelpitch",  "0", CVAR_ARCHIVE};
-cvar_t		vr_wheelyaw    = {"vr_wheelyaw",    "0", CVAR_ARCHIVE};
-cvar_t		vr_wheelroll   = {"vr_wheelroll",   "0", CVAR_ARCHIVE};
-cvar_t		vr_wheelradius = {"vr_wheelradius", "1", CVAR_ARCHIVE};
+cvar_t		vr_wheelpitch  = {"vr_wheelpitch",  "0", CVAR_NONE};
+cvar_t		vr_wheelyaw    = {"vr_wheelyaw",    "0", CVAR_NONE};
+cvar_t		vr_wheelroll   = {"vr_wheelroll",   "0", CVAR_NONE};
+cvar_t		vr_wheelradius = {"vr_wheelradius", "1", CVAR_NONE};
 /* Print the weapon table whenever the owned set changes. Off by default: it is
    a measuring tool, not a diagnostic. It exists because the window pauses the
    simulation while it is open, so nobody can grant weapons and read the result
@@ -565,27 +595,27 @@ cvar_t		vr_wheelclipfront = {"vr_wheelclipfront", "1", CVAR_ARCHIVE};
    projectile quad is gone and the handle is still there, then bake the number
    here. */
 cvar_t		vr_wheelclippack = {"vr_wheelclippack", "0.88", CVAR_ARCHIVE};
-cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_ARCHIVE};
-cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_ARCHIVE};
-cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_ARCHIVE};
+cvar_t		vr_wheelfwd  = {"vr_wheelfwd",  "0", CVAR_NONE};
+cvar_t		vr_wheelup   = {"vr_wheelup",   "0", CVAR_NONE};
+cvar_t		vr_wheelside = {"vr_wheelside", "0", CVAR_NONE};
 /* Rear keep-fraction for a WHEEL model that fell back to the viewmodel (1 =
    whole model). Those bake a loaded round near the GRIP -- same place the hand
    weapon's vr_weaponclipback (0.79) trims -- so the wheel retracts the rear the
    same way. Clean pickup models, the axe and the lightning gun are never
    trimmed (see QR_EmitWheel). */
-cvar_t		vr_wheelclip = {"vr_wheelclip", "0.79", CVAR_ARCHIVE};
-cvar_t		vr_laser = {"vr_laser", "0", CVAR_ARCHIVE};
-cvar_t		vr_reticle = {"vr_reticle", "0", CVAR_ARCHIVE};
+cvar_t		vr_wheelclip = {"vr_wheelclip", "0.79", CVAR_NONE};
+cvar_t		vr_laser = {"vr_laser", "0", CVAR_NONE};
+cvar_t		vr_reticle = {"vr_reticle", "0", CVAR_NONE};
 /* Reticle shape (0 cross, 1 circle+dot, 2 dot, 3 circle, 4 cross+dot) and the
    colour indices into the shared palette for the reticle and the laser (see
    QR_VrColor in qr_bridge.c). Laser defaults to red, reticle to amber. */
-cvar_t		vr_reticlestyle = {"vr_reticlestyle", "0", CVAR_ARCHIVE};
-cvar_t		vr_reticlecolor = {"vr_reticlecolor", "3", CVAR_ARCHIVE};
+cvar_t		vr_reticlestyle = {"vr_reticlestyle", "0", CVAR_NONE};
+cvar_t		vr_reticlecolor = {"vr_reticlecolor", "3", CVAR_NONE};
 /* HL2-style curved gauges flanking the reticle: health left, ammo right.
    Independent of vr_reticle/vr_reticlestyle -- on with any reticle shape, or
    standalone with no shape at all. */
-cvar_t		vr_reticle_arcs = {"vr_reticle_arcs", "0", CVAR_ARCHIVE};
-cvar_t		vr_lasercolor   = {"vr_lasercolor",   "0", CVAR_ARCHIVE};
+cvar_t		vr_reticle_arcs = {"vr_reticle_arcs", "0", CVAR_NONE};
+cvar_t		vr_lasercolor   = {"vr_lasercolor",   "0", CVAR_NONE};
 /* Point-and-blink teleport locomotion: aim with the gun reticle, ring-pinch to
    blink. vr_teleportcolor tints the GUN RETICLE cyan when the spot is a valid
    landing (one reticle, no second ring); turn it off to keep the reticle's
@@ -598,22 +628,22 @@ cvar_t		vr_telefrag      = {"vr_telefrag",      "1", CVAR_ARCHIVE};	/* gib what 
 /* M6: where along the hand weapon the wrist grips, 0 (rear/stock) .. 1
    (muzzle). Low values push the barrel forward off the hand -- megaman
    arm-cannon. Read by qr_bridge; tune live on device. */
-cvar_t		vr_weapongrip = {"vr_weapongrip", "0.15", CVAR_ARCHIVE};
+cvar_t		vr_weapongrip = {"vr_weapongrip", "0.15", CVAR_NONE};
 /* M6: live positional nudge of the hand weapon, Quake units, along the AIM
    axes -- back = toward the player, up = raise, side = to the player's right.
    Default 0; tune in the headset so placement never needs a recompile. */
-cvar_t		vr_weaponback = {"vr_weaponback", "0", CVAR_ARCHIVE};
-cvar_t		vr_weaponup   = {"vr_weaponup",   "0", CVAR_ARCHIVE};
-cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_ARCHIVE};
+cvar_t		vr_weaponback = {"vr_weaponback", "0", CVAR_NONE};
+cvar_t		vr_weaponup   = {"vr_weaponup",   "0", CVAR_NONE};
+cvar_t		vr_weaponside = {"vr_weaponside", "0", CVAR_NONE};
 /* M6: how much of the hand weapon to KEEP, from each end (1 = whole model,
    lower retracts baked-in geometry -- a nail out the barrel, or a round behind
    the receiver). vr_weaponclip trims the BARREL end, vr_weaponclipback the
    ARM end. Manual, because projectile-vs-gun can't be told from geometry. */
-cvar_t		vr_weaponclip     = {"vr_weaponclip",     "1", CVAR_ARCHIVE};
+cvar_t		vr_weaponclip     = {"vr_weaponclip",     "1", CVAR_NONE};
 /* 0.79 default: the view models bake a round/nail into the rear ~21% of the
    model (near the hand); clipping it there clears it on every weapon (found
    on device). Barrel end is left whole. */
-cvar_t		vr_weaponclipback = {"vr_weaponclipback", "0.79", CVAR_ARCHIVE};
+cvar_t		vr_weaponclipback = {"vr_weaponclipback", "0.79", CVAR_NONE};
 /* Debug: 1 draws the hand weapon SOLID GREEN, to identify it on screen. */
 cvar_t		vr_weapontint = {"vr_weapontint", "0", 0};
 /* Debug: 1 draws enemy AI overlay -- each live monster's traveled trail
@@ -626,15 +656,15 @@ cvar_t		vr_projhand = {"vr_projhand", "1", 0};
 /* M6: where the aiming laser STARTS, Quake units along the aim axes from the
    wrist -- forward reaches the muzzle so the beam emits from the barrel tip
    instead of behind the gun, up/side fine-tune to the barrel line. */
-cvar_t		vr_laserforward = {"vr_laserforward", "0", CVAR_ARCHIVE};
-cvar_t		vr_laserup      = {"vr_laserup",      "0", CVAR_ARCHIVE};
-cvar_t		vr_laserside    = {"vr_laserside",    "0", CVAR_ARCHIVE};
+cvar_t		vr_laserforward = {"vr_laserforward", "0", CVAR_NONE};
+cvar_t		vr_laserup      = {"vr_laserup",      "0", CVAR_NONE};
+cvar_t		vr_laserside    = {"vr_laserside",    "0", CVAR_NONE};
 /* M6: laser beam TILT, degrees, off the shot direction so the beam lines up
    with the barrel visually. pitch positive = tilt down, yaw positive = left.
    NB this makes the beam diverge slightly from the true bullet path -- a
    visual-alignment nudge, keep it small. */
-cvar_t		vr_laserpitch   = {"vr_laserpitch",   "0", CVAR_ARCHIVE};
-cvar_t		vr_laseryaw     = {"vr_laseryaw",     "0", CVAR_ARCHIVE};
+cvar_t		vr_laserpitch   = {"vr_laserpitch",   "0", CVAR_NONE};
+cvar_t		vr_laseryaw     = {"vr_laseryaw",     "0", CVAR_NONE};
 static cvar_t	vr_slowmo = {"vr_slowmo", "0.3", CVAR_ARCHIVE};	/* L3 bullet-time scale */
 cvar_t		vr_fullmenu = {"vr_fullmenu", "0", CVAR_ARCHIVE};	/* fixed panel vs wrist ring */
 cvar_t	vr_lean_limit = {"vr_lean_limit", "12", CVAR_ARCHIVE};	/* read by qr_bridge.c */
