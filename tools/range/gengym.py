@@ -19,11 +19,15 @@ Four decisions here are gameplay rather than taste:
     ceiling is a hookable surface, which is what you actually want overhead:
     you can swing from it.
 
-  - SPACING IS SET BY THE HOOK'S REACH, not by how it looks on a plan.
-    vr_grapple_range ships at 1600 units, so the gap from any column to its
-    neighbour is kept under that: at the shipped default every neighbour is
-    reachable, and turning the range up only adds options. Nothing sits
-    closer than vr_grapple_ropemin (64) either.
+  - SPACING IS A SWING LENGTH, not how it looks on a plan. The 1408 pitch
+    was picked when vr_grapple_range was still rogue's 1600, to keep every
+    column inside its neighbour's reach. That reasoning is gone: the range
+    ships at 24000 now and bounds nothing here, because it only sets the
+    hook's self-destruct timer and the longest sight line a Quake map can
+    hold is about 11600 units, so every column is reachable from every
+    other one whatever the pitch. What keeps 1408 is that it reads as one
+    swing rather than one step, and that FEW AND BIG below wants the face
+    count down. Nothing sits closer than vr_grapple_ropemin (64).
 
   - FEW AND BIG rather than many and thin. The immersive renderer has
     neither a frustum nor a PVS while the immersive space is open (it draws
@@ -50,7 +54,7 @@ resolves to BSD vis(1), which is a text utility and would silently do
 nothing -- so use absolute paths):
 
   python3 tools/range/gengym.py build/range
-  ~/.local/ericw-tools/bin/qbsp  build/range/gym.map build/range/gym.bsp
+  ~/.local/ericw-tools/bin/qbsp  -subdivide 480 build/range/gym.map build/range/gym.bsp
   ~/.local/ericw-tools/bin/light build/range/gym.bsp
 
 vis is optional and skipped: the immersive path ignores the PVS entirely.
@@ -272,9 +276,15 @@ def build_map():
     start = (-HALF + 384, -HALF + 384, 40)
     ents.append(entity("info_player_start", origin=start, angle=45))
 
-    # Weapons, because the grapple has to be reached through the ring and the
-    # ring needs something to switch away from, and because testing whether
-    # you can shoot mid-swing needs something to shoot with.
+    # Weapons, because testing whether you can shoot mid-swing needs
+    # something to shoot with, and because the ring needs more than one
+    # entry to be worth opening. NOT because the grapple is reached through
+    # the ring: it is not on the ring in any game and never was. It carries
+    # a wheel identity so it can be drawn and tuned while held, but no
+    # ownership bit, because rogue publishes items2 shifted into bit 23 and
+    # that aliases the grapple onto green armour -- a grapple on the ring
+    # would grow a phantom weapon every time you picked up armour. The
+    # whole argument is at qr_weapons.c:416.
     ents.append(entity("weapon_rocketlauncher",
                        origin=(-HALF + 640, -HALF + 384, 24)))
     ents.append(entity("weapon_grenadelauncher",

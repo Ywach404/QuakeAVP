@@ -1053,3 +1053,58 @@ least one visible unit by construction.
 Deriving the step from the format rather than passing it per call site is the
 part that will still be true in a year. The two numbers cannot drift apart,
 because there is only one of them.
+
+---
+
+## 2026-11-15 - The grappling hook is platform C, not a driver for rogue's QuakeC
+
+**Choice.** The hook lives in `Sources/QuakeCore/platform/grapple_avp.c` as
+engine-side C. It owns the throw, the flight, the anchor and the pendulum, it
+is not networked, and it asks the loaded progs for exactly one symbol,
+`T_Damage`, which is optional. The first version was something else entirely:
+a driver for rogue's compiled QuakeC, which reached `W_FireGrapple` by writing
+`.weapon = 1<<23` and raising a synthetic held `+attack`. That is gone. What
+carried over is the part that was always ours, the pendulum and every number
+in it, which is the 1997 swinging-hook model rather than rogue's rails.
+
+**Why.** Rogue ships a complete grappling hook that cannot be reached. Every
+path that hands you the weapon is gated on `deathmatch && teamplay >= 4`, and
+this engine never writes the `teamplay` progs global, so that condition cannot
+become true by any cvar a player could set. Sweeping impulses 1 through 50
+with every item granted reaches none of it. So "drive the mod that is already
+there" never meant calling a function; it meant forging the player's weapon
+state until rogue's own code consented to run.
+
+Three things were wrong with that, and all three were the same thing. The hook
+could not move to the off hand, because while it was out the player's `.weapon`
+WAS the grapple and there was no gun left to hold, which on this platform is
+the entire feature: a hand that throws a rope while the other hand keeps
+firing. It could not exist in `id1`, `hipnotic`, `dopa`, `mg1` or `mg3`,
+because none of them ships `W_FireGrapple` or the hook's fields, so five of the
+six games this project supports would have had no hook at all. And `1<<23` is
+`HIT_LASER_CANNON` under hipnotic and mg3, so the write was a landmine lying
+under two games, waiting for the day something loosened its capability gate.
+Borrowing a mod's implementation meant inheriting the mod's assumptions about
+which game it was running in, and this engine runs six.
+
+The cost that was expected and did not arrive is an engine patch. There is no
+seventh `#ifdef QAVP_PLATFORM` hunk: the hook does not go through `setorigin`
+and its rope is not a `TE_BEAM`, so the two existing hunks that carry a shot
+from the hand are untouched and no longer involved here.
+
+The one progs dependency left is deliberately the weakest kind. A game whose
+progs has no `T_Damage` gets a hook that flies, anchors and swings and simply
+does not hurt what it catches; nothing about the lookup can gate whether the
+hook works. That is affordable where rogue's six symbols were not, because
+`T_Damage` is defined in id1's own `combat.qc` and every pack here is
+id1-derived, so it is expected everywhere rather than in one game. Expected is
+not verified, though, and the standing rule after the hook-spawns-at-the-chest
+miss is that a claim an existing mechanism already covers a new case is a
+prediction until the new case has run through it. So the first engage after a
+progs change now prints the game's name and which of three states the lookup
+landed in: resolved, absent, or present with an arity we decline to call. The
+third state exists because a single `func_t` of 0 cannot tell a game that never
+had the function apart from a mod whose version takes arguments we would read
+out of whatever happened to be on the stack, and in the headset the difference
+between those two is the difference between a feature this game lacks and a
+bug worth chasing.

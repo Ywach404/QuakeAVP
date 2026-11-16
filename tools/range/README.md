@@ -84,8 +84,22 @@ python3 tools/range/genrange.py <path-to>/id1 build/range
 # 2. compile + light + vis  (tyrutils-ericw; the pre-2018 C tags build
 #    with a plain `make`, the modern CMake tree needs the embree backend).
 #    qbsp finds range.wad beside the .map; pass an explicit output path so
-#    the sidecar files land there too
-qbsp  build/range/range.map build/range/range.bsp
+#    the sidecar files land there too.
+#
+#    -subdivide 480 is not cosmetic. The immersive renderer has neither a
+#    frustum nor a PVS while the immersive space is open, so it draws every
+#    front-facing surface in the level every frame and face count is the
+#    bill. Measured on the gym, this generator's other map: 6231 faces at
+#    qbsp's default 240, and 1943 for identical geometry at 480 (gengym.py's
+#    docstring keeps the numbers). At swing speed the larger faces cannot be
+#    told apart, so they are free.
+#
+#    It does nothing for LIGHTDATA, which is the lump with no headroom in
+#    this map. That scales with surface area, so no amount of subdividing
+#    moves it and only less geometry can; genrange.py's enclosure note has
+#    the measurement. The range's own 3804-face figure predates the flag, so
+#    it should come down, and nobody has re-measured it.
+qbsp  -subdivide 480 build/range/range.map build/range/range.bsp
 light build/range/range.bsp
 vis   build/range/range.bsp
 
@@ -138,10 +152,28 @@ O=${TMPDIR:-/tmp}/quakecore-hostbuild
 cc -std=gnu99 -DQAVP_PLATFORM -DQAVP_HOSTCHECK -DUSE_CODEC_WAVE=1 -DUSE_CODEC_VORBIS=1 \
    -ISources/QuakeCore/engine -ISources/QuakeCore/platform \
    -ISources/QuakeCore/include -ISources/QuakeRenderer/bridge \
-   -o build/rangetest tools/range/rangetest.c $(ls $O/*.o | grep -v hostmain.o) -lm
+   -o build/rangetest tools/range/rangetest.c \
+   $(ls $O/*.o | grep -v -e hostmain.o -e '/unit_') -lm
 build/rangetest <basedir>                     # <basedir>/id1 holds pak0 + pak2
 ```
 
 The basedir is the PARENT of `id1/`; symlinking your `pak0.pak` (and
 `pak1.pak`) into a scratch `base/id1/` next to the freshly packed `pak2.pak`
 is enough.
+
+**Both patterns in that `grep -v` are load-bearing.** `tools/check-unit.sh`
+builds into the same `$O` directory and names its objects `unit_*.o`, and one
+of them, `unit_support.o`, defines the four `QC_Audio*` stand-ins that
+`rangetest.c` and `gymtest.c` each define for themselves. Glob the directory
+after running the unit suite and the link fails on duplicate symbols, with
+nothing to suggest that a different test run is what put them there.
+
+`tools/range/gymtest.c` is the hook's driver and links exactly the same way,
+substituting its own name. It boots the engine on the pak, loads `gym` and
+then `range`, and asserts the grappling hook end to end: the throw, the
+anchor, sky refusal, the swing's velocity budget, that an anchor entity dying
+falls back to a world anchor, that the player's weapon is untouched for a
+whole engagement, that hooking a monster hurts it once rather than every
+frame, and that the capability line naming the game's `T_Damage` is printed
+once per progs and not once per throw. It takes the same basedir, and it
+wants `pak2.pak` for the range half.

@@ -134,8 +134,10 @@ START_W = 8                   # the start/finish line is twice a lane line
 # 8 -- enough to walk, not a field. The outermost brush face is at
 # XW + 32 = 2336, well inside the +-4096 BSP29 limit.
 # Grown for the swing towers, which need air far more than floor: ZC was
-# 1024, which is a room, and a hook that reaches 1600 units turns a 1024
-# ceiling into a winch with nowhere to go.
+# 1024, which is a room, and a 1024 ceiling turns any hook into a winch with
+# nowhere to go. Reach is not what asks for the height -- vr_grapple_range
+# ships at 24000 and only times the hook out -- the ARC is: a swing needs a
+# rope with room to fall through.
 #
 # The footprint is trimmed to 3136 rather than the 3328 it wants, and the
 # reason is LIGHTDATA, not space: at 3328 the lit bsp came to 1,052,788 bytes
@@ -176,10 +178,13 @@ START_X = -HALF_STRAIGHT
 # around them, so one `map range` is still the one map that exercises
 # everything, and now the hook as well.
 #
-# Spacing is set by the WEAPON, not by the plan. vr_grapple_range ships at
-# 1600 units, so the centre-to-centre pitch sits under it and every
-# neighbour is reachable at the shipped default; turning the range up only
-# adds options. Nothing is closer than vr_grapple_ropemin (64).
+# Spacing is a swing length, not a plan. The 1408 pitch was picked when
+# vr_grapple_range was still rogue's 1600, so that every tower sat inside its
+# neighbour's reach. The range ships at 24000 now and bounds nothing here: it
+# only sets the hook's self-destruct timer, and no Quake map can hold a sight
+# line longer than about 11600 units, so every tower is reachable from every
+# other one whatever the pitch. 1408 stays because it reads as one swing
+# rather than one step. Nothing is closer than vr_grapple_ropemin (64).
 #
 # Few and big, for two reasons that happen to agree. The immersive renderer
 # has neither a frustum nor a PVS while the immersive space is open (it draws
