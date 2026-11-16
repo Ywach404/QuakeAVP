@@ -92,6 +92,12 @@ final class HandInput: @unchecked Sendable {
     private var flickPeakPos: Float = 1.0          // decaying peak |speed|, body-right
     private var flickPeakNeg: Float = 1.0          // decaying peak |speed|, body-left
     private var flickPeakTime = 0.0
+    /// The rope grip, held across updates that did not see the off hand.
+    /// Deliberately NOT a HandState field, and here beside the flick
+    /// bookkeeping for the same reason that is here: HandState is what a
+    /// tracking loss wipes, and surviving that wipe is this value's whole job.
+    private var gripLatch = GripLatch()
+
     private var flickArmed = true
 
     private var flickCooldownUntil = 0.0
@@ -372,6 +378,11 @@ final class HandInput: @unchecked Sendable {
         let move = rightHanded ? left : right
         let aim = rightHanded ? right : left
 
+        // The rope's grip, from observations only. Folded in HERE, above every
+        // gate below, so that one update's worth of blindness cannot change it
+        // by falling through a branch.
+        let gripping = gripLatch.update(move.gripUpdate)
+
         // M6: feed the dominant hand's aim ray to the engine every update,
         // even while the wheel is open, so the gun keeps tracking the hand.
         feedAim(aim)
@@ -434,7 +445,7 @@ final class HandInput: @unchecked Sendable {
             // closes. Drop the bit here and closing the ring would drop the
             // rope. A Sense player's off-hand squeeze keeps publishing
             // through the ring for exactly the same reason.
-            if move.fistClosed { slice.buttons |= UInt32(QC_PAD_RSHOULDER) }
+            if gripping { slice.buttons |= UInt32(QC_PAD_RSHOULDER) }
             aggregator.update(.hands, slice)   // zeroed but for the rope
             turnGaugeVerts = []                // no turning while choosing a weapon
             return
@@ -468,7 +479,7 @@ final class HandInput: @unchecked Sendable {
         // Losing movement for the duration is deliberate and is not a missing
         // remap: during a swing the rope IS the movement. A reader hunting for
         // where the walk bindings went should stop here.
-        let fist = move.fistClosed
+        let fist = gripping
         if fist { slice.buttons |= UInt32(QC_PAD_RSHOULDER) }
 
         // Movement, VRChat-style holds on the move hand (not drags -- a
@@ -678,6 +689,7 @@ final class HandInput: @unchecked Sendable {
                 + " thumb=\(Int(aim.thumbBarrelDeg))° ham=\(aim.thumbHammerDown ? 1 : 0)"
                 + " aim=\(aim.aimDir != nil ? 1 : 0) shot=\(slice.rt == 1 ? 1 : 0)"
                 + " | fist=\(move.fistClosed ? 1 : 0)"
+                + " grip=\(gripping ? 1 : 0)"
                 + " open=\(String(format: "%.2f", move.fistStraightness))"
                 + " | turn=\(tstyle) snap=\(String(format: "%.2f", slice.rx))"
                 + " spd=\(String(format: "%.2f", aim.wristVel.map { (basis * $0).x } ?? 0))")
@@ -1048,13 +1060,20 @@ final class HandInput: @unchecked Sendable {
         // gestures measure different things and do not cross their thresholds
         // together: the fist releases on finger straightness, while the thumb
         // is still inside the ring pinch's release radius. See FistMath.settle.
-        if off.fistClosed {
+        // The LATCHED grip (emit() folded it in just above), not the raw
+        // reading. Two reasons, and the second is the sharper one: a rope
+        // still held has to keep the blink shut for as long as it is held,
+        // and the "fist opened" edge that arms the lockout must be a hand
+        // actually opening rather than a hand going out of view, or every
+        // turn mid swing would arm it.
+        let gripping = gripLatch.gripping
+        if gripping {
             tpFistOpenedAt = nil
         } else if tpFistWas {
             tpFistOpenedAt = CACurrentMediaTime()
         }
-        tpFistWas = off.fistClosed
-        if off.fistClosed || FistMath.blinkLocked(openedAt: tpFistOpenedAt,
+        tpFistWas = gripping
+        if gripping || FistMath.blinkLocked(openedAt: tpFistOpenedAt,
                                                   now: CACurrentMediaTime()) {
             if tpRingWas { QC_InputSetTeleport(0, 0, 0, 0, 0, 0, 0) }
             tpRingWas = false
@@ -1244,7 +1263,7 @@ final class HandInput: @unchecked Sendable {
         // and the rope lets go on the frame it closes. So with bare hands the
         // ring cannot be opened mid-swing at all, which is the trade -- one
         // wrist cannot grip and present its palm independently.
-        let gripping = offHand.fistClosed
+        let gripping = gripLatch.gripping
         WheelState.shared.setHold(offHand.palmUp && !editing && !gripping,
                                   source: .hands)
         guard offHand.palmUp, !editing, !gripping else { return }
@@ -1342,6 +1361,10 @@ private struct HandState {
     var pinkyPinched = false
     var fistClosed = false             // all four fingers folded: the rope grip
     var fistStraightness: Float = 1    // log: the straightest of the four (1 = open)
+    /// What this update found out about the rope grip. `.lost` by default,
+    /// which is what a freshly reset HandState means: the hand went away, so
+    /// there is no news about it. See GripLatch.
+    var gripUpdate: GripUpdate = .lost
     var indexDrag: SIMD3<Float>?       // metres from pinch start, room frame
     var middleDrag: SIMD3<Float>?
     var stickyUntil: [Pulse: Double] = [:]
@@ -1454,6 +1477,12 @@ private struct HandState {
     /// Called when a frame arrives without usable tracking: hold the last pose
     /// until the loss has lasted `trackGrace`, then clear so nothing freezes.
     private mutating func trackingLost() {
+        // Before the grace: the POSE is worth holding through a blip, a
+        // measurement is not. Holding the whole struct verbatim would keep
+        // handing GripLatch the last `.measured` reading over and over, which
+        // is the one thing it must never be told by an update that saw
+        // nothing.
+        gripUpdate = .lost
         let t = CACurrentMediaTime()
         if let s = lostSince {
             if t - s > Self.trackGrace { self = HandState() }   // sustained loss: release
@@ -1600,11 +1629,12 @@ private struct HandState {
         // was written for, which keep their joints in view, and it is exactly
         // wrong here: a fist is the one pose that hides its own fingertips
         // from the cameras, so strict joints would go blind at the moment the
-        // gesture begins. What still gates it is skeleton PRESENCE, the guard
-        // at the top of this function -- lose the hand outright, let
-        // trackingLost's grace expire, and HandState resets with fistClosed
-        // false, which releases the rope. That is the same contract the
-        // controller's aim ray has when its tracking drops.
+        // gesture begins. What it is NOT gated on any more is tracking: this
+        // reading feeds GripLatch as an observation to be trusted or not,
+        // rather than being the grip itself. It used to be the grip, and
+        // losing the hand reset HandState with fistClosed false, which
+        // dropped a player out of mid air every time they turned, because a
+        // turn is led with the arm that passes over this one.
         func straightness(_ knuckle: HandSkeleton.JointName,
                           _ base: HandSkeleton.JointName,
                           _ inter: HandSkeleton.JointName,
@@ -1628,6 +1658,28 @@ private struct HandState {
                          .littleFingerIntermediateTip, .littleFingerTip))
         fistClosed = FistMath.closed(fingers, wasClosed: fistClosed)
         fistStraightness = fingers.max()
+
+        // Is that reading an observation or a guess? The straightness above
+        // cannot say, because it is measured from inferred joints that never
+        // report nil. What says it is the hand's GROSS pose. The playbook
+        // (docs/visionos-hand-gestures.md) measured that `wrist` and the
+        // metacarpals are never dropped while the hand itself is in view,
+        // because they come from its rigid pose rather than from finger
+        // articulation, and its standing rule is to build hand poses from
+        // exactly those. Applied as a liveness test that separates the two
+        // occlusions this gesture lives between: lose the palm bones and the
+        // cameras have lost the HAND, which is what the throwing arm sweeping
+        // across it does, while keeping them means the hidden fingertips are
+        // just a fist hiding its own, which is that pose's normal condition
+        // and has to stay readable or the hook could never be thrown.
+        let grossPose: [HandSkeleton.JointName] = [.wrist,
+                                                   .indexFingerMetacarpal,
+                                                   .middleFingerMetacarpal,
+                                                   .ringFingerMetacarpal,
+                                                   .littleFingerMetacarpal]
+        gripUpdate = grossPose.allSatisfy { skeleton.joint($0).isTracked }
+            ? .measured(fistClosed: fistClosed)
+            : .untrusted
 
         // Wheel facts: the wrist, the palm's facing, the index ray.
         wrist = tip(.wrist)
