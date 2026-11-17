@@ -12,7 +12,7 @@ corrections come first, because they change the shape of the work.
 ## What was measured, and what it corrects
 
 Every bit value below was read out of the `progs.dat` globals table in A.'s dump
-(`avp-pomodoro/QuakeDump/`, classic and `rerelease/` both). The engine's
+(a local dump of each game's progs, classic and rerelease both). The engine's
 `IT_`/`HIT_`/`RIT_` defines describe what upstream expects; the progs describe
 what a game actually ships. Where the two disagree, the progs win.
 
