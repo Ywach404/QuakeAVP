@@ -64,6 +64,9 @@ Choose a custom crosshair and change its color. Enable the health and ammo cross
   vertex amplification.
 - **Hand tracking as a first-class input** — the whole game plays with no
   controller at all.
+- A **grappling hook** written as engine C rather than driven through a mod's
+  QuakeC, so it works in all six supported games and leaves the gun drawn and
+  firing for the length of a swing.
 - The head pose is **late-latched at encode** rather than waited on, so the
   engine and the compositor never block each other.
 - The **body/aim split**, the **weapon wheel**, the **phase dissolve** and a
@@ -98,7 +101,7 @@ picker swaps both.
 | --- | --- | --- |
 | <img src="docs/media/gestures/hands-aim.svg" alt="An arm pointing, with the aim ray running along the forearm" width="120"> | **Aim** | The gun rides your dominant forearm and fires where the arm points, not where you look. The forearm is used rather than a finger so pinching, fisting or opening the hand never drops the aim. |
 | <img src="docs/media/gestures/hands-fire.svg" alt="Gun hand, thumb touching the index finger, a shot leaving a muzzle" width="120"> | **Fire** | Pinch thumb to index on the gun hand to shoot, and hold it for automatic fire. An index curl is the alternative trigger, carried on the input profile. |
-| <img src="docs/media/gestures/hands-move-forward.svg" alt="Off hand, thumb touching the index finger, arrow up from the ground" width="120"> | **Walk forward** | Hold thumb to index on the off hand to walk forward. Forward is where you look; the gun's aim is factored out, so pointing it somewhere else never drags you (`vr_moverelative 0` walks the body's forward instead). |
+| <img src="docs/media/gestures/hands-move-forward.svg" alt="Off hand, thumb touching the index finger, arrow up from the ground" width="120"> | **Walk forward** | Hold thumb to index on the off hand to walk forward. Forward is where you look; the gun's aim is factored out, so pointing it somewhere else never drags you (`vr_moverelative 0` walks the body's forward instead). Bare hands walk at 0.75 of a run on the ground and at full speed once both feet leave it, so a jump keeps its air control. |
 | <img src="docs/media/gestures/hands-move-backward.svg" alt="Off hand, thumb touching the middle finger, arrow down to the ground" width="120"> | **Walk backward** | Hold thumb to middle finger on the off hand to back up. |
 | <img src="docs/media/gestures/hands-crouch.svg" alt="Off hand, thumb touching the little finger, arrow pressing down to a bar" width="120"> | **Crouch** | Hold thumb to little finger on the off hand to crouch; it is bound to `+movedown` and releases as soon as you let go. |
 | <img src="docs/media/gestures/hands-jump.svg" alt="Gun hand, thumb touching the ring finger, an arc leaving the ground" width="120"> | **Jump** | Pinch thumb to ring finger on the gun hand to jump. Ring is the free finger there, since firing lives on the index. |
@@ -107,6 +110,7 @@ picker swaps both.
 | <img src="docs/media/gestures/hands-turn-body.svg" alt="An arm held off the forward axis, with a rotation arrow" width="120"> | **Body turn** | Hold the gun past about 18 degrees to one side and your body rotates under it, continuously, until you bring the aim back to center. It is the body that turns, not your neck: the aim leads and the view follows it round. |
 | <img src="docs/media/gestures/hands-teleport.svg" alt="Off hand, thumb touching the ring finger, an arc to a landing ring" width="120"> | **Teleport** | Point the gun at the floor, pinch thumb to ring on the off hand to line the spot up, and release to blink there. The landing point is collision-checked, so you cannot blink into a wall or into lava. |
 | <img src="docs/media/gestures/hands-weapon-wheel.svg" alt="The off wrist turned over, back of the hand up, with a ring of weapon slots around it" width="120"> | **Weapon wheel** | Turn the off wrist over -- palm toward the floor, like checking a watch -- and your owned weapons ring that wrist while the world slows to a crawl. Reach the off hand toward one to highlight it, or point at the ring with the gun hand instead; turn the palm back up to take it. |
+| | **Grappling hook** | Close the off hand into a fist to throw the hook, keep the fist to swing on it, open the hand to let go. The gun hand stays free and keeps firing for the whole swing. It is the engine's own hook rather than a mod's, so it works in every installed game, and `vr_grapple 0` turns it off. |
 | <img src="docs/media/gestures/hands-summon.svg" alt="Both palms together, fingers up, with a dwell arc" width="120"> | **Summon the window** | Hold both palms together with the fingers up for 0.6 seconds and the app window comes back without leaving the game. The prayer sign is used because visionOS reserves the open palm for Home View. |
 | <img src="docs/media/gestures/hands-wristcomm.svg" alt="A six-key panel on the forearm, one key pressed by a fingertip, an eye glancing at it" width="120"> | **Power gauntlet** | Glance down at your off forearm and a six-key panel fades in; touch a key with the other index fingertip to fire it. `MENU`, the sixth key, summons the window. |
 | <img src="docs/media/gestures/hands-hud-grab.svg" alt="A pinch dragging a tile to a new position" width="120"> | **Move a HUD tile** | Press **Edit HUD Layout** in the window, then pinch a status tile with either hand and drag it where you want it. Every other gesture is suppressed while you are arranging, so you cannot fire or walk off the anchor. |
@@ -122,12 +126,13 @@ the names on its own buttons. Left is the movement hand, right is the aim hand.
 | Right stick | Turn | Rotate the body. Smooth by default; snap in 45 degree steps with `vr_smoothturn 0`. |
 | Left trigger | Run | Bound to `+speed`, so it runs unless `cl_alwaysrun` is on, in which case it walks. |
 | Right trigger | Fire | Bound to `+attack`. Suppressed while the weapon wheel is open. |
-| Left grip (L1) | Weapon wheel | Hold to open the ring, aim at a weapon, release to take it. It never reaches the engine as a key. |
+| Left grip (L1) | Grappling hook | Squeeze to throw, hold to swing, let go to drop. A squeeze rather than a trigger, because the bare-hands gesture it mirrors is a closed fist. |
 | Left stick click (L3) | Slow motion | Toggles slow motion, routed straight to the engine rather than through a key. |
 | Square / X | Previous weapon | `impulse 12`. |
 | Triangle / Y | Next weapon | `impulse 10`. |
 | Create / Share | Recenter | Runs `vr_recenter` directly, so it works even with a wiped config. |
-| Cross, or right grip (R1) | Jump | Both are wired to `+jump`. |
+| Cross | Jump | Bound to `+jump`. |
+| Right grip (R1) | Weapon wheel | Hold to open the ring, aim at a weapon, release to take it. It moved here off the left grip to make room for the grapple, and it never reaches the engine as a key. |
 | Circle | Use | Bound to `+use`. |
 | Right stick click (R3) | Recenter | Bound to `vr_recenter`. |
 | Options / Menu | Summon the window | Hand-agnostic on purpose, so swapping controller hands cannot remove the only Sense route into the menu. |
@@ -165,15 +170,15 @@ immersive space that never finishes loading. Neither is a bug in the app.
 
 ### From a release `.ipa`
 
-Tagged builds attach an **unsigned** `.ipa` to the GitHub release. Unsigned
-because a build signed with my certificate installs on my devices and nobody
-else's; sign it with your own team using whichever sideload tool you prefer.
-
-The same artifact, built here:
+There is no tagged release yet. Build the same artifact yourself:
 
 ```sh
 make ipa                 # -> build/QuakeAVP.ipa
 ```
+
+It is deliberately **unsigned**: a build signed with my certificate installs
+on my devices and nobody else's, so sign it with your own team using whichever
+sideload tool you prefer.
 
 If you sign with a **free** Apple ID rather than a paid developer account the
 install expires after 7 days and has to be re-signed. That is Apple's limit on
@@ -258,7 +263,7 @@ firing kicks the shooting hand's haptics and recoils the gun.
 
 The phase dissolve melts the world to passthrough around you while you walk it,
 and the weapon wheel drops the game into bullet-time while you choose: turn the
-off wrist over, palm toward the floor (or hold the left grip on a Sense
+off wrist over, palm toward the floor (or hold the right grip on a Sense
 controller), and your owned weapons ring that wrist as live, lit, spinning
 models while the game slows to a crawl and your head keeps tracking at full
 speed; reach toward the one you want, or point at the ring with the gun hand
